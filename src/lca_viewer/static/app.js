@@ -718,15 +718,16 @@ const RECIPE_TOKENS = {
   product: "reference_product", name: "name", location: "location", unit: "unit",
   type: "activity_type", isic: "isic", cpc: "cpc", database: "database",
 };
-const DEFAULT_RECIPE = "{product} ({location})";
+// Custom names: a main part (normal text) and a secondary part (grey)
+const DEFAULT_RECIPE = { main: "{product}", secondary: "{location}" };
 
-function joinValues(values) {
+function joinValues(values, limit = 3) {
   const unique = [...new Set(values.filter(Boolean))];
-  return unique.length <= 3 ? unique.join(", ") : `${unique.slice(0, 3).join(", ")} +${unique.length - 3}`;
+  return unique.length <= limit ? unique.join(", ") : `${unique.slice(0, limit).join(", ")} +${unique.length - limit}`;
 }
-function applyRecipe(recipe, metas) {
+function applyRecipe(recipe, metas, limit = 3) {
   return recipe
-    .replace(/\{(\w+)\}/g, (token, key) => (RECIPE_TOKENS[key] ? joinValues(metas.map((m) => m[RECIPE_TOKENS[key]])) : token))
+    .replace(/\{(\w+)\}/g, (token, key) => (RECIPE_TOKENS[key] ? joinValues(metas.map((m) => m[RECIPE_TOKENS[key]]), limit) : token))
     .replace(/\(\s*\)/g, "").replace(/\s+/g, " ").trim();
 }
 
@@ -768,7 +769,9 @@ function nameItem(item, naming, recipe, byId) {
   if (kind === "rest") {
     if (many) return { main: "others", qual: `under ${rows.length} processes` };
     if (naming === "short") return { main: "others", qual: `under ${joinValues(parentMetas.map((m) => m.reference_product))}` };
-    if (naming === "custom" && parentMetas.length) return { main: `others under ${applyRecipe(recipe, parentMetas)}`, qual: "" };
+    if (naming === "custom" && parentMetas.length) {
+      return { main: `others under ${applyRecipe(recipe.main, parentMetas)}`, qual: applyRecipe(recipe.secondary, parentMetas, 6) };
+    }
     return { main: shortLabel(rows[0], byId), qual: "" };
   }
   if (!metas.length) return { main: rows[0].label, qual: "" };
@@ -776,7 +779,9 @@ function nameItem(item, naming, recipe, byId) {
   if (naming === "short" || (byProduct && naming === "full")) {
     return { main: pick("reference_product"), qual: [direct && "direct emissions", pick("location")].filter(Boolean).join(" · ") };
   }
-  if (naming === "custom") return { main: `${applyRecipe(recipe, metas)}${direct ? " — direct" : ""}`, qual: "" };
+  if (naming === "custom") {
+    return { main: applyRecipe(recipe.main, metas), qual: [direct && "direct emissions", applyRecipe(recipe.secondary, metas, 6)].filter(Boolean).join(" · ") };
+  }
   if (kind === "merged" && !many) return { main: rows[0].label, qual: "" };  // "steel (RER + RoW)"
   return { main: `${direct ? "direct: " : ""}${pick("name")} (${pick("location")})`, qual: "" };
 }
@@ -833,24 +838,31 @@ function textWidth(text) {
 }
 
 function RecipeEditor({ recipe, setRecipe, example }) {
-  const input = useRef(null);
+  const inputs = { main: useRef(null), secondary: useRef(null) };
+  const [target, setTarget] = useState("main");  // field receiving inserted tokens
   function insert(token) {
-    const el = input.current;
-    const at = el ? el.selectionStart : recipe.length;
-    const next = `${recipe.slice(0, at)}{${token}}${recipe.slice(at)}`;
-    setRecipe(next);
+    const el = inputs[target].current;
+    const text = recipe[target];
+    const at = el ? el.selectionStart : text.length;
+    setRecipe({ ...recipe, [target]: `${text.slice(0, at)}{${token}}${text.slice(at)}` });
     setTimeout(() => { el?.focus(); el?.setSelectionRange(at + token.length + 2, at + token.length + 2); });
   }
+  const field = (key, label) => html`
+    <label class="recipe-field">${label}
+      <input ref=${inputs[key]} value=${recipe[key]} class=${target === key ? "target" : ""} onFocus=${() => setTarget(key)}
+             onInput=${(e) => setRecipe({ ...recipe, [key]: e.target.value })} aria-label=${`${label} name recipe`} />
+    </label>`;
   return html`
     <div class="recipe">
       <div class="row">
-        <input ref=${input} value=${recipe} onInput=${(e) => setRecipe(e.target.value)} aria-label="Row name recipe" />
+        ${field("main", "Main")}
+        ${field("secondary", "Secondary (grey)")}
         <button onClick=${() => setRecipe(DEFAULT_RECIPE)}>Default</button>
       </div>
-      <div class="row tokens">Insert:
+      <div class="row tokens">Insert in ${target}:
         ${Object.keys(RECIPE_TOKENS).map((t) => html`<button class="token" onClick=${() => insert(t)}>{${t}}</button>`)}
       </div>
-      ${example && html`<p class="note">e.g. ${example}</p>`}
+      ${example && html`<p class="note">e.g. <span class="example-main">${example.main}</span>${example.qual && html` <span class="muted">${example.qual}</span>`}${" — when items are combined, their values are listed comma-separated"}</p>`}
     </div>`;
 }
 
@@ -1137,12 +1149,13 @@ function App() {
   const [merges, setMerges] = useState([]);
   const [view, setView] = useState(() => ({
     naming: loadPreference("naming", "full"),
-    recipe: loadPreference("recipe", DEFAULT_RECIPE),
+    recipe: { main: loadPreference("recipeMain", DEFAULT_RECIPE.main), secondary: loadPreference("recipeSecondary", DEFAULT_RECIPE.secondary) },
     groupProducts: loadPreference("groupProducts", "0") === "1",
   }));
   useEffect(() => {
     savePreference("naming", view.naming);
-    savePreference("recipe", view.recipe);
+    savePreference("recipeMain", view.recipe.main);
+    savePreference("recipeSecondary", view.recipe.secondary);
     savePreference("groupProducts", view.groupProducts ? "1" : "0");
   }, [view]);
   const [rules, setRules] = useState([]);
@@ -1366,7 +1379,7 @@ function App() {
             <button onClick=${exportView} disabled=${!root} title="Download this view (tree, groups, pins) as JSON">Save</button>
           </div>
           <${ViewBar} view=${view} setView=${setView}
-            example=${(() => { const r = data.rows.find((x) => x.kind === "process" && x.depth > 0); return r ? rowNames(r, rowsById, view).main : ""; })()} />
+            example=${(() => { const r = data.rows.find((x) => x.kind === "process" && x.depth > 0); return r ? rowNames(r, rowsById, view) : null; })()} />
           ${selection.size > 0 && !selectedRest && html`
             <div class="selection-bar">
               <span>${selection.size} selected${selection.size === 1 ? " · Ctrl/⌘-click to add siblings" : ""}</span>

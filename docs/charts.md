@@ -41,10 +41,12 @@ match.
   emitting product, others rows into one.
 - **Row names** (tree and chart): *Full* (`activity name (location)`), *Short* (product name,
   with the qualifiers needed to tell rows apart in grey: location, then
-  activity name, then the parent, then a number), or *Custom*: a recipe such
-  as `{product} ({location})` with tokens `{product} {name} {location}
-  {unit} {type} {isic} {cpc} {database}`; merged rows list their values
-  ("FR, DE, US +2"). Choices are per-browser preferences.
+  activity name, then the parent, then a number), or *Custom*: two recipes,
+  a **main** part (normal text, default `{product}`) and a **secondary**
+  part (grey, default `{location}`), with tokens `{product} {name}
+  {location} {unit} {type} {isic} {cpc} {database}`; combined rows list
+  their values comma-separated ("FR, DE, US +2"; up to 6 in the secondary
+  part). Choices are per-browser preferences.
 
 Axis label widths are measured with a canvas (ECharts mis-measures two-tone
 rich-text labels with `containLabel`).
