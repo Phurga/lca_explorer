@@ -16,7 +16,7 @@ from pydantic import BaseModel
 
 from .analysis import direct_contribution, first_match_contribution
 from .model import LCAModel
-from .query import derived_activities
+from .query import derived_activities, search, suggest_values
 from .tree import Tree
 from .view import View
 
@@ -38,6 +38,12 @@ class ViewState(BaseModel):
     method: int = 0
     methods: list[int] = []
     """Methods whose impacts are returned, in this order (default: ``method`` only)."""
+
+
+class SearchRequest(BaseModel):
+    text: str = ""
+    predicate: dict | None = None
+    limit: int = 50
 
 
 class GlobalRequest(BaseModel):
@@ -84,22 +90,19 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
             "default_method": default_method,
         }
 
-    @app.get("/api/search")
-    def search(q: str = "", limit: int = 50):
-        df = activities
-        for word in q.lower().split():
-            df = df[
-                df["name"].str.lower().str.contains(word, regex=False)
-                | df["reference_product"].str.lower().str.contains(word, regex=False)
-                | (df["location"].str.lower() == word)
-            ]
-        return [describe(i) for i in df.index[:limit]]
+    @app.post("/api/search")
+    def search_activities(req: SearchRequest):
+        try:
+            found = search(activities, req.text, req.predicate)
+        except (KeyError, ValueError) as e:
+            raise HTTPException(400, f"Invalid filter: {e}")
+        return {"total": int(len(found)), "results": [describe(i) for i in found[: req.limit]]}
 
     @app.get("/api/values/{field}")
-    def values(field: str):
+    def values(field: str, q: str = "", limit: int = 100):
         if field not in QUERY_FIELDS:
             raise HTTPException(404, f"Unknown field {field}")
-        return sorted(activities[field].dropna().astype(str).unique().tolist())
+        return suggest_values(activities, field, q, limit)
 
     @app.post("/api/rows")
     def rows(state: ViewState):
@@ -141,3 +144,15 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
         return FileResponse(STATIC / "index.html")
 
     return app
+
+
+def app_from_env() -> FastAPI:
+    """App factory for ``uvicorn --reload``: settings come from environment variables."""
+    import os
+
+    model = LCAModel.load(os.environ["LCA_VIEWER_MODEL"])
+    return create_app(
+        model,
+        title=os.environ.get("LCA_VIEWER_TITLE", ""),
+        default_root=os.environ.get("LCA_VIEWER_DEFAULT_ROOT") or None,
+    )

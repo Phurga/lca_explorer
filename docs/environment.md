@@ -26,7 +26,13 @@ lca-viewer build --project lca_viewer_ei391 --database ecoinvent-3.9.1-cutoff --
 lca-viewer serve --model data/cache/ei391_cutoff_all --default-root "market for wheat grain, feed|GLO"
 # or, without activating any env:
 scripts/serve.sh
+# while developing: restart automatically when Python code changes
+scripts/serve.sh --reload
 ```
+
+After a change: front-end files (`static/`) only need a browser reload
+(Ctrl+Shift+R); Python changes need a server restart, or `--reload`; data
+changes need `lca-viewer build` then a restart.
 
 The machine is a Docker container reached over SSH: to open the app from
 your own computer, tunnel the port (`ssh -N -L 8765:127.0.0.1:8765 <host>`)

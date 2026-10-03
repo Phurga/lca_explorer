@@ -7,6 +7,8 @@ API in `src/lca_viewer/server.py`.
 
 ![Tree graph](img/tree-graph.png)
 
+![Search with filters](img/search.png)
+
 ## Decision: no-build Preact + htm + ECharts, vendored
 
 - **No build step** (no Node toolchain on the machine, and none needed for a
@@ -21,9 +23,17 @@ API in `src/lca_viewer/server.py`.
 
 ## Layout
 
-- **Header**: functional unit search (name, product or location words),
-  amount, impact method (all 762 ecoinvent methods, grouped by family),
-  display cut-off.
+- **Header**: functional unit search, amount, impact method (all 762
+  ecoinvent methods, grouped by family), display cut-off.
+- **Search**: free words (each must appear in the name or product, or equal
+  the location: `electricity low voltage fr`) and/or **filters** built with
+  the same query builder as grouping rules (location, activity type, ISIC,
+  CPC, product, …, with value suggestions). Filters alone browse the
+  database (e.g. all `RER` market groups). Results show the match count,
+  highlighted words, location chips; ↑/↓/Enter to choose, Esc to close.
+  Ranking (`query.search`, punctuation ignored): exact name, exact product,
+  markets first, name/product starting with the text, text contained as a
+  phrase, shorter names.
 - **Left — tree**: expand/collapse (▸/▾), amount (waste shown as
   "x kg treated"), impact, share bar. "Expand above x %" auto-expands every
   node above a threshold (hotspot drill-down). Ctrl/⌘-click selects sibling
@@ -41,8 +51,10 @@ API in `src/lca_viewer/server.py`.
     stacked bars; CSV export. See [charts.md](charts.md).
   - *Grouping*: active rules (reorder / remove), quick groups (transport,
     electricity, heat & fuels, waste treatment, by location / activity type /
-    ISIC), query builder (conditions on any metadata field, value
-    suggestions, scope everywhere or under the selected row).
+    ISIC), and the shared query builder — the same component as the search
+    filters, so a filter reads and behaves the same in both places — with a
+    live "matches N activities, e.g. …" preview; scope everywhere or under
+    the selected row.
   - *Whole supply chain*: global grouping with the named groups, first-match
     or direct attribution (see [grouping.md](grouping.md)).
 

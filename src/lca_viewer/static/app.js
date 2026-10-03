@@ -115,29 +115,162 @@ function baseOption() {
   };
 }
 
-// ---------------------------------------------------------------- functional unit search
-function FunctionalUnit({ root, onSelect }) {
-  const [query, setQuery] = useState("");
-  const [results, setResults] = useState([]);
-  const [open, setOpen] = useState(false);
+// ---------------------------------------------------------------- shared query builder
+// Used both by the process search and by the grouping rules, so filters read the same everywhere.
+const OPS = [["contains", "contains"], ["eq", "is"], ["ne", "is not"], ["in", "is one of"], ["startswith", "starts with"], ["regex", "matches regex"]];
+const FIELD_LABELS = {
+  name: "activity name", reference_product: "product", location: "location", unit: "unit",
+  activity_type: "activity type", isic: "ISIC class", isic_division: "ISIC division",
+  cpc: "CPC class", cpc_section: "CPC section", database: "database",
+};
+const fieldLabel = (f) => FIELD_LABELS[f] || f;
+let conditionIds = 0;
+
+function useValues(field, text) {
+  const [values, setValues] = useState([]);
   useEffect(() => {
-    if (!query.trim()) { setResults([]); return; }
-    const timer = setTimeout(() => request(`/api/search?q=${encodeURIComponent(query)}`).then(setResults), 250);
+    const timer = setTimeout(() => {
+      request(`/api/values/${field}?q=${encodeURIComponent(text)}&limit=100`).then(setValues).catch(() => setValues([]));
+    }, 150);
     return () => clearTimeout(timer);
-  }, [query]);
-  const current = root ? `${root.reference_product} | ${root.name} | ${root.location}` : "";
+  }, [field, text]);
+  return values;
+}
+
+function Condition({ condition, fields, onChange, onRemove }) {
+  const listId = useMemo(() => `values-${++conditionIds}`, []);
+  // For "is one of", suggest values for the item being typed
+  const typed = condition.op === "in" ? condition.value.split(",").pop().trim() : condition.value;
+  const values = useValues(condition.field, typed);
   return html`
-    <div class="fu">
-      <input placeholder=${current || "Search a process (name, product, location)…"}
-             value=${query} onInput=${(e) => { setQuery(e.target.value); setOpen(true); }}
-             onFocus=${() => setOpen(true)} onBlur=${() => setTimeout(() => setOpen(false), 150)}
-             title=${current} aria-label="Functional unit" />
-      ${open && results.length > 0 && html`
-        <div class="search-results">
-          ${results.map((r) => html`
-            <div onMouseDown=${() => { onSelect(r); setQuery(""); setOpen(false); }}>
-              ${r.reference_product} | ${r.name} <small>${r.location} · ${r.unit}</small>
-            </div>`)}
+    <div class="row condition">
+      <select value=${condition.field} onChange=${(e) => onChange({ ...condition, field: e.target.value })} aria-label="Field">
+        ${fields.map((f) => html`<option value=${f}>${fieldLabel(f)}</option>`)}
+      </select>
+      <select value=${condition.op} onChange=${(e) => onChange({ ...condition, op: e.target.value })} aria-label="Operator">
+        ${OPS.map(([op, label]) => html`<option value=${op}>${label}</option>`)}
+      </select>
+      <input value=${condition.value} list=${listId} placeholder=${condition.op === "in" ? "a, b, c" : "value"}
+             onInput=${(e) => onChange({ ...condition, value: e.target.value })} aria-label="Value" />
+      <datalist id=${listId}>
+        ${values.map((v) => html`<option value=${condition.op === "in" ? condition.value.replace(/[^,]*$/, (condition.value.includes(",") ? " " : "") + v) : v} />`)}
+      </datalist>
+      <button onClick=${onRemove} aria-label="Remove condition">×</button>
+    </div>`;
+}
+
+function QueryBuilder({ query, setQuery, fields }) {
+  const { conditions, combinator } = query;
+  const update = (patch) => setQuery({ ...query, ...patch });
+  return html`
+    <div class="query-builder">
+      ${conditions.length > 1 && html`
+        <div class="row">Match
+          <select value=${combinator} onChange=${(e) => update({ combinator: e.target.value })} aria-label="Combine conditions">
+            <option value="all">all conditions</option><option value="any">any condition</option>
+          </select></div>`}
+      ${conditions.map((c, i) => html`
+        <${Condition} key=${c.id} condition=${c} fields=${fields}
+          onChange=${(next) => update({ conditions: conditions.map((x, j) => (j === i ? next : x)) })}
+          onRemove=${() => update({ conditions: conditions.filter((_, j) => j !== i) })} />`)}
+      <div class="row"><button onClick=${() => update({ conditions: [...conditions, newCondition("location", "eq")] })}>+ condition</button></div>
+    </div>`;
+}
+
+const newCondition = (field = "name", op = "contains", value = "") => ({ id: ++conditionIds, field, op, value });
+const emptyQuery = (field, op) => ({ combinator: "all", conditions: [newCondition(field, op)] });
+
+function toPredicate({ conditions, combinator }) {
+  const parts = conditions.filter((c) => c.value.trim()).map((c) => ({
+    field: c.field, op: c.op,
+    value: c.op === "in" ? c.value.split(",").map((v) => v.trim()).filter(Boolean) : c.value.trim(),
+  }));
+  if (parts.length === 0) return null;
+  if (parts.length === 1) return parts[0];
+  return { [combinator]: parts };
+}
+
+// ---------------------------------------------------------------- functional unit search
+function Highlight({ text, words }) {
+  if (!words.length || !text) return text;
+  const pattern = new RegExp(`(${words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})`, "ig");
+  return text.split(pattern).map((part, i) => (i % 2 ? html`<mark>${part}</mark>` : part));
+}
+
+function FunctionalUnit({ root, onSelect, fields }) {
+  const [text, setText] = useState("");
+  const [filters, setFilters] = useState(() => emptyQuery("location", "eq"));
+  const [showFilters, setShowFilters] = useState(false);
+  const [open, setOpen] = useState(false);
+  const [found, setFound] = useState({ total: 0, results: [] });
+  const [active, setActive] = useState(0);
+  const [error, setError] = useState(null);
+  const box = useRef(null);
+  const predicate = useMemo(() => toPredicate(filters), [filters]);
+  const activeFilters = filters.conditions.filter((c) => c.value.trim()).length;
+  const searching = Boolean(text.trim() || predicate);
+
+  useEffect(() => {
+    const close = (e) => box.current && !box.current.contains(e.target) && setOpen(false);
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, []);
+  useEffect(() => {
+    if (!open || !searching) { setFound({ total: 0, results: [] }); return; }
+    const timer = setTimeout(() => {
+      request("/api/search", { text, predicate, limit: 100 })
+        .then((f) => { setFound(f); setActive(0); setError(null); })
+        .catch((e) => setError(e.message));
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [text, predicate, open]);
+
+  function choose(r) {
+    onSelect(r);
+    setText("");
+    setOpen(false);
+  }
+  function onKeyDown(e) {
+    if (e.key === "ArrowDown") { e.preventDefault(); setActive((a) => Math.min(a + 1, found.results.length - 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setActive((a) => Math.max(a - 1, 0)); }
+    else if (e.key === "Enter" && found.results[active]) choose(found.results[active]);
+    else if (e.key === "Escape") setOpen(false);
+  }
+  useEffect(() => {
+    box.current?.querySelector(".search-results .active")?.scrollIntoView({ block: "nearest" });
+  }, [active]);
+
+  const current = root ? `${root.name} | ${root.location} — ${root.reference_product}` : "";
+  const words = text.toLowerCase().split(/\s+/).filter(Boolean);
+  return html`
+    <div class="fu" ref=${box}>
+      <div class="fu-input">
+        <input placeholder=${current || "Search a process: name, product, location…"} value=${text} title=${current}
+               onInput=${(e) => { setText(e.target.value); setOpen(true); }} onFocus=${() => setOpen(true)}
+               onKeyDown=${onKeyDown} aria-label="Functional unit" />
+        <button class=${activeFilters ? "primary" : ""} onClick=${() => { setShowFilters(!showFilters || !open); setOpen(true); }}
+          title="Filter by location, activity type, ISIC, …">Filters${activeFilters ? ` (${activeFilters})` : ""}</button>
+      </div>
+      ${open && html`
+        <div class="search-panel">
+          ${showFilters && html`
+            <div class="search-filters">
+              <${QueryBuilder} query=${filters} setQuery=${setFilters} fields=${fields} />
+              ${activeFilters > 0 && html`<button onClick=${() => setFilters(emptyQuery("location", "eq"))}>Clear filters</button>`}
+            </div>`}
+          ${error && html`<div class="error">${error}</div>`}
+          ${searching
+            ? html`
+              <div class="search-meta">${found.total} match${found.total === 1 ? "" : "es"}${found.total > found.results.length ? `, first ${found.results.length} shown` : ""} · ↑↓ Enter</div>
+              <div class="search-results" role="listbox">
+                ${found.results.map((r, i) => html`
+                  <div role="option" aria-selected=${i === active} class=${i === active ? "active" : ""}
+                       onMouseEnter=${() => setActive(i)} onMouseDown=${(e) => { e.preventDefault(); choose(r); }}>
+                    <div><b><${Highlight} text=${r.name} words=${words} /></b> <span class="loc-chip">${r.location}</span></div>
+                    <small><${Highlight} text=${r.reference_product} words=${words} /> · ${unit(r.unit)}</small>
+                  </div>`)}
+              </div>`
+            : html`<div class="search-meta">Type words of the activity name or product (a location code like "fr" or "glo" also works), or use filters.</div>`}
         </div>`}
     </div>`;
 }
@@ -458,45 +591,6 @@ function ChartPanel({ data, info, method, chartMethods, setChartMethods }) {
 }
 
 // ---------------------------------------------------------------- grouping panel
-const OPS = [["contains", "contains"], ["eq", "is"], ["ne", "is not"], ["in", "is one of"], ["startswith", "starts with"], ["regex", "matches regex"]];
-const SUGGEST = new Set(["location", "activity_type", "isic_division", "cpc_section", "unit", "database"]);
-
-function useValues(field) {
-  const [values, setValues] = useState([]);
-  useEffect(() => {
-    if (!SUGGEST.has(field)) { setValues([]); return; }
-    request(`/api/values/${field}`).then(setValues).catch(() => setValues([]));
-  }, [field]);
-  return values;
-}
-
-function Condition({ condition, fields, onChange, onRemove }) {
-  const values = useValues(condition.field);
-  const listId = `values-${condition.field}`;
-  return html`
-    <div class="row condition">
-      <select value=${condition.field} onChange=${(e) => onChange({ ...condition, field: e.target.value })} aria-label="Field">
-        ${fields.map((f) => html`<option value=${f}>${f}</option>`)}
-      </select>
-      <select value=${condition.op} onChange=${(e) => onChange({ ...condition, op: e.target.value })} aria-label="Operator">
-        ${OPS.map(([op, label]) => html`<option value=${op}>${label}</option>`)}
-      </select>
-      <input value=${condition.value} list=${listId} placeholder=${condition.op === "in" ? "a, b, c" : "value"}
-             onInput=${(e) => onChange({ ...condition, value: e.target.value })} aria-label="Value" />
-      <datalist id=${listId}>${values.slice(0, 500).map((v) => html`<option value=${v} />`)}</datalist>
-      <button onClick=${onRemove} aria-label="Remove condition">×</button>
-    </div>`;
-}
-
-function toPredicate(conditions, combinator) {
-  const parts = conditions.filter((c) => c.value.trim()).map((c) => ({
-    field: c.field, op: c.op,
-    value: c.op === "in" ? c.value.split(",").map((v) => v.trim()).filter(Boolean) : c.value.trim(),
-  }));
-  if (parts.length === 1) return parts[0];
-  return { [combinator]: parts };
-}
-
 const PRESETS = [
   { label: "Transport", rule: { name: "transport", predicate: { field: "name", op: "contains", value: "transport" } } },
   { label: "Electricity", rule: { name: "electricity", predicate: { field: "reference_product", op: "startswith", value: "electricity" } } },
@@ -514,8 +608,14 @@ function GroupPanel({ info, rules, setRules, selectedRow }) {
   const [kind, setKind] = useState("named");
   const [name, setName] = useState("");
   const [by, setBy] = useState("location");
-  const [combinator, setCombinator] = useState("all");
-  const [conditions, setConditions] = useState([{ field: "name", op: "contains", value: "" }]);
+  const [query, setQuery] = useState(() => emptyQuery("name", "contains"));
+  const [preview, setPreview] = useState(null);
+  const predicate = useMemo(() => toPredicate(query), [query]);
+  useEffect(() => {
+    if (kind !== "named" || !predicate) { setPreview(null); return; }
+    const timer = setTimeout(() => request("/api/search", { predicate, limit: 5 }).then(setPreview).catch(() => setPreview(null)), 250);
+    return () => clearTimeout(timer);
+  }, [predicate, kind]);
   const [scope, setScope] = useState("*");
 
   const scopeTarget = selectedRow && selectedRow.kind === "process" ? selectedRow : null;
@@ -523,8 +623,7 @@ function GroupPanel({ info, rules, setRules, selectedRow }) {
   function addCustom() {
     const ruleScope = scope === "selected" && scopeTarget ? scopeTarget.id : "*";
     if (kind === "named") {
-      const predicate = toPredicate(conditions, combinator);
-      if (!predicate || (predicate[combinator] && !predicate[combinator].length)) return;
+      if (!predicate) return;
       add({ name: name.trim() || describePredicate(predicate), predicate, scope: ruleScope });
     } else {
       add({ by, scope: ruleScope });
@@ -564,18 +663,14 @@ function GroupPanel({ info, rules, setRules, selectedRow }) {
         <label><input type="radio" checked=${kind === "by"} onChange=${() => setKind("by")} /> Group by a field</label>
       </div>
       ${kind === "named" ? html`
-        <div class="row"><input placeholder="Group name" value=${name} onInput=${(e) => setName(e.target.value)} aria-label="Group name" />
-          <select value=${combinator} onChange=${(e) => setCombinator(e.target.value)} aria-label="Combine conditions">
-            <option value="all">all conditions</option><option value="any">any condition</option>
-          </select></div>
-        ${conditions.map((c, i) => html`
-          <${Condition} condition=${c} fields=${info.query_fields}
-            onChange=${(next) => setConditions(conditions.map((x, j) => (j === i ? next : x)))}
-            onRemove=${() => setConditions(conditions.filter((_, j) => j !== i))} />`)}
-        <div class="row"><button onClick=${() => setConditions([...conditions, { field: "location", op: "eq", value: "" }])}>+ condition</button></div>
+        <div class="row"><input placeholder="Group name" value=${name} onInput=${(e) => setName(e.target.value)} aria-label="Group name" /></div>
+        <${QueryBuilder} query=${query} setQuery=${setQuery} fields=${info.query_fields} />
+        ${preview && html`<p class="note">${`Matches ${preview.total} activities in the database, e.g. `
+          + preview.results.slice(0, 3).map((r) => `${r.name} (${r.location})`).join("; ")
+          + (preview.total > 3 ? "…" : "")}</p>`}
       ` : html`
         <div class="row"><select value=${by} onChange=${(e) => setBy(e.target.value)} aria-label="Group by field">
-          ${info.group_by_fields.map((f) => html`<option value=${f}>${f}</option>`)}
+          ${info.group_by_fields.map((f) => html`<option value=${f}>${fieldLabel(f)}</option>`)}
         </select></div>`}
       <div class="row">
         <label><input type="radio" checked=${scope === "*"} onChange=${() => setScope("*")} /> Everywhere</label>
@@ -759,7 +854,7 @@ function App() {
     <div class="app">
       <header>
         <h1>LCA Process Explorer</h1>
-        <${FunctionalUnit} root=${root} onSelect=${selectRoot} />
+        <${FunctionalUnit} root=${root} onSelect=${selectRoot} fields=${info.query_fields} />
         <label>Amount <input class="amount" type="number" value=${amount} min="0" step="any"
           onChange=${(e) => setAmount(Number(e.target.value) || 1)} />${root ? root.unit : ""}</label>
         <${MethodSelect} methods=${info.methods} value=${method} onChange=${setMethod} />

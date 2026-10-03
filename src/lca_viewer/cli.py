@@ -24,15 +24,30 @@ def build(args) -> None:
 
 
 def serve(args) -> None:
+    import os
+
     import uvicorn
+
+    title = args.title or Path(args.model).name
+    if args.reload:
+        # The reloader re-imports the app in a fresh process: pass settings by environment
+        os.environ.update({
+            "LCA_VIEWER_MODEL": str(Path(args.model).resolve()),
+            "LCA_VIEWER_TITLE": title,
+            "LCA_VIEWER_DEFAULT_ROOT": args.default_root or "",
+        })
+        print(f"serving http://{args.host}:{args.port} — restarts when the Python code changes")
+        uvicorn.run("lca_viewer.server:app_from_env", factory=True, reload=True,
+                    reload_dirs=[str(Path(__file__).parent)], host=args.host, port=args.port, log_level="warning")
+        return
 
     from .model import LCAModel
     from .server import create_app
 
     t = time.perf_counter()
     model = LCAModel.load(args.model)
-    app = create_app(model, title=args.title or Path(args.model).name, default_root=args.default_root)
-    print(f"model loaded and factorised in {time.perf_counter() - t:.1f}s")
+    app = create_app(model, title=title, default_root=args.default_root)
+    print(f"model loaded and factorised in {time.perf_counter() - t:.1f}s, serving http://{args.host}:{args.port}")
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
 
 
@@ -53,6 +68,7 @@ def main(argv=None) -> None:
     p.add_argument("--default-root", help='Functional unit shown at start, as "activity name|location"')
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8765)
+    p.add_argument("--reload", action="store_true", help="Restart automatically when the Python code changes (development)")
     p.set_defaults(func=serve)
 
     args = parser.parse_args(argv)

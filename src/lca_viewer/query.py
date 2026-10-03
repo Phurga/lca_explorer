@@ -90,3 +90,62 @@ def evaluate(predicate: dict, activities: pd.DataFrame) -> np.ndarray:
         else:
             raise ValueError(f"Unknown operator {op!r}, expected one of {OPERATORS}")
     return np.asarray(result, dtype=bool)
+
+
+def search(activities: pd.DataFrame, text: str = "", predicate: dict | None = None) -> np.ndarray:
+    """Indices of activities matching free ``text`` and ``predicate``, best first.
+
+    Every word must appear in the name or reference product, or equal the
+    location. Ranking (punctuation ignored): exact name, exact product,
+    markets, name starting with the text, product starting with it, text
+    contained as a phrase, then shorter names.
+    """
+    mask = np.ones(len(activities), dtype=bool)
+    if predicate:
+        mask &= evaluate(predicate, activities)
+    words = text.lower().split()
+    name = activities["name"].str.lower()
+    product = activities["reference_product"].fillna("").str.lower()
+    location = activities["location"].fillna("").str.lower()
+    for word in words:
+        mask &= np.asarray(
+            name.str.contains(word, regex=False) | product.str.contains(word, regex=False) | (location == word)
+        )
+    found = np.flatnonzero(mask)
+    if not words:
+        return found[np.argsort(name.iloc[found].to_numpy(), kind="stable")]
+    # Rank on the text without words that only matched the location, ignoring punctuation
+    phrase = _normalise(pd.Series([
+        " ".join(w for w in words if not (location.iloc[found] == w).all()) or text
+    ])).iat[0]
+    n, p = _normalise(name.iloc[found]), _normalise(product.iloc[found])
+    keys = [  # lexsort: last key is the primary one
+        n.to_numpy(),
+        n.str.len().to_numpy(),
+        ~(n.str.contains(phrase, regex=False) | p.str.contains(phrase, regex=False)).to_numpy(),
+        ~p.str.startswith(phrase).to_numpy(),
+        ~n.str.startswith(phrase).to_numpy(),
+        ~n.str.startswith("market").to_numpy(),  # markets are what one usually links to
+        ~(p == phrase).to_numpy(),
+        ~(n == phrase).to_numpy(),
+    ]
+    return found[np.lexsort(keys)]
+
+
+def _normalise(text: pd.Series) -> pd.Series:
+    return text.str.lower().str.replace(r"[,;:()\[\]/]", " ", regex=True).str.split().str.join(" ")
+
+
+def suggest_values(activities: pd.DataFrame, field: str, text: str = "", limit: int = 100) -> list[str]:
+    """Distinct values of ``field`` containing ``text``, prefix matches first."""
+    values = pd.Series(activities[field].dropna().astype(str).unique())
+    if text:
+        lower = values.str.lower()
+        t = text.lower()
+        values = values[lower.str.contains(t, regex=False)]
+        order = np.lexsort([values.str.lower().to_numpy(), values.str.len().to_numpy(),
+                            ~values.str.lower().str.startswith(t).to_numpy()])
+        values = values.iloc[order]
+    else:
+        values = values.sort_values()
+    return values.head(limit).tolist()

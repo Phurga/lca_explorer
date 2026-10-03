@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Start the explorer on http://127.0.0.1:8765 (no conda activation needed).
+# Development: scripts/serve.sh --reload  (restarts when Python code changes)
 # From your own computer, tunnel the port first:  ssh -N -L 8765:127.0.0.1:8765 <this machine>
 cd "$(dirname "$0")/.."
 exec /home/user1/miniconda3/envs/lca_viewer/bin/lca-viewer serve \
