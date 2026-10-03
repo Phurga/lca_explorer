@@ -37,7 +37,10 @@ API in `src/lca_viewer/server.py`.
 - **Left — tree**: expand/collapse (▸/▾), amount (waste shown as
   "x kg treated"), impact, share bar. "Expand above x %" auto-expands every
   node above a threshold (hotspot drill-down). Ctrl/⌘-click selects sibling
-  rows → "Group selected" creates a manual group; groups have an "ungroup" chip.
+  rows; a selection bar then offers **Group** (bundle them under one row,
+  "ungroup" chip to undo), **Merge** (combine their inventories into one
+  process, "merged ×" chip to undo — see [grouping.md](grouping.md)) and
+  **To others**.
   Every row has a **×** (on hover, next to ▸ in the list, at the box corner
   in the tree view) that moves it to its parent's **others** row; "To others"
   does the same for a selection. Hovering an "others" row previews its

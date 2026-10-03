@@ -24,7 +24,7 @@ configuration to keep in sync.
 
 Labels: processes as `name (location)`; direct emissions and below-cut-off
 rows name their parent ("direct: wheat production (RoW)",
-"other inputs of …"), since several of them can be on the frontier.
+"others under …"), since several of them can be on the frontier.
 
 ## Quick views
 

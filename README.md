@@ -64,9 +64,11 @@ browser keeps its own tree, groups and charts.
 - Pick the **impact method** and a display **cut-off** next to it.
 - **List / Tree** switch the left panel between a table and a node-and-edge
   view. Expand with ▸ or ±; *Expand above x %* opens all hotspots.
-- **Group**: Ctrl/⌘-click sibling rows and *Group selected*, or use the
-  *Grouping* tab (quick groups, group by location / activity type / ISIC, or
-  your own filter).
+- **Group / Merge**: Ctrl/⌘-click sibling rows, then *Group* (bundle them
+  under one row) or *Merge* (one process with their inventories added,
+  common inputs summed); or use the *Grouping* tab (quick groups, group by
+  location / activity type / ISIC, or your own filter).
+- **Right-click** a process for its description, metadata and main emissions.
 - **×** on a row (hover) moves it to *others*, out of the tree and the chart;
   click an *others* row to see what it contains and bring processes back
   (also the way to show processes hidden by the cut-off). Changing the
