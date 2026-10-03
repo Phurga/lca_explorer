@@ -60,6 +60,11 @@ API in `src/lca_viewer/server.py`.
   out. ± handle or double-click to expand, Ctrl/⌘-click to select, drag to
   pan, wheel to zoom, "Fit" for the whole tree. See below for the layout
   choice.
+- **View bar** (under the toolbar): *Group products* and *Full / Short /
+  Custom* names, applied to the list, the tree view and the chart; see
+  [charts.md](charts.md).
+
+  ![View settings](img/view-settings.png)
 - **Right-click a process** (list or tree view): pop-up with its place in
   this tree (amount, impact, path from the root), per-unit cumulative and
   direct impacts, the main direct emissions for the current method, the

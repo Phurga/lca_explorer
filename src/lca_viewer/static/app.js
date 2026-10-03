@@ -321,7 +321,8 @@ function MethodSelect({ methods, value, onChange }) {
 }
 
 // ---------------------------------------------------------------- tree
-function Tree({ rows, rootImpact, selection, onToggle, onSelect, onUngroup, ungroupable, onUnpin, onMoveToOthers, onHover, onInfo, onUnmerge }) {
+function Tree({ rows, rootImpact, selection, onToggle, onSelect, onUngroup, ungroupable, onUnpin, onMoveToOthers, onHover, onInfo, onUnmerge, view }) {
+  const byId = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
   if (!rows.length) return html`<div class="empty">Choose a functional unit to start.</div>`;
   return html`
     <div class="tree">
@@ -331,7 +332,7 @@ function Tree({ rows, rootImpact, selection, onToggle, onSelect, onUngroup, ungr
         <tbody>
           ${rows.map((r) => {
             const share = rootImpact ? r.impacts[0] / rootImpact : 0;
-            const amount = r.kind === "merged" ? (r.unit ? `${fmt(r.amount)} ${unit(r.unit)}` : "")
+            const amount = r.kind === "merged" || r.kind === "group" ? (r.unit ? `${fmt(r.amount)} ${unit(r.unit)}` : "")
               : r.kind !== "process" ? ""
               : r.waste ? `${fmt(-r.amount)} ${unit(r.unit)} treated` : `${fmt(r.amount)} ${unit(r.unit)}`;
             const [product, name, location] = r.kind === "process" ? r.label.split(" | ") : [r.label];
@@ -351,7 +352,7 @@ function Tree({ rows, rootImpact, selection, onToggle, onSelect, onUngroup, ungr
                                onClick=${(e) => { e.stopPropagation(); onMoveToOthers([r.id]); }}>×</button>`
                       : html`<span class="to-others"></span>`}
                     <span class="label" title=${r.label}>
-                      ${r.kind === "process" ? html`${name} <span class="loc">${location}</span> <span class="loc">· ${product}</span>` : r.label}
+                      ${(() => { const n = rowNames(r, byId, view); return html`${n.main}${n.qual && html` <span class="loc">${n.qual}</span>`}`; })()}
                     </span>
                     ${r.kind === "group" && ungroupable(r) && html`
                       <button class="chip" onClick=${(e) => { e.stopPropagation(); onUngroup(r); }}>ungroup</button>`}
@@ -429,7 +430,8 @@ function edgePath(from, to, orientation) {
   return `M${x1},${y1} C${x1},${ym} ${x2},${ym} ${x2},${y2}`;
 }
 
-function TreeGraph({ rows, rootImpact, selection, onToggle, onSelect, onUngroup, ungroupable, onUnpin, onMoveToOthers, onHover, onInfo, onUnmerge, orientation, setOrientation }) {
+function TreeGraph({ rows, rootImpact, selection, onToggle, onSelect, onUngroup, ungroupable, onUnpin, onMoveToOthers, onHover, onInfo, onUnmerge, view, orientation, setOrientation }) {
+  const byId = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
   const container = useRef(null);
   const drag = useRef(null);
   const [transform, setTransform] = useState({ k: 1, x: 16, y: 16 });
@@ -494,11 +496,13 @@ function TreeGraph({ rows, rootImpact, selection, onToggle, onSelect, onUngroup,
           ${graph.nodes.map(({ row: r, x, y }) => {
             const s = share(r);
             const [product, name, location] = r.kind === "process" ? r.label.split(" | ") : [r.label];
-            const title = r.kind === "direct" ? "direct emissions" : r.kind === "process" ? name : r.label;
-            const subtitle = r.kind === "process"
-              ? `${location} · ${r.waste ? `${fmt(-r.amount)} ${unit(r.unit)} treated` : `${fmt(r.amount)} ${unit(r.unit)}`}`
-              : r.kind === "merged" ? `merged${r.unit ? ` · ${fmt(r.amount)} ${unit(r.unit)}` : ""}`
-              : r.kind === "group" ? "group" : r.kind === "rest" ? "others" : "of the parent process";
+            const names = rowNames(r, byId, view);
+            const title = names.main;
+            const amountText = r.kind === "process" ? (r.waste ? `${fmt(-r.amount)} ${unit(r.unit)} treated` : `${fmt(r.amount)} ${unit(r.unit)}`)
+              : (r.kind === "merged" || r.kind === "group") && r.unit ? `${fmt(r.amount)} ${unit(r.unit)}` : "";
+            const qualifier = r.kind === "process" && view.naming === "full" ? location : names.qual;
+            const subtitle = [qualifier, r.kind === "merged" && "merged", r.kind === "group" && !r.by_product && "group",
+              r.kind === "direct" && "of the parent process", amountText].filter(Boolean).join(" · ");
             const toggleAt = orientation === "horizontal" ? [x + BOX.w, y + BOX.h / 2] : [x + BOX.w / 2, y + BOX.h];
             const barWidth = BOX.w - 20 - 52;
             return html`
@@ -596,6 +600,23 @@ function OthersDetails({ rest, rows, rootImpact, cutoff, cutoffBasis, pinned, se
           </tbody>
         </table>
       </div>
+    </div>`;
+}
+
+// ---------------------------------------------------------------- view bar (names and product grouping)
+function ViewBar({ view, setView, example }) {
+  const set = (patch) => setView({ ...view, ...patch });
+  return html`
+    <div class="view-bar">
+      <div class="row">
+        <button class=${view.groupProducts ? "primary" : ""} onClick=${() => set({ groupProducts: !view.groupProducts })}
+          title="Tree: bundle siblings of the same product (other regions or routes). Chart: also merge them across the tree">Group products</button>
+        <span class="segmented" role="group" aria-label="Row names">
+          ${[["full", "Full names"], ["short", "Short names"], ["custom", "Custom name"]].map(([id, label]) => html`
+            <button class=${view.naming === id ? "primary" : ""} onClick=${() => set({ naming: id })}>${label}</button>`)}
+        </span>
+      </div>
+      ${view.naming === "custom" && html`<${RecipeEditor} recipe=${view.recipe} setRecipe=${(recipe) => set({ recipe })} example=${example} />`}
     </div>`;
 }
 
@@ -741,7 +762,8 @@ function nameItem(item, naming, recipe, byId) {
   const { kind, metas, parentMetas, rows } = item;
   const many = rows.length > 1;
   const pick = (field) => joinValues(metas.map((m) => m[field]));
-  if (kind === "group") return { main: rows[0].label, qual: many ? `${rows.length} groups` : "" };
+  const byProduct = kind === "group" && rows.every((r) => r.by_product);
+  if (kind === "group" && !byProduct) return { main: rows[0].label, qual: many ? `${rows.length} groups` : "" };
   if (kind === "rest") {
     if (many) return { main: "others", qual: `under ${rows.length} processes` };
     if (naming === "short") return { main: "others", qual: `under ${joinValues(parentMetas.map((m) => m.reference_product))}` };
@@ -750,9 +772,25 @@ function nameItem(item, naming, recipe, byId) {
   }
   if (!metas.length) return { main: rows[0].label, qual: "" };
   const direct = kind === "direct";
-  if (naming === "short") return { main: pick("reference_product"), qual: [direct && "direct emissions", pick("location")].filter(Boolean).join(" · ") };
+  if (naming === "short" || (byProduct && naming === "full")) {
+    return { main: pick("reference_product"), qual: [direct && "direct emissions", pick("location")].filter(Boolean).join(" · ") };
+  }
   if (naming === "custom") return { main: `${applyRecipe(recipe, metas)}${direct ? " — direct" : ""}`, qual: "" };
+  if (kind === "merged" && !many) return { main: rows[0].label, qual: "" };  // "steel (RER + RoW)"
   return { main: `${direct ? "direct: " : ""}${pick("name")} (${pick("location")})`, qual: "" };
+}
+
+// Name of a tree row (list and tree view), following the view's naming choice
+function rowNames(r, byId, view) {
+  if (r.kind === "process" && view.naming === "full") {
+    const [product, name, location] = r.label.split(" | ");
+    return { main: name, qual: `${location} · ${product}` };
+  }
+  if (r.kind === "direct") return { main: "direct emissions", qual: "" };
+  if (r.kind === "rest") return { main: r.label, qual: "" };
+  const parent = byId.get(r.parent);
+  const metas = r.meta ? [r.meta] : r.metas || [];
+  return nameItem({ kind: r.kind, rows: [r], metas, parentMetas: parent?.meta ? [parent.meta] : [] }, view.naming, view.recipe, byId);
 }
 
 function nameItems(items, naming, recipe, byId) {
@@ -816,15 +854,10 @@ function RecipeEditor({ recipe, setRecipe, example }) {
 }
 
 // ---------------------------------------------------------------- chart panel
-function ChartPanel({ data, info, method, chartMethods, setChartMethods }) {
+function ChartPanel({ data, info, method, chartMethods, setChartMethods, view }) {
+  const { naming, recipe, groupProducts } = view;
   const [mode, setMode] = useState("single");
   const [family, setFamily] = useState(info.methods[method].name[0]);
-  const [naming, setNaming] = useState(() => loadPreference("naming", "full"));
-  const [recipe, setRecipe] = useState(() => loadPreference("recipe", DEFAULT_RECIPE));
-  const [groupProducts, setGroupProducts] = useState(() => loadPreference("groupProducts", "0") === "1");
-  useEffect(() => savePreference("naming", naming), [naming]);
-  useEffect(() => savePreference("recipe", recipe), [recipe]);
-  useEffect(() => savePreference("groupProducts", groupProducts ? "1" : "0"), [groupProducts]);
 
   const byId = useMemo(() => new Map(data.rows.map((r) => [r.id, r])), [data]);
   const parts = useMemo(
@@ -908,19 +941,9 @@ function ChartPanel({ data, info, method, chartMethods, setChartMethods }) {
         <span class="spacer" style="flex:1"></span>
         <button onClick=${exportCsv}>Export CSV</button>
       </div>
-      <div class="row quick-views">
-        <button class=${groupProducts ? "primary" : ""} onClick=${() => setGroupProducts(!groupProducts)}
-          title="Merge rows of the same product (different regions, markets or production routes)">Group products</button>
-        <span class="segmented" role="group" aria-label="Row names">
-          ${[["full", "Full names"], ["short", "Short names"], ["custom", "Custom name"]].map(([id, label]) => html`
-            <button class=${naming === id ? "primary" : ""} onClick=${() => setNaming(id)}>${label}</button>`)}
-        </span>
-      </div>
-      ${naming === "custom" && html`<${RecipeEditor} recipe=${recipe} setRecipe=${setRecipe}
-          example=${parts.find((p) => p.kind === "process")?.label} />`}
       <p class="note">
         Built from the tree as displayed: each visible row that is not expanded is a bar segment.
-        Expand, collapse or group rows to change the breakdown. ${parts.length} segments${groupProducts ? " after merging products" : ""}.
+        Expand, collapse or group rows to change the breakdown. ${parts.length} segments${groupProducts ? " (same products merged across the tree)" : ""}.
       </p>
       ${mode === "single"
         ? html`<${Chart} option=${singleOption} height=${Math.max(260, parts.length * 26 + 60)} />`
@@ -1103,6 +1126,16 @@ function App() {
   const [pinned, setPinned] = useState(new Set());
   const [others, setOthers] = useState(new Set());
   const [merges, setMerges] = useState([]);
+  const [view, setView] = useState(() => ({
+    naming: loadPreference("naming", "full"),
+    recipe: loadPreference("recipe", DEFAULT_RECIPE),
+    groupProducts: loadPreference("groupProducts", "0") === "1",
+  }));
+  useEffect(() => {
+    savePreference("naming", view.naming);
+    savePreference("recipe", view.recipe);
+    savePreference("groupProducts", view.groupProducts ? "1" : "0");
+  }, [view]);
   const [rules, setRules] = useState([]);
   const [chartMethods, setChartMethods] = useState([]);
   const [selection, setSelection] = useState(new Set());
@@ -1180,7 +1213,7 @@ function App() {
 
   const viewState = (exp = expanded) => ({
     root: [root.index], amount, expanded: [...exp], rules, cutoff: cutoff / 100, cutoff_basis: cutoffBasis, method, methods: chartMethods,
-    pinned: [...pinned], others: [...others], merges,
+    pinned: [...pinned], others: [...others], merges, group_products: view.groupProducts,
   });
 
   useEffect(() => {
@@ -1191,7 +1224,7 @@ function App() {
       .catch((e) => !cancelled && setError(e.message));
     save({ root, amount, method, cutoff, cutoffBasis, expanded: [...expanded], rules, chartMethods, pinned: [...pinned], others: [...others], merges });
     return () => { cancelled = true; };
-  }, [root, amount, method, cutoff, cutoffBasis, expanded, rules, chartMethods, pinned, others, merges, info]);
+  }, [root, amount, method, cutoff, cutoffBasis, expanded, rules, chartMethods, pinned, others, merges, view.groupProducts, info]);
 
   const rootImpact = data.rows[0]?.impacts[0] || 0;
   const rowsById = useMemo(() => new Map(data.rows.map((r) => [r.id, r])), [data]);
@@ -1276,7 +1309,7 @@ function App() {
       for (let level = 0; level < 12; level++) {
         const d = await request("/api/rows", viewState(next));
         const total = d.rows[0].impacts[0];
-        const candidates = d.rows.filter((r) => r.kind === "process" && !r.expanded && total
+        const candidates = d.rows.filter((r) => ["process", "group", "merged"].includes(r.kind) && !r.expanded && total
           && Math.abs(r.impacts[0] / total) >= threshold / 100);
         if (!candidates.length) break;
         next = new Set([...next, ...candidates.map((r) => r.id)]);
@@ -1323,6 +1356,8 @@ function App() {
             <span class="spacer"></span>
             <button onClick=${exportView} disabled=${!root} title="Download this view (tree, groups, pins) as JSON">Save</button>
           </div>
+          <${ViewBar} view=${view} setView=${setView}
+            example=${(() => { const r = data.rows.find((x) => x.kind === "process" && x.depth > 0); return r ? rowNames(r, rowsById, view).main : ""; })()} />
           ${selection.size > 0 && !selectedRest && html`
             <div class="selection-bar">
               <span>${selection.size} selected${selection.size === 1 ? " · Ctrl/⌘-click to add siblings" : ""}</span>
@@ -1344,9 +1379,9 @@ function App() {
           ${error && html`<div class="error">${error}</div>`}
           ${display === "list"
             ? html`<${Tree} rows=${data.rows} rootImpact=${rootImpact} selection=${selection} onToggle=${toggle} onSelect=${select}
-                onUngroup=${ungroup} ungroupable=${(r) => manualRuleFor(r) >= 0} onUnpin=${unpin} onMoveToOthers=${moveToOthers} onHover=${hover} onInfo=${showInfo} onUnmerge=${unmerge} />`
+                onUngroup=${ungroup} ungroupable=${(r) => manualRuleFor(r) >= 0} onUnpin=${unpin} onMoveToOthers=${moveToOthers} onHover=${hover} onInfo=${showInfo} onUnmerge=${unmerge} view=${view} />`
             : html`<${TreeGraph} rows=${data.rows} rootImpact=${rootImpact} selection=${selection} onToggle=${toggle} onSelect=${select}
-                onUngroup=${ungroup} ungroupable=${(r) => manualRuleFor(r) >= 0} onUnpin=${unpin} onMoveToOthers=${moveToOthers} onHover=${hover} onInfo=${showInfo} onUnmerge=${unmerge}
+                onUngroup=${ungroup} ungroupable=${(r) => manualRuleFor(r) >= 0} onUnpin=${unpin} onMoveToOthers=${moveToOthers} onHover=${hover} onInfo=${showInfo} onUnmerge=${unmerge} view=${view}
                 orientation=${orientation} setOrientation=${setOrientation} />`}
           ${shownRest && html`<${OthersDetails} rest=${shownRest} rows=${data.rows} rootImpact=${rootImpact}
               cutoff=${cutoff} cutoffBasis=${cutoffBasis} pinned=${pinned} setPinned=${setPinned} others=${others} setOthers=${setOthers}
@@ -1365,7 +1400,7 @@ function App() {
               <button role="tab" class=${tab === id ? "active" : ""} onClick=${() => setTab(id)}>${label}</button>`)}
           </div>
           ${tab === "chart" && data.rows.length > 0 && html`<${ChartPanel} data=${data} info=${info} method=${method}
-              chartMethods=${chartMethods} setChartMethods=${setChartMethods} />`}
+              chartMethods=${chartMethods} setChartMethods=${setChartMethods} view=${view} />`}
           ${tab === "groups" && html`<${GroupPanel} info=${info} rules=${rules} setRules=${setRules}
               selectedRow=${selectedRows.length === 1 ? selectedRows[0] : null} />`}
           ${tab === "global" && html`<${GlobalPanel} info=${info} root=${root} amount=${amount} method=${method} rules=${rules} />`}

@@ -80,6 +80,9 @@ class View:
     """Row ids shown even when below the cut-off (exceptions chosen by the user)."""
     others: set[str] = field(default_factory=set)
     """Row ids moved to their parent's "others" row by the user, whatever their impact."""
+    group_products: bool = False
+    """Bundle siblings delivering the same reference product (e.g. one product from several
+    regions) into one group row, after the user's rules."""
     merges: list[dict] = field(default_factory=list)
     """``{"scope": parent row id, "products": [...]}``: sibling processes merged into one
     process whose inventory is the union of theirs (common inputs summed)."""
@@ -110,6 +113,7 @@ class View:
             "pinned": sorted(self.pinned),
             "others": sorted(self.others),
             "merges": self.merges,
+            "group_products": self.group_products,
         }
 
     @classmethod
@@ -125,6 +129,7 @@ class View:
             pinned=set(data.get("pinned", [])),
             others=set(data.get("others", [])),
             merges=list(data.get("merges", [])),
+            group_products=bool(data.get("group_products", False)),
         )
 
     # --- rendering -------------------------------------------------------
@@ -200,6 +205,21 @@ class View:
                         rows.append(self._group_row(f"{rule.by}: {value}", members, parent, depth))
                     else:
                         free.extend(members)
+        if self.group_products and len(free) > 1:
+            products = self._activities["reference_product"]
+            buckets: dict[str, list[Node]] = {}
+            for c in free:
+                buckets.setdefault(str(products.iat[c.product]), []).append(c)
+            free = []
+            for product, members in buckets.items():
+                if len(members) > 1:
+                    row = self._group_row(f"product:{product}", members, parent, depth, label=product)
+                    units = self._activities["unit"].iloc[[m.product for m in members]]
+                    if units.nunique() == 1:  # same product and unit: amounts add up
+                        row.amount, row.unit = sum(m.amount for m in members), units.iat[0]
+                    rows.append(row)
+                else:
+                    free.extend(members)
         rows.extend(self._process_row(c, parent.id, depth) for c in free)
         rows.extend(
             self._process_row(c, parent.id, depth)
@@ -276,7 +296,11 @@ class View:
         products = sorted(m.product for m in members)
         row_id = f"{parent.id}/m:{'+'.join(map(str, products))}"
         acts = self._activities.iloc[[m.product for m in members]]
-        label = " + ".join(f"{n} ({l})" for n, l in zip(acts["name"], acts["location"]))
+        # Members with the same name are listed once: "steel (RER + RoW) + iron (DE)"
+        locations: dict[str, list[str]] = {}
+        for n, l in zip(acts["name"], acts["location"]):
+            locations.setdefault(n, []).append(str(l))
+        label = " + ".join(f"{n} ({' + '.join(ls)})" for n, ls in locations.items())
         # An amount only makes sense when all members deliver the same product
         same = acts["reference_product"].nunique() == 1 and acts["unit"].nunique() == 1
         return Row(row_id, parent.id, depth, "merged", label,
@@ -284,14 +308,14 @@ class View:
                    acts["unit"].iat[0] if same else "",
                    sum(m.impacts for m in members), True, row_id in self.expanded, merged=members)
 
-    def _group_row(self, name: str, members: list[Node], parent: Row, depth: int) -> Row:
+    def _group_row(self, name: str, members: list[Node], parent: Row, depth: int, label: str | None = None) -> Row:
         row_id = f"{parent.id}/g:{name}"
         # A group opens by itself when it hides an expanded member, unless the
         # user explicitly collapsed it ("!" + id in ``expanded``)
         expanded = row_id in self.expanded or (
             f"!{row_id}" not in self.expanded and any(m.id in self.expanded for m in members)
         )
-        row = Row(row_id, parent.id, depth, "group", name, 0.0, "",
+        row = Row(row_id, parent.id, depth, "group", label or name, 0.0, "",
                   sum(m.impacts for m in members), True, expanded)
         row.node_members = members  # type: ignore[attr-defined]
         return row

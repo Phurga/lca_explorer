@@ -26,13 +26,20 @@ Labels: processes as `name (location)`; direct emissions and below-cut-off
 rows name their parent ("direct: wheat production (RoW)",
 "others under …"), since several of them can be on the frontier.
 
-## Quick views
+## View settings: product grouping and row names
 
-- **Group products**: chart rows of the same reference product (different
-  regions, markets or production routes) are merged into one bar; direct
-  emissions are merged per emitting product, others rows into one. The tree
-  is unchanged.
-- **Row names**: *Full* (`activity name (location)`), *Short* (product name,
+Decision: these were first chart-only "quick views"; they are now **view
+settings** (bar under the left toolbar) applied to the list, the tree view
+and the chart alike, so what the user reads in the tree and in the chart
+match.
+
+- **Group products**: in the tree, siblings delivering the same reference
+  product (other regions, markets or routes) are bundled into one group row
+  named after the product, with the summed amount (`View.group_products`,
+  applied after the user's rules). In the chart, same-product rows are
+  additionally merged *across* the tree; direct emissions are merged per
+  emitting product, others rows into one.
+- **Row names** (tree and chart): *Full* (`activity name (location)`), *Short* (product name,
   with the qualifiers needed to tell rows apart in grey: location, then
   activity name, then the parent, then a number), or *Custom*: a recipe such
   as `{product} ({location})` with tokens `{product} {name} {location}

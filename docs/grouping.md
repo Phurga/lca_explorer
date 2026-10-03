@@ -81,7 +81,9 @@ summed. This differs from a group, which only bundles rows (expanding a
 group shows the original processes). A merged process's inputs are ordinary
 nodes (same product, summed amount), so they expand normally and totals stay
 exact by linearity. Its amount is shown only when all members deliver the
-same product in the same unit (e.g. wheat grain from FR + DE). Merges are
+same product in the same unit (e.g. wheat grain from FR + DE). Members
+sharing a name are listed once: "steel (RER + RoW)", "market for urea
+(RoW + CN)"; different names stay separate ("steel (RER) + iron (DE)"). Merges are
 kept by Reset view and cut-off changes, like groups, and cleared with the
 functional unit.
 
