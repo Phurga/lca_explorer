@@ -41,7 +41,6 @@ class ViewState(BaseModel):
     pinned: list[str] = []
     others: list[str] = []
     merges: list[dict] = []
-    group_products: bool = False
     methods: list[int] = []
     """Methods whose impacts are returned, in this order (default: ``method`` only)."""
 
@@ -151,9 +150,6 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
             elif r.kind == "merged":
                 out["products"] = [int(m.product) for m in r.merged]
                 out["metas"] = [meta(m.product) for m in r.merged]
-            elif r.kind == "group":
-                out["metas"] = [meta(m.product) for m in r.node_members if not m.is_direct]
-                out["by_product"] = "/g:product:" in r.id
             if r.members is not None:
                 out["members"] = [serialise(m) for m in r.members]
             return out

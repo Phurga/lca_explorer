@@ -61,8 +61,8 @@ API in `src/lca_viewer/server.py`.
   out. ± handle or double-click to expand, Ctrl/⌘-click to select, drag to
   pan, wheel to zoom, "Fit" for the whole tree. See below for the layout
   choice.
-- **View bar** (under the toolbar): *Group products* and *Full / Short /
-  Custom* names, applied to the list, the tree view and the chart; see
+- **View bar** (under the toolbar): *Full / Short / Custom* names, applied
+  to the list, the tree view, the others panel and the chart; see
   [charts.md](charts.md).
 
   ![View settings](img/view-settings.png)
@@ -103,9 +103,19 @@ Display choice (list / tree) and orientation are per-browser preferences
 ## State
 
 The client owns the view state (`root`, `amount`, `method`, `cutoff`,
-`expanded`, `rules`) and posts it to `/api/rows` on every change (~70 ms on
-ecoinvent). It is kept in `localStorage` per browser (convenience only) and
-can be downloaded as JSON ("Save view").
+`expanded`, `rules`, pins, moved rows, merges) and posts it to `/api/rows` on
+every change (~70 ms on ecoinvent). It is kept in `localStorage` per browser
+(convenience only).
+
+**Save ▾** downloads the view as JSON; the arrow menu offers *Load view…*
+and *Copy view as JSON*. Saved files record the model (title, size), the
+functional unit's name and location, method names and the naming settings,
+besides positions. Node ids are positions in the model, so on load, if the
+functional unit is not at the same position (view saved from another model
+or database version), it is found by name and location and only the
+position-free parts are applied (functional unit, amount, method, cut-off,
+rules scoped everywhere, names); expansions, pins, moved rows and merges are
+dropped, and the notice says so. Loading is undoable.
 
 Expansion semantics: a group that hides an expanded member opens by itself,
 so adding a group-by rule does not hide the branch being explored; collapsing

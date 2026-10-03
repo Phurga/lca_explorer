@@ -501,7 +501,7 @@ function TreeGraph({ rows, rootImpact, selection, onToggle, onSelect, onUngroup,
             const amountText = r.kind === "process" ? (r.waste ? `${fmt(-r.amount)} ${unit(r.unit)} treated` : `${fmt(r.amount)} ${unit(r.unit)}`)
               : (r.kind === "merged" || r.kind === "group") && r.unit ? `${fmt(r.amount)} ${unit(r.unit)}` : "";
             const qualifier = r.kind === "process" && view.naming === "full" ? location : names.qual;
-            const subtitle = [qualifier, r.kind === "merged" && "merged", r.kind === "group" && !r.by_product && "group",
+            const subtitle = [qualifier, r.kind === "merged" && "merged", r.kind === "group" && "group",
               r.kind === "direct" && "of the parent process", amountText].filter(Boolean).join(" · ");
             const toggleAt = orientation === "horizontal" ? [x + BOX.w, y + BOX.h / 2] : [x + BOX.w / 2, y + BOX.h];
             const barWidth = BOX.w - 20 - 52;
@@ -604,14 +604,37 @@ function OthersDetails({ rest, rows, rootImpact, cutoff, cutoffBasis, pinned, se
     </div>`;
 }
 
+// ---------------------------------------------------------------- save / load menu
+function SaveMenu({ disabled, onSave, onLoad, onCopy }) {
+  const [open, setOpen] = useState(false);
+  const box = useRef(null);
+  const file = useRef(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e) => box.current && !box.current.contains(e.target) && setOpen(false);
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [open]);
+  return html`
+    <span class="split" ref=${box}>
+      <button disabled=${disabled} onClick=${onSave} title="Download this view (functional unit, tree, groups, pins, names) as JSON">Save</button>
+      <button class="split-arrow" onClick=${() => setOpen(!open)} aria-label="More view options" aria-expanded=${open}>▾</button>
+      ${open && html`
+        <div class="menu" role="menu">
+          <button role="menuitem" onClick=${() => { setOpen(false); file.current.click(); }}>Load view…</button>
+          <button role="menuitem" disabled=${disabled} onClick=${() => { setOpen(false); onCopy(); }}>Copy view as JSON</button>
+        </div>`}
+      <input type="file" accept=".json,application/json" ref=${file} style="display:none" aria-label="View file"
+             onChange=${(e) => { const f = e.target.files[0]; e.target.value = ""; if (f) onLoad(f); }} />
+    </span>`;
+}
+
 // ---------------------------------------------------------------- view bar (names and product grouping)
 function ViewBar({ view, setView, example }) {
   const set = (patch) => setView({ ...view, ...patch });
   return html`
     <div class="view-bar">
       <div class="row">
-        <button class=${view.groupProducts ? "primary" : ""} onClick=${() => set({ groupProducts: !view.groupProducts })}
-          title="Tree: bundle siblings of the same product (other regions or routes). Chart: also merge them across the tree">Group products</button>
         <span class="segmented" role="group" aria-label="Row names">
           ${[["full", "Full names"], ["short", "Short names"], ["custom", "Custom name"]].map(([id, label]) => html`
             <button class=${view.naming === id ? "primary" : ""} onClick=${() => set({ naming: id })}>${label}</button>`)}
@@ -731,41 +754,21 @@ function applyRecipe(recipe, metas, limit = 3) {
     .replace(/\(\s*\)/g, "").replace(/\s+/g, " ").trim();
 }
 
-function chartItems(rows, byId, groupProducts) {
-  const items = [];
-  const merged = new Map();
-  for (const r of frontier(rows)) {
-    const parent = byId.get(r.parent);
-    const parentMeta = parent?.meta;
-    const metas = r.meta ? [r.meta] : r.metas ? r.metas : r.kind === "direct" && parent?.metas ? parent.metas : [];
-    let key = null;
-    if (groupProducts) {
-      if (r.kind === "process") key = `p|${r.meta.reference_product}`;
-      else if (r.kind === "direct" && r.meta) key = `d|${r.meta.reference_product}`;
-      else if (r.kind === "rest") key = "o|";
-      else if (r.kind === "group") key = `g|${r.label}`;
-    }
-    if (key && merged.has(key)) {
-      const item = merged.get(key);
-      item.rows.push(r);
-      item.impacts = item.impacts.map((v, k) => v + r.impacts[k]);
-      item.metas.push(...metas);
-      if (parentMeta) item.parentMetas.push(parentMeta);
-      continue;
-    }
-    const item = { kind: r.kind, rows: [r], impacts: [...r.impacts], metas, parentMetas: parentMeta ? [parentMeta] : parent?.metas || [] };
-    if (key) merged.set(key, item);
-    items.push(item);
-  }
-  return items.sort((a, b) => Math.abs(b.impacts[0]) - Math.abs(a.impacts[0]));
+function chartItems(rows, byId) {
+  return frontier(rows)
+    .map((r) => {
+      const parent = byId.get(r.parent);
+      const metas = r.meta ? [r.meta] : r.metas ? r.metas : r.kind === "direct" && parent?.metas ? parent.metas : [];
+      return { kind: r.kind, rows: [r], impacts: [...r.impacts], metas, parentMetas: parent?.meta ? [parent.meta] : parent?.metas || [] };
+    })
+    .sort((a, b) => Math.abs(b.impacts[0]) - Math.abs(a.impacts[0]));
 }
 
 function nameItem(item, naming, recipe, byId) {
   const { kind, metas, parentMetas, rows } = item;
   const many = rows.length > 1;
   const pick = (field) => joinValues(metas.map((m) => m[field]));
-  const byProduct = kind === "group" && rows.every((r) => r.by_product);
-  if (kind === "group" && !byProduct) return { main: rows[0].label, qual: many ? `${rows.length} groups` : "" };
+  if (kind === "group") return { main: rows[0].label, qual: many ? `${rows.length} groups` : "" };
   if (kind === "rest") {
     if (many) return { main: "others", qual: `under ${rows.length} processes` };
     if (naming === "short") return { main: "others", qual: `under ${joinValues(parentMetas.map((m) => m.reference_product))}` };
@@ -776,7 +779,7 @@ function nameItem(item, naming, recipe, byId) {
   }
   if (!metas.length) return { main: rows[0].label, qual: "" };
   const direct = kind === "direct";
-  if (naming === "short" || (byProduct && naming === "full")) {
+  if (naming === "short") {
     return { main: pick("reference_product"), qual: [direct && "direct emissions", pick("location")].filter(Boolean).join(" · ") };
   }
   if (naming === "custom") {
@@ -868,14 +871,14 @@ function RecipeEditor({ recipe, setRecipe, example }) {
 
 // ---------------------------------------------------------------- chart panel
 function ChartPanel({ data, info, method, chartMethods, setChartMethods, view }) {
-  const { naming, recipe, groupProducts } = view;
+  const { naming, recipe } = view;
   const [mode, setMode] = useState("single");
   const [family, setFamily] = useState(info.methods[method].name[0]);
 
   const byId = useMemo(() => new Map(data.rows.map((r) => [r.id, r])), [data]);
   const parts = useMemo(
-    () => nameItems(chartItems(data.rows, byId, groupProducts), naming, recipe, byId),
-    [data, byId, groupProducts, naming, recipe],
+    () => nameItems(chartItems(data.rows, byId), naming, recipe, byId),
+    [data, byId, naming, recipe],
   );
   const unit = info.methods[method].unit;
   const total = parts.reduce((s, p) => s + p.impacts[0], 0);
@@ -956,7 +959,7 @@ function ChartPanel({ data, info, method, chartMethods, setChartMethods, view })
       </div>
       <p class="note">
         Built from the tree as displayed: each visible row that is not expanded is a bar segment.
-        Expand, collapse or group rows to change the breakdown. ${parts.length} segments${groupProducts ? " (same products merged across the tree)" : ""}.
+        Expand, collapse or group rows to change the breakdown. ${parts.length} segments.
       </p>
       ${mode === "single"
         ? html`<${Chart} option=${singleOption} height=${Math.max(260, parts.length * 26 + 60)} />`
@@ -1150,13 +1153,11 @@ function App() {
   const [view, setView] = useState(() => ({
     naming: loadPreference("naming", "full"),
     recipe: { main: loadPreference("recipeMain", DEFAULT_RECIPE.main), secondary: loadPreference("recipeSecondary", DEFAULT_RECIPE.secondary) },
-    groupProducts: loadPreference("groupProducts", "0") === "1",
   }));
   useEffect(() => {
     savePreference("naming", view.naming);
     savePreference("recipeMain", view.recipe.main);
     savePreference("recipeSecondary", view.recipe.secondary);
-    savePreference("groupProducts", view.groupProducts ? "1" : "0");
   }, [view]);
   const [rules, setRules] = useState([]);
   const [chartMethods, setChartMethods] = useState([]);
@@ -1225,17 +1226,18 @@ function App() {
   }
   function applyUndo() {
     const state = undo.state;
-    if (state.cutoff !== undefined) setCutoff(state.cutoff);
-    if (state.cutoffBasis !== undefined) setCutoffBasis(state.cutoffBasis);
-    if (state.expanded) setExpanded(state.expanded);
-    setPinned(state.pinned);
-    setOthers(state.others);
+    const setters = {
+      root: setRoot, amount: setAmount, method: setMethod, cutoff: setCutoff, cutoffBasis: setCutoffBasis,
+      expanded: setExpanded, rules: setRules, pinned: setPinned, others: setOthers, merges: setMerges,
+      chartMethods: setChartMethods, view: setView,
+    };
+    Object.entries(state).forEach(([key, value]) => setters[key]?.(value));
     setUndo(null);
   }
 
   const viewState = (exp = expanded) => ({
     root: [root.index], amount, expanded: [...exp], rules, cutoff: cutoff / 100, cutoff_basis: cutoffBasis, method, methods: chartMethods,
-    pinned: [...pinned], others: [...others], merges, group_products: view.groupProducts,
+    pinned: [...pinned], others: [...others], merges,
   });
 
   useEffect(() => {
@@ -1246,7 +1248,7 @@ function App() {
       .catch((e) => !cancelled && setError(e.message));
     save({ root, amount, method, cutoff, cutoffBasis, expanded: [...expanded], rules, chartMethods, pinned: [...pinned], others: [...others], merges });
     return () => { cancelled = true; };
-  }, [root, amount, method, cutoff, cutoffBasis, expanded, rules, chartMethods, pinned, others, merges, view.groupProducts, info]);
+  }, [root, amount, method, cutoff, cutoffBasis, expanded, rules, chartMethods, pinned, others, merges, info]);
 
   const rootImpact = data.rows[0]?.impacts[0] || 0;
   const rowsById = useMemo(() => new Map(data.rows.map((r) => [r.id, r])), [data]);
@@ -1340,8 +1342,65 @@ function App() {
     } catch (e) { setError(e.message); }
     setBusy(false);
   }
+  // Saved views store names (method, functional unit) as well as positions: node ids are
+  // positions in the model, valid only for the model the view was saved from.
+  function viewFile() {
+    return {
+      format: "lca_viewer view", version: 1,
+      model: { title: info.title, activities: info.activities },
+      root, amount, method: info.methods[method].name, chartMethods: chartMethods.map((k) => info.methods[k].name),
+      cutoff, cutoffBasis, expanded: [...expanded], rules, pinned: [...pinned], others: [...others], merges,
+      display: { naming: view.naming, recipe: view.recipe },
+    };
+  }
   function exportView() {
-    download("lca-view.json", JSON.stringify({ root, amount, method: info.methods[method].name, cutoff, expanded: [...expanded], rules, cutoffBasis, pinned: [...pinned], others: [...others], merges }, null, 2), "application/json");
+    const name = root ? `${root.name}-${root.location}`.replace(/[^\w.-]+/g, "_").slice(0, 60) : "view";
+    download(`lca-view-${name}.json`, JSON.stringify(viewFile(), null, 2), "application/json");
+  }
+  async function copyView() {
+    try { await navigator.clipboard.writeText(JSON.stringify(viewFile(), null, 2)); setUndo({ message: "View copied to the clipboard as JSON.", state: {} }); }
+    catch { setError("The browser did not allow copying to the clipboard."); }
+  }
+  async function loadView(file) {
+    try {
+      const saved = JSON.parse(await file.text());
+      if (!saved.root || !Array.isArray(saved.expanded)) throw new Error("This file is not a saved view.");
+      const methodIndex = (name) => info.methods.findIndex((m) => m.name.join("|") === (name || []).join("|"));
+      // Same functional unit at the same position: everything applies; otherwise find it by name
+      let target = saved.root;
+      let sameModel = saved.root.index < info.activities;
+      if (sameModel) {
+        const there = await request(`/api/activity/${saved.root.index}`);
+        sameModel = there.name === saved.root.name && there.location === saved.root.location;
+      }
+      if (!sameModel) {
+        const found = await request("/api/search", { text: "", predicate: { all: [
+          { field: "name", op: "eq", value: saved.root.name }, { field: "location", op: "eq", value: saved.root.location }] }, limit: 1 });
+        if (!found.results.length) throw new Error(`${saved.root.name} (${saved.root.location}) is not in this database.`);
+        target = found.results[0];
+      }
+      setUndo({
+        message: `View loaded from ${file.name}${sameModel ? "" : " — saved from another model: expansions, pins, moved rows and merges were not restored"}.`,
+        state: { root, amount, method, cutoff, cutoffBasis, expanded, rules, pinned, others, merges, chartMethods, view },
+      });
+      setRoot(target);
+      setAmount(saved.amount ?? 1);
+      const m = methodIndex(saved.method);
+      if (m >= 0) setMethod(m);
+      setChartMethods((saved.chartMethods || []).map(methodIndex).filter((k) => k >= 0));
+      setCutoff(saved.cutoff ?? 1);
+      setCutoffBasis(saved.cutoffBasis || "parent");
+      setRules(sameModel ? saved.rules || [] : (saved.rules || []).filter((r) => r.scope === "*"));
+      setExpanded(new Set(sameModel ? saved.expanded : [String(target.index)]));
+      setPinned(new Set(sameModel ? saved.pinned || [] : []));
+      setOthers(new Set(sameModel ? saved.others || [] : []));
+      setMerges(sameModel ? saved.merges || [] : []);
+      if (saved.display) setView({ ...view, ...saved.display });
+      setSelection(new Set());
+      setError(null);
+    } catch (e) {
+      setError(`Could not load the view: ${e.message}`);
+    }
   }
 
   if (!info) return html`<div class="empty">${error || "Loading model…"}</div>`;
@@ -1376,7 +1435,7 @@ function App() {
             <${NumberInput} class="cutoff" value=${threshold} min=${0.1} step="0.5" aria-label="Expansion threshold"
               onValue=${setThreshold} />%
             <span class="spacer"></span>
-            <button onClick=${exportView} disabled=${!root} title="Download this view (tree, groups, pins) as JSON">Save</button>
+            <${SaveMenu} disabled=${!root} onSave=${exportView} onLoad=${loadView} onCopy=${copyView} />
           </div>
           <${ViewBar} view=${view} setView=${setView}
             example=${(() => { const r = data.rows.find((x) => x.kind === "process" && x.depth > 0); return r ? rowNames(r, rowsById, view) : null; })()} />

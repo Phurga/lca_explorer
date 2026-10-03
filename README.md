@@ -74,8 +74,10 @@ browser keeps its own tree, groups and charts.
   (also the way to show processes hidden by the cut-off). Changing the
   cut-off clears these choices; **Reset view** clears them and collapses the
   tree. Both can be undone from the notice that appears.
-- **Group products** and **Full / Short / Custom names** (bar under the
-  toolbar) apply to the tree and the chart.
+- **Full / Short / Custom names** (bar under the toolbar) apply to the tree
+  and the chart.
+- **Save ▾**: download the view as a file; the arrow menu loads a saved view
+  back (or copies it as JSON).
 - The **contribution chart** shows exactly the rows visible in the tree:
   expand, collapse or group to change it. Export as PNG or CSV.
 - *Whole supply chain* answers "how much electricity / transport / … anywhere

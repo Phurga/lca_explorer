@@ -273,3 +273,15 @@ header { gap: 10px; }
 /* View bar: names and product grouping, for the tree and the chart */
 .view-bar { padding: 4px 12px; border-bottom: 1px solid var(--border); background: var(--panel); }
 .view-bar .row { margin: 2px 0; }
+
+/* Save split button */
+.split { position: relative; display: inline-flex; }
+.split > button:first-child { border-radius: 6px 0 0 6px; }
+.split > .split-arrow { border-radius: 0 6px 6px 0; border-left: none; padding: 4px 6px; }
+.menu {
+  position: absolute; top: calc(100% + 4px); right: 0; z-index: 20; min-width: 180px;
+  display: flex; flex-direction: column; padding: 4px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.14);
+}
+.menu button { border: none; text-align: left; padding: 6px 10px; border-radius: 4px; }
+.menu button:hover:not(:disabled) { background: var(--hover); }
