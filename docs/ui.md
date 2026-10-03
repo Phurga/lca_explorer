@@ -5,6 +5,8 @@ API in `src/lca_viewer/server.py`.
 
 ![Tree and contribution chart](img/tree-and-chart.png)
 
+![Tree graph](img/tree-graph.png)
+
 ## Decision: no-build Preact + htm + ECharts, vendored
 
 - **No build step** (no Node toolchain on the machine, and none needed for a
@@ -26,6 +28,14 @@ API in `src/lca_viewer/server.py`.
   "x kg treated"), impact, share bar. "Expand above x %" auto-expands every
   node above a threshold (hotspot drill-down). Ctrl/⌘-click selects sibling
   rows → "Group selected" creates a manual group; groups have an "ungroup" chip.
+- **Left — tree graph** ("Tree" toggle next to "List"): the same visible
+  tree drawn as nodes and edges, sharing all state with the list (expansion,
+  selection, groups — the chart follows either). Root on the left (→) or on
+  top (↓, SimaPro-like). Each box shows name, location, amount and a share
+  bar; edge thickness ∝ share of the total, so the main supply paths stand
+  out. ± handle or double-click to expand, Ctrl/⌘-click to select, drag to
+  pan, wheel to zoom, "Fit" for the whole tree. See below for the layout
+  choice.
 - **Right — tabs**:
   - *Contribution chart*: current method bars, or several methods as 100 %
     stacked bars; CSV export. See [charts.md](charts.md).
@@ -35,6 +45,21 @@ API in `src/lca_viewer/server.py`.
     suggestions, scope everywhere or under the selected row).
   - *Whole supply chain*: global grouping with the named groups, first-match
     or direct attribution (see [grouping.md](grouping.md)).
+
+## Tree graph layout
+
+Decision: own tidy-tree layout and SVG rendering instead of a graph library
+(ECharts `tree` series, d3-hierarchy, …). The layout is ~20 lines (leaves
+take consecutive slots, a parent is centred on its children, depth sets the
+other axis), and owning the SVG gives full control over boxes with impact
+bars, per-edge widths, selection and grouping interactions — which the
+ECharts tree series does not offer. Opening a functional unit zooms to a
+readable 60 % centred on the root rather than fitting a large tree into an
+unreadable thumbnail; "Fit" shows everything. The view does not re-fit on
+each expansion, so the user keeps their place.
+
+Display choice (list / tree) and orientation are per-browser preferences
+(`localStorage`).
 
 ## State
 

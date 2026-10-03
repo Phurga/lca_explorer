@@ -138,3 +138,36 @@ section { display: flex; flex-direction: column; min-height: 0; border-right: 1p
 table.results { border-collapse: collapse; width: 100%; margin-top: 8px; }
 table.results td, table.results th { padding: 4px 8px; border-bottom: 1px solid var(--border); text-align: left; }
 table.results td.num { text-align: right; font-family: var(--mono); }
+
+.segmented { display: inline-flex; }
+.segmented button { border-radius: 0; }
+.segmented button:first-child { border-radius: 6px 0 0 6px; }
+.segmented button:last-child { border-radius: 0 6px 6px 0; border-left: none; }
+
+/* Tree graph */
+.graph { position: relative; flex: 1; min-height: 0; overflow: hidden; background: var(--bg); cursor: grab; touch-action: none; }
+.graph:active { cursor: grabbing; }
+.graph svg { display: block; user-select: none; }
+.graph-controls { position: absolute; top: 8px; right: 8px; display: flex; gap: 4px; z-index: 1; }
+.graph-hint { position: absolute; bottom: 6px; left: 10px; color: var(--muted); font-size: 11px; pointer-events: none; }
+.graph .edge { fill: none; stroke: var(--bar); stroke-opacity: .55; }
+.graph .edge.neg { stroke: var(--bar-negative); }
+.graph .node { cursor: pointer; }
+.graph .node > rect:first-of-type { fill: var(--panel); stroke: var(--border); stroke-width: 1; }
+.graph .node:hover > rect:first-of-type { stroke: var(--accent); }
+.graph .node.selected > rect:first-of-type { fill: var(--selected); stroke: var(--accent); stroke-width: 2; }
+.graph .node.group > rect:first-of-type { stroke: var(--group); stroke-width: 1.5; }
+.graph .node.direct > rect:first-of-type, .graph .node.rest > rect:first-of-type { stroke-dasharray: 4 3; }
+.graph .node text { fill: var(--text); font-size: 12px; }
+.graph .node .title { font-weight: 500; }
+.graph .node.group .title { fill: var(--group); }
+.graph .node.direct .title, .graph .node.rest .title { fill: var(--muted); font-style: italic; font-weight: 400; }
+.graph .node .subtitle { fill: var(--muted); font-size: 11px; }
+.graph .node .share { font-family: var(--mono); font-size: 11px; }
+.graph .node .track { fill: var(--hover); }
+.graph .node .fill { fill: var(--bar); }
+.graph .node .fill.neg { fill: var(--bar-negative); }
+.graph .node .ungroup { fill: var(--group); font-size: 11px; text-decoration: underline; }
+.graph .toggle circle { fill: var(--panel); stroke: var(--accent); stroke-width: 1.5; }
+.graph .toggle text { fill: var(--accent); font-size: 13px; font-weight: 600; }
+.graph .toggle:hover circle { fill: var(--accent-soft); }

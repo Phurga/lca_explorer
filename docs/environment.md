@@ -24,4 +24,10 @@ python -m pytest tests -q               # unit tests on toy systems
 # build the app's model (all methods, ~5 s) and serve it on http://127.0.0.1:8765
 lca-viewer build --project lca_viewer_ei391 --database ecoinvent-3.9.1-cutoff --output data/cache/ei391_cutoff_all
 lca-viewer serve --model data/cache/ei391_cutoff_all --default-root "market for wheat grain, feed|GLO"
+# or, without activating any env:
+scripts/serve.sh
 ```
+
+The machine is a Docker container reached over SSH: to open the app from
+your own computer, tunnel the port (`ssh -N -L 8765:127.0.0.1:8765 <host>`)
+and browse http://localhost:8765.

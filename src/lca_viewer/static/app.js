@@ -62,6 +62,12 @@ function download(filename, text, type) {
 function loadSaved() {
   try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || "null"); } catch { return null; }
 }
+function loadPreference(name, fallback) {
+  try { return localStorage.getItem(`lca_viewer.${name}`) || fallback; } catch { return fallback; }
+}
+function savePreference(name, value) {
+  try { localStorage.setItem(`lca_viewer.${name}`, value); } catch { /* storage unavailable */ }
+}
 function save(state) {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch { /* storage unavailable */ }
 }
@@ -197,6 +203,155 @@ function Tree({ rows, rootImpact, selection, onToggle, onSelect, onUngroup, ungr
           })}
         </tbody>
       </table>
+    </div>`;
+}
+
+// ---------------------------------------------------------------- tree graph (nodes and edges)
+const BOX = { w: 210, h: 58 };
+const GAP = {
+  horizontal: { depth: 70, slot: 14 }, // root on the left, inputs to the right
+  vertical: { depth: 56, slot: 16 }, // root on top, inputs below
+};
+
+// Tidy tree: leaves take consecutive slots, a parent is centred on its children
+function layoutTree(rows, orientation) {
+  const children = new Map();
+  for (const r of rows) {
+    if (r.parent == null) continue;
+    if (!children.has(r.parent)) children.set(r.parent, []);
+    children.get(r.parent).push(r);
+  }
+  const gap = GAP[orientation];
+  const depthStep = (orientation === "horizontal" ? BOX.w : BOX.h) + gap.depth;
+  const slotStep = (orientation === "horizontal" ? BOX.h : BOX.w) + gap.slot;
+  const nodes = [];
+  const edges = [];
+  let nextSlot = 0;
+  function place(row, depth) {
+    const kids = children.get(row.id) || [];
+    const slot = kids.length
+      ? (() => { const s = kids.map((k) => place(k, depth + 1)); return (s[0] + s[s.length - 1]) / 2; })()
+      : nextSlot++;
+    const [x, y] = orientation === "horizontal" ? [depth * depthStep, slot * slotStep] : [slot * slotStep, depth * depthStep];
+    nodes.push({ row, x, y });
+    return slot;
+  }
+  if (rows.length) place(rows[0], 0);
+  const byId = new Map(nodes.map((n) => [n.row.id, n]));
+  for (const n of nodes) {
+    const parent = byId.get(n.row.parent);
+    if (parent) edges.push({ from: parent, to: n });
+  }
+  const width = Math.max(...nodes.map((n) => n.x)) + BOX.w;
+  const height = Math.max(...nodes.map((n) => n.y)) + BOX.h;
+  return { nodes, edges, width, height };
+}
+
+function edgePath(from, to, orientation) {
+  if (orientation === "horizontal") {
+    const x1 = from.x + BOX.w, y1 = from.y + BOX.h / 2, x2 = to.x, y2 = to.y + BOX.h / 2, xm = (x1 + x2) / 2;
+    return `M${x1},${y1} C${xm},${y1} ${xm},${y2} ${x2},${y2}`;
+  }
+  const x1 = from.x + BOX.w / 2, y1 = from.y + BOX.h, x2 = to.x + BOX.w / 2, y2 = to.y, ym = (y1 + y2) / 2;
+  return `M${x1},${y1} C${x1},${ym} ${x2},${ym} ${x2},${y2}`;
+}
+
+function TreeGraph({ rows, rootImpact, selection, onToggle, onSelect, onUngroup, ungroupable, orientation, setOrientation }) {
+  const container = useRef(null);
+  const drag = useRef(null);
+  const [transform, setTransform] = useState({ k: 1, x: 16, y: 16 });
+  const graph = useMemo(() => layoutTree(rows, orientation), [rows, orientation]);
+  const rootId = rows[0]?.id;
+
+  // Whole tree in view; with ``readable``, never zoom out below 60 % and centre on the root instead
+  function fit(readable = false) {
+    const el = container.current;
+    if (!el || !graph.nodes.length) return;
+    const margin = 24;
+    const whole = Math.min(1, (el.clientWidth - 2 * margin) / graph.width, (el.clientHeight - 2 * margin) / graph.height);
+    const k = readable ? Math.max(whole, 0.6) : Math.max(whole, 0.1);
+    const root = graph.nodes.find((n) => n.row.id === rootId);
+    setTransform(orientation === "horizontal"
+      ? { k, x: margin, y: el.clientHeight / 2 - (root.y + BOX.h / 2) * k }
+      : { k, x: el.clientWidth / 2 - (root.x + BOX.w / 2) * k, y: margin });
+  }
+  // Re-fit when the functional unit or the orientation changes, not on every expand
+  useEffect(() => fit(true), [rootId, orientation]);
+
+  function onWheel(e) {
+    e.preventDefault();
+    const rect = container.current.getBoundingClientRect();
+    const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+    setTransform((t) => {
+      const k = Math.min(2.5, Math.max(0.1, t.k * Math.exp(-e.deltaY * 0.0015)));
+      return { k, x: mx - ((mx - t.x) * k) / t.k, y: my - ((my - t.y) * k) / t.k };
+    });
+  }
+  function onPointerDown(e) {
+    if (e.target.closest(".node, .graph-controls")) return;
+    drag.current = { x: e.clientX, y: e.clientY, t: transform };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  }
+  function onPointerMove(e) {
+    const d = drag.current;
+    if (d) setTransform({ ...d.t, x: d.t.x + e.clientX - d.x, y: d.t.y + e.clientY - d.y });
+  }
+  const onPointerUp = () => { drag.current = null; };
+
+  if (!rows.length) return html`<div class="empty">Choose a functional unit to start.</div>`;
+  const share = (r) => (rootImpact ? r.impacts[0] / rootImpact : 0);
+  return html`
+    <div class="graph" ref=${container} onWheel=${onWheel} onPointerDown=${onPointerDown}
+         onPointerMove=${onPointerMove} onPointerUp=${onPointerUp}>
+      <div class="graph-controls">
+        <button class=${orientation === "horizontal" ? "primary" : ""} onClick=${() => setOrientation("horizontal")}
+          title="Root on the left">→</button>
+        <button class=${orientation === "vertical" ? "primary" : ""} onClick=${() => setOrientation("vertical")}
+          title="Root on top">↓</button>
+        <button onClick=${() => fit(false)}>Fit</button>
+        <button onClick=${() => setTransform((t) => ({ ...t, k: 1 }))}>100 %</button>
+      </div>
+      <svg width="100%" height="100%">
+        <g transform=${`translate(${transform.x},${transform.y}) scale(${transform.k})`}>
+          ${graph.edges.map(({ from, to }) => {
+            const s = share(to.row);
+            return html`<path key=${`e-${to.row.id}`} class="edge ${s < 0 ? "neg" : ""}" d=${edgePath(from, to, orientation)}
+              stroke-width=${1 + 14 * Math.min(1, Math.abs(s))} />`;
+          })}
+          ${graph.nodes.map(({ row: r, x, y }) => {
+            const s = share(r);
+            const [product, name, location] = r.kind === "process" ? r.label.split(" | ") : [r.label];
+            const title = r.kind === "direct" ? "direct emissions" : r.kind === "process" ? name : r.label;
+            const subtitle = r.kind === "process"
+              ? `${location} · ${r.waste ? `${fmt(-r.amount)} ${unit(r.unit)} treated` : `${fmt(r.amount)} ${unit(r.unit)}`}`
+              : r.kind === "group" ? "group" : r.kind === "rest" ? "below cut-off" : "of the parent process";
+            const toggleAt = orientation === "horizontal" ? [x + BOX.w, y + BOX.h / 2] : [x + BOX.w / 2, y + BOX.h];
+            const barWidth = BOX.w - 20 - 52;
+            return html`
+              <g key=${r.id} class="node ${r.kind} ${selection.has(r.id) ? "selected" : ""}"
+                 onClick=${(e) => onSelect(r, e.ctrlKey || e.metaKey || e.shiftKey)}
+                 onDblClick=${() => r.expandable && onToggle(r)}>
+                <title>${r.kind === "process" ? `${product} | ${name} | ${location}` : r.label}\n${fmt(r.impacts[0])} (${pct(s)})</title>
+                <rect x=${x} y=${y} width=${BOX.w} height=${BOX.h} rx="6" />
+                <text x=${x + 10} y=${y + 17} class="title">${truncate(title, 30)}</text>
+                <text x=${x + 10} y=${y + 32} class="subtitle">${truncate(subtitle, 34)}</text>
+                <rect x=${x + 10} y=${y + 41} width=${barWidth} height="7" rx="3.5" class="track" />
+                <rect x=${x + 10} y=${y + 41} width=${barWidth * Math.min(1, Math.abs(s))} height="7" rx="3.5"
+                      class="fill ${s < 0 ? "neg" : ""}" />
+                <text x=${x + BOX.w - 10} y=${y + 48} class="share" text-anchor="end">${pct(s)}</text>
+                ${r.kind === "group" && ungroupable(r) && html`
+                  <text x=${x + BOX.w - 10} y=${y + 17} class="ungroup" text-anchor="end"
+                        onClick=${(e) => { e.stopPropagation(); onUngroup(r); }}>ungroup</text>`}
+                ${r.expandable && html`
+                  <g class="toggle" onClick=${(e) => { e.stopPropagation(); onToggle(r); }}>
+                    <circle cx=${toggleAt[0]} cy=${toggleAt[1]} r="8" />
+                    <text x=${toggleAt[0]} y=${toggleAt[1] + 4} text-anchor="middle">${r.expanded ? "−" : "+"}</text>
+                  </g>`}
+              </g>`;
+          })}
+        </g>
+      </svg>
+      <div class="graph-hint">Drag to pan · wheel to zoom · double-click or ± to expand · Ctrl/⌘-click to select</div>
     </div>`;
 }
 
@@ -500,6 +655,10 @@ function App() {
   const [threshold, setThreshold] = useState(5);
   const [groupName, setGroupName] = useState("");
   const [busy, setBusy] = useState(false);
+  const [display, setDisplay] = useState(() => loadPreference("display", "list"));
+  const [orientation, setOrientation] = useState(() => loadPreference("orientation", "horizontal"));
+  useEffect(() => savePreference("display", display), [display]);
+  useEffect(() => savePreference("orientation", orientation), [orientation]);
 
   useEffect(() => {
     request("/api/info").then((i) => {
@@ -610,6 +769,10 @@ function App() {
       <main>
         <section>
           <div class="toolbar">
+            <div class="segmented" role="group" aria-label="Display">
+              <button class=${display === "list" ? "primary" : ""} onClick=${() => setDisplay("list")}>List</button>
+              <button class=${display === "graph" ? "primary" : ""} onClick=${() => setDisplay("graph")}>Tree</button>
+            </div>
             <button onClick=${() => setExpanded(new Set(root ? [String(root.index)] : []))}>Collapse all</button>
             <button onClick=${expandAbove} disabled=${busy || !root}>Expand above</button>
             <input class="cutoff" type="number" value=${threshold} min="0.1" step="0.5" aria-label="Expansion threshold"
@@ -621,8 +784,12 @@ function App() {
             <button onClick=${exportView} disabled=${!root}>Save view</button>
           </div>
           ${error && html`<div class="error">${error}</div>`}
-          <${Tree} rows=${data.rows} rootImpact=${rootImpact} selection=${selection} onToggle=${toggle} onSelect=${select}
-            onUngroup=${ungroup} ungroupable=${(r) => manualRuleFor(r) >= 0} />
+          ${display === "list"
+            ? html`<${Tree} rows=${data.rows} rootImpact=${rootImpact} selection=${selection} onToggle=${toggle} onSelect=${select}
+                onUngroup=${ungroup} ungroupable=${(r) => manualRuleFor(r) >= 0} />`
+            : html`<${TreeGraph} rows=${data.rows} rootImpact=${rootImpact} selection=${selection} onToggle=${toggle} onSelect=${select}
+                onUngroup=${ungroup} ungroupable=${(r) => manualRuleFor(r) >= 0}
+                orientation=${orientation} setOrientation=${setOrientation} />`}
           <div class="toolbar"><span class="hint">
             ${root ? `Total: ${fmt(rootImpact)} ${methodInfo.unit} — ${methodLabel(methodInfo)}` : ""}
           </span></div>
