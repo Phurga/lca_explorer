@@ -301,7 +301,7 @@ function MethodSelect({ methods, value, onChange }) {
 }
 
 // ---------------------------------------------------------------- tree
-function Tree({ rows, rootImpact, selection, onToggle, onSelect, onUngroup, ungroupable }) {
+function Tree({ rows, rootImpact, selection, onToggle, onSelect, onUngroup, ungroupable, onUnpin }) {
   if (!rows.length) return html`<div class="empty">Choose a functional unit to start.</div>`;
   return html`
     <div class="tree">
@@ -328,6 +328,9 @@ function Tree({ rows, rootImpact, selection, onToggle, onSelect, onUngroup, ungr
                     </span>
                     ${r.kind === "group" && ungroupable(r) && html`
                       <button class="chip" onClick=${(e) => { e.stopPropagation(); onUngroup(r); }}>ungroup</button>`}
+                    ${r.pinned && html`
+                      <button class="chip pin" title="Shown despite the cut-off — click to hide again"
+                        onClick=${(e) => { e.stopPropagation(); onUnpin(r); }}>pinned ×</button>`}
                   </div>
                 </td>
                 <td class="num" title=${amount}>${amount}</td>
@@ -396,7 +399,7 @@ function edgePath(from, to, orientation) {
   return `M${x1},${y1} C${x1},${ym} ${x2},${ym} ${x2},${y2}`;
 }
 
-function TreeGraph({ rows, rootImpact, selection, onToggle, onSelect, onUngroup, ungroupable, orientation, setOrientation }) {
+function TreeGraph({ rows, rootImpact, selection, onToggle, onSelect, onUngroup, ungroupable, onUnpin, orientation, setOrientation }) {
   const container = useRef(null);
   const drag = useRef(null);
   const [transform, setTransform] = useState({ k: 1, x: 16, y: 16 });
@@ -482,6 +485,9 @@ function TreeGraph({ rows, rootImpact, selection, onToggle, onSelect, onUngroup,
                 ${r.kind === "group" && ungroupable(r) && html`
                   <text x=${x + BOX.w - 10} y=${y + 17} class="ungroup" text-anchor="end"
                         onClick=${(e) => { e.stopPropagation(); onUngroup(r); }}>ungroup</text>`}
+                ${r.pinned && html`
+                  <text x=${x + BOX.w - 10} y=${y + 17} class="unpin" text-anchor="end"
+                        onClick=${(e) => { e.stopPropagation(); onUnpin(r); }}>pinned ×</text>`}
                 ${r.expandable && html`
                   <g class="toggle" onClick=${(e) => { e.stopPropagation(); onToggle(r); }}>
                     <circle cx=${toggleAt[0]} cy=${toggleAt[1]} r="8" />
@@ -492,6 +498,52 @@ function TreeGraph({ rows, rootImpact, selection, onToggle, onSelect, onUngroup,
         </g>
       </svg>
       <div class="graph-hint">Drag to pan · wheel to zoom · double-click or ± to expand · Ctrl/⌘-click to select</div>
+    </div>`;
+}
+
+// ---------------------------------------------------------------- below cut-off details
+// Shows what a "below cut-off" row contains; ticking a process pins it (exception to the cut-off)
+function CutoffDetails({ rest, rows, rootImpact, cutoff, pinned, setPinned, onClose }) {
+  const byId = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
+  const parent = byId.get(rest.parent);
+  const shownPins = rows.filter((r) => r.parent === rest.parent && r.pinned);
+  const items = [...shownPins, ...rest.members].sort((a, b) => Math.abs(b.impacts[0]) - Math.abs(a.impacts[0]));
+  const share = (r) => (rootImpact ? r.impacts[0] / rootImpact : 0);
+  const setPin = (ids, on) => {
+    const next = new Set(pinned);
+    ids.forEach((id) => (on ? next.add(id) : next.delete(id)));
+    setPinned(next);
+  };
+  return html`
+    <div class="details">
+      <div class="details-head">
+        <span><b>${rest.members.length} processes below the ${cutoff} % cut-off</b>
+          ${parent && html` under ${shortLabel(parent, byId)}`} · ${fmt(rest.impacts[0])} (${pct(share(rest))})</span>
+        <span class="spacer"></span>
+        <button onClick=${() => setPin(rest.members.map((m) => m.id), true)}>Show all</button>
+        <button disabled=${!shownPins.length} onClick=${() => setPin(shownPins.map((m) => m.id), false)}>Hide pinned</button>
+        <button onClick=${onClose} aria-label="Close">×</button>
+      </div>
+      <p class="note">Tick a process to show it in the tree and the contribution chart despite the cut-off.</p>
+      <div class="details-list">
+        <table>
+          <tbody>
+            ${items.map((r) => {
+              const [product, name, location] = r.kind === "process" ? r.label.split(" | ") : [r.label];
+              const amount = r.kind !== "process" ? "" : r.waste ? `${fmt(-r.amount)} ${unit(r.unit)} treated` : `${fmt(r.amount)} ${unit(r.unit)}`;
+              return html`
+                <tr key=${r.id}>
+                  <td><input type="checkbox" checked=${pinned.has(r.id)} aria-label="Show despite cut-off"
+                        onChange=${(e) => setPin([r.id], e.target.checked)} /></td>
+                  <td class="name-cell" title=${r.label}>${r.kind === "process" ? html`${name} <span class="loc">${location} · ${product}</span>` : r.kind === "direct" ? "direct emissions" : r.label}</td>
+                  <td class="num">${amount}</td>
+                  <td class="num">${fmt(r.impacts[0])}</td>
+                  <td class="num">${pct(share(r))}</td>
+                </tr>`;
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>`;
 }
 
@@ -748,6 +800,7 @@ function App() {
   const [method, setMethod] = useState(0);
   const [cutoff, setCutoff] = useState(1);
   const [expanded, setExpanded] = useState(new Set());
+  const [pinned, setPinned] = useState(new Set());
   const [rules, setRules] = useState([]);
   const [chartMethods, setChartMethods] = useState([]);
   const [selection, setSelection] = useState(new Set());
@@ -769,6 +822,7 @@ function App() {
       if (saved && saved.root && saved.root.index < i.activities && saved.method < i.methods.length) {
         setRoot(saved.root); setAmount(saved.amount); setMethod(saved.method); setCutoff(saved.cutoff);
         setExpanded(new Set(saved.expanded)); setRules(saved.rules); setChartMethods(saved.chartMethods || []);
+        setPinned(new Set(saved.pinned || []));
         return;
       }
       setMethod(i.default_method);
@@ -781,12 +835,14 @@ function App() {
   function selectRoot(r) {
     setRoot(r);
     setExpanded(new Set([String(r.index)]));
+    setPinned(new Set());
     setRules((current) => current.filter((rule) => rule.scope === "*"));
     setSelection(new Set());
   }
 
   const viewState = (exp = expanded) => ({
     root: [root.index], amount, expanded: [...exp], rules, cutoff: cutoff / 100, method, methods: chartMethods,
+    pinned: [...pinned],
   });
 
   useEffect(() => {
@@ -795,9 +851,9 @@ function App() {
     request("/api/rows", viewState())
       .then((d) => { if (!cancelled) { setData(d); setError(null); } })
       .catch((e) => !cancelled && setError(e.message));
-    save({ root, amount, method, cutoff, expanded: [...expanded], rules, chartMethods });
+    save({ root, amount, method, cutoff, expanded: [...expanded], rules, chartMethods, pinned: [...pinned] });
     return () => { cancelled = true; };
-  }, [root, amount, method, cutoff, expanded, rules, chartMethods, info]);
+  }, [root, amount, method, cutoff, expanded, rules, chartMethods, pinned, info]);
 
   const rootImpact = data.rows[0]?.impacts[0] || 0;
   const rowsById = useMemo(() => new Map(data.rows.map((r) => [r.id, r])), [data]);
@@ -830,6 +886,8 @@ function App() {
     setSelection(new Set());
     setGroupName("");
   }
+  const unpin = (row) => { const next = new Set(pinned); next.delete(row.id); setPinned(next); };
+  const selectedRest = selectedRows.length === 1 && selectedRows[0].kind === "rest" ? selectedRows[0] : null;
   const manualRuleFor = (groupRow) => rules.findIndex((r) => r.predicate && r.scope === groupRow.parent && `${groupRow.parent}/g:${r.name}` === groupRow.id);
   function ungroup(groupRow) {
     const i = manualRuleFor(groupRow);
@@ -852,7 +910,7 @@ function App() {
     setBusy(false);
   }
   function exportView() {
-    download("lca-view.json", JSON.stringify({ root, amount, method: info.methods[method].name, cutoff, expanded: [...expanded], rules }, null, 2), "application/json");
+    download("lca-view.json", JSON.stringify({ root, amount, method: info.methods[method].name, cutoff, expanded: [...expanded], rules, pinned: [...pinned] }, null, 2), "application/json");
   }
 
   if (!info) return html`<div class="empty">${error || "Loading model…"}</div>`;
@@ -888,10 +946,12 @@ function App() {
           ${error && html`<div class="error">${error}</div>`}
           ${display === "list"
             ? html`<${Tree} rows=${data.rows} rootImpact=${rootImpact} selection=${selection} onToggle=${toggle} onSelect=${select}
-                onUngroup=${ungroup} ungroupable=${(r) => manualRuleFor(r) >= 0} />`
+                onUngroup=${ungroup} ungroupable=${(r) => manualRuleFor(r) >= 0} onUnpin=${unpin} />`
             : html`<${TreeGraph} rows=${data.rows} rootImpact=${rootImpact} selection=${selection} onToggle=${toggle} onSelect=${select}
-                onUngroup=${ungroup} ungroupable=${(r) => manualRuleFor(r) >= 0}
+                onUngroup=${ungroup} ungroupable=${(r) => manualRuleFor(r) >= 0} onUnpin=${unpin}
                 orientation=${orientation} setOrientation=${setOrientation} />`}
+          ${selectedRest && html`<${CutoffDetails} rest=${selectedRest} rows=${data.rows} rootImpact=${rootImpact}
+              cutoff=${cutoff} pinned=${pinned} setPinned=${setPinned} onClose=${() => setSelection(new Set())} />`}
           <div class="toolbar"><span class="hint">
             ${root ? `Total: ${fmt(rootImpact)} ${methodInfo.unit} — ${methodLabel(methodInfo)}` : ""}
           </span></div>

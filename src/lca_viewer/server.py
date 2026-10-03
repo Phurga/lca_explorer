@@ -36,6 +36,7 @@ class ViewState(BaseModel):
     rules: list[dict] = []
     cutoff: float = 0.0
     method: int = 0
+    pinned: list[str] = []
     methods: list[int] = []
     """Methods whose impacts are returned, in this order (default: ``method`` only)."""
 
@@ -112,8 +113,9 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
         except (KeyError, IndexError, ValueError) as e:
             raise HTTPException(400, f"Invalid view: {e}")
         methods = [state.method] + [m for m in state.methods if m != state.method]
-        rows = [
-            {
+
+        def serialise(r) -> dict:
+            out = {
                 "id": r.id,
                 "parent": r.parent,
                 "depth": r.depth,
@@ -126,9 +128,13 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
                 "impacts": _floats(r.impacts[methods]),
                 "expandable": r.expandable,
                 "expanded": r.expanded,
+                "pinned": r.pinned,
             }
-            for r in rendered
-        ]
+            if r.members is not None:
+                out["members"] = [serialise(m) for m in r.members]
+            return out
+
+        rows = [serialise(r) for r in rendered]
         return {"methods": methods, "rows": rows}
 
     @app.post("/api/global")

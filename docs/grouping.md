@@ -33,6 +33,18 @@ The view also applies a display **cut-off**: children below x % of the root
 are summed into one "n processes below cut-off" row, so the frontier stays
 complete.
 
+### Cut-off exceptions (pins)
+
+The rest row keeps its `members` (the hidden rows), so the UI can show what
+it contains: selecting it opens a panel listing them with their impacts.
+Ticking one **pins** it: its id goes into `View.pinned`, and pinned rows are
+kept whatever the cut-off (flagged `pinned` while below it). They then
+appear in the tree and, being on the frontier, in the contribution chart;
+the rest row shrinks accordingly, so totals stay exact. Pins are part of the
+saved view and are cleared when the functional unit changes.
+
+![Cut-off exceptions](img/cutoff-exceptions.png)
+
 ## Queries (`query.py`)
 
 JSON predicates, evaluated vectorised over activity metadata

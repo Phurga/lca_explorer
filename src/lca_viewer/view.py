@@ -55,6 +55,10 @@ class Row:
     expandable: bool
     expanded: bool
     node: Node | None = None
+    members: list["Row"] | None = None
+    """For "rest" rows: the rows hidden by the cut-off."""
+    pinned: bool = False
+    """Shown although below the cut-off, because the user pinned it."""
 
 
 @dataclass
@@ -65,6 +69,8 @@ class View:
     cutoff: float = 0.0
     """Hide children whose |impact| < cutoff × |root impact| (for ``method``); they are summed in a "rest" row."""
     method: int = 0
+    pinned: set[str] = field(default_factory=set)
+    """Row ids shown even when below the cut-off (exceptions chosen by the user)."""
 
     def __post_init__(self):
         self._activities = derived_activities(self.tree.model)
@@ -88,6 +94,7 @@ class View:
             "rules": [r.to_dict() for r in self.rules],
             "cutoff": self.cutoff,
             "method": self.method,
+            "pinned": sorted(self.pinned),
         }
 
     @classmethod
@@ -99,6 +106,7 @@ class View:
             rules=[GroupRule(**r) for r in data.get("rules", [])],
             cutoff=data.get("cutoff", 0.0),
             method=data.get("method", 0),
+            pinned=set(data.get("pinned", [])),
         )
 
     # --- rendering -------------------------------------------------------
@@ -166,8 +174,11 @@ class View:
         if self.cutoff <= 0:
             return rows
         threshold = self.cutoff * abs(self.tree.root.impacts[self.method])
-        kept = [r for r in rows if abs(r.impacts[self.method]) >= threshold]
-        hidden = [r for r in rows if abs(r.impacts[self.method]) < threshold]
+        below = [bool(abs(r.impacts[self.method]) < threshold) for r in rows]
+        for r, b in zip(rows, below):
+            r.pinned = b and r.id in self.pinned
+        kept = [r for r, b in zip(rows, below) if not b or r.pinned]
+        hidden = [r for r, b in zip(rows, below) if b and not r.pinned]
         if len(hidden) > 1:
             rest = Row(
                 id=f"{parent.id}/rest",
@@ -180,6 +191,7 @@ class View:
                 impacts=sum(r.impacts for r in hidden),
                 expandable=False,
                 expanded=False,
+                members=hidden,
             )
             return kept + [rest]
         return rows

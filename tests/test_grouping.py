@@ -707,3 +707,51 @@ def test_group_hiding_an_expanded_member_opens_until_collapsed(grouping_model):
     assert french.id not in [r.id for r in view.rows()]
     view.expand(group.id)
     assert next(r for r in view.rows() if r.kind == "group").expanded
+
+
+def test_rest_row_lists_hidden_members_and_pins_bring_them_back(grouping_model):
+    view = View(Tree(grouping_model, 0))
+    view.expand("0")
+    root_score = abs(view.tree.root.impacts[0])
+    children = [r for r in view.rows() if r.depth == 1]
+    impacts = sorted(abs(r.impacts[0]) for r in children)
+    # cut-off between the 2nd and 3rd smallest child, so that two rows are hidden
+    view.cutoff = (impacts[1] + impacts[2]) / 2 / root_score
+    rest = next(r for r in view.rows() if r.kind == "rest")
+    assert len(rest.members) == 2
+    assert np.allclose(rest.impacts, sum(m.impacts for m in rest.members))
+
+    pinned = rest.members[0]
+    view.pinned = {pinned.id}
+    rows = view.rows()
+    shown = next(r for r in rows if r.id == pinned.id)
+    assert shown.pinned
+    # only one row left below the cut-off: it is shown as itself, no rest row
+    assert not [r for r in rows if r.kind == "rest"]
+    assert np.allclose(sum(r.impacts for r in view.frontier()), view.tree.root.impacts)
+    assert View.from_dict(grouping_model, view.to_dict()).pinned == {pinned.id}
+
+
+def test_pin_above_cutoff_is_not_flagged(grouping_model):
+    view = View(Tree(grouping_model, 0), cutoff=1e-9)
+    view.expand("0")
+    child = next(r for r in view.rows() if r.depth == 1)
+    view.pinned = {child.id}
+    assert not next(r for r in view.rows() if r.id == child.id).pinned
+
+
+def test_rows_api_with_cutoff_and_pins_is_json_serialisable(grouping_model):
+    """Cut-off flags must be plain bools in the API response (regression: numpy.bool)."""
+    from fastapi.testclient import TestClient
+    from lca_viewer.server import create_app
+
+    client = TestClient(create_app(grouping_model))
+    state = {"root": [0], "expanded": ["0"], "cutoff": 0.3, "method": 0, "pinned": []}
+    response = client.post("/api/rows", json=state)
+    assert response.status_code == 200
+    rest = [r for r in response.json()["rows"] if r["kind"] == "rest"]
+    assert rest and len(rest[0]["members"]) > 1
+
+    state["pinned"] = [rest[0]["members"][0]["id"]]
+    rows = client.post("/api/rows", json=state).json()["rows"]
+    assert any(r["pinned"] for r in rows)

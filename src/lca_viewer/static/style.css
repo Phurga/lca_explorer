@@ -181,3 +181,22 @@ table.results td.num { text-align: right; font-family: var(--mono); }
 .graph .toggle circle { fill: var(--panel); stroke: var(--accent); stroke-width: 1.5; }
 .graph .toggle text { fill: var(--accent); font-size: 13px; font-weight: 600; }
 .graph .toggle:hover circle { fill: var(--accent-soft); }
+
+/* Below cut-off details */
+.tree tr.rest { cursor: pointer; }
+.tree tr.rest .label::after { content: "  · click to see"; color: var(--accent); font-style: normal; font-size: 11px; }
+.tree .chip.pin { color: var(--accent); border-color: var(--accent); }
+.graph .node .unpin { fill: var(--accent); font-size: 11px; text-decoration: underline; }
+.details {
+  border-top: 2px solid var(--accent); background: var(--panel); padding: 8px 12px;
+  max-height: 45%; display: flex; flex-direction: column; min-height: 0;
+}
+.details-head { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.details .note { margin: 4px 0 6px; }
+.details-list { overflow: auto; min-height: 0; }
+.details-list table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.details-list td { padding: 3px 6px; border-bottom: 1px solid var(--border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.details-list td:first-child { width: 28px; }
+.details-list td.num { width: 110px; text-align: right; font-family: var(--mono); font-size: 12px; }
+.details-list td.num:last-child { width: 64px; }
+.details-list .loc { color: var(--muted); margin-left: 4px; }
