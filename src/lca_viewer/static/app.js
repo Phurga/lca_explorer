@@ -11,7 +11,14 @@ async function request(url, body) {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
   };
   const response = await fetch(url, options);
-  if (!response.ok) throw new Error(await response.text());
+  if (!response.ok) {
+    let detail = await response.text();
+    try { detail = JSON.parse(detail).detail ?? detail; } catch { /* not JSON */ }
+    if (response.status === 404 || response.status === 405) {
+      detail = `The server does not know this request (${detail}). It is probably running older code: restart it.`;
+    }
+    throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+  }
   return response.json();
 }
 
