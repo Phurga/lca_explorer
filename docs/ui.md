@@ -44,6 +44,9 @@ API in `src/lca_viewer/server.py`.
   listing what it contains and why (below cut-off / moved); ticking a process
   shows it again — also how to pin exceptions to the cut-off ("pinned ×" chip
   to undo). See [grouping.md](grouping.md).
+  **Reset view** collapses the tree and clears pins and moved rows (groups
+  kept); changing the cut-off also clears pins and moved rows. Both show a
+  notice with **Undo**.
 - **Left — tree graph** ("Tree" toggle next to "List"): the same visible
   tree drawn as nodes and edges, sharing all state with the list (expansion,
   selection, groups — the chart follows either). Root on the left (→) or on

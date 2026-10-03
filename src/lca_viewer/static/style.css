@@ -213,3 +213,11 @@ table.results td.num { text-align: right; font-family: var(--mono); }
 .details-list td.num { width: 110px; text-align: right; font-family: var(--mono); font-size: 12px; }
 .details-list td.num:last-child { width: 64px; }
 .details-list .loc { color: var(--muted); margin-left: 4px; }
+
+.notice {
+  display: flex; gap: 8px; align-items: center; padding: 6px 12px;
+  background: var(--accent-soft); border-bottom: 1px solid var(--border);
+}
+.notice span { flex: 1; }
+button.link { border: none; background: none; padding: 0 4px; color: var(--accent); font-size: 12px; font-weight: 400; text-decoration: underline; }
+.toolbar input.cutoff { width: 56px; }

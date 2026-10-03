@@ -53,6 +53,14 @@ A single row below the cut-off is shown as itself, but a single moved row
 still gets an others row. Pins and moved rows are part of the saved view and
 are cleared when the functional unit changes.
 
+Decision: **changing the cut-off clears pins and moved rows** (with an Undo
+notice that also restores the previous cut-off). Pins are exceptions to one
+particular cut-off; kept across changes they made a raised cut-off look
+ignored ("Show all" pins every member), and moved rows mixed confusingly
+with a different set of cut-off rows. **Reset view** does the same plus
+collapsing the tree, keeping grouping rules, functional unit, method and
+cut-off (also undoable).
+
 ![Cut-off exceptions](img/cutoff-exceptions.png)
 
 ## Queries (`query.py`)

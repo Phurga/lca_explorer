@@ -737,7 +737,7 @@ function GroupPanel({ info, rules, setRules, selectedRow }) {
 
   return html`
     <div class="panel">
-      <h3>Active rules</h3>
+      <h3>Active rules ${rules.length > 1 && html`<button class="link" onClick=${() => setRules([])}>remove all</button>`}</h3>
       <p class="note">Rules bundle sibling processes in the tree. Named groups are applied first, then group-by rules, each in list order; a process goes to the first group that claims it. Numbers never change, only how they are bundled.</p>
       ${rules.length === 0 ? html`<p class="note">No grouping. Select several sibling rows in the tree (Ctrl/⌘-click) and use "Group selected", or add a rule below.</p>` : html`
         <ul class="rules">
@@ -839,6 +839,7 @@ function App() {
   const [amount, setAmount] = useState(1);
   const [method, setMethod] = useState(0);
   const [cutoff, setCutoff] = useState(1);
+  const [undo, setUndo] = useState(null);
   const [expanded, setExpanded] = useState(new Set());
   const [pinned, setPinned] = useState(new Set());
   const [others, setOthers] = useState(new Set());
@@ -880,6 +881,36 @@ function App() {
     setOthers(new Set());
     setRules((current) => current.filter((rule) => rule.scope === "*"));
     setSelection(new Set());
+    setUndo(null);
+  }
+
+  // Pins are exceptions to one cut-off, and moved rows mix with the cut-off rows in
+  // "others": a new cut-off starts from a clean slate, with an undo.
+  const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  const describeCustom = (p, o) => [p.size && `${plural(p.size, "pinned row")}`, o.size && `${plural(o.size, "row")} moved to others`].filter(Boolean).join(" and ");
+  function changeCutoff(next) {
+    if (pinned.size || others.size) {
+      setUndo({ message: `Cut-off changed: ${describeCustom(pinned, others)} reset.`, state: { cutoff, pinned, others } });
+      setPinned(new Set());
+      setOthers(new Set());
+    }
+    setCutoff(next);
+  }
+  function resetView() {
+    const custom = describeCustom(pinned, others);
+    setUndo({ message: `View reset${custom ? ` (${custom})` : ""}.`, state: { expanded, pinned, others } });
+    setExpanded(new Set([String(root.index)]));
+    setPinned(new Set());
+    setOthers(new Set());
+    setSelection(new Set());
+  }
+  function applyUndo() {
+    const state = undo.state;
+    if (state.cutoff !== undefined) setCutoff(state.cutoff);
+    if (state.expanded) setExpanded(state.expanded);
+    setPinned(state.pinned);
+    setOthers(state.others);
+    setUndo(null);
   }
 
   const viewState = (exp = expanded) => ({
@@ -974,7 +1005,7 @@ function App() {
           onValue=${setAmount} aria-label="Amount" />${root ? root.unit : ""}</label>
         <${MethodSelect} methods=${info.methods} value=${method} onChange=${setMethod} />
         <label>Cut-off <${NumberInput} class="cutoff" value=${cutoff} min=${0} max=${100} step="0.5"
-          onValue=${setCutoff} aria-label="Cut-off" />%</label>
+          onValue=${changeCutoff} aria-label="Cut-off" title="Changing the cut-off resets pinned rows and rows moved to others" />%</label>
       </header>
       <main>
         <section>
@@ -984,6 +1015,7 @@ function App() {
               <button class=${display === "graph" ? "primary" : ""} onClick=${() => setDisplay("graph")}>Tree</button>
             </div>
             <button onClick=${() => setExpanded(new Set(root ? [String(root.index)] : []))} title="Collapse everything below the root">Collapse</button>
+            <button onClick=${resetView} disabled=${!root} title="Collapse the tree and clear pinned rows and rows moved to others (groups are kept)">Reset view</button>
             <button onClick=${expandAbove} disabled=${busy || !root}>Expand above</button>
             <${NumberInput} class="cutoff" value=${threshold} min=${0.1} step="0.5" aria-label="Expansion threshold"
               onValue=${setThreshold} />%
@@ -993,8 +1025,14 @@ function App() {
               title="Group the selected sibling rows (select at least two with Ctrl/⌘-click)">Group</button>
             <button disabled=${!movableSelection.length} onClick=${() => moveToOthers(movableSelection.map((r) => r.id))}
               title="Move the selected rows to their parent's others row">To others</button>
-            <button onClick=${exportView} disabled=${!root}>Save view</button>
+            <button onClick=${exportView} disabled=${!root} title="Download this view (tree, groups, pins) as JSON">Save</button>
           </div>
+          ${undo && html`
+            <div class="notice" role="status">
+              <span>${undo.message}</span>
+              <button onClick=${applyUndo}>Undo</button>
+              <button onClick=${() => setUndo(null)} aria-label="Dismiss">×</button>
+            </div>`}
           ${error && html`<div class="error">${error}</div>`}
           ${display === "list"
             ? html`<${Tree} rows=${data.rows} rootImpact=${rootImpact} selection=${selection} onToggle=${toggle} onSelect=${select}

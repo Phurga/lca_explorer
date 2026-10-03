@@ -69,7 +69,9 @@ browser keeps its own tree, groups and charts.
   your own filter).
 - **×** on a row (hover) moves it to *others*, out of the tree and the chart;
   click an *others* row to see what it contains and bring processes back
-  (also the way to show processes hidden by the cut-off).
+  (also the way to show processes hidden by the cut-off). Changing the
+  cut-off clears these choices; **Reset view** clears them and collapses the
+  tree. Both can be undone from the notice that appears.
 - The **contribution chart** shows exactly the rows visible in the tree:
   expand, collapse or group to change it. Export as PNG or CSV.
 - *Whole supply chain* answers "how much electricity / transport / … anywhere
