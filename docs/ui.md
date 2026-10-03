@@ -40,7 +40,9 @@ API in `src/lca_viewer/server.py`.
   rows → "Group selected" creates a manual group; groups have an "ungroup" chip.
   Every row has a **×** (on hover, next to ▸ in the list, at the box corner
   in the tree view) that moves it to its parent's **others** row; "To others"
-  does the same for a selection. Clicking an "others" row opens a panel
+  does the same for a selection. Hovering an "others" row previews its
+  panel (closed when the mouse leaves the row and the panel); clicking keeps
+  it open, clicking again closes it. The panel shows
   listing what it contains and why (below cut-off / moved); ticking a process
   shows it again — also how to pin exceptions to the cut-off ("pinned ×" chip
   to undo). See [grouping.md](grouping.md).
@@ -55,6 +57,13 @@ API in `src/lca_viewer/server.py`.
   out. ± handle or double-click to expand, Ctrl/⌘-click to select, drag to
   pan, wheel to zoom, "Fit" for the whole tree. See below for the layout
   choice.
+- **Right-click a process** (list or tree view): pop-up with its place in
+  this tree (amount, impact, path from the root), per-unit cumulative and
+  direct impacts, the main direct emissions for the current method, the
+  ecoinvent description, included activities, time period, classifications,
+  authors and file; actions "Use as functional unit" and "Move to others".
+  Descriptions are stored in the cached model (`details.pkl`, 77 MB for
+  ecoinvent, loaded on first use).
 - **Right — tabs**:
   - *Contribution chart*: current method bars, or several methods as 100 %
     stacked bars; CSV export. See [charts.md](charts.md).

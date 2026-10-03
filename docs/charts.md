@@ -26,6 +26,22 @@ Labels: processes as `name (location)`; direct emissions and below-cut-off
 rows name their parent ("direct: wheat production (RoW)",
 "other inputs of …"), since several of them can be on the frontier.
 
+## Quick views
+
+- **Group products**: chart rows of the same reference product (different
+  regions, markets or production routes) are merged into one bar; direct
+  emissions are merged per emitting product, others rows into one. The tree
+  is unchanged.
+- **Row names**: *Full* (`activity name (location)`), *Short* (product name,
+  with the qualifiers needed to tell rows apart in grey: location, then
+  activity name, then the parent, then a number), or *Custom*: a recipe such
+  as `{product} ({location})` with tokens `{product} {name} {location}
+  {unit} {type} {isic} {cpc} {database}`; merged rows list their values
+  ("FR, DE, US +2"). Choices are per-browser preferences.
+
+Axis label widths are measured with a canvas (ECharts mis-measures two-tone
+rich-text labels with `containLabel`).
+
 ## Export
 
 - PNG from the chart toolbox (2× resolution).
