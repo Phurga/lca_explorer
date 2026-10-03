@@ -1,0 +1,11 @@
+# ecoinvent data is licensed: never commit it
+*.7z
+*.zip
+*.spold
+data/
+
+# Python
+__pycache__/
+*.egg-info/
+.venv/
+.pytest_cache/
