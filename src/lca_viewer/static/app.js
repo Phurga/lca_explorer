@@ -96,6 +96,25 @@ const PALETTE = [
 ];
 const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
+// ---------------------------------------------------------------- number input
+// Applies the value while typing (after a short pause), not only on blur/Enter
+function NumberInput({ value, onValue, min, max, step, delay = 400, ...props }) {
+  const [text, setText] = useState(String(value));
+  const timer = useRef(null);
+  useEffect(() => { if (Number(text) !== value) setText(String(value)); }, [value]);
+  function commit(raw) {
+    clearTimeout(timer.current);
+    const x = Number(raw);
+    if (raw.trim() === "" || !Number.isFinite(x)) return;
+    const clamped = Math.min(max ?? Infinity, Math.max(min ?? -Infinity, x));
+    if (clamped !== value) onValue(clamped);
+  }
+  return html`<input type="number" value=${text} min=${min} max=${max} step=${step} ...${props}
+    onInput=${(e) => { const raw = e.target.value; setText(raw); clearTimeout(timer.current); timer.current = setTimeout(() => commit(raw), delay); }}
+    onChange=${(e) => commit(e.target.value)}
+    onBlur=${() => setText(String(value))} />`;
+}
+
 // ---------------------------------------------------------------- chart
 function Chart({ option, height = 420 }) {
   const ref = useRef(null);
@@ -951,11 +970,11 @@ function App() {
       <header>
         <h1>LCA Process Explorer</h1>
         <${FunctionalUnit} root=${root} onSelect=${selectRoot} fields=${info.query_fields} />
-        <label>Amount <input class="amount" type="number" value=${amount} min="0" step="any"
-          onChange=${(e) => setAmount(Number(e.target.value) || 1)} />${root ? root.unit : ""}</label>
+        <label>Amount <${NumberInput} class="amount" value=${amount} min=${1e-12} step="any"
+          onValue=${setAmount} aria-label="Amount" />${root ? root.unit : ""}</label>
         <${MethodSelect} methods=${info.methods} value=${method} onChange=${setMethod} />
-        <label>Cut-off <input class="cutoff" type="number" value=${cutoff} min="0" max="50" step="0.5"
-          onChange=${(e) => setCutoff(Math.max(0, Number(e.target.value)))} />%</label>
+        <label>Cut-off <${NumberInput} class="cutoff" value=${cutoff} min=${0} max=${100} step="0.5"
+          onValue=${setCutoff} aria-label="Cut-off" />%</label>
       </header>
       <main>
         <section>
@@ -966,8 +985,8 @@ function App() {
             </div>
             <button onClick=${() => setExpanded(new Set(root ? [String(root.index)] : []))} title="Collapse everything below the root">Collapse</button>
             <button onClick=${expandAbove} disabled=${busy || !root}>Expand above</button>
-            <input class="cutoff" type="number" value=${threshold} min="0.1" step="0.5" aria-label="Expansion threshold"
-              onChange=${(e) => setThreshold(Math.max(0.1, Number(e.target.value)))} />%
+            <${NumberInput} class="cutoff" value=${threshold} min=${0.1} step="0.5" aria-label="Expansion threshold"
+              onValue=${setThreshold} />%
             <span class="spacer"></span>
             <input placeholder="group name" value=${groupName} onInput=${(e) => setGroupName(e.target.value)} style="width:96px" aria-label="New group name" />
             <button disabled=${!canGroup} onClick=${groupSelected}
