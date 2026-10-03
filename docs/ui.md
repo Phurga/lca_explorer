@@ -45,7 +45,8 @@ API in `src/lca_viewer/server.py`.
   in the tree view) that moves it to its parent's **others** row; "To others"
   does the same for a selection. Hovering an "others" row previews its
   panel (closed when the mouse leaves the row and the panel); clicking keeps
-  it open, clicking again closes it. The panel shows
+  it open, clicking again closes it. The panel follows the view's naming
+  choice, and right-clicking one of its processes opens the info pop-up. It shows
   listing what it contains and why (below cut-off / moved); ticking a process
   shows it again — also how to pin exceptions to the cut-off ("pinned ×" chip
   to undo). See [grouping.md](grouping.md).
