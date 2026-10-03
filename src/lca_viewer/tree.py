@@ -22,8 +22,9 @@ DIRECT = -1
 
 @dataclass(frozen=True)
 class Node:
-    path: tuple[int, ...]
-    """Product indices from the root; ``DIRECT`` as last element for direct emissions."""
+    path: tuple[int | str, ...]
+    """Product indices from the root; ``DIRECT`` as last element for direct emissions.
+    May start with a view row id (a string) for inputs of merged processes."""
     amount: float
     """Amount of product supplied, in the product's unit (0 for direct nodes)."""
     impacts: np.ndarray

@@ -321,7 +321,7 @@ function MethodSelect({ methods, value, onChange }) {
 }
 
 // ---------------------------------------------------------------- tree
-function Tree({ rows, rootImpact, selection, onToggle, onSelect, onUngroup, ungroupable, onUnpin, onMoveToOthers, onHover, onInfo }) {
+function Tree({ rows, rootImpact, selection, onToggle, onSelect, onUngroup, ungroupable, onUnpin, onMoveToOthers, onHover, onInfo, onUnmerge }) {
   if (!rows.length) return html`<div class="empty">Choose a functional unit to start.</div>`;
   return html`
     <div class="tree">
@@ -331,7 +331,8 @@ function Tree({ rows, rootImpact, selection, onToggle, onSelect, onUngroup, ungr
         <tbody>
           ${rows.map((r) => {
             const share = rootImpact ? r.impacts[0] / rootImpact : 0;
-            const amount = r.kind !== "process" ? ""
+            const amount = r.kind === "merged" ? (r.unit ? `${fmt(r.amount)} ${unit(r.unit)}` : "")
+              : r.kind !== "process" ? ""
               : r.waste ? `${fmt(-r.amount)} ${unit(r.unit)} treated` : `${fmt(r.amount)} ${unit(r.unit)}`;
             const [product, name, location] = r.kind === "process" ? r.label.split(" | ") : [r.label];
             return html`
@@ -354,6 +355,9 @@ function Tree({ rows, rootImpact, selection, onToggle, onSelect, onUngroup, ungr
                     </span>
                     ${r.kind === "group" && ungroupable(r) && html`
                       <button class="chip" onClick=${(e) => { e.stopPropagation(); onUngroup(r); }}>ungroup</button>`}
+                    ${r.kind === "merged" && html`
+                      <button class="chip merge" title="Split back into the original processes"
+                        onClick=${(e) => { e.stopPropagation(); onUnmerge(r); }}>merged ×</button>`}
                     ${r.pinned && html`
                       <button class="chip pin" title="Shown despite the cut-off — click to hide again"
                         onClick=${(e) => { e.stopPropagation(); onUnpin(r); }}>pinned ×</button>`}
@@ -425,7 +429,7 @@ function edgePath(from, to, orientation) {
   return `M${x1},${y1} C${x1},${ym} ${x2},${ym} ${x2},${y2}`;
 }
 
-function TreeGraph({ rows, rootImpact, selection, onToggle, onSelect, onUngroup, ungroupable, onUnpin, onMoveToOthers, onHover, onInfo, orientation, setOrientation }) {
+function TreeGraph({ rows, rootImpact, selection, onToggle, onSelect, onUngroup, ungroupable, onUnpin, onMoveToOthers, onHover, onInfo, onUnmerge, orientation, setOrientation }) {
   const container = useRef(null);
   const drag = useRef(null);
   const [transform, setTransform] = useState({ k: 1, x: 16, y: 16 });
@@ -493,7 +497,8 @@ function TreeGraph({ rows, rootImpact, selection, onToggle, onSelect, onUngroup,
             const title = r.kind === "direct" ? "direct emissions" : r.kind === "process" ? name : r.label;
             const subtitle = r.kind === "process"
               ? `${location} · ${r.waste ? `${fmt(-r.amount)} ${unit(r.unit)} treated` : `${fmt(r.amount)} ${unit(r.unit)}`}`
-              : r.kind === "group" ? "group" : r.kind === "rest" ? "below cut-off" : "of the parent process";
+              : r.kind === "merged" ? `merged${r.unit ? ` · ${fmt(r.amount)} ${unit(r.unit)}` : ""}`
+              : r.kind === "group" ? "group" : r.kind === "rest" ? "others" : "of the parent process";
             const toggleAt = orientation === "horizontal" ? [x + BOX.w, y + BOX.h / 2] : [x + BOX.w / 2, y + BOX.h];
             const barWidth = BOX.w - 20 - 52;
             return html`
@@ -513,6 +518,9 @@ function TreeGraph({ rows, rootImpact, selection, onToggle, onSelect, onUngroup,
                 ${r.kind === "group" && ungroupable(r) && html`
                   <text x=${x + BOX.w - 10} y=${y + 17} class="ungroup" text-anchor="end"
                         onClick=${(e) => { e.stopPropagation(); onUngroup(r); }}>ungroup</text>`}
+                ${r.kind === "merged" && html`
+                  <text x=${x + BOX.w - 10} y=${y + 17} class="unmerge" text-anchor="end"
+                        onClick=${(e) => { e.stopPropagation(); onUnmerge(r); }}>unmerge</text>`}
                 ${r.pinned && html`
                   <text x=${x + BOX.w - 10} y=${y + 17} class="unpin" text-anchor="end"
                         onClick=${(e) => { e.stopPropagation(); onUnpin(r); }}>pinned ×</text>`}
@@ -704,7 +712,9 @@ function chartItems(rows, byId, groupProducts) {
   const items = [];
   const merged = new Map();
   for (const r of frontier(rows)) {
-    const parentMeta = byId.get(r.parent)?.meta;
+    const parent = byId.get(r.parent);
+    const parentMeta = parent?.meta;
+    const metas = r.meta ? [r.meta] : r.metas ? r.metas : r.kind === "direct" && parent?.metas ? parent.metas : [];
     let key = null;
     if (groupProducts) {
       if (r.kind === "process") key = `p|${r.meta.reference_product}`;
@@ -716,11 +726,11 @@ function chartItems(rows, byId, groupProducts) {
       const item = merged.get(key);
       item.rows.push(r);
       item.impacts = item.impacts.map((v, k) => v + r.impacts[k]);
-      if (r.meta) item.metas.push(r.meta);
+      item.metas.push(...metas);
       if (parentMeta) item.parentMetas.push(parentMeta);
       continue;
     }
-    const item = { kind: r.kind, rows: [r], impacts: [...r.impacts], metas: r.meta ? [r.meta] : [], parentMetas: parentMeta ? [parentMeta] : [] };
+    const item = { kind: r.kind, rows: [r], impacts: [...r.impacts], metas, parentMetas: parentMeta ? [parentMeta] : parent?.metas || [] };
     if (key) merged.set(key, item);
     items.push(item);
   }
@@ -1092,6 +1102,7 @@ function App() {
   const [expanded, setExpanded] = useState(new Set());
   const [pinned, setPinned] = useState(new Set());
   const [others, setOthers] = useState(new Set());
+  const [merges, setMerges] = useState([]);
   const [rules, setRules] = useState([]);
   const [chartMethods, setChartMethods] = useState([]);
   const [selection, setSelection] = useState(new Set());
@@ -1115,6 +1126,7 @@ function App() {
         setExpanded(new Set(saved.expanded)); setRules(saved.rules); setChartMethods(saved.chartMethods || []);
         setPinned(new Set(saved.pinned || [])); setOthers(new Set(saved.others || []));
         setCutoffBasis(saved.cutoffBasis || "parent");
+        setMerges(saved.merges || []);
         return;
       }
       setMethod(i.default_method);
@@ -1129,6 +1141,7 @@ function App() {
     setExpanded(new Set([String(r.index)]));
     setPinned(new Set());
     setOthers(new Set());
+    setMerges([]);
     setRules((current) => current.filter((rule) => rule.scope === "*"));
     setSelection(new Set());
     setUndo(null);
@@ -1167,7 +1180,7 @@ function App() {
 
   const viewState = (exp = expanded) => ({
     root: [root.index], amount, expanded: [...exp], rules, cutoff: cutoff / 100, cutoff_basis: cutoffBasis, method, methods: chartMethods,
-    pinned: [...pinned], others: [...others],
+    pinned: [...pinned], others: [...others], merges,
   });
 
   useEffect(() => {
@@ -1176,15 +1189,28 @@ function App() {
     request("/api/rows", viewState())
       .then((d) => { if (!cancelled) { setData(d); setError(null); } })
       .catch((e) => !cancelled && setError(e.message));
-    save({ root, amount, method, cutoff, cutoffBasis, expanded: [...expanded], rules, chartMethods, pinned: [...pinned], others: [...others] });
+    save({ root, amount, method, cutoff, cutoffBasis, expanded: [...expanded], rules, chartMethods, pinned: [...pinned], others: [...others], merges });
     return () => { cancelled = true; };
-  }, [root, amount, method, cutoff, cutoffBasis, expanded, rules, chartMethods, pinned, others, info]);
+  }, [root, amount, method, cutoff, cutoffBasis, expanded, rules, chartMethods, pinned, others, merges, info]);
 
   const rootImpact = data.rows[0]?.impacts[0] || 0;
   const rowsById = useMemo(() => new Map(data.rows.map((r) => [r.id, r])), [data]);
   const selectedRows = [...selection].map((id) => rowsById.get(id)).filter(Boolean);
-  const canGroup = selectedRows.length >= 2 && selectedRows.every((r) => r.kind === "process" && r.parent === selectedRows[0].parent)
+  const siblings = selectedRows.length >= 2 && selectedRows.every((r) => r.parent === selectedRows[0].parent)
     && !selectedRows[0].parent.includes("/g:");
+  const canGroup = siblings && selectedRows.every((r) => r.kind === "process");
+  const canMerge = siblings && selectedRows.every((r) => r.kind === "process" || r.kind === "merged");
+  function mergeSelected() {
+    const scope = selectedRows[0].parent;
+    const products = [...new Set(selectedRows.flatMap((r) => (r.kind === "merged" ? r.products : [productOf(r.id)])))];
+    // Merging a merged row with more processes replaces its merge
+    setMerges([...merges.filter((m) => m.scope !== scope || !m.products.some((p) => products.includes(p))), { scope, products }]);
+    setSelection(new Set());
+  }
+  function unmerge(row) {
+    setMerges(merges.filter((m) => !(m.scope === row.parent && m.products.length === row.products.length
+      && m.products.every((p) => row.products.includes(p)))));
+  }
 
   function toggle(row) {
     // Same semantics as View.expand / View.collapse ("!" marks a group collapsed on purpose)
@@ -1260,7 +1286,7 @@ function App() {
     setBusy(false);
   }
   function exportView() {
-    download("lca-view.json", JSON.stringify({ root, amount, method: info.methods[method].name, cutoff, expanded: [...expanded], rules, cutoffBasis, pinned: [...pinned], others: [...others] }, null, 2), "application/json");
+    download("lca-view.json", JSON.stringify({ root, amount, method: info.methods[method].name, cutoff, expanded: [...expanded], rules, cutoffBasis, pinned: [...pinned], others: [...others], merges }, null, 2), "application/json");
   }
 
   if (!info) return html`<div class="empty">${error || "Loading model…"}</div>`;
@@ -1295,13 +1321,20 @@ function App() {
             <${NumberInput} class="cutoff" value=${threshold} min=${0.1} step="0.5" aria-label="Expansion threshold"
               onValue=${setThreshold} />%
             <span class="spacer"></span>
-            <input placeholder="group name" value=${groupName} onInput=${(e) => setGroupName(e.target.value)} style="width:96px" aria-label="New group name" />
-            <button disabled=${!canGroup} onClick=${groupSelected}
-              title="Group the selected sibling rows (select at least two with Ctrl/⌘-click)">Group</button>
-            <button disabled=${!movableSelection.length} onClick=${() => moveToOthers(movableSelection.map((r) => r.id))}
-              title="Move the selected rows to their parent's others row">To others</button>
             <button onClick=${exportView} disabled=${!root} title="Download this view (tree, groups, pins) as JSON">Save</button>
           </div>
+          ${selection.size > 0 && !selectedRest && html`
+            <div class="selection-bar">
+              <span>${selection.size} selected${selection.size === 1 ? " · Ctrl/⌘-click to add siblings" : ""}</span>
+              <input placeholder="group name" value=${groupName} onInput=${(e) => setGroupName(e.target.value)} aria-label="New group name" />
+              <button disabled=${!canGroup} onClick=${groupSelected}
+                title="Bundle the selected sibling rows under one row; expanding it shows them">Group</button>
+              <button disabled=${!canMerge} onClick=${mergeSelected}
+                title="Combine the selected sibling processes into one process: inventories added, common inputs summed">Merge</button>
+              <button disabled=${!movableSelection.length} onClick=${() => moveToOthers(movableSelection.map((r) => r.id))}
+                title="Move the selected rows to their parent's others row">To others</button>
+              <button onClick=${() => setSelection(new Set())} aria-label="Clear selection">×</button>
+            </div>`}
           ${undo && html`
             <div class="notice" role="status">
               <span>${undo.message}</span>
@@ -1311,9 +1344,9 @@ function App() {
           ${error && html`<div class="error">${error}</div>`}
           ${display === "list"
             ? html`<${Tree} rows=${data.rows} rootImpact=${rootImpact} selection=${selection} onToggle=${toggle} onSelect=${select}
-                onUngroup=${ungroup} ungroupable=${(r) => manualRuleFor(r) >= 0} onUnpin=${unpin} onMoveToOthers=${moveToOthers} onHover=${hover} onInfo=${showInfo} />`
+                onUngroup=${ungroup} ungroupable=${(r) => manualRuleFor(r) >= 0} onUnpin=${unpin} onMoveToOthers=${moveToOthers} onHover=${hover} onInfo=${showInfo} onUnmerge=${unmerge} />`
             : html`<${TreeGraph} rows=${data.rows} rootImpact=${rootImpact} selection=${selection} onToggle=${toggle} onSelect=${select}
-                onUngroup=${ungroup} ungroupable=${(r) => manualRuleFor(r) >= 0} onUnpin=${unpin} onMoveToOthers=${moveToOthers} onHover=${hover} onInfo=${showInfo}
+                onUngroup=${ungroup} ungroupable=${(r) => manualRuleFor(r) >= 0} onUnpin=${unpin} onMoveToOthers=${moveToOthers} onHover=${hover} onInfo=${showInfo} onUnmerge=${unmerge}
                 orientation=${orientation} setOrientation=${setOrientation} />`}
           ${shownRest && html`<${OthersDetails} rest=${shownRest} rows=${data.rows} rootImpact=${rootImpact}
               cutoff=${cutoff} cutoffBasis=${cutoffBasis} pinned=${pinned} setPinned=${setPinned} others=${others} setOthers=${setOthers}

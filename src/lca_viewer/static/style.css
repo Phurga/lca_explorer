@@ -254,3 +254,15 @@ button.link { border: none; background: none; padding: 0 4px; color: var(--accen
 .recipe .token { font-family: var(--mono); font-size: 12px; padding: 2px 6px; }
 header { gap: 10px; }
 .segmented.basis button { padding: 4px 8px; }
+
+/* Selection actions and merged rows */
+.selection-bar {
+  display: flex; gap: 6px; align-items: center; padding: 6px 12px;
+  background: var(--selected); border-bottom: 1px solid var(--border);
+}
+.selection-bar span { flex: 1; }
+.selection-bar input { width: 120px; }
+.tree tr.merged .label { font-weight: 500; }
+.tree .chip.merge { color: var(--accent); border-color: var(--accent); }
+.graph .node.merged > rect:first-of-type { stroke: var(--accent); stroke-width: 1.5; }
+.graph .node .unmerge { fill: var(--accent); font-size: 11px; text-decoration: underline; }

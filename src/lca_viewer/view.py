@@ -61,6 +61,8 @@ class Row:
     """Shown although below the cut-off, because the user pinned it."""
     moved: bool = False
     """Put in "others" by the user."""
+    merged: list[Node] | None = None
+    """For "merged" rows: the sibling processes whose inventories are combined."""
 
 
 @dataclass
@@ -78,6 +80,9 @@ class View:
     """Row ids shown even when below the cut-off (exceptions chosen by the user)."""
     others: set[str] = field(default_factory=set)
     """Row ids moved to their parent's "others" row by the user, whatever their impact."""
+    merges: list[dict] = field(default_factory=list)
+    """``{"scope": parent row id, "products": [...]}``: sibling processes merged into one
+    process whose inventory is the union of theirs (common inputs summed)."""
 
     def __post_init__(self):
         self._activities = derived_activities(self.tree.model)
@@ -104,6 +109,7 @@ class View:
             "method": self.method,
             "pinned": sorted(self.pinned),
             "others": sorted(self.others),
+            "merges": self.merges,
         }
 
     @classmethod
@@ -118,6 +124,7 @@ class View:
             method=data.get("method", 0),
             pinned=set(data.get("pinned", [])),
             others=set(data.get("others", [])),
+            merges=list(data.get("merges", [])),
         )
 
     # --- rendering -------------------------------------------------------
@@ -143,14 +150,35 @@ class View:
             members = row.node_members  # type: ignore[attr-defined]
             rows = [self._process_row(n, row.id, row.depth + 1) for n in members]
             return self._apply_cutoff(rows, row)
-        children = self.tree.children(row.node)
+        children = self._merged_children(row) if row.kind == "merged" else self.tree.children(row.node)
         rows = self._group(children, row)
         return self._apply_cutoff(rows, row)
+
+    def _merged_children(self, row: Row) -> list[Node]:
+        """Union of the members' inputs (and direct emissions); a product used by
+        several members becomes one node with the summed amount and impacts."""
+        combined: dict[int, list] = {}
+        for member in row.merged:
+            for child in self.tree.children(member):
+                if child.product in combined:
+                    combined[child.product][0] += child.amount
+                    combined[child.product][1] = combined[child.product][1] + child.impacts
+                else:
+                    combined[child.product] = [child.amount, child.impacts]
+        return [Node((row.id, product), amount, impacts) for product, (amount, impacts) in combined.items()]
 
     def _group(self, children: list[Node], parent: Row) -> list[Row]:
         depth = parent.depth + 1
         free = [c for c in children if not c.is_direct]
         rows: list[Row] = []
+        for merge in self.merges:
+            if merge["scope"] != parent.id:
+                continue
+            products = set(merge["products"])
+            members = [c for c in free if c.product in products]
+            if len(members) > 1:
+                rows.append(self._merged_row(members, parent, depth))
+                free = [c for c in free if c.product not in products]
         ordered = [r for r in self.rules if r.by is None] + [r for r in self.rules if r.by is not None]
         for rule in ordered:
             if rule.scope not in (ROOT_SCOPE, parent.id) or not free:
@@ -243,6 +271,18 @@ class View:
         label = f"{a['reference_product']} | {a['name']} | {a['location']}"
         return Row(node.id, parent, depth, "process", label, node.amount, a["unit"],
                    node.impacts, True, node.id in self.expanded, node)
+
+    def _merged_row(self, members: list[Node], parent: Row, depth: int) -> Row:
+        products = sorted(m.product for m in members)
+        row_id = f"{parent.id}/m:{'+'.join(map(str, products))}"
+        acts = self._activities.iloc[[m.product for m in members]]
+        label = " + ".join(f"{n} ({l})" for n, l in zip(acts["name"], acts["location"]))
+        # An amount only makes sense when all members deliver the same product
+        same = acts["reference_product"].nunique() == 1 and acts["unit"].nunique() == 1
+        return Row(row_id, parent.id, depth, "merged", label,
+                   sum(m.amount for m in members) if same else 0.0,
+                   acts["unit"].iat[0] if same else "",
+                   sum(m.impacts for m in members), True, row_id in self.expanded, merged=members)
 
     def _group_row(self, name: str, members: list[Node], parent: Row, depth: int) -> Row:
         row_id = f"{parent.id}/g:{name}"

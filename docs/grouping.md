@@ -71,6 +71,22 @@ cut-off (also undoable).
 
 ![Cut-off exceptions](img/cutoff-exceptions.png)
 
+### Merge
+
+Merging (`View.merges`: `{"scope": parent id, "products": [...]}`) combines
+sibling processes into **one process whose inventory is the union of
+theirs**: expanding it shows each input once, with the amounts and impacts of
+inputs common to several members summed, and the members' direct emissions
+summed. This differs from a group, which only bundles rows (expanding a
+group shows the original processes). A merged process's inputs are ordinary
+nodes (same product, summed amount), so they expand normally and totals stay
+exact by linearity. Its amount is shown only when all members deliver the
+same product in the same unit (e.g. wheat grain from FR + DE). Merges are
+kept by Reset view and cut-off changes, like groups, and cleared with the
+functional unit.
+
+![Merge](img/merge.png)
+
 ## Queries (`query.py`)
 
 JSON predicates, evaluated vectorised over activity metadata

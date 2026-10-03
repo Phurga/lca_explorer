@@ -40,6 +40,7 @@ class ViewState(BaseModel):
     method: int = 0
     pinned: list[str] = []
     others: list[str] = []
+    merges: list[dict] = []
     methods: list[int] = []
     """Methods whose impacts are returned, in this order (default: ``method`` only)."""
 
@@ -144,8 +145,11 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
             }
             if r.kind == "process":
                 out["meta"] = meta(r.node.product)
-            elif r.kind == "direct" and len(r.node.path) > 1:
+            elif r.kind == "direct" and len(r.node.path) > 1 and isinstance(r.node.path[-2], int):
                 out["meta"] = meta(r.node.path[-2])  # the process emitting
+            elif r.kind == "merged":
+                out["products"] = [int(m.product) for m in r.merged]
+                out["metas"] = [meta(m.product) for m in r.merged]
             if r.members is not None:
                 out["members"] = [serialise(m) for m in r.members]
             return out

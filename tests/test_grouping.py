@@ -868,3 +868,60 @@ def test_unknown_cutoff_basis_is_rejected(grouping_model):
     view.expand("0")
     with pytest.raises(ValueError):
         view.rows()
+
+
+def _merged_view(model):
+    view = View(Tree(model, 0))
+    view.expand("0")
+    breads = [r for r in view.rows() if r.depth == 1 and r.kind == "process"][:2]
+    view.merges = [{"scope": "0", "products": [r.node.product for r in breads]}]
+    return view, breads
+
+
+def test_merge_combines_inventories_and_sums_common_inputs(grouping_model):
+    view, breads = _merged_view(grouping_model)
+    merged = next(r for r in view.rows() if r.kind == "merged")
+    assert np.allclose(merged.impacts, breads[0].impacts + breads[1].impacts)
+    assert [r.id for r in view.rows() if r.id in {b.id for b in breads}] == []
+
+    view.expand(merged.id)
+    children = [r for r in view.rows() if r.parent == merged.id]
+    assert np.allclose(sum(c.impacts for c in children), merged.impacts)
+    # an input used by both members is one row with the summed amount and impacts
+    tree = view.tree
+    inputs = [{c.product: c for c in tree.children(b.node) if not c.is_direct} for b in breads]
+    common = set(inputs[0]) & set(inputs[1])
+    assert common
+    for product in common:
+        row = next(c for c in children if c.kind == "process" and c.node.product == product)
+        assert row.amount == pytest.approx(inputs[0][product].amount + inputs[1][product].amount)
+        assert np.allclose(row.impacts, inputs[0][product].impacts + inputs[1][product].impacts)
+        # and it expands like any process
+        view.expand(row.id)
+        grandchildren = [r for r in view.rows() if r.parent == row.id]
+        assert np.allclose(sum(g.impacts for g in grandchildren), row.impacts)
+    direct = [c for c in children if c.kind == "direct"]
+    assert len(direct) == 1  # direct emissions of both members summed
+    assert np.allclose(sum(r.impacts for r in view.frontier()), view.tree.root.impacts)
+
+
+def test_merge_amount_and_round_trip(grouping_model):
+    view, breads = _merged_view(grouping_model)
+    merged = next(r for r in view.rows() if r.kind == "merged")
+    assert merged.amount == pytest.approx(breads[0].amount + breads[1].amount)  # same product: amounts add up
+    copy = View.from_dict(grouping_model, view.to_dict())
+    assert [r.id for r in copy.rows()] == [r.id for r in view.rows()]
+
+
+def test_rows_api_serialises_merged_rows(grouping_model):
+    from fastapi.testclient import TestClient
+    from lca_viewer.server import create_app
+
+    view, breads = _merged_view(grouping_model)
+    merged_id = next(r for r in view.rows() if r.kind == "merged").id
+    state = {"root": [0], "expanded": ["0", merged_id], "method": 0, "merges": view.merges}
+    rows = TestClient(create_app(grouping_model)).post("/api/rows", json=state).json()["rows"]
+    merged = next(r for r in rows if r["kind"] == "merged")
+    assert sorted(merged["products"]) == sorted(b.node.product for b in breads)
+    assert len(merged["metas"]) == 2
+    assert any(r["parent"] == merged_id for r in rows)
