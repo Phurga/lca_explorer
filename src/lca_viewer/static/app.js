@@ -833,6 +833,15 @@ function nameItems(items, naming, recipe, byId) {
 }
 
 const richSafe = (text) => String(text).replace(/[{}|]/g, " ");
+const LABEL_WIDTH = 440;  // px available for chart row labels
+// Shorten a two-tone label to fit: the grey qualifier first, then the main text
+function fitLabel(main, qual, width) {
+  const fits = (m, q) => textWidth(q ? `${m} ${q}` : m) <= width;
+  let m = main, q = qual || "";
+  while (q && !fits(m, q)) q = q.length > 2 ? `${q.slice(0, -2)}…` : "";
+  while (!fits(m, q) && m.length > 4) m = `${m.slice(0, -2)}…`;
+  return [m, q];
+}
 let measureContext = null;
 function textWidth(text) {
   measureContext = measureContext || document.createElement("canvas").getContext("2d");
@@ -887,9 +896,9 @@ function ChartPanel({ data, info, method, chartMethods, setChartMethods, view })
     const o = baseOption();
     const items = [...parts].reverse();
     const groupColor = cssVar("--group");
-    const shown = items.map((p) => [truncate(p.main, 52), p.qual ? truncate(p.qual, 48) : ""]);
+    const shown = items.map((p) => fitLabel(p.main, p.qual, LABEL_WIDTH));
     o.grid = { ...o.grid, containLabel: false, top: 36, bottom: 28,
-      left: Math.min(460, Math.max(...shown.map(([m, q]) => textWidth(q ? `${m} ${q}` : m))) + 16) };
+      left: Math.max(...shown.map(([m, q]) => textWidth(q ? `${m} ${q}` : m))) + 16 };
     o.title = { text: `${methodLabel(info.methods[method])} [${unit}]`, textStyle: { fontSize: 12, color: cssVar("--muted") } };
     o.yAxis = {
       ...o.yAxis, type: "category", data: items.map((_, i) => String(i)),
