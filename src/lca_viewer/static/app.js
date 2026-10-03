@@ -550,7 +550,7 @@ function TreeGraph({ rows, rootImpact, selection, onToggle, onSelect, onUngroup,
 // ---------------------------------------------------------------- "others" details
 // Shows what an "others" row contains (below the cut-off, or moved there by the user);
 // ticking a process brings it back into the tree and the chart.
-function OthersDetails({ rest, rows, rootImpact, cutoff, cutoffBasis, pinned, setPinned, others, setOthers, onClose, sticky, onMouseEnter, onMouseLeave }) {
+function OthersDetails({ rest, rows, rootImpact, cutoff, cutoffBasis, pinned, setPinned, others, setOthers, onClose, sticky, onMouseEnter, onMouseLeave, onInfo, view }) {
   const byId = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
   const parent = byId.get(rest.parent);
   const shownPins = rows.filter((r) => r.parent === rest.parent && r.pinned);
@@ -578,19 +578,20 @@ function OthersDetails({ rest, rows, rootImpact, cutoff, cutoffBasis, pinned, se
           ${sticky && html`<button onClick=${onClose} aria-label="Close">×</button>`}
         </span>
       </div>
-      <p class="note">Tick a process to show it in the tree and the contribution chart; untick to put it back in others.${sticky ? "" : " Click the others row to keep this panel open."}</p>
+      <p class="note">Tick a process to show it in the tree and the contribution chart; untick to put it back in others. Right-click a process for its details.${sticky ? "" : " Click the others row to keep this panel open."}</p>
       <div class="details-list">
         <table>
           <tbody>
             ${items.map((r) => {
-              const [product, name, location] = r.kind === "process" ? r.label.split(" | ") : [r.label];
-              const amount = r.kind !== "process" ? "" : r.waste ? `${fmt(-r.amount)} ${unit(r.unit)} treated` : `${fmt(r.amount)} ${unit(r.unit)}`;
+              const names = rowNames(r, byId, view);
+              const amount = r.kind === "process" ? (r.waste ? `${fmt(-r.amount)} ${unit(r.unit)} treated` : `${fmt(r.amount)} ${unit(r.unit)}`)
+                : (r.kind === "merged" || r.kind === "group") && r.unit ? `${fmt(r.amount)} ${unit(r.unit)}` : "";
               const shown = pinned.has(r.id) && !others.has(r.id);
               return html`
-                <tr key=${r.id}>
+                <tr key=${r.id} onContextMenu=${(e) => onInfo(r, e)} title="Right-click for details">
                   <td><input type="checkbox" checked=${shown} aria-label="Show in tree and chart"
                         onChange=${(e) => setShown([r.id], e.target.checked)} /></td>
-                  <td class="name-cell" title=${r.label}>${r.kind === "process" ? html`${name} <span class="loc">${location} · ${product}</span>` : r.kind === "direct" ? "direct emissions" : r.label}</td>
+                  <td class="name-cell" title=${r.label}>${names.main}${names.qual && html` <span class="loc">${names.qual}</span>`}</td>
                   <td class="reason">${r.moved ? "moved" : r.pinned ? "pinned" : "cut-off"}</td>
                   <td class="num">${amount}</td>
                   <td class="num">${fmt(r.impacts[0])}</td>
@@ -974,6 +975,14 @@ const PRESETS = [
   { label: "Heat & fuels", rule: { name: "heat & fuels", predicate: { any: [
     { field: "reference_product", op: "startswith", value: "heat" },
     { field: "reference_product", op: "regex", value: "^(diesel|petrol|natural gas|hard coal|light fuel oil|heavy fuel oil)" },
+  ] } } },
+  // ecoinvent 3 has no infrastructure flag: constructions (CPC section 5), equipment and
+  // vehicles counted per unit (CPC section 4), and machinery and vehicles inventoried in kg
+  { label: "Infrastructure", rule: { name: "infrastructure", predicate: { any: [
+    { field: "cpc_section", op: "eq", value: "5" },
+    { all: [{ field: "cpc_section", op: "eq", value: "4" }, { field: "unit", op: "eq", value: "unit" }] },
+    { field: "reference_product", op: "regex",
+      value: "^(tractor|harvester|forestry harvester|agricultural machinery|lorry|bus|locomotive|freight wagon|tram|aircraft|barge|transoceanic|ferry|passenger car|electric bicycle|electric scooter|light commercial vehicle|industrial machine)\\b" },
   ] } } },
   { label: "Waste treatment", rule: { name: "waste treatment", predicate: { field: "activity_type", op: "eq", value: "treatment" } } },
   { label: "By location", rule: { by: "location" } },
@@ -1385,7 +1394,8 @@ function App() {
                 orientation=${orientation} setOrientation=${setOrientation} />`}
           ${shownRest && html`<${OthersDetails} rest=${shownRest} rows=${data.rows} rootImpact=${rootImpact}
               cutoff=${cutoff} cutoffBasis=${cutoffBasis} pinned=${pinned} setPinned=${setPinned} others=${others} setOthers=${setOthers}
-              sticky=${shownRest === selectedRest} onMouseEnter=${keepHover} onMouseLeave=${() => hover(null)}
+              sticky=${shownRest === selectedRest} onMouseEnter=${keepHover} onMouseLeave=${() => !infoTarget && hover(null)}
+              onInfo=${showInfo} view=${view}
               onClose=${() => setSelection(new Set())} />`}
           ${infoTarget && html`<${InfoPopup} target=${infoTarget} method=${method} methodInfo=${methodInfo}
               rootImpact=${rootImpact} rowsById=${rowsById} onClose=${() => setInfoTarget(null)}

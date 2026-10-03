@@ -89,6 +89,24 @@ functional unit.
 
 ![Merge](img/merge.png)
 
+### Quick group "infrastructure"
+
+ecoinvent 3 has no infrastructure flag (ecoinvent 2 had one), so the quick
+group is a query, checked on ecoinvent 3.9.1 (1,570 activities, no services,
+energy carriers or transport services among them):
+
+- CPC section 5, *constructions*: buildings, factories, plants, roads,
+  railway tracks, electricity networks, mines (900);
+- CPC section 4 counted per `unit`: vehicles, machines, heat pumps, CHP
+  units… (635);
+- machinery and vehicles inventoried in kg or per unit, by product name:
+  tractor, harvester, agricultural machinery, lorry, bus, locomotive,
+  aircraft, ship… ("machine operation" excluded: it is a service in hours).
+
+On 1 kg of GLO wheat (feed), infrastructure is 10.0 % of EF 3.1 climate
+change (first-match rule, *Whole supply chain* tab). In the tree, like any
+named group, it only bundles two or more infrastructure siblings.
+
 ## Queries (`query.py`)
 
 JSON predicates, evaluated vectorised over activity metadata
