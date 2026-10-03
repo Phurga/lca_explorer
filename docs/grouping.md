@@ -25,8 +25,10 @@ the whole tree). Two forms:
   (thematic grouping: location, ISIC division, CPC section, activity type…).
 
 Manual grouping = named group with `{"products": [...]}` scoped to one node.
-Rules apply in order, a child goes to the first group claiming it, and groups
-of one child are not created. Group rows can be expanded to show members;
+Named groups are applied first, then group-by rules, each in list order (so
+a broad "group by location" never swallows a group the user named); a child
+goes to the first group claiming it, and groups of one child are not created.
+A group that hides an expanded member opens by itself. Group rows can be expanded to show members;
 members keep their real node ids, so expansion state survives regrouping.
 
 The view also applies a display **cut-off**: children below x % of the root
