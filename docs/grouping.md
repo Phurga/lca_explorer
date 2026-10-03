@@ -35,15 +35,23 @@ The view also applies a display **cut-off**: children below x % of the root
 are summed into one "n processes below cut-off" row, so the frontier stays
 complete.
 
-### Cut-off exceptions (pins)
+### "Others": cut-off, pins and moved rows
 
-The rest row keeps its `members` (the hidden rows), so the UI can show what
-it contains: selecting it opens a panel listing them with their impacts.
-Ticking one **pins** it: its id goes into `View.pinned`, and pinned rows are
-kept whatever the cut-off (flagged `pinned` while below it). They then
-appear in the tree and, being on the frontier, in the contribution chart;
-the rest row shrinks accordingly, so totals stay exact. Pins are part of the
-saved view and are cleared when the functional unit changes.
+Each parent can have one **others** row (kind `rest`) bundling the siblings
+that are not shown individually. A sibling goes there when
+
+- it is below the display cut-off (and not pinned), or
+- the user **moved** it there (`View.others`), whatever its impact — to keep
+  irrelevant sub-processes out of the tree and the contribution chart.
+
+Conversely, the user can **pin** a row (`View.pinned`) to show it although
+it is below the cut-off. Moving wins over pinning. The others row keeps its
+`members`, so the UI can show what it contains and why (`moved` / cut-off);
+ticking a member shows it again (un-move + pin). Because others is just one
+more row on the frontier, totals stay exact whatever is moved or pinned.
+A single row below the cut-off is shown as itself, but a single moved row
+still gets an others row. Pins and moved rows are part of the saved view and
+are cleared when the functional unit changes.
 
 ![Cut-off exceptions](img/cutoff-exceptions.png)
 

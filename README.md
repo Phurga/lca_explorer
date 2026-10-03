@@ -67,6 +67,9 @@ browser keeps its own tree, groups and charts.
 - **Group**: Ctrl/⌘-click sibling rows and *Group selected*, or use the
   *Grouping* tab (quick groups, group by location / activity type / ISIC, or
   your own filter).
+- **×** on a row (hover) moves it to *others*, out of the tree and the chart;
+  click an *others* row to see what it contains and bring processes back
+  (also the way to show processes hidden by the cut-off).
 - The **contribution chart** shows exactly the rows visible in the tree:
   expand, collapse or group to change it. Export as PNG or CSV.
 - *Whole supply chain* answers "how much electricity / transport / … anywhere

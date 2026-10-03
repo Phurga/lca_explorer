@@ -47,7 +47,7 @@ class Row:
     id: str
     parent: str | None
     depth: int
-    kind: str  # "process", "direct", "group", "rest" (below cut-off)
+    kind: str  # "process", "direct", "group", "rest" (others: below cut-off or moved there)
     label: str
     amount: float
     unit: str
@@ -56,9 +56,11 @@ class Row:
     expanded: bool
     node: Node | None = None
     members: list["Row"] | None = None
-    """For "rest" rows: the rows hidden by the cut-off."""
+    """For "rest" rows: the rows they contain."""
     pinned: bool = False
     """Shown although below the cut-off, because the user pinned it."""
+    moved: bool = False
+    """Put in "others" by the user."""
 
 
 @dataclass
@@ -71,6 +73,8 @@ class View:
     method: int = 0
     pinned: set[str] = field(default_factory=set)
     """Row ids shown even when below the cut-off (exceptions chosen by the user)."""
+    others: set[str] = field(default_factory=set)
+    """Row ids moved to their parent's "others" row by the user, whatever their impact."""
 
     def __post_init__(self):
         self._activities = derived_activities(self.tree.model)
@@ -95,6 +99,7 @@ class View:
             "cutoff": self.cutoff,
             "method": self.method,
             "pinned": sorted(self.pinned),
+            "others": sorted(self.others),
         }
 
     @classmethod
@@ -107,6 +112,7 @@ class View:
             cutoff=data.get("cutoff", 0.0),
             method=data.get("method", 0),
             pinned=set(data.get("pinned", [])),
+            others=set(data.get("others", [])),
         )
 
     # --- rendering -------------------------------------------------------
@@ -170,22 +176,23 @@ class View:
         return rows
 
     def _apply_cutoff(self, rows: list[Row], parent: Row) -> list[Row]:
+        """Sort siblings and bundle into "others" those below the cut-off or moved there."""
         rows.sort(key=lambda r: -abs(r.impacts[self.method]))
-        if self.cutoff <= 0:
-            return rows
-        threshold = self.cutoff * abs(self.tree.root.impacts[self.method])
-        below = [bool(abs(r.impacts[self.method]) < threshold) for r in rows]
-        for r, b in zip(rows, below):
-            r.pinned = b and r.id in self.pinned
-        kept = [r for r, b in zip(rows, below) if not b or r.pinned]
-        hidden = [r for r, b in zip(rows, below) if b and not r.pinned]
-        if len(hidden) > 1:
+        threshold = self.cutoff * abs(self.tree.root.impacts[self.method]) if self.cutoff > 0 else None
+        kept, hidden = [], []
+        for r in rows:
+            r.moved = r.id in self.others
+            below = threshold is not None and bool(abs(r.impacts[self.method]) < threshold)
+            r.pinned = below and not r.moved and r.id in self.pinned
+            (hidden if r.moved or (below and not r.pinned) else kept).append(r)
+        # A single row below the cut-off is shown as itself; moved rows always go to "others"
+        if len(hidden) > 1 or any(r.moved for r in hidden):
             rest = Row(
                 id=f"{parent.id}/rest",
                 parent=parent.id,
                 depth=parent.depth + 1,
                 kind="rest",
-                label=f"{len(hidden)} processes below cut-off",
+                label=f"others ({len(hidden)} {'process' if len(hidden) == 1 else 'processes'})",
                 amount=0.0,
                 unit="",
                 impacts=sum(r.impacts for r in hidden),

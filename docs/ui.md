@@ -38,9 +38,12 @@ API in `src/lca_viewer/server.py`.
   "x kg treated"), impact, share bar. "Expand above x %" auto-expands every
   node above a threshold (hotspot drill-down). Ctrl/⌘-click selects sibling
   rows → "Group selected" creates a manual group; groups have an "ungroup" chip.
-  Clicking an "n processes below cut-off" row (list or tree view) opens a
-  panel listing what it contains; ticking a process pins it as an exception
-  to the cut-off ("pinned ×" chip to undo), see [grouping.md](grouping.md).
+  Every row has a **×** (on hover, next to ▸ in the list, at the box corner
+  in the tree view) that moves it to its parent's **others** row; "To others"
+  does the same for a selection. Clicking an "others" row opens a panel
+  listing what it contains and why (below cut-off / moved); ticking a process
+  shows it again — also how to pin exceptions to the cut-off ("pinned ×" chip
+  to undo). See [grouping.md](grouping.md).
 - **Left — tree graph** ("Tree" toggle next to "List"): the same visible
   tree drawn as nodes and edges, sharing all state with the list (expansion,
   selection, groups — the chart follows either). Root on the left (→) or on

@@ -38,6 +38,7 @@ const UNITS = {
   "metric ton*km": "tkm", meter: "m", unit: "unit", hour: "h", litre: "l", "kilo becquerel": "kBq",
 };
 const unit = (u) => UNITS[u] || u;
+const movable = (r) => r.depth > 0 && r.kind !== "rest";
 
 function shortLabel(row, byId) {
   if (row.kind === "direct") {
@@ -50,7 +51,7 @@ function shortLabel(row, byId) {
   }
   if (row.kind === "rest") {
     const parent = byId.get(row.parent);
-    return `other inputs of ${parent ? shortLabel(parent, byId) : ""}`;
+    return `others under ${parent ? shortLabel(parent, byId) : ""}`;
   }
   return row.label;
 }
@@ -301,7 +302,7 @@ function MethodSelect({ methods, value, onChange }) {
 }
 
 // ---------------------------------------------------------------- tree
-function Tree({ rows, rootImpact, selection, onToggle, onSelect, onUngroup, ungroupable, onUnpin }) {
+function Tree({ rows, rootImpact, selection, onToggle, onSelect, onUngroup, ungroupable, onUnpin, onMoveToOthers }) {
   if (!rows.length) return html`<div class="empty">Choose a functional unit to start.</div>`;
   return html`
     <div class="tree">
@@ -323,6 +324,10 @@ function Tree({ rows, rootImpact, selection, onToggle, onSelect, onUngroup, ungr
                       ? html`<button class="toggle" aria-label=${r.expanded ? "Collapse" : "Expand"}
                                onClick=${(e) => { e.stopPropagation(); onToggle(r); }}>${r.expanded ? "▾" : "▸"}</button>`
                       : html`<span class="toggle"></span>`}
+                    ${movable(r)
+                      ? html`<button class="to-others" title="Move to others (out of the tree and the chart)" aria-label="Move to others"
+                               onClick=${(e) => { e.stopPropagation(); onMoveToOthers([r.id]); }}>×</button>`
+                      : html`<span class="to-others"></span>`}
                     <span class="label" title=${r.label}>
                       ${r.kind === "process" ? html`${name} <span class="loc">${location}</span> <span class="loc">· ${product}</span>` : r.label}
                     </span>
@@ -399,7 +404,7 @@ function edgePath(from, to, orientation) {
   return `M${x1},${y1} C${x1},${ym} ${x2},${ym} ${x2},${y2}`;
 }
 
-function TreeGraph({ rows, rootImpact, selection, onToggle, onSelect, onUngroup, ungroupable, onUnpin, orientation, setOrientation }) {
+function TreeGraph({ rows, rootImpact, selection, onToggle, onSelect, onUngroup, ungroupable, onUnpin, onMoveToOthers, orientation, setOrientation }) {
   const container = useRef(null);
   const drag = useRef(null);
   const [transform, setTransform] = useState({ k: 1, x: 16, y: 16 });
@@ -488,6 +493,12 @@ function TreeGraph({ rows, rootImpact, selection, onToggle, onSelect, onUngroup,
                 ${r.pinned && html`
                   <text x=${x + BOX.w - 10} y=${y + 17} class="unpin" text-anchor="end"
                         onClick=${(e) => { e.stopPropagation(); onUnpin(r); }}>pinned ×</text>`}
+                ${movable(r) && html`
+                  <g class="to-others" onClick=${(e) => { e.stopPropagation(); onMoveToOthers([r.id]); }}>
+                    <title>Move to others (out of the tree and the chart)</title>
+                    <circle cx=${x + BOX.w} cy=${y} r="8" />
+                    <text x=${x + BOX.w} y=${y + 4} text-anchor="middle">×</text>
+                  </g>`}
                 ${r.expandable && html`
                   <g class="toggle" onClick=${(e) => { e.stopPropagation(); onToggle(r); }}>
                     <circle cx=${toggleAt[0]} cy=${toggleAt[1]} r="8" />
@@ -501,41 +512,51 @@ function TreeGraph({ rows, rootImpact, selection, onToggle, onSelect, onUngroup,
     </div>`;
 }
 
-// ---------------------------------------------------------------- below cut-off details
-// Shows what a "below cut-off" row contains; ticking a process pins it (exception to the cut-off)
-function CutoffDetails({ rest, rows, rootImpact, cutoff, pinned, setPinned, onClose }) {
+// ---------------------------------------------------------------- "others" details
+// Shows what an "others" row contains (below the cut-off, or moved there by the user);
+// ticking a process brings it back into the tree and the chart.
+function OthersDetails({ rest, rows, rootImpact, cutoff, pinned, setPinned, others, setOthers, onClose }) {
   const byId = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
   const parent = byId.get(rest.parent);
   const shownPins = rows.filter((r) => r.parent === rest.parent && r.pinned);
   const items = [...shownPins, ...rest.members].sort((a, b) => Math.abs(b.impacts[0]) - Math.abs(a.impacts[0]));
+  const nMoved = rest.members.filter((m) => m.moved).length;
+  const nCut = rest.members.length - nMoved;
   const share = (r) => (rootImpact ? r.impacts[0] / rootImpact : 0);
-  const setPin = (ids, on) => {
-    const next = new Set(pinned);
-    ids.forEach((id) => (on ? next.add(id) : next.delete(id)));
-    setPinned(next);
-  };
+  // Showing = not in others, and pinned in case it is below the cut-off
+  function setShown(ids, on) {
+    const nextPinned = new Set(pinned), nextOthers = new Set(others);
+    ids.forEach((id) => {
+      if (on) { nextOthers.delete(id); nextPinned.add(id); } else nextPinned.delete(id);
+    });
+    setPinned(nextPinned);
+    setOthers(nextOthers);
+  }
+  const reasons = [nCut && `${nCut} below the ${cutoff} % cut-off`, nMoved && `${nMoved} moved here by you`].filter(Boolean).join(", ");
   return html`
     <div class="details">
       <div class="details-head">
-        <span><b>${rest.members.length} processes below the ${cutoff} % cut-off</b>
-          ${parent && html` under ${shortLabel(parent, byId)}`} · ${fmt(rest.impacts[0])} (${pct(share(rest))})</span>
-        <span class="spacer"></span>
-        <button onClick=${() => setPin(rest.members.map((m) => m.id), true)}>Show all</button>
-        <button disabled=${!shownPins.length} onClick=${() => setPin(shownPins.map((m) => m.id), false)}>Hide pinned</button>
-        <button onClick=${onClose} aria-label="Close">×</button>
+        <span class="details-title"><b>Others</b>${parent ? ` under ${shortLabel(parent, byId)}` : ""}${`: ${reasons} · ${fmt(rest.impacts[0])} (${pct(share(rest))})`}</span>
+        <span class="details-actions">
+          <button onClick=${() => setShown(rest.members.map((m) => m.id), true)}>Show all</button>
+          <button disabled=${!shownPins.length} onClick=${() => setShown(shownPins.map((m) => m.id), false)}>Hide pinned</button>
+          <button onClick=${onClose} aria-label="Close">×</button>
+        </span>
       </div>
-      <p class="note">Tick a process to show it in the tree and the contribution chart despite the cut-off.</p>
+      <p class="note">Tick a process to show it in the tree and the contribution chart; untick to put it back in others.</p>
       <div class="details-list">
         <table>
           <tbody>
             ${items.map((r) => {
               const [product, name, location] = r.kind === "process" ? r.label.split(" | ") : [r.label];
               const amount = r.kind !== "process" ? "" : r.waste ? `${fmt(-r.amount)} ${unit(r.unit)} treated` : `${fmt(r.amount)} ${unit(r.unit)}`;
+              const shown = pinned.has(r.id) && !others.has(r.id);
               return html`
                 <tr key=${r.id}>
-                  <td><input type="checkbox" checked=${pinned.has(r.id)} aria-label="Show despite cut-off"
-                        onChange=${(e) => setPin([r.id], e.target.checked)} /></td>
+                  <td><input type="checkbox" checked=${shown} aria-label="Show in tree and chart"
+                        onChange=${(e) => setShown([r.id], e.target.checked)} /></td>
                   <td class="name-cell" title=${r.label}>${r.kind === "process" ? html`${name} <span class="loc">${location} · ${product}</span>` : r.kind === "direct" ? "direct emissions" : r.label}</td>
+                  <td class="reason">${r.moved ? "moved" : r.pinned ? "pinned" : "cut-off"}</td>
                   <td class="num">${amount}</td>
                   <td class="num">${fmt(r.impacts[0])}</td>
                   <td class="num">${pct(share(r))}</td>
@@ -801,6 +822,7 @@ function App() {
   const [cutoff, setCutoff] = useState(1);
   const [expanded, setExpanded] = useState(new Set());
   const [pinned, setPinned] = useState(new Set());
+  const [others, setOthers] = useState(new Set());
   const [rules, setRules] = useState([]);
   const [chartMethods, setChartMethods] = useState([]);
   const [selection, setSelection] = useState(new Set());
@@ -822,7 +844,7 @@ function App() {
       if (saved && saved.root && saved.root.index < i.activities && saved.method < i.methods.length) {
         setRoot(saved.root); setAmount(saved.amount); setMethod(saved.method); setCutoff(saved.cutoff);
         setExpanded(new Set(saved.expanded)); setRules(saved.rules); setChartMethods(saved.chartMethods || []);
-        setPinned(new Set(saved.pinned || []));
+        setPinned(new Set(saved.pinned || [])); setOthers(new Set(saved.others || []));
         return;
       }
       setMethod(i.default_method);
@@ -836,13 +858,14 @@ function App() {
     setRoot(r);
     setExpanded(new Set([String(r.index)]));
     setPinned(new Set());
+    setOthers(new Set());
     setRules((current) => current.filter((rule) => rule.scope === "*"));
     setSelection(new Set());
   }
 
   const viewState = (exp = expanded) => ({
     root: [root.index], amount, expanded: [...exp], rules, cutoff: cutoff / 100, method, methods: chartMethods,
-    pinned: [...pinned],
+    pinned: [...pinned], others: [...others],
   });
 
   useEffect(() => {
@@ -851,9 +874,9 @@ function App() {
     request("/api/rows", viewState())
       .then((d) => { if (!cancelled) { setData(d); setError(null); } })
       .catch((e) => !cancelled && setError(e.message));
-    save({ root, amount, method, cutoff, expanded: [...expanded], rules, chartMethods, pinned: [...pinned] });
+    save({ root, amount, method, cutoff, expanded: [...expanded], rules, chartMethods, pinned: [...pinned], others: [...others] });
     return () => { cancelled = true; };
-  }, [root, amount, method, cutoff, expanded, rules, chartMethods, pinned, info]);
+  }, [root, amount, method, cutoff, expanded, rules, chartMethods, pinned, others, info]);
 
   const rootImpact = data.rows[0]?.impacts[0] || 0;
   const rowsById = useMemo(() => new Map(data.rows.map((r) => [r.id, r])), [data]);
@@ -887,6 +910,14 @@ function App() {
     setGroupName("");
   }
   const unpin = (row) => { const next = new Set(pinned); next.delete(row.id); setPinned(next); };
+  function moveToOthers(ids) {
+    setOthers(new Set([...others, ...ids]));
+    const nextPinned = new Set(pinned);
+    ids.forEach((id) => nextPinned.delete(id));
+    setPinned(nextPinned);
+    setSelection(new Set());
+  }
+  const movableSelection = selectedRows.filter(movable);
   const selectedRest = selectedRows.length === 1 && selectedRows[0].kind === "rest" ? selectedRows[0] : null;
   const manualRuleFor = (groupRow) => rules.findIndex((r) => r.predicate && r.scope === groupRow.parent && `${groupRow.parent}/g:${r.name}` === groupRow.id);
   function ungroup(groupRow) {
@@ -910,7 +941,7 @@ function App() {
     setBusy(false);
   }
   function exportView() {
-    download("lca-view.json", JSON.stringify({ root, amount, method: info.methods[method].name, cutoff, expanded: [...expanded], rules, pinned: [...pinned] }, null, 2), "application/json");
+    download("lca-view.json", JSON.stringify({ root, amount, method: info.methods[method].name, cutoff, expanded: [...expanded], rules, pinned: [...pinned], others: [...others] }, null, 2), "application/json");
   }
 
   if (!info) return html`<div class="empty">${error || "Loading model…"}</div>`;
@@ -933,25 +964,28 @@ function App() {
               <button class=${display === "list" ? "primary" : ""} onClick=${() => setDisplay("list")}>List</button>
               <button class=${display === "graph" ? "primary" : ""} onClick=${() => setDisplay("graph")}>Tree</button>
             </div>
-            <button onClick=${() => setExpanded(new Set(root ? [String(root.index)] : []))}>Collapse all</button>
+            <button onClick=${() => setExpanded(new Set(root ? [String(root.index)] : []))} title="Collapse everything below the root">Collapse</button>
             <button onClick=${expandAbove} disabled=${busy || !root}>Expand above</button>
             <input class="cutoff" type="number" value=${threshold} min="0.1" step="0.5" aria-label="Expansion threshold"
               onChange=${(e) => setThreshold(Math.max(0.1, Number(e.target.value)))} />%
             <span class="spacer"></span>
-            <input placeholder="group name" value=${groupName} onInput=${(e) => setGroupName(e.target.value)} style="width:120px" aria-label="New group name" />
+            <input placeholder="group name" value=${groupName} onInput=${(e) => setGroupName(e.target.value)} style="width:96px" aria-label="New group name" />
             <button disabled=${!canGroup} onClick=${groupSelected}
-              title="Select at least two sibling rows with Ctrl/⌘-click">Group selected</button>
+              title="Group the selected sibling rows (select at least two with Ctrl/⌘-click)">Group</button>
+            <button disabled=${!movableSelection.length} onClick=${() => moveToOthers(movableSelection.map((r) => r.id))}
+              title="Move the selected rows to their parent's others row">To others</button>
             <button onClick=${exportView} disabled=${!root}>Save view</button>
           </div>
           ${error && html`<div class="error">${error}</div>`}
           ${display === "list"
             ? html`<${Tree} rows=${data.rows} rootImpact=${rootImpact} selection=${selection} onToggle=${toggle} onSelect=${select}
-                onUngroup=${ungroup} ungroupable=${(r) => manualRuleFor(r) >= 0} onUnpin=${unpin} />`
+                onUngroup=${ungroup} ungroupable=${(r) => manualRuleFor(r) >= 0} onUnpin=${unpin} onMoveToOthers=${moveToOthers} />`
             : html`<${TreeGraph} rows=${data.rows} rootImpact=${rootImpact} selection=${selection} onToggle=${toggle} onSelect=${select}
-                onUngroup=${ungroup} ungroupable=${(r) => manualRuleFor(r) >= 0} onUnpin=${unpin}
+                onUngroup=${ungroup} ungroupable=${(r) => manualRuleFor(r) >= 0} onUnpin=${unpin} onMoveToOthers=${moveToOthers}
                 orientation=${orientation} setOrientation=${setOrientation} />`}
-          ${selectedRest && html`<${CutoffDetails} rest=${selectedRest} rows=${data.rows} rootImpact=${rootImpact}
-              cutoff=${cutoff} pinned=${pinned} setPinned=${setPinned} onClose=${() => setSelection(new Set())} />`}
+          ${selectedRest && html`<${OthersDetails} rest=${selectedRest} rows=${data.rows} rootImpact=${rootImpact}
+              cutoff=${cutoff} pinned=${pinned} setPinned=${setPinned} others=${others} setOthers=${setOthers}
+              onClose=${() => setSelection(new Set())} />`}
           <div class="toolbar"><span class="hint">
             ${root ? `Total: ${fmt(rootImpact)} ${methodInfo.unit} — ${methodLabel(methodInfo)}` : ""}
           </span></div>

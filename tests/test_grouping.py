@@ -755,3 +755,37 @@ def test_rows_api_with_cutoff_and_pins_is_json_serialisable(grouping_model):
     state["pinned"] = [rest[0]["members"][0]["id"]]
     rows = client.post("/api/rows", json=state).json()["rows"]
     assert any(r["pinned"] for r in rows)
+
+
+def test_moving_rows_to_others(grouping_model):
+    view = View(Tree(grouping_model, 0))
+    view.expand("0")
+    children = [r for r in view.rows() if r.depth == 1]
+    biggest = children[0]
+
+    # a single moved row creates an "others" row, even without cut-off
+    view.others = {biggest.id}
+    rows = view.rows()
+    assert biggest.id not in [r.id for r in rows]
+    rest = next(r for r in rows if r.kind == "rest")
+    assert [m.id for m in rest.members] == [biggest.id] and rest.members[0].moved
+    assert np.allclose(rest.impacts, biggest.impacts)
+    assert np.allclose(sum(r.impacts for r in view.frontier()), view.tree.root.impacts)
+
+    # moved wins over pinned; round trip keeps it
+    view.pinned = {biggest.id}
+    assert biggest.id not in [r.id for r in view.rows()]
+    assert View.from_dict(grouping_model, view.to_dict()).others == {biggest.id}
+
+
+def test_moved_and_cut_rows_share_one_others_row(grouping_model):
+    view = View(Tree(grouping_model, 0))
+    view.expand("0")
+    children = [r for r in view.rows() if r.depth == 1]
+    root_score = abs(view.tree.root.impacts[0])
+    impacts = sorted(abs(r.impacts[0]) for r in children)
+    view.cutoff = (impacts[0] + impacts[1]) / 2 / root_score  # hides only the smallest child
+    view.others = {children[0].id}  # and the biggest is moved
+    rest = [r for r in view.rows() if r.kind == "rest"]
+    assert len(rest) == 1 and len(rest[0].members) == 2
+    assert np.allclose(sum(r.impacts for r in view.frontier()), view.tree.root.impacts)

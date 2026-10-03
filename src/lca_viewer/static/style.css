@@ -184,14 +184,27 @@ table.results td.num { text-align: right; font-family: var(--mono); }
 
 /* Below cut-off details */
 .tree tr.rest { cursor: pointer; }
-.tree tr.rest .label::after { content: "  · click to see"; color: var(--accent); font-style: normal; font-size: 11px; }
+.tree tr.rest .label::after { content: "  · click to see / restore"; color: var(--accent); font-style: normal; font-size: 11px; }
+.tree .to-others {
+  width: 16px; height: 18px; border: none; padding: 0; background: none; color: var(--muted);
+  flex: none; opacity: 0; font-size: 13px; line-height: 1;
+}
+.tree tr:hover .to-others, .tree .to-others:focus-visible { opacity: 1; }
+.tree button.to-others:hover { color: var(--bar-negative); }
+.graph .to-others { opacity: 0; }
+.graph .node:hover .to-others { opacity: 1; }
+.graph .to-others circle { fill: var(--panel); stroke: var(--bar-negative); stroke-width: 1.2; }
+.graph .to-others text { fill: var(--bar-negative); font-size: 12px; font-weight: 600; }
+.details-list td.reason { width: 64px; color: var(--muted); font-size: 11px; }
 .tree .chip.pin { color: var(--accent); border-color: var(--accent); }
 .graph .node .unpin { fill: var(--accent); font-size: 11px; text-decoration: underline; }
 .details {
   border-top: 2px solid var(--accent); background: var(--panel); padding: 8px 12px;
   max-height: 45%; display: flex; flex-direction: column; min-height: 0;
 }
-.details-head { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.details-head { display: flex; gap: 8px; align-items: center; }
+.details-title { flex: 1; min-width: 0; }
+.details-actions { display: flex; gap: 4px; flex: none; }
 .details .note { margin: 4px 0 6px; }
 .details-list { overflow: auto; min-height: 0; }
 .details-list table { width: 100%; border-collapse: collapse; table-layout: fixed; }

@@ -37,6 +37,7 @@ class ViewState(BaseModel):
     cutoff: float = 0.0
     method: int = 0
     pinned: list[str] = []
+    others: list[str] = []
     methods: list[int] = []
     """Methods whose impacts are returned, in this order (default: ``method`` only)."""
 
@@ -129,6 +130,7 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
                 "expandable": r.expandable,
                 "expanded": r.expanded,
                 "pinned": r.pinned,
+                "moved": r.moved,
             }
             if r.members is not None:
                 out["members"] = [serialise(m) for m in r.members]
