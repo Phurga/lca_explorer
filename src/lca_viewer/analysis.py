@@ -20,14 +20,14 @@ import numpy as np
 import scipy.sparse as sp
 
 from .model import LCAModel, _factorized_solver
-from .query import evaluate, with_derived_fields
+from .query import derived_activities, evaluate
 
 OTHER = "other"
 
 
 def _assign(model: LCAModel, groups: dict[str, dict]) -> np.ndarray:
     """Group index per activity (first match wins), ``len(groups)`` for none."""
-    activities = with_derived_fields(model.activities)
+    activities = derived_activities(model)
     assignment = np.full(model.size, len(groups))
     for g, predicate in reversed(list(enumerate(groups.values()))):
         assignment[evaluate(predicate, activities)] = g

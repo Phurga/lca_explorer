@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from .query import evaluate, with_derived_fields
+from .query import derived_activities, evaluate
 from .tree import DIRECT, Node, Tree
 
 ROOT_SCOPE = "*"
@@ -28,8 +28,9 @@ class GroupRule:
 
     Either a named group (``name`` + ``predicate``: matching children go into
     one group) or a group-by (``by``: children are partitioned by the value of
-    that field). Rules are applied in order; a child goes to the first group
-    that claims it. Groups of a single child are not created.
+    that field). Named groups are applied first, then group-bys, each in list
+    order; a child goes to the first group that claims it. Groups of a single
+    child are not created.
     """
 
     name: str | None = None
@@ -66,15 +67,18 @@ class View:
     method: int = 0
 
     def __post_init__(self):
-        self._activities = with_derived_fields(self.tree.model.activities)
+        self._activities = derived_activities(self.tree.model)
         self._masks: dict[int, np.ndarray] = {}
 
     # --- state -----------------------------------------------------------
     def expand(self, row_id: str) -> None:
+        self.expanded.discard(f"!{row_id}")
         self.expanded.add(row_id)
 
     def collapse(self, row_id: str) -> None:
         self.expanded.discard(row_id)
+        if "/g:" in row_id:
+            self.expanded.add(f"!{row_id}")
 
     def to_dict(self) -> dict:
         return {
@@ -128,7 +132,8 @@ class View:
         depth = parent.depth + 1
         free = [c for c in children if not c.is_direct]
         rows: list[Row] = []
-        for rule in self.rules:
+        ordered = [r for r in self.rules if r.by is None] + [r for r in self.rules if r.by is not None]
+        for rule in ordered:
             if rule.scope not in (ROOT_SCOPE, parent.id) or not free:
                 continue
             if rule.predicate is not None:
@@ -149,7 +154,11 @@ class View:
                     else:
                         free.extend(members)
         rows.extend(self._process_row(c, parent.id, depth) for c in free)
-        rows.extend(self._process_row(c, parent.id, depth) for c in children if c.is_direct)
+        rows.extend(
+            self._process_row(c, parent.id, depth)
+            for c in children
+            if c.is_direct and np.any(c.impacts != 0)
+        )
         return rows
 
     def _apply_cutoff(self, rows: list[Row], parent: Row) -> list[Row]:
@@ -192,7 +201,12 @@ class View:
 
     def _group_row(self, name: str, members: list[Node], parent: Row, depth: int) -> Row:
         row_id = f"{parent.id}/g:{name}"
+        # A group opens by itself when it hides an expanded member, unless the
+        # user explicitly collapsed it ("!" + id in ``expanded``)
+        expanded = row_id in self.expanded or (
+            f"!{row_id}" not in self.expanded and any(m.id in self.expanded for m in members)
+        )
         row = Row(row_id, parent.id, depth, "group", name, 0.0, "",
-                  sum(m.impacts for m in members), True, row_id in self.expanded)
+                  sum(m.impacts for m in members), True, expanded)
         row.node_members = members  # type: ignore[attr-defined]
         return row

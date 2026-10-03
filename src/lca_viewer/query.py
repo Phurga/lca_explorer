@@ -43,6 +43,13 @@ def with_derived_fields(activities: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def derived_activities(model) -> pd.DataFrame:
+    """``with_derived_fields`` of the model's activities, computed once per model."""
+    if getattr(model, "_derived_activities", None) is None:
+        model._derived_activities = with_derived_fields(model.activities)
+    return model._derived_activities
+
+
 def evaluate(predicate: dict, activities: pd.DataFrame) -> np.ndarray:
     """Boolean mask over activities (= products) matching ``predicate``."""
     if "all" in predicate:
