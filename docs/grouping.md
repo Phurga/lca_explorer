@@ -31,9 +31,17 @@ goes to the first group claiming it, and groups of one child are not created.
 A group that hides an expanded member opens by itself. Group rows can be expanded to show members;
 members keep their real node ids, so expansion state survives regrouping.
 
-The view also applies a display **cut-off**: children below x % of the root
-are summed into one "n processes below cut-off" row, so the frontier stays
-complete.
+The view also applies a display **cut-off** (`View.cutoff`, `cutoff_basis`):
+under each parent, the smallest children are bundled into one **others** row
+as long as their cumulative |impact| stays within x % of the reference:
+
+- `cutoff_basis="parent"`: the parent (sum of the siblings' |impact|);
+- `cutoff_basis="total"`: the root score.
+
+Decision: cumulative "bottom x %" rather than "each child below x %", so an
+others row never weighs more than x % of its reference — with an individual
+threshold, hundreds of small children could add up to a large, opaque
+others. The basis is a toggle next to the cut-off ("% of total | parent").
 
 ### "Others": cut-off, pins and moved rows
 

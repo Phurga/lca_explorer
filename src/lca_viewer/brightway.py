@@ -9,6 +9,25 @@ import scipy.sparse as sp
 from .model import LCAModel, Method
 
 
+DETAIL_FIELDS = [
+    "comment", "product_information", "included_activities_start", "included_activities_end",
+    "start_date", "end_date", "activity type", "synonyms", "production amount", "filename",
+]
+
+
+def _details(data: dict) -> dict:
+    """Descriptive metadata shown in the activity pop-up."""
+    out = {k: data[k] for k in DETAIL_FIELDS if data.get(k) not in (None, "", [])}
+    if data.get("classifications"):
+        out["classifications"] = [list(c) for c in data["classifications"]]
+    authors = data.get("authors") or {}
+    if isinstance(authors, dict):
+        names = {role: a.get("name") for role, a in authors.items() if isinstance(a, dict) and a.get("name")}
+        if names:
+            out["authors"] = names
+    return out
+
+
 def _classification(classifications, prefix: str) -> str | None:
     for system, value in classifications or []:
         if system.startswith(prefix):
@@ -75,4 +94,5 @@ def from_brightway(project: str, database: str, methods: list[tuple]) -> LCAMode
         cfs = np.asarray(lca.characterization_matrix.diagonal()).ravel()
         loaded.append(Method(tuple(name), bd.methods[name].get("unit", ""), cfs))
 
-    return LCAModel(A=A, B=B, activities=activities, flows=flows, methods=loaded)
+    details = [_details(records[i]) for i in activity_ids]
+    return LCAModel(A=A, B=B, activities=activities, flows=flows, methods=loaded, details=details)

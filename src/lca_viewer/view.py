@@ -69,7 +69,10 @@ class View:
     expanded: set[str] = field(default_factory=set)
     rules: list[GroupRule] = field(default_factory=list)
     cutoff: float = 0.0
-    """Hide children whose |impact| < cutoff × |root impact| (for ``method``); they are summed in a "rest" row."""
+    """Under each parent, the smallest children that together weigh at most ``cutoff`` of
+    the reference (see ``cutoff_basis``), for ``method``, are bundled in "others"."""
+    cutoff_basis: str = "parent"
+    """"parent": the reference is the sum of the siblings' |impact|; "total": the root score."""
     method: int = 0
     pinned: set[str] = field(default_factory=set)
     """Row ids shown even when below the cut-off (exceptions chosen by the user)."""
@@ -97,6 +100,7 @@ class View:
             "expanded": sorted(self.expanded),
             "rules": [r.to_dict() for r in self.rules],
             "cutoff": self.cutoff,
+            "cutoff_basis": self.cutoff_basis,
             "method": self.method,
             "pinned": sorted(self.pinned),
             "others": sorted(self.others),
@@ -110,6 +114,7 @@ class View:
             expanded=set(data.get("expanded", [])),
             rules=[GroupRule(**r) for r in data.get("rules", [])],
             cutoff=data.get("cutoff", 0.0),
+            cutoff_basis=data.get("cutoff_basis", "parent"),
             method=data.get("method", 0),
             pinned=set(data.get("pinned", [])),
             others=set(data.get("others", [])),
@@ -178,13 +183,12 @@ class View:
     def _apply_cutoff(self, rows: list[Row], parent: Row) -> list[Row]:
         """Sort siblings and bundle into "others" those below the cut-off or moved there."""
         rows.sort(key=lambda r: -abs(r.impacts[self.method]))
-        threshold = self.cutoff * abs(self.tree.root.impacts[self.method]) if self.cutoff > 0 else None
+        below = self._bottom_contributors(rows)
         kept, hidden = [], []
-        for r in rows:
+        for r, b in zip(rows, below):
             r.moved = r.id in self.others
-            below = threshold is not None and bool(abs(r.impacts[self.method]) < threshold)
-            r.pinned = below and not r.moved and r.id in self.pinned
-            (hidden if r.moved or (below and not r.pinned) else kept).append(r)
+            r.pinned = b and not r.moved and r.id in self.pinned
+            (hidden if r.moved or (b and not r.pinned) else kept).append(r)
         # A single row below the cut-off is shown as itself; moved rows always go to "others"
         if len(hidden) > 1 or any(r.moved for r in hidden):
             rest = Row(
@@ -202,6 +206,28 @@ class View:
             )
             return kept + [rest]
         return rows
+
+    def _bottom_contributors(self, rows: list[Row]) -> list[bool]:
+        """Flags the smallest rows (``rows`` sorted by decreasing |impact|) whose
+        cumulative |impact| stays within ``cutoff`` of the siblings' total or of the root."""
+        below = [False] * len(rows)
+        magnitudes = [float(abs(r.impacts[self.method])) for r in rows]
+        if self.cutoff_basis == "total":
+            reference = float(abs(self.tree.root.impacts[self.method]))
+        elif self.cutoff_basis == "parent":
+            reference = sum(magnitudes)
+        else:
+            raise ValueError(f"Unknown cut-off basis {self.cutoff_basis!r}")
+        budget = self.cutoff * reference
+        if budget <= 0:
+            return below
+        cumulated = 0.0
+        for i in reversed(range(len(rows))):
+            cumulated += magnitudes[i]
+            if cumulated > budget:
+                break
+            below[i] = True
+        return below
 
     def _mask(self, rule: GroupRule) -> np.ndarray:
         key = id(rule)

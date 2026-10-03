@@ -368,42 +368,59 @@ class TestGroupExpansion:
             np.testing.assert_allclose(member_sum, group.impacts, rtol=1e-10)
 
 
+def _cutoff_between(view, parent_id, n):
+    """A cut-off that bundles exactly the ``n`` smallest children of ``parent_id``."""
+    magnitudes = sorted(abs(r.impacts[view.method]) for r in view.rows() if r.parent == parent_id)
+    total = sum(magnitudes)
+    return (sum(magnitudes[:n]) + magnitudes[n] / 2) / total
+
+
 class TestCutoff:
-    """Test cutoff functionality."""
+    """Cut-off: under each parent, the smallest children weighing together at most
+    ``cutoff`` of the siblings' total go to "others"."""
 
-    def test_cutoff_creates_rest_row_multiple_hidden(self, grouping_model):
-        """With cutoff, children below threshold should be merged into 'rest' row."""
-        tree = Tree(grouping_model, product=0, amount=1.0)
-        view = View(tree, cutoff=0.5)  # Hide processes with <50% of root impact
+    def test_bundles_the_bottom_share_of_each_parent(self, grouping_model):
+        view = View(Tree(grouping_model, 0))
         view.expand("0")
-        rows = view.rows()
+        smallest = sorted((r for r in view.rows() if r.parent == "0"), key=lambda r: abs(r.impacts[0]))
+        view.cutoff = _cutoff_between(view, "0", 2)
+        rest = next(r for r in view.rows() if r.kind == "rest")
+        assert {m.id for m in rest.members} == {smallest[0].id, smallest[1].id}
 
-        # Should have a "rest" row if multiple children are hidden
-        rest_rows = [r for r in rows if r.kind == "rest"]
-        # May or may not have rest depending on model values
-        if rest_rows:
-            assert len(rest_rows) > 0
-
-    def test_cutoff_frontier_still_sums_to_root(self, grouping_model):
-        """Even with cutoff, frontier sum should equal root impacts."""
-        tree = Tree(grouping_model, product=0, amount=1.0)
-        view = View(tree, cutoff=0.1)
+    def test_is_relative_to_each_parent_not_the_root(self, grouping_model):
+        view = View(Tree(grouping_model, 0))
         view.expand("0")
+        for r in [r for r in view.rows() if r.depth == 1 and r.kind == "process"]:
+            view.expand(r.id)
+        full = view.rows()
+        view.cutoff = 0.2
+        rest_by_parent = {r.parent: {m.id for m in r.members} for r in view.rows() if r.kind == "rest"}
+        for parent in {r.parent for r in full if r.parent is not None}:
+            children = sorted((r for r in full if r.parent == parent), key=lambda r: abs(r.impacts[0]))
+            budget, cumulated, expected = 0.2 * sum(abs(c.impacts[0]) for c in children), 0.0, set()
+            for c in children:
+                cumulated += abs(c.impacts[0])
+                if cumulated > budget:
+                    break
+                expected.add(c.id)
+            if len(expected) > 1:
+                assert rest_by_parent.get(parent) == expected
+            else:
+                assert parent not in rest_by_parent
 
-        frontier = view.frontier()
-        frontier_sum = sum(r.impacts for r in frontier)
-        np.testing.assert_allclose(frontier_sum, tree.root.impacts, rtol=1e-10)
-
-    def test_no_rest_when_one_or_fewer_hidden(self, grouping_model):
-        """No 'rest' row should be created if 0 or 1 processes are hidden."""
+    def test_frontier_still_sums_to_root(self, grouping_model):
         tree = Tree(grouping_model, product=0, amount=1.0)
-        view = View(tree, cutoff=1.0)  # Hide everything with <100% of root (nearly all)
+        view = View(tree, cutoff=0.3)
         view.expand("0")
-        rows = view.rows()
+        for r in [r for r in view.rows() if r.depth == 1 and r.kind == "process"]:
+            view.expand(r.id)
+        np.testing.assert_allclose(sum(r.impacts for r in view.frontier()), tree.root.impacts, rtol=1e-10)
 
-        # With very high cutoff, most things are hidden but only one "rest" if >1
-        rest_rows = [r for r in rows if r.kind == "rest"]
-        # Result depends on actual impacts
+    def test_a_single_bottom_row_is_shown_as_itself(self, grouping_model):
+        view = View(Tree(grouping_model, 0))
+        view.expand("0")
+        view.cutoff = _cutoff_between(view, "0", 1)
+        assert not [r for r in view.rows() if r.kind == "rest"]
 
 
 class TestViewRoundTrip:
@@ -712,11 +729,7 @@ def test_group_hiding_an_expanded_member_opens_until_collapsed(grouping_model):
 def test_rest_row_lists_hidden_members_and_pins_bring_them_back(grouping_model):
     view = View(Tree(grouping_model, 0))
     view.expand("0")
-    root_score = abs(view.tree.root.impacts[0])
-    children = [r for r in view.rows() if r.depth == 1]
-    impacts = sorted(abs(r.impacts[0]) for r in children)
-    # cut-off between the 2nd and 3rd smallest child, so that two rows are hidden
-    view.cutoff = (impacts[1] + impacts[2]) / 2 / root_score
+    view.cutoff = _cutoff_between(view, "0", 2)  # the two smallest children go to others
     rest = next(r for r in view.rows() if r.kind == "rest")
     assert len(rest.members) == 2
     assert np.allclose(rest.impacts, sum(m.impacts for m in rest.members))
@@ -746,7 +759,9 @@ def test_rows_api_with_cutoff_and_pins_is_json_serialisable(grouping_model):
     from lca_viewer.server import create_app
 
     client = TestClient(create_app(grouping_model))
-    state = {"root": [0], "expanded": ["0"], "cutoff": 0.3, "method": 0, "pinned": []}
+    view = View(Tree(grouping_model, 0))
+    view.expand("0")
+    state = {"root": [0], "expanded": ["0"], "cutoff": _cutoff_between(view, "0", 2), "method": 0, "pinned": []}
     response = client.post("/api/rows", json=state)
     assert response.status_code == 200
     rest = [r for r in response.json()["rows"] if r["kind"] == "rest"]
@@ -782,10 +797,74 @@ def test_moved_and_cut_rows_share_one_others_row(grouping_model):
     view = View(Tree(grouping_model, 0))
     view.expand("0")
     children = [r for r in view.rows() if r.depth == 1]
-    root_score = abs(view.tree.root.impacts[0])
-    impacts = sorted(abs(r.impacts[0]) for r in children)
-    view.cutoff = (impacts[0] + impacts[1]) / 2 / root_score  # hides only the smallest child
+    view.cutoff = _cutoff_between(view, "0", 1)  # only the smallest child is below the cut-off
     view.others = {children[0].id}  # and the biggest is moved
     rest = [r for r in view.rows() if r.kind == "rest"]
     assert len(rest) == 1 and len(rest[0].members) == 2
     assert np.allclose(sum(r.impacts for r in view.frontier()), view.tree.root.impacts)
+
+
+def test_rows_carry_metadata_for_chart_names(grouping_model):
+    from fastapi.testclient import TestClient
+    from lca_viewer.server import create_app
+
+    client = TestClient(create_app(grouping_model))
+    rows = client.post("/api/rows", json={"root": [0], "expanded": ["0", "0/1"], "method": 0}).json()["rows"]
+    process = next(r for r in rows if r["id"] == "0/1")
+    assert process["meta"]["name"] == grouping_model.activities["name"].iat[1]
+    assert process["meta"]["index"] == 1
+    direct = next(r for r in rows if r["kind"] == "direct" and r["parent"] == "0/1")
+    assert direct["meta"]["index"] == 1  # direct emissions are named after the emitting process
+
+
+def test_activity_endpoint_and_lazy_details(grouping_model, tmp_path):
+    from fastapi.testclient import TestClient
+    from lca_viewer.model import LCAModel
+    from lca_viewer.server import create_app
+
+    grouping_model.details = [{"comment": f"about {i}"} for i in range(grouping_model.size)]
+    grouping_model.save(tmp_path)
+    loaded = LCAModel.load(tmp_path)
+    assert loaded.details is None  # not read until needed
+    client = TestClient(create_app(loaded))
+    info = client.get("/api/activity/1?method=0").json()
+    assert info["details"] == {"comment": "about 1"}
+    assert info["cumulative_per_unit"] == pytest.approx(loaded.G[1, 0])
+    assert info["direct_per_unit"] == pytest.approx(loaded.U[0, 1] / loaded.diagonal[1])
+    assert sum(f["impact"] for f in info["direct_flows"]) == pytest.approx(info["direct_per_unit"])
+    assert client.get(f"/api/activity/{loaded.size}").status_code == 404
+
+
+def test_cutoff_of_total_uses_the_root_score_as_budget(grouping_model):
+    view = View(Tree(grouping_model, 0), cutoff_basis="total")
+    view.expand("0")
+    for r in [r for r in view.rows() if r.depth == 1 and r.kind == "process"]:
+        view.expand(r.id)
+    full = view.rows()
+    view.cutoff = 0.05
+    root = abs(view.tree.root.impacts[0])
+    rest_by_parent = {r.parent: {m.id for m in r.members} for r in view.rows() if r.kind == "rest"}
+    assert rest_by_parent  # the model has small enough grandchildren
+    for parent in {r.parent for r in full if r.parent is not None}:
+        children = sorted((r for r in full if r.parent == parent), key=lambda r: abs(r.impacts[0]))
+        cumulated, expected = 0.0, set()
+        for c in children:
+            cumulated += abs(c.impacts[0])
+            if cumulated > 0.05 * root:
+                break
+            expected.add(c.id)
+        if len(expected) > 1:
+            assert rest_by_parent.get(parent) == expected
+        else:
+            assert parent not in rest_by_parent
+    # every others row stays within the budget, and totals are exact
+    assert all(abs(r.impacts[0]) <= 0.05 * root + 1e-12 for r in view.rows() if r.kind == "rest")
+    assert np.allclose(sum(r.impacts for r in view.frontier()), view.tree.root.impacts)
+    assert View.from_dict(grouping_model, view.to_dict()).cutoff_basis == "total"
+
+
+def test_unknown_cutoff_basis_is_rejected(grouping_model):
+    view = View(Tree(grouping_model, 0), cutoff=0.1, cutoff_basis="sideways")
+    view.expand("0")
+    with pytest.raises(ValueError):
+        view.rows()

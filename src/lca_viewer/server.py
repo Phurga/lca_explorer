@@ -9,6 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -35,6 +36,7 @@ class ViewState(BaseModel):
     expanded: list[str] = []
     rules: list[dict] = []
     cutoff: float = 0.0
+    cutoff_basis: str = "parent"
     method: int = 0
     pinned: list[str] = []
     others: list[str] = []
@@ -74,6 +76,14 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
         default_method = model.method_index(("EF v3.1", "climate change", "global warming potential (GWP100)"))
     except KeyError:
         default_method = 0
+
+    META_FIELDS = ["name", "reference_product", "location", "unit", "activity_type", "isic", "cpc", "database"]
+
+    def meta(i: int) -> dict:
+        """Metadata of activity ``i`` used to name chart rows."""
+        r = activities.iloc[i]
+        values = {f: r.get(f) for f in META_FIELDS}  # importers may not provide every field
+        return {"index": int(i), **{f: (None if v is None or pd.isna(v) else str(v)) for f, v in values.items()}}
 
     def describe(i: int) -> dict:
         r = activities.iloc[i]
@@ -132,12 +142,40 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
                 "pinned": r.pinned,
                 "moved": r.moved,
             }
+            if r.kind == "process":
+                out["meta"] = meta(r.node.product)
+            elif r.kind == "direct" and len(r.node.path) > 1:
+                out["meta"] = meta(r.node.path[-2])  # the process emitting
             if r.members is not None:
                 out["members"] = [serialise(m) for m in r.members]
             return out
 
         rows = [serialise(r) for r in rendered]
         return {"methods": methods, "rows": rows}
+
+    @app.get("/api/activity/{index}")
+    def activity(index: int, method: int | None = None, flows: int = 8):
+        """Metadata, description and per-unit results of one activity, for the info pop-up."""
+        if not 0 <= index < model.size:
+            raise HTTPException(404, f"No activity {index}")
+        k = default_method if method is None else method
+        per_unit = 1 / model.diagonal[index]  # per unit of reference product
+        column = model.B[:, index].toarray().ravel() * model.methods[k].cfs * per_unit
+        top = np.argsort(-np.abs(column))[:flows]
+        categories = model.flows["categories"] if "categories" in model.flows else None
+        return {
+            **meta(index),
+            "details": model.activity_details(index),
+            "method": k,
+            "cumulative_per_unit": float(model.G[index, k]),
+            "direct_per_unit": float(model.U[k, index] * per_unit),
+            "direct_flows": [
+                {"name": model.flows["name"].iat[f],
+                 "categories": list(categories.iat[f]) if categories is not None else [],
+                 "impact": float(column[f])}
+                for f in top if column[f] != 0
+            ],
+        }
 
     @app.post("/api/global")
     def global_contribution(req: GlobalRequest):

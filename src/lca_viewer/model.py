@@ -68,6 +68,8 @@ class LCAModel:
     activities: pd.DataFrame
     flows: pd.DataFrame
     methods: list[Method] = field(default_factory=list)
+    details: list[dict] | None = None
+    """Optional descriptive metadata per activity (description, dates, …); loaded lazily from a cache."""
 
     def __post_init__(self):
         self.A = sp.csc_matrix(self.A, dtype=float)
@@ -83,6 +85,7 @@ class LCAModel:
             raise ValueError("A has zero entries on its diagonal")
         self._G = None
         self._U = None
+        self._details_path = None
 
     @property
     def size(self) -> int:
@@ -134,6 +137,9 @@ class LCAModel:
         self.flows.to_pickle(directory / "flows.pkl")
         with open(directory / "methods.pkl", "wb") as f:
             pickle.dump(self.methods, f)
+        if self.details is not None:
+            with open(directory / "details.pkl", "wb") as f:
+                pickle.dump(self.details, f)
 
     @classmethod
     def load(cls, directory) -> "LCAModel":
@@ -143,10 +149,22 @@ class LCAModel:
         directory = Path(directory)
         with open(directory / "methods.pkl", "rb") as f:
             methods = pickle.load(f)
-        return cls(
+        model = cls(
             A=sp.load_npz(directory / "A.npz"),
             B=sp.load_npz(directory / "B.npz"),
             activities=pd.read_pickle(directory / "activities.pkl"),
             flows=pd.read_pickle(directory / "flows.pkl"),
             methods=methods,
         )
+        if (directory / "details.pkl").exists():
+            model._details_path = directory / "details.pkl"
+        return model
+
+    def activity_details(self, index: int) -> dict:
+        """Descriptive metadata of one activity ({} when the model has none)."""
+        if self.details is None and self._details_path is not None:
+            import pickle
+
+            with open(self._details_path, "rb") as f:
+                self.details = pickle.load(f)
+        return self.details[index] if self.details is not None else {}

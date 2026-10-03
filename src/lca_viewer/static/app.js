@@ -321,7 +321,7 @@ function MethodSelect({ methods, value, onChange }) {
 }
 
 // ---------------------------------------------------------------- tree
-function Tree({ rows, rootImpact, selection, onToggle, onSelect, onUngroup, ungroupable, onUnpin, onMoveToOthers }) {
+function Tree({ rows, rootImpact, selection, onToggle, onSelect, onUngroup, ungroupable, onUnpin, onMoveToOthers, onHover, onInfo }) {
   if (!rows.length) return html`<div class="empty">Choose a functional unit to start.</div>`;
   return html`
     <div class="tree">
@@ -336,7 +336,9 @@ function Tree({ rows, rootImpact, selection, onToggle, onSelect, onUngroup, ungr
             const [product, name, location] = r.kind === "process" ? r.label.split(" | ") : [r.label];
             return html`
               <tr key=${r.id} class="${r.kind} ${selection.has(r.id) ? "selected" : ""}"
-                  onClick=${(e) => onSelect(r, e.ctrlKey || e.metaKey || e.shiftKey)}>
+                  onClick=${(e) => onSelect(r, e.ctrlKey || e.metaKey || e.shiftKey)}
+                  onMouseEnter=${() => onHover(r)} onMouseLeave=${() => onHover(null)}
+                  onContextMenu=${(e) => onInfo(r, e)}>
                 <td>
                   <div class="name" style=${{ paddingLeft: `${r.depth * 16}px` }}>
                     ${r.expandable
@@ -423,7 +425,7 @@ function edgePath(from, to, orientation) {
   return `M${x1},${y1} C${x1},${ym} ${x2},${ym} ${x2},${y2}`;
 }
 
-function TreeGraph({ rows, rootImpact, selection, onToggle, onSelect, onUngroup, ungroupable, onUnpin, onMoveToOthers, orientation, setOrientation }) {
+function TreeGraph({ rows, rootImpact, selection, onToggle, onSelect, onUngroup, ungroupable, onUnpin, onMoveToOthers, onHover, onInfo, orientation, setOrientation }) {
   const container = useRef(null);
   const drag = useRef(null);
   const [transform, setTransform] = useState({ k: 1, x: 16, y: 16 });
@@ -497,7 +499,9 @@ function TreeGraph({ rows, rootImpact, selection, onToggle, onSelect, onUngroup,
             return html`
               <g key=${r.id} class="node ${r.kind} ${selection.has(r.id) ? "selected" : ""}"
                  onClick=${(e) => onSelect(r, e.ctrlKey || e.metaKey || e.shiftKey)}
-                 onDblClick=${() => r.expandable && onToggle(r)}>
+                 onDblClick=${() => r.expandable && onToggle(r)}
+                 onMouseEnter=${() => onHover(r)} onMouseLeave=${() => onHover(null)}
+                 onContextMenu=${(e) => onInfo(r, e)}>
                 <title>${r.kind === "process" ? `${product} | ${name} | ${location}` : r.label}\n${fmt(r.impacts[0])} (${pct(s)})</title>
                 <rect x=${x} y=${y} width=${BOX.w} height=${BOX.h} rx="6" />
                 <text x=${x + 10} y=${y + 17} class="title">${truncate(title, 30)}</text>
@@ -534,7 +538,7 @@ function TreeGraph({ rows, rootImpact, selection, onToggle, onSelect, onUngroup,
 // ---------------------------------------------------------------- "others" details
 // Shows what an "others" row contains (below the cut-off, or moved there by the user);
 // ticking a process brings it back into the tree and the chart.
-function OthersDetails({ rest, rows, rootImpact, cutoff, pinned, setPinned, others, setOthers, onClose }) {
+function OthersDetails({ rest, rows, rootImpact, cutoff, cutoffBasis, pinned, setPinned, others, setOthers, onClose, sticky, onMouseEnter, onMouseLeave }) {
   const byId = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
   const parent = byId.get(rest.parent);
   const shownPins = rows.filter((r) => r.parent === rest.parent && r.pinned);
@@ -551,18 +555,18 @@ function OthersDetails({ rest, rows, rootImpact, cutoff, pinned, setPinned, othe
     setPinned(nextPinned);
     setOthers(nextOthers);
   }
-  const reasons = [nCut && `${nCut} below the ${cutoff} % cut-off`, nMoved && `${nMoved} moved here by you`].filter(Boolean).join(", ");
+  const reasons = [nCut && `${nCut} in the bottom ${cutoff} % of ${cutoffBasis === "total" ? "the total" : "their parent"}`, nMoved && `${nMoved} moved here by you`].filter(Boolean).join(", ");
   return html`
-    <div class="details">
+    <div class="details ${sticky ? "sticky" : "preview"}" onMouseEnter=${onMouseEnter} onMouseLeave=${onMouseLeave}>
       <div class="details-head">
         <span class="details-title"><b>Others</b>${parent ? ` under ${shortLabel(parent, byId)}` : ""}${`: ${reasons} · ${fmt(rest.impacts[0])} (${pct(share(rest))})`}</span>
         <span class="details-actions">
           <button onClick=${() => setShown(rest.members.map((m) => m.id), true)}>Show all</button>
           <button disabled=${!shownPins.length} onClick=${() => setShown(shownPins.map((m) => m.id), false)}>Hide pinned</button>
-          <button onClick=${onClose} aria-label="Close">×</button>
+          ${sticky && html`<button onClick=${onClose} aria-label="Close">×</button>`}
         </span>
       </div>
-      <p class="note">Tick a process to show it in the tree and the contribution chart; untick to put it back in others.</p>
+      <p class="note">Tick a process to show it in the tree and the contribution chart; untick to put it back in others.${sticky ? "" : " Click the others row to keep this panel open."}</p>
       <div class="details-list">
         <table>
           <tbody>
@@ -588,35 +592,265 @@ function OthersDetails({ rest, rows, rootImpact, cutoff, pinned, setPinned, othe
 }
 
 // ---------------------------------------------------------------- chart panel
+// ---------------------------------------------------------------- activity info pop-up (right click)
+const DETAIL_SECTIONS = [
+  ["comment", "Description"], ["product_information", "Product"],
+  ["included_activities_start", "Starts with"], ["included_activities_end", "Ends with"],
+];
+
+function InfoPopup({ target, method, methodInfo, rootImpact, rowsById, onClose, onUseAsRoot, onMoveToOthers }) {
+  const [info, setInfo] = useState(null);
+  const [error, setError] = useState(null);
+  const box = useRef(null);
+  useEffect(() => {
+    setInfo(null);
+    request(`/api/activity/${target.index}?method=${method}`).then(setInfo).catch((e) => setError(e.message));
+  }, [target.index, method]);
+  useEffect(() => {
+    const onKey = (e) => e.key === "Escape" && onClose();
+    const onDown = (e) => box.current && !box.current.contains(e.target) && onClose();
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("mousedown", onDown);
+    return () => { document.removeEventListener("keydown", onKey); document.removeEventListener("mousedown", onDown); };
+  }, []);
+
+  const width = Math.min(560, window.innerWidth - 24);
+  const left = Math.max(12, Math.min(target.x + 8, window.innerWidth - width - 12));
+  const top = Math.max(12, Math.min(target.y + 8, window.innerHeight - 320));
+  const row = target.row;
+  const path = [];
+  for (let r = row; r; r = rowsById.get(r.parent)) if (r.meta && r.kind === "process") path.unshift(r.meta.name);
+  const d = info?.details || {};
+  const unitPer = info ? `${methodInfo.unit} / ${unit(info.unit)}` : "";
+  const directTotal = info ? info.direct_flows.reduce((sum, f) => sum + f.impact, 0) : 0;
+  return html`
+    <div class="info-popup" ref=${box} style=${{ left: `${left}px`, top: `${top}px`, width: `${width}px`, maxHeight: `calc(100vh - ${top + 12}px)` }}
+         role="dialog" aria-label="Activity information">
+      <div class="info-head">
+        <div>
+          <div class="info-title">${target.direct ? "Direct emissions of " : ""}${info?.name ?? "…"} ${info && html`<span class="loc-chip">${info.location}</span>`}</div>
+          ${info && html`<div class="muted">${info.reference_product} · ${unit(info.unit)} · ${info.activity_type}</div>`}
+        </div>
+        <button onClick=${onClose} aria-label="Close">×</button>
+      </div>
+      ${error && html`<div class="error">${error}</div>`}
+      ${info && html`
+        <div class="info-body">
+          ${row && (row.kind === "process" || row.kind === "direct") && html`
+            <section>
+              <h4>In this tree</h4>
+              <table class="kv">
+                ${row.kind === "process" && html`<tr><th>Amount</th><td>${row.waste ? `${fmt(-row.amount)} ${unit(row.unit)} treated` : `${fmt(row.amount)} ${unit(row.unit)}`}</td></tr>`}
+                <tr><th>Impact</th><td>${fmt(row.impacts[0])} ${methodInfo.unit} (${pct(rootImpact ? row.impacts[0] / rootImpact : 0)} of the total)</td></tr>
+                <tr><th>Path</th><td>${path.join(" → ")}</td></tr>
+              </table>
+            </section>`}
+          <section>
+            <h4>Per ${unit(info.unit)} of ${info.reference_product}</h4>
+            <table class="kv">
+              <tr><th>Cumulative</th><td>${fmt(info.cumulative_per_unit)} ${unitPer}</td></tr>
+              <tr><th>Direct</th><td>${fmt(info.direct_per_unit)} ${unitPer}${info.cumulative_per_unit ? ` (${pct(info.direct_per_unit / info.cumulative_per_unit)} of cumulative)` : ""}</td></tr>
+            </table>
+            ${info.direct_flows.length > 0 && html`
+              <table class="flows">
+                <thead><tr><th>Main direct emissions (${methodLabel(methodInfo)})</th><th class="num">${unitPer}</th><th class="num">share</th></tr></thead>
+                <tbody>${info.direct_flows.map((f) => html`
+                  <tr><td>${f.name} <span class="muted">${f.categories.join(" / ")}</span></td>
+                      <td class="num">${fmt(f.impact)}</td><td class="num">${pct(directTotal ? f.impact / directTotal : 0)}</td></tr>`)}
+                </tbody>
+              </table>`}
+          </section>
+          ${DETAIL_SECTIONS.filter(([k]) => d[k]).map(([k, title]) => html`
+            <section><h4>${title}</h4><p class="text">${String(d[k]).split("\n").filter((line) => line.trim() !== "None").join("\n").trim()}</p></section>`)}
+          <section>
+            <h4>Metadata</h4>
+            <table class="kv">
+              ${(d.start_date || d.end_date) && html`<tr><th>Time period</th><td>${d.start_date ?? "?"} – ${d.end_date ?? "?"}</td></tr>`}
+              ${(d.classifications || []).map(([system, value]) => html`<tr><th>${system}</th><td>${value}</td></tr>`)}
+              ${d.synonyms && html`<tr><th>Synonyms</th><td>${d.synonyms.join("; ")}</td></tr>`}
+              ${d.authors && Object.entries(d.authors).map(([role, name]) => html`<tr><th>${role}</th><td>${name}</td></tr>`)}
+              <tr><th>Database</th><td>${info.database}</td></tr>
+              ${d.filename && html`<tr><th>File</th><td class="muted">${d.filename}</td></tr>`}
+            </table>
+          </section>
+        </div>
+        <div class="info-actions">
+          <button onClick=${() => { onUseAsRoot(info); onClose(); }}>Use as functional unit</button>
+          ${row && movable(row) && html`<button onClick=${() => { onMoveToOthers([row.id]); onClose(); }}>Move to others</button>`}
+        </div>`}
+    </div>`;
+}
+
+// ---------------------------------------------------------------- chart row naming
+// Chart items come from the tree frontier; "group products" merges items of the same
+// reference product. Each item gets a main name and grey qualifiers.
+const RECIPE_TOKENS = {
+  product: "reference_product", name: "name", location: "location", unit: "unit",
+  type: "activity_type", isic: "isic", cpc: "cpc", database: "database",
+};
+const DEFAULT_RECIPE = "{product} ({location})";
+
+function joinValues(values) {
+  const unique = [...new Set(values.filter(Boolean))];
+  return unique.length <= 3 ? unique.join(", ") : `${unique.slice(0, 3).join(", ")} +${unique.length - 3}`;
+}
+function applyRecipe(recipe, metas) {
+  return recipe
+    .replace(/\{(\w+)\}/g, (token, key) => (RECIPE_TOKENS[key] ? joinValues(metas.map((m) => m[RECIPE_TOKENS[key]])) : token))
+    .replace(/\(\s*\)/g, "").replace(/\s+/g, " ").trim();
+}
+
+function chartItems(rows, byId, groupProducts) {
+  const items = [];
+  const merged = new Map();
+  for (const r of frontier(rows)) {
+    const parentMeta = byId.get(r.parent)?.meta;
+    let key = null;
+    if (groupProducts) {
+      if (r.kind === "process") key = `p|${r.meta.reference_product}`;
+      else if (r.kind === "direct" && r.meta) key = `d|${r.meta.reference_product}`;
+      else if (r.kind === "rest") key = "o|";
+      else if (r.kind === "group") key = `g|${r.label}`;
+    }
+    if (key && merged.has(key)) {
+      const item = merged.get(key);
+      item.rows.push(r);
+      item.impacts = item.impacts.map((v, k) => v + r.impacts[k]);
+      if (r.meta) item.metas.push(r.meta);
+      if (parentMeta) item.parentMetas.push(parentMeta);
+      continue;
+    }
+    const item = { kind: r.kind, rows: [r], impacts: [...r.impacts], metas: r.meta ? [r.meta] : [], parentMetas: parentMeta ? [parentMeta] : [] };
+    if (key) merged.set(key, item);
+    items.push(item);
+  }
+  return items.sort((a, b) => Math.abs(b.impacts[0]) - Math.abs(a.impacts[0]));
+}
+
+function nameItem(item, naming, recipe, byId) {
+  const { kind, metas, parentMetas, rows } = item;
+  const many = rows.length > 1;
+  const pick = (field) => joinValues(metas.map((m) => m[field]));
+  if (kind === "group") return { main: rows[0].label, qual: many ? `${rows.length} groups` : "" };
+  if (kind === "rest") {
+    if (many) return { main: "others", qual: `under ${rows.length} processes` };
+    if (naming === "short") return { main: "others", qual: `under ${joinValues(parentMetas.map((m) => m.reference_product))}` };
+    if (naming === "custom" && parentMetas.length) return { main: `others under ${applyRecipe(recipe, parentMetas)}`, qual: "" };
+    return { main: shortLabel(rows[0], byId), qual: "" };
+  }
+  if (!metas.length) return { main: rows[0].label, qual: "" };
+  const direct = kind === "direct";
+  if (naming === "short") return { main: pick("reference_product"), qual: [direct && "direct emissions", pick("location")].filter(Boolean).join(" · ") };
+  if (naming === "custom") return { main: `${applyRecipe(recipe, metas)}${direct ? " — direct" : ""}`, qual: "" };
+  return { main: `${direct ? "direct: " : ""}${pick("name")} (${pick("location")})`, qual: "" };
+}
+
+function nameItems(items, naming, recipe, byId) {
+  const named = items.map((item) => ({ ...item, ...nameItem(item, naming, recipe, byId) }));
+  // Rows that still read the same get the activity name, then a number, as qualifiers
+  const text = (it) => `${it.main}|${it.qual}`;
+  const count = (list) => list.reduce((m, it) => m.set(text(it), (m.get(text(it)) || 0) + 1), new Map());
+  const qualify = (extra) => {
+    const counts = count(named);
+    for (const it of named) {
+      const q = counts.get(text(it)) > 1 ? extra(it) : "";
+      if (q) it.qual = [it.qual, q].filter(Boolean).join(" · ");
+    }
+  };
+  if (naming !== "full") qualify((it) => (it.metas.length ? joinValues(it.metas.map((m) => m.name)) : ""));
+  qualify((it) => {
+    const parents = it.rows.map((r) => byId.get(r.kind === "direct" ? byId.get(r.parent)?.parent : r.parent)?.meta).filter(Boolean);
+    return parents.length ? `under ${joinValues(parents.map((m) => `${m.name} (${m.location})`))}` : "";
+  });
+  const counts = count(named);
+  const seen = new Map();
+  for (const it of named) {
+    if (counts.get(text(it)) > 1) {
+      const n = (seen.get(text(it)) || 0) + 1;
+      seen.set(text(it), n);
+      it.qual = [it.qual, `#${n}`].filter(Boolean).join(" ");
+    }
+    it.label = it.qual ? `${it.main} (${it.qual})` : it.main;
+  }
+  return named;
+}
+
+const richSafe = (text) => String(text).replace(/[{}|]/g, " ");
+let measureContext = null;
+function textWidth(text) {
+  measureContext = measureContext || document.createElement("canvas").getContext("2d");
+  measureContext.font = `12px ${cssVar("--font")}`;
+  return measureContext.measureText(text).width;
+}
+
+function RecipeEditor({ recipe, setRecipe, example }) {
+  const input = useRef(null);
+  function insert(token) {
+    const el = input.current;
+    const at = el ? el.selectionStart : recipe.length;
+    const next = `${recipe.slice(0, at)}{${token}}${recipe.slice(at)}`;
+    setRecipe(next);
+    setTimeout(() => { el?.focus(); el?.setSelectionRange(at + token.length + 2, at + token.length + 2); });
+  }
+  return html`
+    <div class="recipe">
+      <div class="row">
+        <input ref=${input} value=${recipe} onInput=${(e) => setRecipe(e.target.value)} aria-label="Row name recipe" />
+        <button onClick=${() => setRecipe(DEFAULT_RECIPE)}>Default</button>
+      </div>
+      <div class="row tokens">Insert:
+        ${Object.keys(RECIPE_TOKENS).map((t) => html`<button class="token" onClick=${() => insert(t)}>{${t}}</button>`)}
+      </div>
+      ${example && html`<p class="note">e.g. ${example}</p>`}
+    </div>`;
+}
+
+// ---------------------------------------------------------------- chart panel
 function ChartPanel({ data, info, method, chartMethods, setChartMethods }) {
   const [mode, setMode] = useState("single");
   const [family, setFamily] = useState(info.methods[method].name[0]);
+  const [naming, setNaming] = useState(() => loadPreference("naming", "full"));
+  const [recipe, setRecipe] = useState(() => loadPreference("recipe", DEFAULT_RECIPE));
+  const [groupProducts, setGroupProducts] = useState(() => loadPreference("groupProducts", "0") === "1");
+  useEffect(() => savePreference("naming", naming), [naming]);
+  useEffect(() => savePreference("recipe", recipe), [recipe]);
+  useEffect(() => savePreference("groupProducts", groupProducts ? "1" : "0"), [groupProducts]);
+
   const byId = useMemo(() => new Map(data.rows.map((r) => [r.id, r])), [data]);
-  const parts = useMemo(() => {
-    const seen = new Map();
-    return frontier(data.rows)
-      .map((r) => {
-        let label = truncate(shortLabel(r, byId), 60);
-        const n = (seen.get(label) || 0) + 1;
-        seen.set(label, n);
-        if (n > 1) label = `${label} #${n}`;
-        return { ...r, chartLabel: label };
-      })
-      .sort((a, b) => Math.abs(b.impacts[0]) - Math.abs(a.impacts[0]));
-  }, [data, byId]);
+  const parts = useMemo(
+    () => nameItems(chartItems(data.rows, byId, groupProducts), naming, recipe, byId),
+    [data, byId, groupProducts, naming, recipe],
+  );
   const unit = info.methods[method].unit;
+  const total = parts.reduce((s, p) => s + p.impacts[0], 0);
 
   const singleOption = useMemo(() => {
     const o = baseOption();
     const items = [...parts].reverse();
+    const groupColor = cssVar("--group");
+    const shown = items.map((p) => [truncate(p.main, 52), p.qual ? truncate(p.qual, 48) : ""]);
+    o.grid = { ...o.grid, containLabel: false, top: 36, bottom: 28,
+      left: Math.min(460, Math.max(...shown.map(([m, q]) => textWidth(q ? `${m} ${q}` : m))) + 16) };
     o.title = { text: `${methodLabel(info.methods[method])} [${unit}]`, textStyle: { fontSize: 12, color: cssVar("--muted") } };
-    o.yAxis = { ...o.yAxis, type: "category", data: items.map((p) => p.chartLabel) };
+    o.yAxis = {
+      ...o.yAxis, type: "category", data: items.map((_, i) => String(i)),
+      axisLabel: {
+        formatter: (v) => {
+          const [m, q] = shown[Number(v)];
+          return `{m|${richSafe(m)}}${q ? ` {q|${richSafe(q)}}` : ""}`;
+        },
+        rich: { m: { color: cssVar("--text") }, q: { color: cssVar("--muted") } },
+      },
+    };
     o.xAxis = { ...o.xAxis, type: "value", name: unit };
-    o.tooltip.valueFormatter = (v) => `${fmt(v)} ${unit}`;
+    o.tooltip.formatter = (d) => {
+      const p = items[d.dataIndex];
+      return `${p.label}<br/><b>${fmt(p.impacts[0])} ${unit}</b> (${pct(total ? p.impacts[0] / total : 0)})${p.rows.length > 1 ? `<br/>${p.rows.length} rows merged` : ""}`;
+    };
     o.series = [{
       type: "bar", data: items.map((p) => ({
         value: p.impacts[0],
-        itemStyle: { color: p.impacts[0] < 0 ? cssVar("--bar-negative") : p.kind === "group" ? cssVar("--group") : cssVar("--bar") },
+        itemStyle: { color: p.impacts[0] < 0 ? cssVar("--bar-negative") : p.kind === "group" ? groupColor : cssVar("--bar") },
       })),
       label: { show: true, position: "right", formatter: (d) => fmt(d.value), color: cssVar("--muted") },
     }];
@@ -628,9 +862,9 @@ function ChartPanel({ data, info, method, chartMethods, setChartMethods }) {
     const positions = chartMethods.map((m) => data.methods.indexOf(m)).filter((i) => i >= 0);
     const top = parts.slice(0, 11);
     const rest = parts.slice(11);
-    const segments = top.map((p) => ({ name: p.chartLabel, impacts: p.impacts }));
+    const segments = top.map((p) => ({ name: truncate(p.label, 60), impacts: p.impacts }));
     if (rest.length) {
-      segments.push({ name: `${rest.length} others`, impacts: data.methods.map((_, k) => rest.reduce((s, p) => s + p.impacts[k], 0)) });
+      segments.push({ name: `${rest.length} more rows`, impacts: data.methods.map((_, k) => rest.reduce((s, p) => s + p.impacts[k], 0)) });
     }
     const totals = positions.map((k) => parts.reduce((s, p) => s + p.impacts[k], 0));
     const categories = positions.map((k) => truncate(info.methods[data.methods[k]].name.slice(1).join(" | "), 50));
@@ -650,8 +884,9 @@ function ChartPanel({ data, info, method, chartMethods, setChartMethods }) {
   const familyMethods = info.methods.map((m, i) => [m, i]).filter(([m]) => m.name[0] === family);
 
   function exportCsv() {
-    const header = ["row", "kind", "amount", "unit", ...data.methods.map((m) => `"${methodLabel(info.methods[m])} [${info.methods[m].unit}]"`)];
-    const lines = parts.map((p) => [`"${p.chartLabel.replace(/"/g, '""')}"`, p.kind, p.amount, p.unit, ...p.impacts].join(","));
+    const quote = (v) => `"${String(v).replace(/"/g, '""')}"`;
+    const header = ["row", "kind", "merged rows", ...data.methods.map((m) => quote(`${methodLabel(info.methods[m])} [${info.methods[m].unit}]`))];
+    const lines = parts.map((p) => [quote(p.label), p.kind, p.rows.length, ...p.impacts].join(","));
     download("contributions.csv", [header.join(","), ...lines].join("\n"), "text/csv");
   }
 
@@ -663,9 +898,19 @@ function ChartPanel({ data, info, method, chartMethods, setChartMethods }) {
         <span class="spacer" style="flex:1"></span>
         <button onClick=${exportCsv}>Export CSV</button>
       </div>
+      <div class="row quick-views">
+        <button class=${groupProducts ? "primary" : ""} onClick=${() => setGroupProducts(!groupProducts)}
+          title="Merge rows of the same product (different regions, markets or production routes)">Group products</button>
+        <span class="segmented" role="group" aria-label="Row names">
+          ${[["full", "Full names"], ["short", "Short names"], ["custom", "Custom name"]].map(([id, label]) => html`
+            <button class=${naming === id ? "primary" : ""} onClick=${() => setNaming(id)}>${label}</button>`)}
+        </span>
+      </div>
+      ${naming === "custom" && html`<${RecipeEditor} recipe=${recipe} setRecipe=${setRecipe}
+          example=${parts.find((p) => p.kind === "process")?.label} />`}
       <p class="note">
         Built from the tree as displayed: each visible row that is not expanded is a bar segment.
-        Expand, collapse or group rows to change the breakdown. ${parts.length} segments.
+        Expand, collapse or group rows to change the breakdown. ${parts.length} segments${groupProducts ? " after merging products" : ""}.
       </p>
       ${mode === "single"
         ? html`<${Chart} option=${singleOption} height=${Math.max(260, parts.length * 26 + 60)} />`
@@ -839,7 +1084,11 @@ function App() {
   const [amount, setAmount] = useState(1);
   const [method, setMethod] = useState(0);
   const [cutoff, setCutoff] = useState(1);
+  const [cutoffBasis, setCutoffBasis] = useState("parent");
   const [undo, setUndo] = useState(null);
+  const [hoverRest, setHoverRest] = useState(null);
+  const [infoTarget, setInfoTarget] = useState(null);
+  const hoverTimer = useRef(null);
   const [expanded, setExpanded] = useState(new Set());
   const [pinned, setPinned] = useState(new Set());
   const [others, setOthers] = useState(new Set());
@@ -865,6 +1114,7 @@ function App() {
         setRoot(saved.root); setAmount(saved.amount); setMethod(saved.method); setCutoff(saved.cutoff);
         setExpanded(new Set(saved.expanded)); setRules(saved.rules); setChartMethods(saved.chartMethods || []);
         setPinned(new Set(saved.pinned || [])); setOthers(new Set(saved.others || []));
+        setCutoffBasis(saved.cutoffBasis || "parent");
         return;
       }
       setMethod(i.default_method);
@@ -888,13 +1138,14 @@ function App() {
   // "others": a new cut-off starts from a clean slate, with an undo.
   const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
   const describeCustom = (p, o) => [p.size && `${plural(p.size, "pinned row")}`, o.size && `${plural(o.size, "row")} moved to others`].filter(Boolean).join(" and ");
-  function changeCutoff(next) {
+  function changeCutoff(next, basis = cutoffBasis) {
     if (pinned.size || others.size) {
-      setUndo({ message: `Cut-off changed: ${describeCustom(pinned, others)} reset.`, state: { cutoff, pinned, others } });
+      setUndo({ message: `Cut-off changed: ${describeCustom(pinned, others)} reset.`, state: { cutoff, cutoffBasis, pinned, others } });
       setPinned(new Set());
       setOthers(new Set());
     }
     setCutoff(next);
+    setCutoffBasis(basis);
   }
   function resetView() {
     const custom = describeCustom(pinned, others);
@@ -907,6 +1158,7 @@ function App() {
   function applyUndo() {
     const state = undo.state;
     if (state.cutoff !== undefined) setCutoff(state.cutoff);
+    if (state.cutoffBasis !== undefined) setCutoffBasis(state.cutoffBasis);
     if (state.expanded) setExpanded(state.expanded);
     setPinned(state.pinned);
     setOthers(state.others);
@@ -914,7 +1166,7 @@ function App() {
   }
 
   const viewState = (exp = expanded) => ({
-    root: [root.index], amount, expanded: [...exp], rules, cutoff: cutoff / 100, method, methods: chartMethods,
+    root: [root.index], amount, expanded: [...exp], rules, cutoff: cutoff / 100, cutoff_basis: cutoffBasis, method, methods: chartMethods,
     pinned: [...pinned], others: [...others],
   });
 
@@ -924,9 +1176,9 @@ function App() {
     request("/api/rows", viewState())
       .then((d) => { if (!cancelled) { setData(d); setError(null); } })
       .catch((e) => !cancelled && setError(e.message));
-    save({ root, amount, method, cutoff, expanded: [...expanded], rules, chartMethods, pinned: [...pinned], others: [...others] });
+    save({ root, amount, method, cutoff, cutoffBasis, expanded: [...expanded], rules, chartMethods, pinned: [...pinned], others: [...others] });
     return () => { cancelled = true; };
-  }, [root, amount, method, cutoff, expanded, rules, chartMethods, pinned, others, info]);
+  }, [root, amount, method, cutoff, cutoffBasis, expanded, rules, chartMethods, pinned, others, info]);
 
   const rootImpact = data.rows[0]?.impacts[0] || 0;
   const rowsById = useMemo(() => new Map(data.rows.map((r) => [r.id, r])), [data]);
@@ -947,9 +1199,24 @@ function App() {
     setExpanded(next);
   }
   function select(row, additive) {
+    // Clicking the only selected row again unselects it (closes the others panel)
+    if (!additive && selection.size === 1 && selection.has(row.id)) { setSelection(new Set()); return; }
     const next = new Set(additive ? selection : []);
     additive && selection.has(row.id) ? next.delete(row.id) : next.add(row.id);
     setSelection(next);
+  }
+  // Hovering an others row previews its panel; leaving it (and the panel) closes the preview
+  function hover(row) {
+    clearTimeout(hoverTimer.current);
+    if (row && row.kind === "rest") hoverTimer.current = setTimeout(() => setHoverRest(row.id), 150);
+    else hoverTimer.current = setTimeout(() => setHoverRest(null), 300);
+  }
+  const keepHover = () => clearTimeout(hoverTimer.current);
+  function showInfo(row, e) {
+    e.preventDefault();
+    if (row.kind === "rest") { setSelection(new Set([row.id])); return; }
+    if (!row.meta) return;
+    setInfoTarget({ index: row.meta.index, row, direct: row.kind === "direct", x: e.clientX, y: e.clientY });
   }
   function groupSelected() {
     const parent = selectedRows[0].parent;
@@ -969,6 +1236,8 @@ function App() {
   }
   const movableSelection = selectedRows.filter(movable);
   const selectedRest = selectedRows.length === 1 && selectedRows[0].kind === "rest" ? selectedRows[0] : null;
+  const hoveredRest = hoverRest && hoverRest !== selectedRest?.id ? rowsById.get(hoverRest) : null;
+  const shownRest = hoveredRest || selectedRest;
   const manualRuleFor = (groupRow) => rules.findIndex((r) => r.predicate && r.scope === groupRow.parent && `${groupRow.parent}/g:${r.name}` === groupRow.id);
   function ungroup(groupRow) {
     const i = manualRuleFor(groupRow);
@@ -991,7 +1260,7 @@ function App() {
     setBusy(false);
   }
   function exportView() {
-    download("lca-view.json", JSON.stringify({ root, amount, method: info.methods[method].name, cutoff, expanded: [...expanded], rules, pinned: [...pinned], others: [...others] }, null, 2), "application/json");
+    download("lca-view.json", JSON.stringify({ root, amount, method: info.methods[method].name, cutoff, expanded: [...expanded], rules, cutoffBasis, pinned: [...pinned], others: [...others] }, null, 2), "application/json");
   }
 
   if (!info) return html`<div class="empty">${error || "Loading model…"}</div>`;
@@ -1005,7 +1274,13 @@ function App() {
           onValue=${setAmount} aria-label="Amount" />${root ? root.unit : ""}</label>
         <${MethodSelect} methods=${info.methods} value=${method} onChange=${setMethod} />
         <label>Cut-off <${NumberInput} class="cutoff" value=${cutoff} min=${0} max=${100} step="0.5"
-          onValue=${changeCutoff} aria-label="Cut-off" title="Changing the cut-off resets pinned rows and rows moved to others" />%</label>
+          onValue=${(v) => changeCutoff(v)} aria-label="Cut-off" title="Changing the cut-off resets pinned rows and rows moved to others" />% of</label>
+        <span class="segmented basis" role="group" aria-label="Cut-off basis">
+          <button class=${cutoffBasis === "total" ? "primary" : ""} onClick=${() => cutoffBasis !== "total" && changeCutoff(cutoff, "total")}
+            title="Under each parent, the smallest children together weighing at most the cut-off of the total go to others">total</button>
+          <button class=${cutoffBasis === "parent" ? "primary" : ""} onClick=${() => cutoffBasis !== "parent" && changeCutoff(cutoff, "parent")}
+            title="Under each parent, the smallest children together weighing at most the cut-off of that parent go to others">parent</button>
+        </span>
       </header>
       <main>
         <section>
@@ -1036,13 +1311,17 @@ function App() {
           ${error && html`<div class="error">${error}</div>`}
           ${display === "list"
             ? html`<${Tree} rows=${data.rows} rootImpact=${rootImpact} selection=${selection} onToggle=${toggle} onSelect=${select}
-                onUngroup=${ungroup} ungroupable=${(r) => manualRuleFor(r) >= 0} onUnpin=${unpin} onMoveToOthers=${moveToOthers} />`
+                onUngroup=${ungroup} ungroupable=${(r) => manualRuleFor(r) >= 0} onUnpin=${unpin} onMoveToOthers=${moveToOthers} onHover=${hover} onInfo=${showInfo} />`
             : html`<${TreeGraph} rows=${data.rows} rootImpact=${rootImpact} selection=${selection} onToggle=${toggle} onSelect=${select}
-                onUngroup=${ungroup} ungroupable=${(r) => manualRuleFor(r) >= 0} onUnpin=${unpin} onMoveToOthers=${moveToOthers}
+                onUngroup=${ungroup} ungroupable=${(r) => manualRuleFor(r) >= 0} onUnpin=${unpin} onMoveToOthers=${moveToOthers} onHover=${hover} onInfo=${showInfo}
                 orientation=${orientation} setOrientation=${setOrientation} />`}
-          ${selectedRest && html`<${OthersDetails} rest=${selectedRest} rows=${data.rows} rootImpact=${rootImpact}
-              cutoff=${cutoff} pinned=${pinned} setPinned=${setPinned} others=${others} setOthers=${setOthers}
+          ${shownRest && html`<${OthersDetails} rest=${shownRest} rows=${data.rows} rootImpact=${rootImpact}
+              cutoff=${cutoff} cutoffBasis=${cutoffBasis} pinned=${pinned} setPinned=${setPinned} others=${others} setOthers=${setOthers}
+              sticky=${shownRest === selectedRest} onMouseEnter=${keepHover} onMouseLeave=${() => hover(null)}
               onClose=${() => setSelection(new Set())} />`}
+          ${infoTarget && html`<${InfoPopup} target=${infoTarget} method=${method} methodInfo=${methodInfo}
+              rootImpact=${rootImpact} rowsById=${rowsById} onClose=${() => setInfoTarget(null)}
+              onUseAsRoot=${selectRoot} onMoveToOthers=${moveToOthers} />`}
           <div class="toolbar"><span class="hint">
             ${root ? `Total: ${fmt(rootImpact)} ${methodInfo.unit} — ${methodLabel(methodInfo)}` : ""}
           </span></div>
