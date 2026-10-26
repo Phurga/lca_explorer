@@ -3,14 +3,17 @@ import { useState, useEffect, useMemo, useRef } from "preact/hooks";
 import htm from "htm";
 
 const html = htm.bind(h);
-const STORAGE_KEY = "lca_viewer.view";
+// A server with several models serves each one under /db/<key>/ (see server.create_multi_app)
+const DATABASE = location.pathname.match(/^\/db\/([^/]+)/)?.[1] ?? null;
+const API_BASE = DATABASE ? `/db/${DATABASE}` : "";
+const STORAGE_KEY = DATABASE ? `lca_viewer.view.${DATABASE}` : "lca_viewer.view";
 
 // ---------------------------------------------------------------- helpers
 async function request(url, body) {
   const options = body === undefined ? {} : {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
   };
-  const response = await fetch(url, options);
+  const response = await fetch(url.startsWith("/api/") ? API_BASE + url : url, options);
   if (!response.ok) {
     let detail = await response.text();
     try { detail = JSON.parse(detail).detail ?? detail; } catch { /* not JSON */ }
@@ -116,11 +119,14 @@ function NumberInput({ value, onValue, min, max, step, delay = 400, ...props }) 
 }
 
 // ---------------------------------------------------------------- chart
-function Chart({ option, height = 420 }) {
+function Chart({ option, height = 420, onClick }) {
   const ref = useRef(null);
   const chart = useRef(null);
+  const clickHandler = useRef(onClick);
+  clickHandler.current = onClick;
   useEffect(() => {
     chart.current = echarts.init(ref.current);
+    chart.current.on("click", (e) => clickHandler.current?.(e));
     const observer = new ResizeObserver(() => chart.current.resize());
     observer.observe(ref.current);
     return () => { observer.disconnect(); chart.current.dispose(); };
@@ -302,6 +308,21 @@ function FunctionalUnit({ root, onSelect, fields }) {
     </div>`;
 }
 
+function DatabaseSelect() {
+  // Only shown when the server holds several models; switching reloads the page on the other one
+  const [databases, setDatabases] = useState(null);
+  useEffect(() => {
+    // Not request(): this endpoint is the server's, not under /db/<key>/
+    if (DATABASE) fetch("/api/databases").then((r) => (r.ok ? r.json() : null)).then(setDatabases).catch(() => setDatabases(null));
+  }, []);
+  if (!databases || databases.length < 2) return null;
+  return html`
+    <select class="database" value=${DATABASE} aria-label="Database"
+      onChange=${(e) => { location.href = `/db/${encodeURIComponent(e.target.value)}/`; }}>
+      ${databases.map((d) => html`<option value=${d.key}>${d.title}</option>`)}
+    </select>`;
+}
+
 function MethodSelect({ methods, value, onChange }) {
   const families = useMemo(() => {
     const map = new Map();
@@ -321,11 +342,18 @@ function MethodSelect({ methods, value, onChange }) {
 }
 
 // ---------------------------------------------------------------- tree
-function Tree({ rows, rootImpact, selection, onToggle, onSelect, onUngroup, ungroupable, onUnpin, onMoveToOthers, onHover, onInfo, onUnmerge, view }) {
+function Tree({ rows, rootImpact, selection, onToggle, onSelect, onUngroup, ungroupable, onUnpin, onMoveToOthers, onHover, onInfo, onUnmerge, view, focus }) {
   const byId = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
+  const box = useRef(null);
+  const scrolledTo = useRef(null);
+  // Scroll once to a row found from elsewhere ("Go to in tree"), when it has been rendered
+  useEffect(() => {
+    const el = focus && focus !== scrolledTo.current && box.current?.querySelector(`[data-id="${CSS.escape(focus)}"]`);
+    if (el) { el.scrollIntoView({ block: "center", behavior: "smooth" }); scrolledTo.current = focus; }
+  }, [focus, rows]);
   if (!rows.length) return html`<div class="empty">Choose a functional unit to start.</div>`;
   return html`
-    <div class="tree">
+    <div class="tree" ref=${box}>
       <table>
         <colgroup><col /><col style="width:130px" /><col style="width:90px" /><col style="width:150px" /></colgroup>
         <thead><tr><th>Process</th><th class="num">Amount</th><th class="num">Impact</th><th>Share</th></tr></thead>
@@ -337,7 +365,7 @@ function Tree({ rows, rootImpact, selection, onToggle, onSelect, onUngroup, ungr
               : r.waste ? `${fmt(-r.amount)} ${unit(r.unit)} treated` : `${fmt(r.amount)} ${unit(r.unit)}`;
             const [product, name, location] = r.kind === "process" ? r.label.split(" | ") : [r.label];
             return html`
-              <tr key=${r.id} class="${r.kind} ${selection.has(r.id) ? "selected" : ""}"
+              <tr key=${r.id} data-id=${r.id} class="${r.kind} ${selection.has(r.id) ? "selected" : ""} ${focus === r.id ? "focus" : ""}"
                   onClick=${(e) => onSelect(r, e.ctrlKey || e.metaKey || e.shiftKey)}
                   onMouseEnter=${() => onHover(r)} onMouseLeave=${() => onHover(null)}
                   onContextMenu=${(e) => onInfo(r, e)}>
@@ -430,7 +458,7 @@ function edgePath(from, to, orientation) {
   return `M${x1},${y1} C${x1},${ym} ${x2},${ym} ${x2},${y2}`;
 }
 
-function TreeGraph({ rows, rootImpact, selection, onToggle, onSelect, onUngroup, ungroupable, onUnpin, onMoveToOthers, onHover, onInfo, onUnmerge, view, orientation, setOrientation }) {
+function TreeGraph({ rows, rootImpact, selection, onToggle, onSelect, onUngroup, ungroupable, onUnpin, onMoveToOthers, onHover, onInfo, onUnmerge, view, orientation, setOrientation, focus }) {
   const byId = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
   const container = useRef(null);
   const drag = useRef(null);
@@ -452,6 +480,18 @@ function TreeGraph({ rows, rootImpact, selection, onToggle, onSelect, onUngroup,
   }
   // Re-fit when the functional unit or the orientation changes, not on every expand
   useEffect(() => fit(true), [rootId, orientation]);
+  // Centre once on a node found from elsewhere ("Go to in tree"), when it has been laid out
+  const centredOn = useRef(null);
+  useEffect(() => {
+    const node = focus && focus !== centredOn.current && graph.nodes.find((n) => n.row.id === focus);
+    const el = container.current;
+    if (!node || !el) return;
+    centredOn.current = focus;
+    setTransform((t) => {
+      const k = Math.max(t.k, 0.8);
+      return { k, x: el.clientWidth / 2 - (node.x + BOX.w / 2) * k, y: el.clientHeight / 2 - (node.y + BOX.h / 2) * k };
+    });
+  }, [focus, graph]);
 
   function onWheel(e) {
     e.preventDefault();
@@ -506,7 +546,7 @@ function TreeGraph({ rows, rootImpact, selection, onToggle, onSelect, onUngroup,
             const toggleAt = orientation === "horizontal" ? [x + BOX.w, y + BOX.h / 2] : [x + BOX.w / 2, y + BOX.h];
             const barWidth = BOX.w - 20 - 52;
             return html`
-              <g key=${r.id} class="node ${r.kind} ${selection.has(r.id) ? "selected" : ""}"
+              <g key=${r.id} data-id=${r.id} class="node ${r.kind} ${selection.has(r.id) ? "selected" : ""} ${focus === r.id ? "focus" : ""}"
                  onClick=${(e) => onSelect(r, e.ctrlKey || e.metaKey || e.shiftKey)}
                  onDblClick=${() => r.expandable && onToggle(r)}
                  onMouseEnter=${() => onHover(r)} onMouseLeave=${() => onHover(null)}
@@ -651,14 +691,23 @@ const DETAIL_SECTIONS = [
   ["included_activities_start", "Starts with"], ["included_activities_end", "Ends with"],
 ];
 
-function InfoPopup({ target, method, methodInfo, rootImpact, rowsById, onClose, onUseAsRoot, onMoveToOthers }) {
+function InfoPopup({ target, method, methodInfo, rootImpact, rowsById, onClose, onUseAsRoot, onMoveToOthers, root, amount, onOpen, onGoTo }) {
   const [info, setInfo] = useState(null);
   const [error, setError] = useState(null);
+  const [users, setUsers] = useState(null);
+  const [allUsers, setAllUsers] = useState(false);
   const box = useRef(null);
   useEffect(() => {
     setInfo(null);
     request(`/api/activity/${target.index}?method=${method}`).then(setInfo).catch((e) => setError(e.message));
   }, [target.index, method]);
+  useEffect(() => { setAllUsers(false); box.current?.querySelector(".info-body")?.scrollTo(0, 0); }, [target.index]);
+  useEffect(() => {
+    setUsers(null);
+    const fu = root ? `&root=${root.index}&amount=${amount}` : "";
+    request(`/api/activity/${target.index}/users?method=${method}&limit=${allUsers ? 1000 : 15}${fu}`)
+      .then(setUsers).catch((e) => setError(e.message));
+  }, [target.index, method, root, amount, allUsers]);
   useEffect(() => {
     const onKey = (e) => e.key === "Escape" && onClose();
     const onDown = (e) => box.current && !box.current.contains(e.target) && onClose();
@@ -713,6 +762,33 @@ function InfoPopup({ target, method, methodInfo, rootImpact, rowsById, onClose, 
                 </tbody>
               </table>`}
           </section>
+          ${users && html`
+            <section>
+              <h4>${users.waste ? "Treats the waste of" : "Used by"} · ${users.count} ${users.count === 1 ? "activity" : "activities"}${root ? `, ${users.in_supply_chain} in this supply chain` : ""}</h4>
+              ${users.count === 0 ? html`<p class="text muted">No activity in the database uses this product.</p>` : html`
+                <table class="flows users">
+                  <thead><tr>
+                    <th>Activity <span class="muted">· click for its details</span></th>
+                    <th class="num" title=${`${unit(info.unit)} ${users.waste ? "of waste" : ""} per unit of the activity's product`}>per unit</th>
+                    ${root && html`<th class="num" title="Amount going to this activity in the supply chain of the functional unit">in this tree</th><th class="num">share</th><th></th>`}
+                  </tr></thead>
+                  <tbody>${users.users.map((u) => html`
+                    <tr key=${u.index}>
+                      <td class="user" title=${`${u.reference_product} | ${u.name} | ${u.location}`}>
+                        <span class="user-cell"><a href="#" onClick=${(e) => { e.preventDefault(); onOpen(u.index); }}>${u.name}</a>
+                        <span class="loc-chip">${u.location}</span></span></td>
+                      <td class="num">${fmt(Math.abs(u.per_unit))} ${unit(info.unit)}/${unit(u.unit)}</td>
+                      ${root && html`
+                        <td class="num">${u.flow ? `${fmt(Math.abs(u.flow))} ${unit(info.unit)}` : "–"}</td>
+                        <td class="num">${u.flow ? pct(u.share) : ""}</td>
+                        <td>${u.flow !== 0 && html`<button class="chip" title="Open the tree at this activity (largest supply path)"
+                              onClick=${() => { onGoTo(u.index); onClose(); }}>go to</button>`}</td>`}
+                    </tr>`)}
+                  </tbody>
+                </table>
+                ${users.count > users.users.length && html`
+                  <button class="link" onClick=${() => setAllUsers(true)}>Show all ${users.count}</button>`}`}
+            </section>`}
           ${DETAIL_SECTIONS.filter(([k]) => d[k]).map(([k, title]) => html`
             <section><h4>${title}</h4><p class="text">${String(d[k]).split("\n").filter((line) => line.trim() !== "None").join("\n").trim()}</p></section>`)}
           <section>
@@ -1092,10 +1168,14 @@ function GroupPanel({ info, rules, setRules, selectedRow }) {
 }
 
 // ---------------------------------------------------------------- global grouping panel
-function GlobalPanel({ info, root, amount, method, rules }) {
+function GlobalPanel({ info, root, amount, method, rules, onLocate, onInfo }) {
   const [rule, setRule] = useState("first_match");
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
+  const [group, setGroup] = useState(null);
+  const [contributors, setContributors] = useState(null);
+  const [menu, setMenu] = useState(null);
+  const contributorsBox = useRef(null);
   const groups = useMemo(() => Object.fromEntries(rules.filter((r) => r.predicate).map((r) => [r.name, r.predicate])), [rules]);
   const k = method;
 
@@ -1104,20 +1184,46 @@ function GlobalPanel({ info, root, amount, method, rules }) {
     setError(null);
     request("/api/global", { root: root.index, amount, groups, rule }).then(setResult).catch((e) => setError(e.message));
   }, [root, amount, groups, rule]);
+  useEffect(() => { if (group && result && !(group in result)) setGroup(null); }, [result]);
+  // Processes making up the chosen group
+  useEffect(() => {
+    setContributors(null);
+    if (!root || !group) return;
+    let cancelled = false;
+    request("/api/global/contributors", { root: root.index, amount, groups, rule, group, method: k, limit: 50 })
+      .then((d) => !cancelled && setContributors(d)).catch((e) => !cancelled && setError(e.message));
+    return () => { cancelled = true; };
+  }, [root, amount, groups, rule, group, k]);
+  useEffect(() => { contributorsBox.current?.scrollIntoView({ block: "nearest", behavior: "smooth" }); }, [group, !!contributors]);
+  useEffect(() => {
+    if (!menu) return;
+    const close = () => setMenu(null);
+    const onKey = (e) => e.key === "Escape" && close();
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("mousedown", close); document.removeEventListener("keydown", onKey); };
+  }, [menu]);
 
   const unit = info.methods[k].unit;
   const entries = result ? Object.entries(result).map(([n, v]) => [n, v[k]]) : [];
   const total = entries.reduce((s, [, v]) => s + v, 0);
+  const choose = (name) => setGroup(name === group ? null : name);
+  const goTo = (c) => onLocate(c.index, { groups, rule });
+  const ofTotal = (v) => pct(total ? v / total : 0);
+  const ofGroup = (v) => pct(contributors?.total ? v / contributors.total : 0);
   const option = useMemo(() => {
     const o = baseOption();
-    o.yAxis = { ...o.yAxis, type: "category", data: entries.map(([n]) => n), inverse: true };
+    o.yAxis = { ...o.yAxis, type: "category", data: entries.map(([n]) => n), inverse: true, triggerEvent: true };
     o.xAxis = { ...o.xAxis, type: "value", name: unit };
     o.tooltip.valueFormatter = (v) => `${fmt(v)} ${unit} (${pct(v / total)})`;
-    o.series = [{ type: "bar", colorBy: "data",
-      data: entries.map(([n, v]) => (n === "other" ? { value: v, itemStyle: { color: cssVar("--muted") } } : v)),
+    o.series = [{ type: "bar", colorBy: "data", cursor: "pointer",
+      data: entries.map(([n, v]) => ({
+        value: v,
+        itemStyle: { ...(n === "other" ? { color: cssVar("--muted") } : {}), opacity: group && n !== group ? 0.35 : 1 },
+      })),
       label: { show: true, position: "right", formatter: (d) => pct(d.value / total), color: cssVar("--muted") } }];
     return o;
-  }, [result, k]);
+  }, [result, k, group]);
 
   return html`
     <div class="panel">
@@ -1135,11 +1241,55 @@ function GlobalPanel({ info, root, amount, method, rules }) {
       </div>
       ${error && html`<div class="error">${error}</div>`}
       ${result && html`
-        <${Chart} option=${option} height=${Math.max(200, entries.length * 34 + 60)} />
+        <${Chart} option=${option} height=${Math.max(200, entries.length * 34 + 60)}
+          onClick=${(e) => choose(e.componentType === "yAxis" ? e.value : e.name)} />
         <table class="results">
-          <thead><tr><th>Group</th><th class="num">${unit}</th><th class="num">Share</th></tr></thead>
-          <tbody>${entries.map(([n, v]) => html`<tr><td>${n}</td><td class="num">${fmt(v)}</td><td class="num">${pct(v / total)}</td></tr>`)}</tbody>
+          <thead><tr><th>Group <span class="muted">· click to see its processes</span></th><th class="num">${unit}</th><th class="num">Share</th></tr></thead>
+          <tbody>${entries.map(([n, v]) => html`
+            <tr class="clickable ${n === group ? "selected" : ""}" onClick=${() => choose(n)}>
+              <td>${n === group ? "▾" : "▸"} ${n}</td><td class="num">${fmt(v)}</td><td class="num">${pct(v / total)}</td>
+            </tr>`)}
+          </tbody>
         </table>`}
+      ${group && html`
+        <div class="contributors" ref=${contributorsBox}>
+          <div class="details-head">
+            <span class="details-title"><b>${group}</b>${contributors
+              ? `: ${contributors.count} ${contributors.count === 1 ? "process" : "processes"} · ${fmt(contributors.total)} ${unit} (${ofTotal(contributors.total)})`
+              : " …"}</span>
+            <button onClick=${() => setGroup(null)} aria-label="Close">×</button>
+          </div>
+          ${contributors && html`
+            <p class="note">${contributors.cumulative
+              ? "Each process with its supply chain (the first process of the group on each supply path)."
+              : "Each process's own emissions."} Right-click a process (or double-click) to go to it in the tree, along its largest supply path.</p>
+            <div class="contributors-list">
+              <table>
+                <thead><tr><th>Process</th><th class="num">${unit}</th><th class="pct">of group</th><th class="pct">of total</th></tr></thead>
+                <tbody>
+                  ${contributors.contributors.map((c) => html`
+                    <tr key=${c.index} title=${`${c.reference_product} | ${c.name} | ${c.location}`}
+                        onContextMenu=${(e) => { e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY, item: c }); }}
+                        onDblClick=${() => goTo(c)}>
+                      <td>${c.name}<span class="loc">${c.location}</span></td>
+                      <td class="num">${fmt(c.impact)}</td><td class="pct">${ofGroup(c.impact)}</td><td class="pct">${ofTotal(c.impact)}</td>
+                    </tr>`)}
+                  ${contributors.others.count > 0 && html`
+                    <tr class="more">
+                      <td>+ ${contributors.others.count} more ${contributors.others.count === 1 ? "process" : "processes"}</td>
+                      <td class="num">${fmt(contributors.others.impact)}</td>
+                      <td class="pct">${ofGroup(contributors.others.impact)}</td><td class="pct">${ofTotal(contributors.others.impact)}</td>
+                    </tr>`}
+                </tbody>
+              </table>
+            </div>`}
+        </div>`}
+      ${menu && html`
+        <div class="menu context" style=${{ left: `${Math.min(menu.x, window.innerWidth - 200)}px`, top: `${Math.min(menu.y, window.innerHeight - 90)}px` }}
+             onMouseDown=${(e) => e.stopPropagation()}>
+          <button onClick=${() => { goTo(menu.item); setMenu(null); }}>Go to in tree</button>
+          <button onClick=${() => { onInfo(menu.item.index, menu.x, menu.y); setMenu(null); }}>Details…</button>
+        </div>`}
     </div>`;
 }
 
@@ -1154,7 +1304,9 @@ function App() {
   const [undo, setUndo] = useState(null);
   const [hoverRest, setHoverRest] = useState(null);
   const [infoTarget, setInfoTarget] = useState(null);
+  const [focus, setFocus] = useState(null);
   const hoverTimer = useRef(null);
+  const focusTimer = useRef(null);
   const [expanded, setExpanded] = useState(new Set());
   const [pinned, setPinned] = useState(new Set());
   const [others, setOthers] = useState(new Set());
@@ -1310,6 +1462,24 @@ function App() {
     if (!row.meta) return;
     setInfoTarget({ index: row.meta.index, row, direct: row.kind === "direct", x: e.clientX, y: e.clientY });
   }
+  // Open the tree down to a process found elsewhere (Whole supply chain panel)
+  async function goTo(product, context = {}) {
+    try {
+      const found = await request("/api/locate", { ...viewState(), product, ...context });
+      const target = found.path[found.path.length - 1];
+      setUndo({
+        message: `Opened the tree at ${target.name} (${target.location}), ${found.path.length - 1} levels down along its largest supply path${found.found ? "" : " — shown as far as merged rows allow"}.`,
+        state: { expanded, pinned, others },
+      });
+      setExpanded(new Set(found.expanded));
+      setPinned(new Set(found.pinned));
+      setOthers(new Set(found.others));
+      setFocus(found.target);
+      clearTimeout(focusTimer.current);
+      focusTimer.current = setTimeout(() => setFocus(null), 4000);
+      setError(null);
+    } catch (e) { setError(e.message); }
+  }
   function groupSelected() {
     const parent = selectedRows[0].parent;
     const name = groupName.trim() || `group ${rules.filter((r) => r.predicate?.products).length + 1}`;
@@ -1418,6 +1588,7 @@ function App() {
     <div class="app">
       <header>
         <h1>LCA Process Explorer</h1>
+        <${DatabaseSelect} />
         <${FunctionalUnit} root=${root} onSelect=${selectRoot} fields=${info.query_fields} />
         <label>Amount <${NumberInput} class="amount" value=${amount} min=${1e-12} step="any"
           onValue=${setAmount} aria-label="Amount" />${root ? root.unit : ""}</label>
@@ -1469,10 +1640,10 @@ function App() {
           ${error && html`<div class="error">${error}</div>`}
           ${display === "list"
             ? html`<${Tree} rows=${data.rows} rootImpact=${rootImpact} selection=${selection} onToggle=${toggle} onSelect=${select}
-                onUngroup=${ungroup} ungroupable=${(r) => manualRuleFor(r) >= 0} onUnpin=${unpin} onMoveToOthers=${moveToOthers} onHover=${hover} onInfo=${showInfo} onUnmerge=${unmerge} view=${view} />`
+                onUngroup=${ungroup} ungroupable=${(r) => manualRuleFor(r) >= 0} onUnpin=${unpin} onMoveToOthers=${moveToOthers} onHover=${hover} onInfo=${showInfo} onUnmerge=${unmerge} view=${view} focus=${focus} />`
             : html`<${TreeGraph} rows=${data.rows} rootImpact=${rootImpact} selection=${selection} onToggle=${toggle} onSelect=${select}
                 onUngroup=${ungroup} ungroupable=${(r) => manualRuleFor(r) >= 0} onUnpin=${unpin} onMoveToOthers=${moveToOthers} onHover=${hover} onInfo=${showInfo} onUnmerge=${unmerge} view=${view}
-                orientation=${orientation} setOrientation=${setOrientation} />`}
+                orientation=${orientation} setOrientation=${setOrientation} focus=${focus} />`}
           ${shownRest && html`<${OthersDetails} rest=${shownRest} rows=${data.rows} rootImpact=${rootImpact}
               cutoff=${cutoff} cutoffBasis=${cutoffBasis} pinned=${pinned} setPinned=${setPinned} others=${others} setOthers=${setOthers}
               sticky=${shownRest === selectedRest} onMouseEnter=${keepHover} onMouseLeave=${() => !infoTarget && hover(null)}
@@ -1480,7 +1651,8 @@ function App() {
               onClose=${() => setSelection(new Set())} />`}
           ${infoTarget && html`<${InfoPopup} target=${infoTarget} method=${method} methodInfo=${methodInfo}
               rootImpact=${rootImpact} rowsById=${rowsById} onClose=${() => setInfoTarget(null)}
-              onUseAsRoot=${selectRoot} onMoveToOthers=${moveToOthers} />`}
+              onUseAsRoot=${selectRoot} onMoveToOthers=${moveToOthers} root=${root} amount=${amount}
+              onOpen=${(index) => setInfoTarget({ ...infoTarget, index, row: null, direct: false })} onGoTo=${(index) => goTo(index)} />`}
           <div class="toolbar"><span class="hint">
             ${root ? `Total: ${fmt(rootImpact)} ${methodInfo.unit} — ${methodLabel(methodInfo)}` : ""}
           </span></div>
@@ -1494,7 +1666,8 @@ function App() {
               chartMethods=${chartMethods} setChartMethods=${setChartMethods} view=${view} />`}
           ${tab === "groups" && html`<${GroupPanel} info=${info} rules=${rules} setRules=${setRules}
               selectedRow=${selectedRows.length === 1 ? selectedRows[0] : null} />`}
-          ${tab === "global" && html`<${GlobalPanel} info=${info} root=${root} amount=${amount} method=${method} rules=${rules} />`}
+          ${tab === "global" && html`<${GlobalPanel} info=${info} root=${root} amount=${amount} method=${method} rules=${rules}
+              onLocate=${goTo} onInfo=${(index, x, y) => setInfoTarget({ index, row: null, x, y })} />`}
         </section>
       </main>
     </div>`;

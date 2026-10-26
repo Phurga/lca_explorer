@@ -127,12 +127,57 @@ class View:
             merges=list(data.get("merges", [])),
         )
 
+    def reveal(self, row_id: str) -> str | None:
+        """Expand, open groups and pin rows so that ``row_id`` is visible; returns the
+        deepest row of its path that could be shown (a merge can absorb the rest)."""
+        parts = row_id.split("/")
+        for i in range(1, len(parts)):
+            self.expand("/".join(parts[:i]))
+        contains = lambda r, i: r.id == i or any(m.id == i for m in getattr(r, "node_members", []))
+        for _ in range(4 * len(parts)):  # each pass opens at least one group or others row
+            rows = self.rows()
+            visible = {r.id for r in rows}
+            if row_id in visible:
+                return row_id
+            target = next("/".join(parts[:i]) for i in range(1, len(parts) + 1) if "/".join(parts[:i]) not in visible)
+            changed = False
+            for r in rows:
+                if r.kind == "group" and not r.expanded and contains(r, target):
+                    self.expand(r.id)
+                    changed = True
+                for m in r.members or []:  # others rows
+                    if contains(m, target):
+                        self.pinned.add(m.id)
+                        self.others.discard(m.id)
+                        changed = True
+            if not changed:
+                break
+        shown = [i for i in range(1, len(parts) + 1) if "/".join(parts[:i]) in {r.id for r in self.rows()}]
+        return "/".join(parts[: shown[-1]]) if shown else None
+
     # --- rendering -------------------------------------------------------
     def rows(self) -> list[Row]:
         """All visible rows, depth first, children sorted by impact."""
         out: list[Row] = []
         self._render(self._process_row(self.tree.root, None), out)
         return out
+
+    def find(self, row_id: str) -> Row:
+        """A visible row, or a row bundled in an others row."""
+        for r in self.rows():
+            if r.id == row_id:
+                return r
+            for m in r.members or []:
+                if m.id == row_id:
+                    return m
+        raise KeyError(row_id)
+
+    def direct_sources(self, row: Row) -> list[tuple[int, float]]:
+        """(activity, operation level) pairs whose own emissions make up a direct row."""
+        parent = self.find(row.parent)
+        nodes = parent.merged if parent.kind == "merged" else [parent.node]
+        diagonal = self.tree.model.diagonal
+        return [(int(n.product), float(n.amount / diagonal[n.product])) for n in nodes]
 
     def frontier(self) -> list[Row]:
         """Visible rows that are not expanded: they sum to the root."""

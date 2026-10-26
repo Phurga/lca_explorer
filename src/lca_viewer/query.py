@@ -46,7 +46,10 @@ def with_derived_fields(activities: pd.DataFrame) -> pd.DataFrame:
 def derived_activities(model) -> pd.DataFrame:
     """``with_derived_fields`` of the model's activities, computed once per model."""
     if getattr(model, "_derived_activities", None) is None:
-        model._derived_activities = with_derived_fields(model.activities)
+        df = with_derived_fields(model.activities)
+        # waste: produced with a negative amount (treatments and markets of wastes)
+        df["flow_type"] = np.where(model.diagonal < 0, "waste", "product")
+        model._derived_activities = df
     return model._derived_activities
 
 

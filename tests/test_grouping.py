@@ -933,3 +933,125 @@ def test_merged_label_lists_a_shared_name_once(grouping_model):
     locations = [grouping_model.activities["location"].iat[b.node.product] for b in breads]
     assert merged.label == f"bread production ({' + '.join(locations)})"
 
+
+
+def test_direct_breakdown_sums_to_the_direct_row(grouping_model):
+    from fastapi.testclient import TestClient
+    from lca_viewer.server import create_app
+
+    client = TestClient(create_app(grouping_model))
+    state = {"root": [0], "expanded": ["0", "0/1"], "method": 0}
+    rows = client.post("/api/rows", json=state).json()["rows"]
+    direct = next(r for r in rows if r["kind"] == "direct" and r["parent"] == "0/1")
+    out = client.post("/api/direct", json={**state, "row": direct["id"]}).json()
+    assert out["total"] == pytest.approx(direct["impacts"][0])
+    assert sum(f["impact"] for f in out["flows"]) + out["others"]["impact"] == pytest.approx(out["total"])
+    assert out["sources"][0]["index"] == 1
+    assert client.post("/api/direct", json={**state, "row": "0/1"}).status_code == 400  # not a direct row
+
+
+def test_direct_breakdown_of_merged_and_hidden_rows(grouping_model):
+    from fastapi.testclient import TestClient
+    from lca_viewer.server import create_app
+
+    view, breads = _merged_view(grouping_model)
+    merged = next(r for r in view.rows() if r.kind == "merged")
+    view.expand(merged.id)
+    direct = next(r for r in view.rows() if r.parent == merged.id and r.kind == "direct")
+    assert len(view.direct_sources(direct)) == 2
+    client = TestClient(create_app(grouping_model))
+    state = {**view.to_dict(), "row": direct.id}
+    out = client.post("/api/direct", json=state).json()
+    assert out["total"] == pytest.approx(direct.impacts[0])
+    # a direct row bundled in others is found too
+    view.others = {direct.id}
+    assert view.find(direct.id).moved
+    out = client.post("/api/direct", json={**view.to_dict(), "row": direct.id}).json()
+    assert out["total"] == pytest.approx(direct.impacts[0])
+
+
+def test_flow_type_marks_wastes(grouping_model, waste_treatment_model):
+    from lca_viewer.query import derived_activities
+    assert set(derived_activities(grouping_model)["flow_type"]) == {"product"}
+    assert list(derived_activities(waste_treatment_model)["flow_type"]) == ["product", "waste", "product"]
+
+
+# --- whole supply chain: what a group is made of, and finding a process in the tree
+
+GROUPS = {"electricity": {"field": "reference_product", "op": "eq", "value": "electricity"}}
+
+
+@pytest.mark.parametrize("rule", ["first_match", "direct"])
+@pytest.mark.parametrize("group", ["electricity", "other"])
+def test_group_contributors_sum_to_the_group_total(grouping_model, rule, group):
+    from lca_viewer.analysis import group_contributors
+
+    totals = (first_match_contribution if rule == "first_match" else direct_contribution)(grouping_model, 0, GROUPS)
+    members, values = group_contributors(grouping_model, 0, GROUPS, group, rule)
+    np.testing.assert_allclose(values.sum(axis=0), totals[group])
+    if group == "electricity":
+        assert list(members) == [5]
+    else:
+        assert 5 not in members
+
+
+def test_main_path_follows_the_largest_flow(grouping_model):
+    from lca_viewer.analysis import main_path
+
+    # Most electricity reaches the market through French bread (0.4 kg)
+    assert main_path(grouping_model, 0, 5, method=0) == [0, 1, 5]
+    blocked = np.zeros(grouping_model.size, dtype=bool)
+    blocked[1] = True
+    assert main_path(grouping_model, 0, 5, method=0, blocked=blocked) == [0, 2, 5]
+    assert main_path(grouping_model, 0, 0, method=0) == [0]
+    assert main_path(grouping_model, 5, 0, method=0) is None
+
+
+def test_reveal_expands_opens_groups_and_pins_cut_rows(grouping_model):
+    view = View(Tree(grouping_model, 0), cutoff=0.15,
+                rules=[GroupRule(name="bread", predicate={"field": "reference_product", "op": "eq", "value": "bread"})])
+    assert view.reveal("0/1/5") == "0/1/5"
+    rows = {r.id: r for r in view.rows()}
+    assert rows["0/1/5"].pinned
+    assert "0/g:bread" in rows and rows["0/g:bread"].expanded
+
+
+def test_locate_api_returns_the_view_changes(grouping_model):
+    from fastapi.testclient import TestClient
+    from lca_viewer.server import create_app
+
+    client = TestClient(create_app(grouping_model))
+    state = {"root": [0], "expanded": ["0"], "cutoff": 0.15}
+    found = client.post("/api/locate", json={**state, "product": 5}).json()
+    assert found["target"] == "0/1/5" and found["found"]
+    assert {"0", "0/1"} <= set(found["expanded"]) and "0/1/5" in found["pinned"]
+    assert [p["index"] for p in found["path"]] == [0, 1, 5]
+    # First match: the path avoids activities whose supply chain belongs to a group
+    groups = {"french bread": {"field": "location", "op": "eq", "value": "FR"}}
+    found = client.post("/api/locate", json={**state, "product": 5, "groups": groups, "rule": "first_match"}).json()
+    assert found["target"] == "0/2/5"
+
+    listed = client.post("/api/global/contributors", json={"root": 0, "groups": GROUPS, "group": "other", "limit": 2}).json()
+    assert len(listed["contributors"]) == 2 and listed["others"]["count"] == listed["count"] - 2
+    assert not listed["cumulative"]
+    total = sum(c["impact"] for c in listed["contributors"]) + listed["others"]["impact"]
+    assert total == pytest.approx(listed["total"])
+
+
+def test_used_by_lists_consumers_and_their_share_in_the_supply_chain(grouping_model):
+    from fastapi.testclient import TestClient
+    from lca_viewer.server import create_app
+
+    client = TestClient(create_app(grouping_model))
+    # Electricity (5) is used by the three bread productions and transport
+    out = client.get("/api/activity/5/users", params={"root": 0}).json()
+    assert out["count"] == 4 and out["in_supply_chain"] == 4 and not out["waste"]
+    assert sum(u["share"] for u in out["users"]) == pytest.approx(1.0)
+    assert out["users"][0]["index"] == 1  # French bread takes the most (0.4 kg × 0.5 kWh)
+    assert out["users"][0]["flow"] == pytest.approx(0.2)
+    transport = next(u for u in out["users"] if u["index"] == 4)
+    assert transport["per_unit"] == pytest.approx(0.3)
+    # Without a functional unit, only per-unit amounts
+    alone = client.get("/api/activity/5/users", params={"limit": 2}).json()
+    assert len(alone["users"]) == 2 and all(u["flow"] == 0 for u in alone["users"])
+    assert client.get("/api/activity/0/users").json()["count"] == 0

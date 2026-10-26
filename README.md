@@ -8,6 +8,30 @@ charts built from what the tree shows. Reads Brightway 2.5 projects
 Status and design decisions: [docs/](docs/README.md). Development setup:
 [docs/environment.md](docs/environment.md).
 
+## Running the explorer locally
+
+Needs the built model in `data/cache/ei391_cutoff_all/` (copy it from the
+server, or rebuild it: see [docs/environment.md](docs/environment.md)) and a
+Python ≥ 3.10 env — here the `analyses` conda env.
+
+**1. Install once** (from the repo folder):
+
+```bash
+conda activate analyses
+pip install -e ".[fast]" fastapi uvicorn
+```
+
+**2. Start it** (takes ~5 s; stop with Ctrl+C):
+
+```bash
+lca-viewer serve --model data/cache/ei391_cutoff_all --title "ecoinvent 3.9.1 cut-off" --default-root "market for wheat grain, feed|GLO"
+```
+
+**3. Open http://localhost:8765**.
+
+Port taken? Add `--port 8800` and open http://localhost:8800. While
+developing, add `--reload` to restart when Python code changes.
+
 ## Using the explorer on the server (SSH access)
 
 The app runs on the server and is only reachable from the server itself
@@ -68,7 +92,9 @@ browser keeps its own tree, groups and charts.
   under one row) or *Merge* (one process with their inventories added,
   common inputs summed); or use the *Grouping* tab (quick groups, group by
   location / activity type / ISIC, or your own filter).
-- **Right-click** a process for its description, metadata and main emissions.
+- **Right-click** a process for its description, metadata and main emissions,
+  and *Used by*: which activities use its product, and how much each takes
+  in this supply chain.
 - **×** on a row (hover) moves it to *others*, out of the tree and the chart;
   click an *others* row to see what it contains and bring processes back
   (also the way to show processes hidden by the cut-off). Changing the
@@ -81,4 +107,6 @@ browser keeps its own tree, groups and charts.
 - The **contribution chart** shows exactly the rows visible in the tree:
   expand, collapse or group to change it. Export as PNG or CSV.
 - *Whole supply chain* answers "how much electricity / transport / … anywhere
-  upstream?" using the named groups.
+  upstream?" using the named groups. Click a group (e.g. *other*) to list
+  the processes it is made of; right-click one and *Go to in tree* to open
+  the tree where it sits (along its largest supply path).

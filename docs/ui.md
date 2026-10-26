@@ -68,8 +68,12 @@ API in `src/lca_viewer/server.py`.
   ![View settings](img/view-settings.png)
 - **Right-click a process** (list or tree view): pop-up with its place in
   this tree (amount, impact, path from the root), per-unit cumulative and
-  direct impacts, the main direct emissions for the current method, the
-  ecoinvent description, included activities, time period, classifications,
+  direct impacts, the main direct emissions for the current method,
+  **Used by** (the activities consuming its product — or, for a waste
+  treatment, generating the waste — with the amount per unit of their
+  product and, largest first, the amount each takes in this functional
+  unit's supply chain and its share; click one for its own pop-up, *go to*
+  to open the tree at it), the ecoinvent description, included activities, time period, classifications,
   authors and file; actions "Use as functional unit" and "Move to others".
   Descriptions are stored in the cached model (`details.pkl`, 77 MB for
   ecoinvent, loaded on first use).
@@ -83,7 +87,9 @@ API in `src/lca_viewer/server.py`.
     live "matches N activities, e.g. …" preview; scope everywhere or under
     the selected row.
   - *Whole supply chain*: global grouping with the named groups, first-match
-    or direct attribution (see [grouping.md](grouping.md)).
+    or direct attribution (see [grouping.md](grouping.md)). Clicking a group
+    lists the processes it is made of; right-click one for *Go to in tree*
+    (opens and highlights it along its largest supply path) or *Details*.
 
 ## Tree graph layout
 

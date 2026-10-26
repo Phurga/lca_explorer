@@ -80,6 +80,7 @@ header .fu { position: relative; flex: 1 1 300px; min-width: 240px; }
 }
 .query-builder .condition select:first-child { width: 130px; }
 select.method { max-width: 300px; }
+select.database { max-width: 220px; font-weight: 600; }
 .amount { width: 80px; }
 .cutoff { width: 64px; }
 
@@ -285,3 +286,38 @@ header { gap: 10px; }
 }
 .menu button { border: none; text-align: left; padding: 6px 10px; border-radius: 4px; }
 .menu button:hover:not(:disabled) { background: var(--hover); }
+
+/* Whole supply chain: what a group is made of, and "Go to in tree" */
+table.results tr.clickable { cursor: pointer; }
+table.results tr.clickable:hover td { background: var(--hover); }
+table.results tr.selected td { background: var(--selected); }
+.contributors { margin-top: 12px; padding-top: 8px; border-top: 1px solid var(--border); }
+.contributors .note { margin: 4px 0 6px; }
+.contributors-list { max-height: 440px; overflow: auto; }
+.contributors-list table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.contributors-list td, .contributors-list th { padding: 3px 6px; border-bottom: 1px solid var(--border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left; }
+.contributors-list th { color: var(--muted); font-weight: 400; }
+.contributors-list .num { width: 90px; text-align: right; font-family: var(--mono); font-size: 12px; }
+.contributors-list .pct { width: 66px; text-align: right; font-family: var(--mono); font-size: 12px; }
+.contributors-list tbody tr { cursor: context-menu; }
+.contributors-list tbody tr:hover td { background: var(--hover); }
+.contributors-list tr.more td { color: var(--muted); cursor: default; }
+.contributors-list .loc { color: var(--muted); margin-left: 6px; }
+.menu.context { position: fixed; top: auto; right: auto; z-index: 40; }
+@keyframes focus-flash { 0%, 40% { background: var(--accent-soft); } 100% { background: transparent; } }
+.tree tr.focus td { animation: focus-flash 4s ease-out; }
+.tree tr.focus td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+.graph .node.focus > rect:first-of-type { stroke: var(--accent); stroke-width: 3; }
+
+/* Info pop-up: "Used by" */
+.info-body table.users { table-layout: fixed; }
+.info-body table.users .user-cell { display: flex; gap: 6px; align-items: center; min-width: 0; }
+.info-body table.users .user-cell a { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.info-body table.users .user-cell .loc-chip { flex: none; }
+.info-body table.users th:nth-child(2), .info-body table.users td:nth-child(2) { width: 120px; }
+.info-body table.users th:nth-child(3), .info-body table.users td:nth-child(3) { width: 96px; }
+.info-body table.users th:nth-child(4), .info-body table.users td:nth-child(4) { width: 52px; }
+.info-body table.users th:nth-child(5), .info-body table.users td:nth-child(5) { width: 52px; text-align: right; }
+.info-body table.users a { color: var(--text); text-decoration: none; }
+.info-body table.users a:hover { color: var(--accent); text-decoration: underline; }
+.info-body table.users .chip { font-size: 11px; padding: 0 6px; border-radius: 9px; }

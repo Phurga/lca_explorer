@@ -153,3 +153,25 @@ Reference example (EF 3.1 climate change), same four groups:
 | other (incl. field emissions) | 62.0 % | 38.7 % |
 
 The two readings differ a lot, so charts must always state which rule is used.
+
+### What a group is made of, and finding it in the tree
+
+Clicking a group (bar or table row) lists its activities, largest first, from
+the same per-activity values the totals are summed from
+(`group_contributors`), so the list adds up to the group exactly. Under first
+match, a matched activity counts with its supply chain and an unmatched one
+("other") with its own emissions; under direct, every activity with its own
+emissions.
+
+*Go to in tree* (right-click, or double-click) opens the tree at one of these
+activities. An activity usually appears at many places in the tree, so the
+decision is to open it along the **path that carries the most of its
+impact**: each edge parent → child weighs the share of the parent's |impact|
+flowing through the child, and the best path maximises the product of shares
+(Dijkstra on −log share, `main_path`). The product of shares telescopes to
+`path amount × G_target / G_root`, so this is the path delivering the most of
+the activity's product. Under first match the path does not go through
+matched activities (their supply chain belongs to their group), unless no
+other path exists. The server then expands the path, opens groups and pins
+rows hidden in "others" (`View.reveal`); the change can be undone from the
+notice.

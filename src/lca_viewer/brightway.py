@@ -35,14 +35,58 @@ def _classification(classifications, prefix: str) -> str | None:
     return None
 
 
+def _product_rows(lca, activity_ids: np.ndarray) -> np.ndarray:
+    """Technosphere row of the reference product of each activity (column).
+
+    A process is usually its own product (ecoinvent imports); SimaPro imports can instead
+    give each process a separate product node, linked by its production exchange.
+    """
+    import bw2data as bd
+    from bw2data.backends import ActivityDataset as AD
+    from bw2data.backends import ExchangeDataset as ED
+
+    rows = np.array([lca.dicts.product.get(i, -1) for i in activity_ids])
+    missing = activity_ids[rows < 0].tolist()
+    if not missing:
+        return rows
+    key_of = {i: (db, code) for i, db, code in AD.select(AD.id, AD.database, AD.code).where(AD.id.in_(missing)).tuples()}
+    product_key = {}
+    for db in {db for db, _ in key_of.values()}:
+        codes = [code for d, code in key_of.values() if d == db]
+        query = ED.select(ED.output_code, ED.input_database, ED.input_code).where(
+            ED.type.in_(bd.labels.technosphere_positive_edge_types), ED.output_database == db, ED.output_code.in_(codes)
+        )
+        for output_code, input_db, input_code in query.tuples():
+            product_key.setdefault((db, output_code), (input_db, input_code))
+    id_of = {
+        (db, code): i
+        for db in {db for db, _ in product_key.values()}
+        for i, code in AD.select(AD.id, AD.code).where(
+            AD.database == db, AD.code.in_([c for d, c in product_key.values() if d == db])
+        ).tuples()
+    }
+    for j in np.flatnonzero(rows < 0):
+        key = product_key.get(key_of[activity_ids[j]])
+        if key is None or id_of.get(key) not in lca.dicts.product:
+            raise ValueError(f"Activity {key_of[activity_ids[j]]} has no reference product in the technosphere")
+        rows[j] = lca.dicts.product[id_of[key]]
+    if len(set(rows.tolist())) != len(rows):
+        raise ValueError("Several activities produce the same product: the technosphere is not square")
+    return rows
+
+
 def from_brightway(project: str, database: str, methods: list[tuple]) -> LCAModel:
-    """Load the technosphere of ``database`` (and its dependencies) with ``methods``."""
+    """Load the technosphere of ``database`` and of the databases it links to, with ``methods``.
+
+    The LCA is built from one activity of ``database``: Brightway then includes every database
+    it depends on (e.g. ecoinvent and the biosphere for Agribalyse), so the model is complete.
+    """
     import bw2calc as bc
     import bw2data as bd
     from bw2data.backends import ActivityDataset as AD
 
     bd.projects.set_current(project)
-    any_activity = next(iter(bd.Database(database)))
+    any_activity = next(a for a in bd.Database(database) if a.get("type", "process") in bd.labels.process_node_types)
     lca = bc.LCA({any_activity: 1}, method=methods[0])
     lca.lci()
 
@@ -50,7 +94,7 @@ def from_brightway(project: str, database: str, methods: list[tuple]) -> LCAMode
     activity_ids = np.empty(len(lca.dicts.activity), dtype=int)
     for node_id, col in lca.dicts.activity.items():
         activity_ids[col] = node_id
-    rows = np.array([lca.dicts.product[i] for i in activity_ids])
+    rows = _product_rows(lca, activity_ids)
     A = sp.csr_matrix(lca.technosphere_matrix)[rows, :].tocsc()
     B = sp.csc_matrix(lca.biosphere_matrix)
 
