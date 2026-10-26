@@ -1,27 +1,12 @@
-import json, zipfile
-from pathlib import Path
-import bw2data as bd, bw2io as bi
-from bw2io.importers.base_lcia import LCIAImporter
+"""ecoinvent 3.9.1 cut-off into project lca_viewer_ei391 (set BRIGHTWAY2_DIR=data/brightway first).
 
-bd.projects.set_current("lca_viewer_ei391")
-if "biosphere3" not in bd.databases:
-    bi.create_default_biosphere3()
-if not bd.methods:
-    fp = Path(bi.__file__).parent / "data" / "lcia" / "lcia_39_ecoinvent.zip"
-    with zipfile.ZipFile(fp) as archive:
-        data = json.load(archive.open("data.json"))
-    for m in data:
-        m["name"] = tuple(m["name"])
-        for exc in m["exchanges"]:
-            if isinstance(exc.get("input"), list):
-                exc["input"] = tuple(exc["input"])
-    ei = LCIAImporter("lcia_39_ecoinvent.zip")
-    ei.data = data
-    ei.write_methods()
-    bi.create_core_migrations()
+Same as: lca-viewer import ecospold2 data/ei391_cutoff/datasets --project lca_viewer_ei391 --database ecoinvent-3.9.1-cutoff
+"""
+import bw2data as bd
+
+from lca_viewer.importing import import_ecospold2, setup_project
+
+setup_project("lca_viewer_ei391")
 if "ecoinvent-3.9.1-cutoff" not in bd.databases:
-    imp = bi.SingleOutputEcospold2Importer("data/ei391_cutoff/datasets", "ecoinvent-3.9.1-cutoff", use_mp=True)
-    imp.apply_strategies()
-    imp.statistics()
-    imp.write_database()
+    import_ecospold2("lca_viewer_ei391", "data/ei391_cutoff/datasets", "ecoinvent-3.9.1-cutoff")
 print(bd.databases, len(bd.methods))

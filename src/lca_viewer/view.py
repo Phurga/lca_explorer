@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from .query import derived_activities, evaluate
+from .query import derived_activities, derived_flows, evaluate
 from .tree import DIRECT, Node, Tree
 
 ROOT_SCOPE = "*"
@@ -31,12 +31,17 @@ class GroupRule:
     that field). Named groups are applied first, then group-bys, each in list
     order; a child goes to the first group that claims it. Groups of a single
     child are not created.
+
+    With ``target="flows"`` the rule bundles the elementary flows under direct
+    emissions rows instead of processes; its predicate and field then refer to
+    flow metadata (``name``, ``compartment``, ``subcompartment``, ``unit``).
     """
 
     name: str | None = None
     predicate: dict | None = None
     by: str | None = None
     scope: str = ROOT_SCOPE
+    target: str | None = None
 
     def to_dict(self) -> dict:
         return {k: v for k, v in self.__dict__.items() if v is not None}
@@ -47,7 +52,7 @@ class Row:
     id: str
     parent: str | None
     depth: int
-    kind: str  # "process", "direct", "group", "rest" (others: below cut-off or moved there)
+    kind: str  # "process", "direct", "flow", "group", "merged", "rest" (others: below cut-off or moved there)
     label: str
     amount: float
     unit: str
@@ -63,6 +68,9 @@ class Row:
     """Put in "others" by the user."""
     merged: list[Node] | None = None
     """For "merged" rows: the sibling processes whose inventories are combined."""
+    sources: list[tuple[int, float]] | None = None
+    """For direct rows and every row below them (flows, groups of flows, others):
+    the (activity, operation level) pairs whose own emissions they are part of."""
 
 
 @dataclass
@@ -80,12 +88,16 @@ class View:
     """Row ids shown even when below the cut-off (exceptions chosen by the user)."""
     others: set[str] = field(default_factory=set)
     """Row ids moved to their parent's "others" row by the user, whatever their impact."""
+    group_products: bool = False
+    """Bundle sibling processes delivering the same reference product (e.g. one product
+    from several regions or routes) into one group row, after the user's rules."""
     merges: list[dict] = field(default_factory=list)
     """``{"scope": parent row id, "products": [...]}``: sibling processes merged into one
     process whose inventory is the union of theirs (common inputs summed)."""
 
     def __post_init__(self):
         self._activities = derived_activities(self.tree.model)
+        self._flows = derived_flows(self.tree.model)
         self._masks: dict[int, np.ndarray] = {}
 
     # --- state -----------------------------------------------------------
@@ -110,6 +122,7 @@ class View:
             "pinned": sorted(self.pinned),
             "others": sorted(self.others),
             "merges": self.merges,
+            "group_products": self.group_products,
         }
 
     @classmethod
@@ -125,6 +138,7 @@ class View:
             pinned=set(data.get("pinned", [])),
             others=set(data.get("others", [])),
             merges=list(data.get("merges", [])),
+            group_products=bool(data.get("group_products", False)),
         )
 
     def reveal(self, row_id: str) -> str | None:
@@ -174,7 +188,9 @@ class View:
 
     def direct_sources(self, row: Row) -> list[tuple[int, float]]:
         """(activity, operation level) pairs whose own emissions make up a direct row."""
-        parent = self.find(row.parent)
+        return row.sources
+
+    def _sources(self, parent: Row) -> list[tuple[int, float]]:
         nodes = parent.merged if parent.kind == "merged" else [parent.node]
         diagonal = self.tree.model.diagonal
         return [(int(n.product), float(n.amount / diagonal[n.product])) for n in nodes]
@@ -194,8 +210,15 @@ class View:
         if row.kind == "group":
             members = row.node_members  # type: ignore[attr-defined]
             rows = [self._process_row(n, row.id, row.depth + 1) for n in members]
+            for r in rows:
+                r.sources = row.sources
             return self._apply_cutoff(rows, row)
-        children = self._merged_children(row) if row.kind == "merged" else self.tree.children(row.node)
+        if row.kind == "direct":
+            children = self.tree.flows(row.node, row.sources)
+        elif row.kind == "merged":
+            children = self._merged_children(row)
+        else:
+            children = self.tree.children(row.node)
         rows = self._group(children, row)
         return self._apply_cutoff(rows, row)
 
@@ -224,58 +247,87 @@ class View:
             if len(members) > 1:
                 rows.append(self._merged_row(members, parent, depth))
                 free = [c for c in free if c.product not in products]
+        # Under a direct row the children are elementary flows, grouped by flow rules only
+        flows = parent.kind == "direct"
+        table = self._flows if flows else self._activities
+        index = (lambda c: c.flow) if flows else (lambda c: c.product)
         ordered = [r for r in self.rules if r.by is None] + [r for r in self.rules if r.by is not None]
         for rule in ordered:
-            if rule.scope not in (ROOT_SCOPE, parent.id) or not free:
+            if (rule.target == "flows") != flows or rule.scope not in (ROOT_SCOPE, parent.id) or not free:
                 continue
             if rule.predicate is not None:
                 mask = self._mask(rule)
-                members = [c for c in free if mask[c.product]]
+                members = [c for c in free if mask[index(c)]]
                 if len(members) > 1:
                     rows.append(self._group_row(rule.name or "group", members, parent, depth))
-                    free = [c for c in free if not mask[c.product]]
+                    free = [c for c in free if not mask[index(c)]]
             elif rule.by is not None:
-                column = self._activities[rule.by]
+                column = table[rule.by]
                 buckets: dict[str, list[Node]] = {}
                 for c in free:
-                    buckets.setdefault(str(column.iat[c.product]), []).append(c)
+                    buckets.setdefault(str(column.iat[index(c)]), []).append(c)
                 free = []
                 for value, members in buckets.items():
                     if len(members) > 1:
-                        rows.append(self._group_row(f"{rule.by}: {value}", members, parent, depth))
+                        # flows read better by value alone: "air", "Carbon dioxide, fossil"
+                        name = (value or f"no {rule.by}") if flows else f"{rule.by}: {value}"
+                        rows.append(self._group_row(name, members, parent, depth))
                     else:
                         free.extend(members)
+        if self.group_products and not flows and len(free) > 1:
+            products = self._activities["reference_product"]
+            buckets = {}
+            for c in free:
+                buckets.setdefault(str(products.iat[c.product]), []).append(c)
+            free = []
+            for product, members in buckets.items():
+                if len(members) > 1:
+                    rows.append(self._group_row(f"product:{product}", members, parent, depth, label=product))
+                else:
+                    free.extend(members)
         rows.extend(self._process_row(c, parent.id, depth) for c in free)
-        rows.extend(
-            self._process_row(c, parent.id, depth)
-            for c in children
-            if c.is_direct and np.any(c.impacts != 0)
-        )
+        if flows:
+            for r in rows:
+                r.sources = parent.sources
+        for c in children:
+            if c.is_direct and np.any(c.impacts != 0):
+                direct = self._process_row(c, parent.id, depth)
+                direct.sources = self._sources(parent)
+                rows.append(direct)
         return rows
 
     def _apply_cutoff(self, rows: list[Row], parent: Row) -> list[Row]:
         """Sort siblings and bundle into "others" those below the cut-off or moved there."""
         rows.sort(key=lambda r: -abs(r.impacts[self.method]))
-        below = self._bottom_contributors(rows)
-        kept, hidden = [], []
-        for r, b in zip(rows, below):
+        # Flows without impact for this method (they are kept for the other methods) are
+        # noise here: always in others, like moved rows
+        zero = [r.kind == "flow" and bool(r.impacts[self.method] == 0) for r in rows]
+        kept, hidden, forced = [], [], False
+        for r, b, z in zip(rows, self._bottom_contributors(rows), zero):
             r.moved = r.id in self.others
-            r.pinned = b and not r.moved and r.id in self.pinned
-            (hidden if r.moved or (b and not r.pinned) else kept).append(r)
+            r.pinned = (b or z) and not r.moved and r.id in self.pinned
+            if r.moved or ((b or z) and not r.pinned):
+                hidden.append(r)
+                forced = forced or r.moved or z
+            else:
+                kept.append(r)
         # A single row below the cut-off is shown as itself; moved rows always go to "others"
-        if len(hidden) > 1 or any(r.moved for r in hidden):
+        if len(hidden) > 1 or forced:
+            flows = parent.sources is not None  # under a direct row, or a group of its flows
+            noun = ("flow" if flows else "process") if len(hidden) == 1 else ("flows" if flows else "processes")
             rest = Row(
                 id=f"{parent.id}/rest",
                 parent=parent.id,
                 depth=parent.depth + 1,
                 kind="rest",
-                label=f"others ({len(hidden)} {'process' if len(hidden) == 1 else 'processes'})",
+                label=f"others ({len(hidden)} {noun})",
                 amount=0.0,
                 unit="",
                 impacts=sum(r.impacts for r in hidden),
                 expandable=False,
                 expanded=False,
                 members=hidden,
+                sources=parent.sources,
             )
             return kept + [rest]
         return rows
@@ -305,13 +357,18 @@ class View:
     def _mask(self, rule: GroupRule) -> np.ndarray:
         key = id(rule)
         if key not in self._masks:
-            self._masks[key] = evaluate(rule.predicate, self._activities)
+            self._masks[key] = evaluate(rule.predicate, self._flows if rule.target == "flows" else self._activities)
         return self._masks[key]
 
     def _process_row(self, node: Node, parent: str | None, depth: int = 0) -> Row:
+        if node.flow is not None:
+            f = self._flows.iloc[node.flow]
+            compartment = ", ".join(c for c in (f["compartment"], f["subcompartment"]) if c)
+            return Row(node.id, parent, depth, "flow", f"{f['name']} | {compartment}", node.amount, f["unit"],
+                       node.impacts, False, False, node)
         if node.is_direct:
             return Row(node.id, parent, depth, "direct", "direct emissions", 0.0, "",
-                       node.impacts, False, False, node)
+                       node.impacts, True, node.id in self.expanded, node)
         a = self._activities.iloc[node.product]
         label = f"{a['reference_product']} | {a['name']} | {a['location']}"
         return Row(node.id, parent, depth, "process", label, node.amount, a["unit"],
@@ -333,14 +390,25 @@ class View:
                    acts["unit"].iat[0] if same else "",
                    sum(m.impacts for m in members), True, row_id in self.expanded, merged=members)
 
-    def _group_row(self, name: str, members: list[Node], parent: Row, depth: int) -> Row:
+    def _group_row(self, name: str, members: list[Node], parent: Row, depth: int, label: str | None = None) -> Row:
         row_id = f"{parent.id}/g:{name}"
         # A group opens by itself when it hides an expanded member, unless the
         # user explicitly collapsed it ("!" + id in ``expanded``)
         expanded = row_id in self.expanded or (
             f"!{row_id}" not in self.expanded and any(m.id in self.expanded for m in members)
         )
-        row = Row(row_id, parent.id, depth, "group", name, 0.0, "",
+        amount, unit = 0.0, ""
+        if members[0].flow is not None:
+            # Flows of one substance (several compartments) add up to an amount
+            flows = self._flows.iloc[[m.flow for m in members]]
+            if flows["name"].nunique() == 1 and flows["unit"].nunique() == 1:
+                amount, unit = sum(m.amount for m in members), flows["unit"].iat[0]
+        else:
+            # Processes of one product (several regions or routes) add up too
+            acts = self._activities.iloc[[m.product for m in members]]
+            if acts["reference_product"].nunique() == 1 and acts["unit"].nunique() == 1:
+                amount, unit = sum(m.amount for m in members), acts["unit"].iat[0]
+        row = Row(row_id, parent.id, depth, "group", label or name, amount, unit,
                   sum(m.impacts for m in members), True, expanded)
         row.node_members = members  # type: ignore[attr-defined]
         return row

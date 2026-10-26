@@ -10,7 +10,7 @@ requires-python = ">=3.10"
 dependencies = ["numpy", "scipy", "pandas"]
 
 [project.optional-dependencies]
-brightway = ["bw2data>=4", "bw2calc>=2", "bw2io>=0.9"]
+brightway = ["bw2data>=4", "bw2calc>=2", "bw2io>=0.9.17", "bw_simapro_csv"]
 fast = ["pypardiso"]
 dev = ["pytest"]
 

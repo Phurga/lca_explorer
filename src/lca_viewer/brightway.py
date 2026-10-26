@@ -28,6 +28,50 @@ def _details(data: dict) -> dict:
     return out
 
 
+EXCHANGE_FIELDS = [
+    "amount", "unit", "comment", "formula", "variable name", "uncertainty type", "loc", "scale",
+    "scale without pedigree", "shape", "minimum", "maximum", "pedigree",
+]
+
+
+def _exchange_data(data: dict) -> dict:
+    """Metadata of one exchange shown in the activity pop-up; the product properties (price,
+    carbon content, …) and production volume are kept for production exchanges only."""
+    fields = EXCHANGE_FIELDS + (["production volume", "properties"] if data.get("type") == "production" else [])
+    out = {}
+    for k in fields:
+        v = data.get(k)
+        if v in (None, "", [], {}) or (isinstance(v, float) and v != v):  # NaN is not valid JSON
+            continue
+        out[k] = v
+    return out
+
+
+def _exchanges(lca, rows: np.ndarray, activity_ids: np.ndarray) -> list[tuple]:
+    """``(activity, type, row, data)`` for every exchange of the model's activities, with
+    ``row`` in the model's numbering (products of ``A``, flows of ``B``)."""
+    from bw2data.backends import ActivityDataset as AD
+    from bw2data.backends import ExchangeDataset as ED
+
+    product_of_row = np.empty(len(rows), dtype=int)
+    product_of_row[rows] = np.arange(len(rows))  # technosphere row -> model product
+    databases = {db for db, in AD.select(AD.database).where(AD.id.in_(activity_ids.tolist())).distinct().tuples()}
+    node_id = {(db, code): i for i, db, code in AD.select(AD.id, AD.database, AD.code).tuples()}
+    out = []
+    query = ED.select(ED.type, ED.input_database, ED.input_code, ED.output_database, ED.output_code, ED.data)
+    for kind, in_db, in_code, out_db, out_code, data in query.where(ED.output_database.in_(databases)).tuples().iterator():
+        activity = lca.dicts.activity.get(node_id.get((out_db, out_code)))
+        source = node_id.get((in_db, in_code))
+        if kind == "biosphere":
+            row = lca.dicts.biosphere.get(source)
+        else:
+            row = lca.dicts.product.get(source)
+            row = None if row is None else int(product_of_row[row])
+        if activity is not None and row is not None:
+            out.append((activity, kind, row, _exchange_data(data)))
+    return out
+
+
 def _classification(classifications, prefix: str) -> str | None:
     for system, value in classifications or []:
         if system.startswith(prefix):
@@ -85,10 +129,15 @@ def from_brightway(project: str, database: str, methods: list[tuple]) -> LCAMode
     import bw2data as bd
     from bw2data.backends import ActivityDataset as AD
 
+    try:
+        import multifunctional  # noqa: F401  (backend of databases with allocated multi-output processes)
+    except ImportError:
+        pass
+
     bd.projects.set_current(project)
-    any_activity = next(a for a in bd.Database(database) if a.get("type", "process") in bd.labels.process_node_types)
-    lca = bc.LCA({any_activity: 1}, method=methods[0])
-    lca.lci()
+    any_node = next(iter(bd.Database(database)))
+    lca = bc.LCA({any_node: 1}, method=methods[0])
+    lca.load_lci_data()  # matrices only: the demand just selects the databases
 
     # Reorder rows so that column j produces row j
     activity_ids = np.empty(len(lca.dicts.activity), dtype=int)
@@ -139,4 +188,5 @@ def from_brightway(project: str, database: str, methods: list[tuple]) -> LCAMode
         loaded.append(Method(tuple(name), bd.methods[name].get("unit", ""), cfs))
 
     details = [_details(records[i]) for i in activity_ids]
-    return LCAModel(A=A, B=B, activities=activities, flows=flows, methods=loaded, details=details)
+    exchanges = _exchanges(lca, rows, activity_ids)
+    return LCAModel(A=A, B=B, activities=activities, flows=flows, methods=loaded, details=details, exchanges=exchanges)

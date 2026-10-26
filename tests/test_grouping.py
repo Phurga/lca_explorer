@@ -1055,3 +1055,20 @@ def test_used_by_lists_consumers_and_their_share_in_the_supply_chain(grouping_mo
     alone = client.get("/api/activity/5/users", params={"limit": 2}).json()
     assert len(alone["users"]) == 2 and all(u["flow"] == 0 for u in alone["users"])
     assert client.get("/api/activity/0/users").json()["count"] == 0
+
+
+def test_group_products_bundles_siblings_of_the_same_product(grouping_model):
+    view = View(Tree(grouping_model, 0), group_products=True)
+    view.expand("0")
+    groups = [r for r in view.rows() if r.kind == "group"]
+    products = grouping_model.activities["reference_product"]
+    breads = [i for i in range(grouping_model.size) if products.iat[i] == products.iat[1]]
+    assert len(groups) == 1 and groups[0].label == products.iat[1]
+    assert groups[0].id == f"0/g:product:{products.iat[1]}"
+    assert groups[0].amount == pytest.approx(sum(m.amount for m in groups[0].node_members))
+    assert sorted(m.product for m in groups[0].node_members) == sorted(p for p in breads if p != 0)
+    assert np.allclose(sum(r.impacts for r in view.frontier()), view.tree.root.impacts)
+    # user rules come first
+    view.rules = [GroupRule(name="FR only", predicate={"field": "location", "op": "eq", "value": "FR"})]
+    assert [r.label for r in view.rows() if r.kind == "group"] == [products.iat[1]]  # FR alone: no group of one
+    assert View.from_dict(grouping_model, view.to_dict()).group_products

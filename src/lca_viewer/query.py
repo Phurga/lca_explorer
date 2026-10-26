@@ -5,7 +5,8 @@ A predicate is a dict, evaluated vectorised over the activities dataframe:
 - ``{"field": "location", "op": "in", "value": ["FR", "DE"]}``
 - ``{"field": "name", "op": "contains", "value": "electricity"}``
 - ``{"all": [p1, p2]}``, ``{"any": [p1, p2]}``, ``{"not": p}``
-- ``{"products": [12, 345]}`` — explicit selection (manual groups)
+- ``{"products": [12, 345]}`` — explicit selection (manual groups); ``{"flows": [...]}``
+  for elementary flows (predicates evaluated over :func:`derived_flows`)
 
 Operators: ``eq``, ``ne``, ``in``, ``contains``, ``startswith``, ``regex``.
 Text operators are case-insensitive.
@@ -36,9 +37,10 @@ def with_derived_fields(activities: pd.DataFrame) -> pd.DataFrame:
     """Add fields useful for thematic grouping, computed from metadata."""
     df = activities.copy()
     df["activity_type"] = df["name"].map(activity_type)
-    isic = df["isic"].fillna("")
+    missing = pd.Series("", index=df.index, dtype=object)  # importers may not classify activities
+    isic = df["isic"].fillna("") if "isic" in df else missing
     df["isic_division"] = isic.str.split(":").str[0].str[:2]
-    cpc = df["cpc"].fillna("")
+    cpc = df["cpc"].fillna("") if "cpc" in df else missing
     df["cpc_section"] = cpc.str.split(":").str[0].str[:1]
     return df
 
@@ -51,6 +53,21 @@ def derived_activities(model) -> pd.DataFrame:
         df["flow_type"] = np.where(model.diagonal < 0, "waste", "product")
         model._derived_activities = df
     return model._derived_activities
+
+
+def derived_flows(model) -> pd.DataFrame:
+    """Elementary flow metadata with ``compartment`` and ``subcompartment`` split out of
+    ``categories`` (e.g. ``("air", "urban air close to ground")``), computed once per model."""
+    if getattr(model, "_derived_flows", None) is None:
+        df = model.flows.copy()
+        categories = df["categories"] if "categories" in df else pd.Series([()] * len(df), index=df.index)
+        categories = categories.map(lambda c: tuple(c) if isinstance(c, (tuple, list)) else ())
+        df["compartment"] = categories.map(lambda c: c[0] if c else "")
+        df["subcompartment"] = categories.map(lambda c: ", ".join(c[1:]))
+        if "unit" not in df:
+            df["unit"] = ""
+        model._derived_flows = df
+    return model._derived_flows
 
 
 def evaluate(predicate: dict, activities: pd.DataFrame) -> np.ndarray:
@@ -67,9 +84,9 @@ def evaluate(predicate: dict, activities: pd.DataFrame) -> np.ndarray:
         return mask
     if "not" in predicate:
         return ~evaluate(predicate["not"], activities)
-    if "products" in predicate:
+    if "products" in predicate or "flows" in predicate:  # explicit rows of the table
         mask = np.zeros(len(activities), dtype=bool)
-        mask[list(predicate["products"])] = True
+        mask[list(predicate.get("products", predicate.get("flows")))] = True
         return mask
 
     column = activities[predicate["field"]]

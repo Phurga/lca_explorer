@@ -1,0 +1,115 @@
+{SimaPro 9.6.0.1}
+{processes}
+{Date: 26/10/2026}
+{Time: 10:00:00}
+{Project: Toy agri-food}
+{CSV Format version: 9.0.0}
+{CSV separator: Semicolon}
+{Decimal separator: .}
+{Date separator: /}
+{Short date format: dd/MM/yyyy}
+
+Process
+
+Category type
+material
+
+Process identifier
+TOYAGB000000000000001
+
+Type
+Unit process
+
+Process name
+Soft wheat grain, conventional, at farm gate {FR} U
+
+Geography
+France
+
+Date
+01/01/2024
+
+Comment
+Synthetic crop process for tests (not Agribalyse data).
+
+Products
+Soft wheat grain, conventional, at farm gate {FR} U;kg;1;100;not defined;Toy\Crops;
+
+Materials/fuels
+Diesel {Europe without Switzerland}| market for diesel | Cut-off, U;kg;0.05;Undefined;0;0;0;
+
+Electricity/heat
+Electricity, low voltage {FR}| market for electricity, low voltage | Cut-off, U;kWh;0.1;Undefined;0;0;0;
+
+Emissions to air
+Carbon dioxide, fossil;;kg;0.2;Undefined;0;0;0;
+Dinitrogen monoxide;low. pop.;kg;0.001;Undefined;0;0;0;
+
+End
+
+Process
+
+Category type
+material
+
+Process identifier
+TOYAGB000000000000002
+
+Type
+Unit process
+
+Process name
+Dairy farm {FR} U
+
+Geography
+France
+
+Date
+01/01/2024
+
+Multiple output allocation
+Economic
+
+Products
+Cow milk, at farm gate {FR} U;kg;1;80;not defined;Toy\Animals;
+Cull cow, at farm gate {FR} U;kg;0.1;20;not defined;Toy\Animals;
+
+Materials/fuels
+Soft wheat grain, conventional, at farm gate {FR} U;kg;2;Undefined;0;0;0;
+Tap water {Europe without Switzerland}| market for tap water | Cut-off, U;kg;50;Undefined;0;0;0;
+
+Emissions to air
+Methane, biogenic;;kg;0.02;Undefined;0;0;0;
+
+Waste to treatment
+Manure, treatment {FR} U;kg;3;Undefined;0;0;0;
+
+End
+
+Process
+
+Category type
+waste treatment
+
+Process identifier
+TOYAGB000000000000003
+
+Type
+Unit process
+
+Process name
+Manure, treatment {FR} U
+
+Geography
+France
+
+Date
+01/01/2024
+
+Waste treatment
+Manure, treatment {FR} U;kg;1;All waste types;Toy\Waste;
+
+Emissions to air
+Ammonia;;kg;0.01;Undefined;0;0;0;
+
+End

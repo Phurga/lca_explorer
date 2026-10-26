@@ -9,3 +9,7 @@ __pycache__/
 *.egg-info/
 .venv/
 .pytest_cache/
+
+# Claude Code: machine-specific settings
+.claude/settings.local.json
+.claude/launch.json

@@ -44,6 +44,77 @@ def _factorized_solver(matrix: sp.csc_matrix):
         return lambda rhs: lu.solve(np.asarray(rhs, dtype=float))
 
 
+# Exchange cache (SQLite): one column per common field, named as in Brightway, other fields in
+# ``extra`` (JSON). Comments repeat a lot (ecoinvent 3.9: 100 MB, 8 MB distinct), so are stored once;
+# pedigree scores in the usual order are stored as "2,3,5,5,1".
+EXCHANGE_COLUMNS = {
+    "amount": "REAL", "unit": "TEXT", "uncertainty type": "INTEGER", "loc": "REAL", "scale": "REAL",
+    "scale without pedigree": "REAL", "shape": "REAL", "minimum": "REAL", "maximum": "REAL",
+    "formula": "TEXT", "variable name": "TEXT",
+}
+PEDIGREE = ("reliability", "completeness", "temporal correlation", "geographical correlation",
+            "further technological correlation")
+
+
+def _write_exchanges(path, exchanges) -> None:
+    import json
+    import sqlite3
+    from contextlib import closing
+
+    comments: dict[str, int] = {}
+
+    def record(activity, kind, row, data):
+        data = dict(data)
+        comment = data.pop("comment", None)
+        pedigree = data.get("pedigree")
+        if isinstance(pedigree, dict) and set(pedigree) == set(PEDIGREE) and all(type(v) is int for v in pedigree.values()):
+            pedigree = ",".join(str(pedigree[k]) for k in PEDIGREE)
+            del data["pedigree"]
+        else:
+            pedigree = None
+        values = [data.pop(k, None) for k in EXCHANGE_COLUMNS]
+        comment_id = None if comment is None else comments.setdefault(comment, len(comments))
+        extra = json.dumps(data, default=str) if data else None
+        return (int(activity), kind, int(row), comment_id, pedigree, *values, extra)
+
+    columns = ", ".join(f'"{k}" {t}' for k, t in EXCHANGE_COLUMNS.items())
+    path.unlink(missing_ok=True)
+    with closing(sqlite3.connect(path)) as db:
+        db.execute(f"CREATE TABLE exchanges (activity INTEGER, type TEXT, row INTEGER, comment INTEGER, "
+                   f"pedigree TEXT, {columns}, extra TEXT)")
+        db.executemany(f"INSERT INTO exchanges VALUES ({', '.join('?' * (len(EXCHANGE_COLUMNS) + 6))})",
+                       (record(*e) for e in exchanges))
+        db.execute("CREATE TABLE comments (id INTEGER PRIMARY KEY, text TEXT)")
+        db.executemany("INSERT INTO comments VALUES (?, ?)", ((i, c) for c, i in comments.items()))
+        db.execute("CREATE INDEX by_activity ON exchanges (activity)")
+        db.commit()
+        db.execute("VACUUM")
+
+
+def _read_exchanges(path, activity: int) -> list[dict]:
+    import json
+    import sqlite3
+    from contextlib import closing
+
+    columns = ", ".join(f'e."{k}"' for k in EXCHANGE_COLUMNS)
+    with closing(sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)) as db:
+        rows = db.execute(
+            f"SELECT e.type, e.row, c.text, e.pedigree, {columns}, e.extra FROM exchanges e "
+            f"LEFT JOIN comments c ON c.id = e.comment WHERE e.activity = ? ORDER BY e.rowid", (activity,))
+        out = []
+        for kind, row, comment, pedigree, *values, extra in rows:
+            d = {"type": kind, "row": row}
+            d.update((k, v) for k, v in zip(EXCHANGE_COLUMNS, values) if v is not None)
+            if comment is not None:
+                d["comment"] = comment
+            if pedigree is not None:
+                d["pedigree"] = dict(zip(PEDIGREE, map(int, pedigree.split(","))))
+            if extra:
+                d.update(json.loads(extra))
+            out.append(d)
+        return out
+
+
 @dataclass
 class Method:
     """An impact method, as a vector of characterisation factors over ``B`` rows."""
@@ -70,6 +141,10 @@ class LCAModel:
     methods: list[Method] = field(default_factory=list)
     details: list[dict] | None = None
     """Optional descriptive metadata per activity (description, dates, …); loaded lazily from a cache."""
+    exchanges: list[tuple[int, str, int, dict]] | None = None
+    """Optional metadata of each exchange (comment, uncertainty, pedigree, …) as ``(activity, type,
+    row, data)``: ``row`` is a product (row of ``A``), or a flow (row of ``B``) for "biosphere"
+    exchanges. Cached in an SQLite file, read one activity at a time."""
 
     def __post_init__(self):
         self.A = sp.csc_matrix(self.A, dtype=float)
@@ -85,18 +160,26 @@ class LCAModel:
             raise ValueError("A has zero entries on its diagonal")
         self._G = None
         self._U = None
+        self._CF = None
         self._details_path = None
+        self._exchanges_path = None
 
     @property
     def size(self) -> int:
         return self.A.shape[0]
 
     @property
+    def CF(self) -> np.ndarray:
+        """Characterisation factors (methods x elementary flows)."""
+        if self._CF is None:
+            self._CF = np.vstack([m.cfs for m in self.methods])
+        return self._CF
+
+    @property
     def U(self) -> np.ndarray:
         """Direct impacts per unit of activity operation (methods x activities)."""
         if self._U is None:
-            cfs = np.vstack([m.cfs for m in self.methods])
-            self._U = np.asarray((sp.csr_matrix(cfs) @ self.B).todense())
+            self._U = np.asarray((sp.csr_matrix(self.CF) @ self.B).todense())
         return self._U
 
     @property
@@ -140,6 +223,8 @@ class LCAModel:
         if self.details is not None:
             with open(directory / "details.pkl", "wb") as f:
                 pickle.dump(self.details, f)
+        if self.exchanges is not None:
+            _write_exchanges(directory / "exchanges.sqlite", self.exchanges)
 
     @classmethod
     def load(cls, directory) -> "LCAModel":
@@ -158,7 +243,20 @@ class LCAModel:
         )
         if (directory / "details.pkl").exists():
             model._details_path = directory / "details.pkl"
+        if (directory / "exchanges.sqlite").exists():
+            model._exchanges_path = directory / "exchanges.sqlite"
         return model
+
+    @property
+    def has_exchanges(self) -> bool:
+        return self.exchanges is not None or self._exchanges_path is not None
+
+    def exchange_details(self, index: int) -> list[dict]:
+        """Exchanges of activity ``index`` in dataset order, as ``{"type", "row", **data}``
+        ([] when the model has no exchange metadata)."""
+        if self.exchanges is not None:
+            return [{"type": t, "row": r, **d} for a, t, r, d in self.exchanges if a == index]
+        return [] if self._exchanges_path is None else _read_exchanges(self._exchanges_path, index)
 
     def activity_details(self, index: int) -> dict:
         """Descriptive metadata of one activity ({} when the model has none)."""

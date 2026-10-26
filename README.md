@@ -3,7 +3,7 @@
 Process explorer for LCA results: a SimaPro-like supply chain tree you can
 expand, collapse and group (manually, by theme or by query), and contribution
 charts built from what the tree shows. Reads Brightway 2.5 projects
-(ecoinvent ecoSpold2 via Brightway import).
+(ecoinvent ecoSpold2 and SimaPro CSV, e.g. Agribalyse, via Brightway import).
 
 Status and design decisions: [docs/](docs/README.md). Development setup:
 [docs/environment.md](docs/environment.md).
@@ -31,6 +31,65 @@ lca-viewer serve --model data/cache/ei391_cutoff_all --title "ecoinvent 3.9.1 cu
 
 Port taken? Add `--port 8800` and open http://localhost:8800. While
 developing, add `--reload` to restart when Python code changes.
+
+### Adding Agribalyse (or another database)
+
+Another database is imported into the same Brightway project as ecoinvent
+(`data/brightway`), built into its own model, then served next to ecoinvent
+with a database picker in the top bar. Details and caveats:
+[docs/data-import.md](docs/data-import.md).
+
+**1. Get the Agribalyse 3.2 SimaPro CSV.** There is no ready-made Brightway
+download. Fill in the form on the
+[SimaPro Agribalyse page](https://simapro.com/products/agribalyse-agricultural-database/)
+(an ecoinvent licence is required). Unzip the export into `data/agribalyse/`,
+e.g. `data/agribalyse/AGB32_final.CSV`. `data/` is never committed.
+
+**2. Create the import env once.** Importing needs Brightway, which the
+`analyses` env doesn't have:
+
+```bash
+conda create -n lca_viewer_bw -c conda-forge python=3.12 pip
+```
+
+```bash
+conda activate lca_viewer_bw
+```
+
+```bash
+pip install -e ".[brightway,fast]" fastapi uvicorn pytest httpx
+```
+
+**3. Import it** into the ecoinvent project, linked to ecoinvent 3.9.1
+cut-off. This takes a few minutes. Point Brightway at the project folder
+first: in PowerShell, `$env:BRIGHTWAY2_DIR = "$PWD\data\brightway"`; in bash,
+`export BRIGHTWAY2_DIR=$PWD/data/brightway`.
+
+```bash
+lca-viewer import simapro-csv data/agribalyse/AGB32_final.CSV --project lca_viewer_ei391 --database agribalyse-3.2 --link-to ecoinvent-3.9.1-cutoff
+```
+
+When some inputs or emissions can't be linked, nothing is written and they
+are listed in `data/import-agribalyse-3.2-unlinked.csv`. Check the list, then
+re-run with `--unlinked drop` to import without them.
+
+**4. Build its model** (same env, same `BRIGHTWAY2_DIR`). The model includes
+the ecoinvent activities that Agribalyse uses:
+
+```bash
+lca-viewer build --project lca_viewer_ei391 --database agribalyse-3.2 --output data/cache/agb32
+```
+
+**5. Serve both** (from any env with lca_viewer installed). Pick the database
+in the top bar. Each one keeps its own view.
+
+```bash
+lca-viewer serve --model data/cache/ei391_cutoff_all --model data/cache/agb32 --title "ecoinvent 3.9.1 cut-off" --title "Agribalyse 3.2" --default-root "market for wheat grain, feed|GLO"
+```
+
+Each model takes its own memory (the Agribalyse model also holds ecoinvent).
+If memory is short, serve `--model data/cache/agb32` alone: it covers both
+databases.
 
 ## Using the explorer on the server (SSH access)
 
@@ -100,8 +159,8 @@ browser keeps its own tree, groups and charts.
   (also the way to show processes hidden by the cut-off). Changing the
   cut-off clears these choices; **Reset view** clears them and collapses the
   tree. Both can be undone from the notice that appears.
-- **Full / Short / Custom names** (bar under the toolbar) apply to the tree
-  and the chart.
+- **Group by product** and **Full / Short / Custom names** (bar under the
+  toolbar) apply to the tree and the chart.
 - **Save ▾**: download the view as a file; the arrow menu loads a saved view
   back (or copies it as JSON).
 - The **contribution chart** shows exactly the rows visible in the tree:

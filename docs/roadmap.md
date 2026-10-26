@@ -6,7 +6,7 @@
 | 1. Core model | tree view state, grouping rules, queries, global grouping | **done (Python)** |
 | 2. Local app | FastAPI API + browser UI: tree, expand/collapse, grouping UI, method picker | **done (first version)** |
 | 3. Charts | contribution bars from the tree frontier, multi-method, export | **done (first version)**; FU comparison to do |
-| 4. Practitioner features | saved views, search, "skip markets", Excel export, biosphere flow view per node | |
+| 4. Practitioner features | saved views, search, "skip markets", Excel export, biosphere flow view per node | flows of direct emissions in the tree: **done** |
 | 5. Extensions | regional maps, Sankey, scenario comparison, Monte Carlo, AB integration, hosted mode | |
 
 ## Next steps
@@ -16,7 +16,8 @@
 2. Saved views keyed on activity codes instead of matrix indices.
 3. Compare several functional units in one chart.
 4. "Transparent markets" option.
-5. Biosphere flow breakdown of a node's direct emissions.
+5. Elementary flows across the whole supply chain ("all N2O, wherever
+   emitted"); flow query builder in the grouping panel.
 6. Load a model directly from a Brightway project in the UI (project /
    database picker) instead of the `build` command.
 

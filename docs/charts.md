@@ -25,18 +25,25 @@ configuration to keep in sync.
 Labels: processes as `name (location)`; direct emissions and below-cut-off
 rows name their parent ("direct: wheat production (RoW)",
 "others under …"), since several of them can be on the frontier.
+Elementary flows name the substance, then the emitter and compartment in
+grey ("Dinitrogen monoxide · direct: wheat production (RoW) · air, …"):
+the emitter comes first so that it survives when a long label is shortened.
 
-## View settings: row names
+## View settings: product grouping and row names
 
 Decision: names were first a chart-only "quick view"; they are now a **view
 setting** (bar under the left toolbar) applied to the list, the tree view
 and the chart alike, so what the user reads in the tree and in the chart
 match.
 
-A "Group products" toggle (bundle same-product siblings in the tree, merge
-same-product bars across the chart) existed for a while and was removed at
-the user's request: selecting rows and using Group or Merge covers it, with
-the user in control of what is combined.
+- **Group by product**: in the tree, sibling inputs delivering the same
+  reference product (other regions, markets or routes) are bundled into one
+  group row named after the product, with the summed amount when the units
+  match (`View.group_products`, applied after the user's rules; flows under
+  direct emissions are not affected). The chart follows the tree: a
+  collapsed product group is one bar. A first version also merged
+  same-product bars *across* the tree in the chart; it was removed, and
+  brought back (2026-10) for the tree only.
 
 - **Row names** (tree and chart): *Full* (`activity name (location)`), *Short* (product name,
   with the qualifiers needed to tell rows apart in grey: location, then

@@ -6,6 +6,11 @@
   The user suggested reusing an `analyses` env, but no env of that name
   exists on this machine (existing: `ablca_raymond`, `aburg`,
   `env_qdassibat`, spyder envs), so a dedicated env was created.
+- On the Windows machine: conda env **`lca_viewer_bw`** (Python 3.12) for
+  import and build: `bw2data 4.8`, `bw2calc 3.1`, `bw2io 0.9.17`,
+  `bw_simapro_csv 0.5`, `pypardiso`, `pytest`, `httpx`
+  (`pip install -e ".[brightway,fast]" fastapi uvicorn pytest httpx`). The
+  `analyses` env (Python 3.14) has no Brightway and only serves.
 - Brightway data: `export BRIGHTWAY2_DIR=$PWD/data/brightway` (kept inside the
   repo folder, gitignored, so this project does not touch other Brightway
   projects on the machine).

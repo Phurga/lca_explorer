@@ -42,6 +42,13 @@ const UNITS = {
 };
 const unit = (u) => UNITS[u] || u;
 const movable = (r) => r.depth > 0 && r.kind !== "rest";
+const compartmentOf = (flow) => [flow.compartment, flow.subcompartment].filter(Boolean).join(", ");
+// Amount column of a row: product supplied, waste treated, or elementary flow emitted
+function rowAmount(r) {
+  if (r.kind === "merged" || r.kind === "group" || r.kind === "flow") return r.unit ? `${fmt(r.amount)} ${unit(r.unit)}` : "";
+  if (r.kind !== "process") return "";
+  return r.waste ? `${fmt(-r.amount)} ${unit(r.unit)} treated` : `${fmt(r.amount)} ${unit(r.unit)}`;
+}
 
 function shortLabel(row, byId) {
   if (row.kind === "direct") {
@@ -89,6 +96,7 @@ function describePredicate(p) {
   if (p.any) return p.any.map(describePredicate).join(" or ");
   if (p.not) return `not (${describePredicate(p.not)})`;
   if (p.products) return `${p.products.length} selected processes`;
+  if (p.flows) return `${p.flows.length} selected flows`;
   const value = Array.isArray(p.value) ? p.value.join(", ") : p.value;
   return `${p.field} ${p.op} "${value}"`;
 }
@@ -360,9 +368,7 @@ function Tree({ rows, rootImpact, selection, onToggle, onSelect, onUngroup, ungr
         <tbody>
           ${rows.map((r) => {
             const share = rootImpact ? r.impacts[0] / rootImpact : 0;
-            const amount = r.kind === "merged" || r.kind === "group" ? (r.unit ? `${fmt(r.amount)} ${unit(r.unit)}` : "")
-              : r.kind !== "process" ? ""
-              : r.waste ? `${fmt(-r.amount)} ${unit(r.unit)} treated` : `${fmt(r.amount)} ${unit(r.unit)}`;
+            const amount = rowAmount(r);
             const [product, name, location] = r.kind === "process" ? r.label.split(" | ") : [r.label];
             return html`
               <tr key=${r.id} data-id=${r.id} class="${r.kind} ${selection.has(r.id) ? "selected" : ""} ${focus === r.id ? "focus" : ""}"
@@ -538,8 +544,7 @@ function TreeGraph({ rows, rootImpact, selection, onToggle, onSelect, onUngroup,
             const [product, name, location] = r.kind === "process" ? r.label.split(" | ") : [r.label];
             const names = rowNames(r, byId, view);
             const title = names.main;
-            const amountText = r.kind === "process" ? (r.waste ? `${fmt(-r.amount)} ${unit(r.unit)} treated` : `${fmt(r.amount)} ${unit(r.unit)}`)
-              : (r.kind === "merged" || r.kind === "group") && r.unit ? `${fmt(r.amount)} ${unit(r.unit)}` : "";
+            const amountText = rowAmount(r);
             const qualifier = r.kind === "process" && view.naming === "full" ? location : names.qual;
             const subtitle = [qualifier, r.kind === "merged" && "merged", r.kind === "group" && "group",
               r.kind === "direct" && "of the parent process", amountText].filter(Boolean).join(" · ");
@@ -596,7 +601,8 @@ function OthersDetails({ rest, rows, rootImpact, cutoff, cutoffBasis, pinned, se
   const shownPins = rows.filter((r) => r.parent === rest.parent && r.pinned);
   const items = [...shownPins, ...rest.members].sort((a, b) => Math.abs(b.impacts[0]) - Math.abs(a.impacts[0]));
   const nMoved = rest.members.filter((m) => m.moved).length;
-  const nCut = rest.members.length - nMoved;
+  const nZero = rest.members.filter((m) => !m.moved && m.kind === "flow" && m.impacts[0] === 0).length;
+  const nCut = rest.members.length - nMoved - nZero;
   const share = (r) => (rootImpact ? r.impacts[0] / rootImpact : 0);
   // Showing = not in others, and pinned in case it is below the cut-off
   function setShown(ids, on) {
@@ -607,7 +613,9 @@ function OthersDetails({ rest, rows, rootImpact, cutoff, cutoffBasis, pinned, se
     setPinned(nextPinned);
     setOthers(nextOthers);
   }
-  const reasons = [nCut && `${nCut} in the bottom ${cutoff} % of ${cutoffBasis === "total" ? "the total" : "their parent"}`, nMoved && `${nMoved} moved here by you`].filter(Boolean).join(", ");
+  const reasons = [nCut && `${nCut} in the bottom ${cutoff} % of ${cutoffBasis === "total" ? "the total" : "their parent"}`,
+    nZero && `${nZero} without impact for this method`, nMoved && `${nMoved} moved here by you`].filter(Boolean).join(", ");
+  const things = rest.label.includes("flow") ? "flow" : "process";
   return html`
     <div class="details ${sticky ? "sticky" : "preview"}" onMouseEnter=${onMouseEnter} onMouseLeave=${onMouseLeave}>
       <div class="details-head">
@@ -618,21 +626,20 @@ function OthersDetails({ rest, rows, rootImpact, cutoff, cutoffBasis, pinned, se
           ${sticky && html`<button onClick=${onClose} aria-label="Close">×</button>`}
         </span>
       </div>
-      <p class="note">Tick a process to show it in the tree and the contribution chart; untick to put it back in others. Right-click a process for its details.${sticky ? "" : " Click the others row to keep this panel open."}</p>
+      <p class="note">Tick a ${things} to show it in the tree and the contribution chart; untick to put it back in others.${things === "process" ? " Right-click a process for its details." : ""}${sticky ? "" : " Click the others row to keep this panel open."}</p>
       <div class="details-list">
         <table>
           <tbody>
             ${items.map((r) => {
               const names = rowNames(r, byId, view);
-              const amount = r.kind === "process" ? (r.waste ? `${fmt(-r.amount)} ${unit(r.unit)} treated` : `${fmt(r.amount)} ${unit(r.unit)}`)
-                : (r.kind === "merged" || r.kind === "group") && r.unit ? `${fmt(r.amount)} ${unit(r.unit)}` : "";
+              const amount = rowAmount(r);
               const shown = pinned.has(r.id) && !others.has(r.id);
               return html`
                 <tr key=${r.id} onContextMenu=${(e) => onInfo(r, e)} title="Right-click for details">
                   <td><input type="checkbox" checked=${shown} aria-label="Show in tree and chart"
                         onChange=${(e) => setShown([r.id], e.target.checked)} /></td>
                   <td class="name-cell" title=${r.label}>${names.main}${names.qual && html` <span class="loc">${names.qual}</span>`}</td>
-                  <td class="reason">${r.moved ? "moved" : r.pinned ? "pinned" : "cut-off"}</td>
+                  <td class="reason">${r.moved ? "moved" : r.pinned ? "pinned" : r.kind === "flow" && r.impacts[0] === 0 ? "no impact" : "cut-off"}</td>
                   <td class="num">${amount}</td>
                   <td class="num">${fmt(r.impacts[0])}</td>
                   <td class="num">${pct(share(r))}</td>
@@ -675,6 +682,8 @@ function ViewBar({ view, setView, example }) {
   return html`
     <div class="view-bar">
       <div class="row">
+        <button class=${view.groupProducts ? "primary" : ""} onClick=${() => set({ groupProducts: !view.groupProducts })}
+          title="Bundle sibling inputs of the same product (other regions or routes) under one row">Group by product</button>
         <span class="segmented" role="group" aria-label="Row names">
           ${[["full", "Full names"], ["short", "Short names"], ["custom", "Custom name"]].map(([id, label]) => html`
             <button class=${view.naming === id ? "primary" : ""} onClick=${() => set({ naming: id })}>${label}</button>`)}
@@ -685,6 +694,78 @@ function ViewBar({ view, setView, example }) {
 }
 
 // ---------------------------------------------------------------- chart panel
+// ---------------------------------------------------------------- exchange metadata (info pop-up)
+// Brightway's uncertainty type ids (stats_arrays)
+const UNCERTAINTY_TYPES = ["undefined", "none", "lognormal", "normal", "uniform", "triangular", "Bernoulli",
+  "discrete uniform", "Weibull", "gamma", "beta", "generalized extreme value", "Student's t"];
+const PEDIGREE = [["reliability", "reliability"], ["completeness", "completeness"], ["temporal correlation", "time"],
+  ["geographical correlation", "geography"], ["further technological correlation", "technology"]];
+
+function uncertaintyText(e) {
+  const type = e["uncertainty type"];
+  if (type === undefined || type <= 1) return null;
+  if (type === 2 && e.scale !== undefined) {
+    const basic = e["scale without pedigree"];
+    return `lognormal, σ = ${fmt(e.scale)} (GSD² = ${fmt(Math.exp(2 * e.scale))})${basic ? `; basic σ = ${fmt(basic)}` : ""}`;
+  }
+  if (type === 3 && e.scale !== undefined) return `normal, sd = ${fmt(e.scale)}`;
+  const params = [["min", e.minimum], [type === 5 ? "mode" : "loc", type === 4 ? undefined : e.loc], ["max", e.maximum],
+    ["scale", type === 5 ? undefined : e.scale], ["shape", e.shape]].filter(([, v]) => v !== undefined);
+  return `${UNCERTAINTY_TYPES[type] ?? `type ${type}`}${params.length ? `: ${params.map(([k, v]) => `${k} ${fmt(v)}`).join(", ")}` : ""}`;
+}
+
+const hasExchangeMeta = (e) => e.comment || e.pedigree || e.formula || e["uncertainty type"] > 1;
+
+function ExchangeMeta({ e }) {
+  const uncertainty = uncertaintyText(e);
+  return html`
+    <div class="exchange-meta">
+      ${e.comment && html`<p class="text">${e.comment.trim()}</p>`}
+      <table class="kv">
+        ${uncertainty && html`<tr><th>Uncertainty</th><td>${uncertainty}</td></tr>`}
+        ${e.pedigree && html`<tr><th>Pedigree</th><td title="Data quality scores, 1 (best) to 5">
+          ${PEDIGREE.map(([k, label]) => `${label} ${e.pedigree[k] ?? "–"}`).join(" · ")}</td></tr>`}
+        ${e.formula && html`<tr><th>Formula</th><td class="mono">${e.formula}</td></tr>`}
+        ${e["variable name"] && html`<tr><th>Variable</th><td class="mono">${e["variable name"]}</td></tr>`}
+      </table>
+    </div>`;
+}
+
+// Inputs or elementary flows of an activity as in its dataset; click a row for its comment and uncertainty
+function ExchangeTable({ title, items, cumulative, unitPer, onOpen, limit = 10 }) {
+  const [open, setOpen] = useState(() => new Set());
+  const [all, setAll] = useState(false);
+  const toggle = (i) => setOpen((s) => { const next = new Set(s); next.has(i) ? next.delete(i) : next.add(i); return next; });
+  const shown = all ? items : items.slice(0, limit);
+  return html`
+    <section>
+      <h4>${title} · ${items.length}</h4>
+      <table class="flows exchanges">
+        <thead><tr>
+          <th>${onOpen ? "Product" : "Flow"} <span class="muted">· click a row for its comment and uncertainty</span></th>
+          <th class="num" title="Amount in the dataset">amount</th><th class="num" title=${unitPer}>impact</th><th class="num">share</th>
+        </tr></thead>
+        <tbody>${shown.map((e, i) => {
+          const meta = hasExchangeMeta(e);
+          return html`
+            <tr key=${i} class=${`exchange ${meta ? "has-meta" : ""} ${open.has(i) ? "open" : ""}`} onClick=${() => meta && toggle(i)}>
+              <td><span class="caret">${meta ? (open.has(i) ? "▾" : "▸") : ""}</span>
+                ${onOpen
+                  ? html`<a href="#" title=${`${e.name} | ${e.location}`} onClick=${(ev) => { ev.preventDefault(); ev.stopPropagation(); onOpen(e.index); }}>${e.reference_product}</a>
+                      <span class="loc-chip">${e.location}</span>`
+                  : html`<span title=${`${e.name} | ${e.categories.join(" / ")}`}>${e.name} <span class="muted">${e.categories.join(" / ")}</span></span>`}</td>
+              <td class="num">${fmt(e.amount)} ${unit(e.unit)}</td>
+              <td class="num">${e.impact ? fmt(e.impact) : "–"}</td>
+              <td class="num">${e.impact && cumulative ? pct(e.impact / cumulative) : ""}</td>
+            </tr>
+            ${open.has(i) && html`<tr class="exchange-detail"><td colspan="4"><${ExchangeMeta} e=${e} /></td></tr>`}`;
+        })}
+        </tbody>
+      </table>
+      ${items.length > shown.length && html`<button class="link" onClick=${() => setAll(true)}>Show all ${items.length}</button>`}
+    </section>`;
+}
+
 // ---------------------------------------------------------------- activity info pop-up (right click)
 const DETAIL_SECTIONS = [
   ["comment", "Description"], ["product_information", "Product"],
@@ -702,6 +783,21 @@ function InfoPopup({ target, method, methodInfo, rootImpact, rowsById, onClose, 
     request(`/api/activity/${target.index}?method=${method}`).then(setInfo).catch((e) => setError(e.message));
   }, [target.index, method]);
   useEffect(() => { setAllUsers(false); box.current?.querySelector(".info-body")?.scrollTo(0, 0); }, [target.index]);
+  // Exchanges as in the dataset, and for a tree row, the parent's input of this product (comment, uncertainty)
+  const [exchanges, setExchanges] = useState(null);
+  const [link, setLink] = useState(null);
+  const parent = target.row?.kind === "process" ? rowsById.get(target.row.parent) : null;
+  const parentMeta = parent?.kind === "process" ? parent.meta : null;
+  useEffect(() => {
+    setExchanges(null);
+    request(`/api/activity/${target.index}/exchanges?method=${method}`).then(setExchanges).catch(() => setExchanges(null));
+  }, [target.index, method]);
+  useEffect(() => {
+    setLink(null);
+    if (parentMeta) {
+      request(`/api/activity/${parentMeta.index}/exchanges?method=${method}&product=${target.index}`).then(setLink).catch(() => setLink(null));
+    }
+  }, [target.index, parentMeta?.index, method]);
   useEffect(() => {
     setUsers(null);
     const fu = root ? `&root=${root.index}&amount=${amount}` : "";
@@ -725,6 +821,14 @@ function InfoPopup({ target, method, methodInfo, rootImpact, rowsById, onClose, 
   const d = info?.details || {};
   const unitPer = info ? `${methodInfo.unit} / ${unit(info.unit)}` : "";
   const directTotal = info ? info.direct_flows.reduce((sum, f) => sum + f.impact, 0) : 0;
+  const production = exchanges?.production;
+  const exchangeTables = info && exchanges?.available ? [
+    html`<${ExchangeTable} key=${`inputs-${target.index}`} title="Inputs" items=${exchanges.inputs}
+           cumulative=${info.cumulative_per_unit} unitPer=${unitPer} onOpen=${onOpen} />`,
+    html`<${ExchangeTable} key=${`flows-${target.index}`} title="Elementary flows" items=${exchanges.flows}
+           cumulative=${info.cumulative_per_unit} unitPer=${unitPer} />`,
+  ] : [];
+  if (target.direct) exchangeTables.reverse();  // direct emissions row: flows first
   return html`
     <div class="info-popup" ref=${box} style=${{ left: `${left}px`, top: `${top}px`, width: `${width}px`, maxHeight: `calc(100vh - ${top + 12}px)` }}
          role="dialog" aria-label="Activity information">
@@ -745,7 +849,11 @@ function InfoPopup({ target, method, methodInfo, rootImpact, rowsById, onClose, 
                 ${row.kind === "process" && html`<tr><th>Amount</th><td>${row.waste ? `${fmt(-row.amount)} ${unit(row.unit)} treated` : `${fmt(row.amount)} ${unit(row.unit)}`}</td></tr>`}
                 <tr><th>Impact</th><td>${fmt(row.impacts[0])} ${methodInfo.unit} (${pct(rootImpact ? row.impacts[0] / rootImpact : 0)} of the total)</td></tr>
                 <tr><th>Path</th><td>${path.join(" → ")}</td></tr>
+                ${link?.inputs.map((e) => html`
+                  <tr><th>Input</th><td>${fmt(e.amount)} ${unit(e.unit)} in the dataset of ${parentMeta.name}
+                    <span class="loc-chip">${parentMeta.location}</span>${e.type !== "technosphere" ? html` <span class="muted">(${e.type})</span>` : ""}</td></tr>`)}
               </table>
+              ${link?.inputs.filter(hasExchangeMeta).map((e) => html`<${ExchangeMeta} e=${e} />`)}
             </section>`}
           <section>
             <h4>Per ${unit(info.unit)} of ${info.reference_product}</h4>
@@ -753,7 +861,7 @@ function InfoPopup({ target, method, methodInfo, rootImpact, rowsById, onClose, 
               <tr><th>Cumulative</th><td>${fmt(info.cumulative_per_unit)} ${unitPer}</td></tr>
               <tr><th>Direct</th><td>${fmt(info.direct_per_unit)} ${unitPer}${info.cumulative_per_unit ? ` (${pct(info.direct_per_unit / info.cumulative_per_unit)} of cumulative)` : ""}</td></tr>
             </table>
-            ${info.direct_flows.length > 0 && html`
+            ${!exchanges?.available && info.direct_flows.length > 0 && html`
               <table class="flows">
                 <thead><tr><th>Main direct emissions (${methodLabel(methodInfo)})</th><th class="num">${unitPer}</th><th class="num">share</th></tr></thead>
                 <tbody>${info.direct_flows.map((f) => html`
@@ -762,6 +870,7 @@ function InfoPopup({ target, method, methodInfo, rootImpact, rowsById, onClose, 
                 </tbody>
               </table>`}
           </section>
+          ${exchangeTables}
           ${users && html`
             <section>
               <h4>${users.waste ? "Treats the waste of" : "Used by"} · ${users.count} ${users.count === 1 ? "activity" : "activities"}${root ? `, ${users.in_supply_chain} in this supply chain` : ""}</h4>
@@ -791,6 +900,18 @@ function InfoPopup({ target, method, methodInfo, rootImpact, rowsById, onClose, 
             </section>`}
           ${DETAIL_SECTIONS.filter(([k]) => d[k]).map(([k, title]) => html`
             <section><h4>${title}</h4><p class="text">${String(d[k]).split("\n").filter((line) => line.trim() !== "None").join("\n").trim()}</p></section>`)}
+          ${production && (production.comment || production.properties || production["production volume"]) && html`
+            <section>
+              <h4>Reference product exchange</h4>
+              <table class="kv">
+                ${production["production volume"] !== undefined && html`
+                  <tr><th>Production volume</th><td>${fmt(production["production volume"])} ${unit(production.unit)} per year</td></tr>`}
+                ${production.comment && html`<tr><th>Comment</th><td>${production.comment}</td></tr>`}
+                ${Object.entries(production.properties || {}).map(([name, p]) => html`
+                  <tr><th>${name}</th><td title=${p.comment || ""}>${typeof p.amount === "number" ? fmt(p.amount) : p.amount} ${p.unit ?? ""}
+                    ${p.comment && html`<span class="muted">· ${truncate(p.comment, 80)}</span>`}</td></tr>`)}
+              </table>
+            </section>`}
           <section>
             <h4>Metadata</h4>
             <table class="kv">
@@ -834,7 +955,7 @@ function chartItems(rows, byId) {
   return frontier(rows)
     .map((r) => {
       const parent = byId.get(r.parent);
-      const metas = r.meta ? [r.meta] : r.metas ? r.metas : r.kind === "direct" && parent?.metas ? parent.metas : [];
+      const metas = r.meta ? [r.meta] : r.metas ? r.metas : r.emitters ? r.emitters : r.kind === "direct" && parent?.metas ? parent.metas : [];
       return { kind: r.kind, rows: [r], impacts: [...r.impacts], metas, parentMetas: parent?.meta ? [parent.meta] : parent?.metas || [] };
     })
     .sort((a, b) => Math.abs(b.impacts[0]) - Math.abs(a.impacts[0]));
@@ -844,6 +965,14 @@ function nameItem(item, naming, recipe, byId) {
   const { kind, metas, parentMetas, rows } = item;
   const many = rows.length > 1;
   const pick = (field) => joinValues(metas.map((m) => m[field]));
+  if (rows[0].emitters) {
+    // Elementary flows (or a group or others row of them): the flow, then whose direct emissions
+    const emitter = naming === "short" ? pick("reference_product")
+      : naming === "custom" ? applyRecipe(recipe.main, metas) : `${pick("name")} (${pick("location")})`;
+    const main = kind === "flow" ? rows[0].flow.name : kind === "rest" ? "other flows" : rows[0].label;
+    // the emitter first: labels that do not fit lose the end of the qualifier
+    return { main, qual: [`direct: ${emitter}`, kind === "flow" && compartmentOf(rows[0].flow)].filter(Boolean).join(" · ") };
+  }
   if (kind === "group") return { main: rows[0].label, qual: many ? `${rows.length} groups` : "" };
   if (kind === "rest") {
     if (many) return { main: "others", qual: `under ${rows.length} processes` };
@@ -872,7 +1001,8 @@ function rowNames(r, byId, view) {
     return { main: name, qual: `${location} · ${product}` };
   }
   if (r.kind === "direct") return { main: "direct emissions", qual: "" };
-  if (r.kind === "rest") return { main: r.label, qual: "" };
+  if (r.kind === "flow") return { main: r.flow.name, qual: compartmentOf(r.flow) };
+  if (r.kind === "rest" || r.kind === "group") return { main: r.label, qual: "" };
   const parent = byId.get(r.parent);
   const metas = r.meta ? [r.meta] : r.metas || [];
   return nameItem({ kind: r.kind, rows: [r], metas, parentMetas: parent?.meta ? [parent.meta] : [] }, view.naming, view.recipe, byId);
@@ -1089,6 +1219,11 @@ const PRESETS = [
   { label: "By activity type", rule: { by: "activity_type" } },
   { label: "By ISIC division", rule: { by: "isic_division" } },
 ];
+// Rules on the elementary flows shown when a "direct emissions" row is expanded
+const FLOW_PRESETS = [
+  { label: "By substance", rule: { by: "name", target: "flows" } },
+  { label: "By compartment", rule: { by: "compartment", target: "flows" } },
+];
 
 function GroupPanel({ info, rules, setRules, selectedRow }) {
   const [kind, setKind] = useState("named");
@@ -1125,13 +1260,13 @@ function GroupPanel({ info, rules, setRules, selectedRow }) {
   return html`
     <div class="panel">
       <h3>Active rules ${rules.length > 1 && html`<button class="link" onClick=${() => setRules([])}>remove all</button>`}</h3>
-      <p class="note">Rules bundle sibling processes in the tree. Named groups are applied first, then group-by rules, each in list order; a process goes to the first group that claims it. Numbers never change, only how they are bundled.</p>
+      <p class="note">Rules bundle sibling processes in the tree (flow rules: the elementary flows of expanded direct emissions). Named groups are applied first, then group-by rules, each in list order; a process goes to the first group that claims it. Numbers never change, only how they are bundled.</p>
       ${rules.length === 0 ? html`<p class="note">No grouping. Select several sibling rows in the tree (Ctrl/⌘-click) and use "Group selected", or add a rule below.</p>` : html`
         <ul class="rules">
           ${rules.map((r, i) => html`
             <li>
               <span class="desc">
-                ${r.by ? html`<b>group by ${r.by}</b>` : html`<b>${r.name}</b> <small>← ${describePredicate(r.predicate)}</small>`}
+                ${r.target === "flows" && "flows: "}${r.by ? html`<b>group by ${r.by === "name" && r.target === "flows" ? "substance" : r.by}</b>` : html`<b>${r.name}</b> <small>← ${describePredicate(r.predicate)}</small>`}
                 <br /><small>${r.scope === "*" ? "everywhere in the tree" : `under ${r.scope}`}</small>
               </span>
               <button disabled=${i === 0} onClick=${() => move(i, -1)} aria-label="Move up">↑</button>
@@ -1142,6 +1277,8 @@ function GroupPanel({ info, rules, setRules, selectedRow }) {
 
       <h3>Quick groups</h3>
       <div class="row">${PRESETS.map((p) => html`<button onClick=${() => add(p.rule)}>${p.label}</button>`)}</div>
+      <div class="row"><span class="muted">Direct emission flows:</span>
+        ${FLOW_PRESETS.map((p) => html`<button onClick=${() => add(p.rule)}>${p.label}</button>`)}</div>
 
       <h3>New rule</h3>
       <div class="row">
@@ -1176,7 +1313,8 @@ function GlobalPanel({ info, root, amount, method, rules, onLocate, onInfo }) {
   const [contributors, setContributors] = useState(null);
   const [menu, setMenu] = useState(null);
   const contributorsBox = useRef(null);
-  const groups = useMemo(() => Object.fromEntries(rules.filter((r) => r.predicate).map((r) => [r.name, r.predicate])), [rules]);
+  // Flow rules only bundle rows in the tree; this analysis groups activities
+  const groups = useMemo(() => Object.fromEntries(rules.filter((r) => r.predicate && r.target !== "flows").map((r) => [r.name, r.predicate])), [rules]);
   const k = method;
 
   useEffect(() => {
@@ -1314,11 +1452,13 @@ function App() {
   const [view, setView] = useState(() => ({
     naming: loadPreference("naming", "full"),
     recipe: { main: loadPreference("recipeMain", DEFAULT_RECIPE.main), secondary: loadPreference("recipeSecondary", DEFAULT_RECIPE.secondary) },
+    groupProducts: loadPreference("groupProducts", "0") === "1",
   }));
   useEffect(() => {
     savePreference("naming", view.naming);
     savePreference("recipeMain", view.recipe.main);
     savePreference("recipeSecondary", view.recipe.secondary);
+    savePreference("groupProducts", view.groupProducts ? "1" : "0");
   }, [view]);
   const [rules, setRules] = useState([]);
   const [chartMethods, setChartMethods] = useState([]);
@@ -1398,7 +1538,7 @@ function App() {
 
   const viewState = (exp = expanded) => ({
     root: [root.index], amount, expanded: [...exp], rules, cutoff: cutoff / 100, cutoff_basis: cutoffBasis, method, methods: chartMethods,
-    pinned: [...pinned], others: [...others], merges,
+    pinned: [...pinned], others: [...others], merges, group_products: view.groupProducts,
   });
 
   useEffect(() => {
@@ -1409,14 +1549,14 @@ function App() {
       .catch((e) => !cancelled && setError(e.message));
     save({ root, amount, method, cutoff, cutoffBasis, expanded: [...expanded], rules, chartMethods, pinned: [...pinned], others: [...others], merges });
     return () => { cancelled = true; };
-  }, [root, amount, method, cutoff, cutoffBasis, expanded, rules, chartMethods, pinned, others, merges, info]);
+  }, [root, amount, method, cutoff, cutoffBasis, expanded, rules, chartMethods, pinned, others, merges, view.groupProducts, info]);
 
   const rootImpact = data.rows[0]?.impacts[0] || 0;
   const rowsById = useMemo(() => new Map(data.rows.map((r) => [r.id, r])), [data]);
   const selectedRows = [...selection].map((id) => rowsById.get(id)).filter(Boolean);
   const siblings = selectedRows.length >= 2 && selectedRows.every((r) => r.parent === selectedRows[0].parent)
     && !selectedRows[0].parent.includes("/g:");
-  const canGroup = siblings && selectedRows.every((r) => r.kind === "process");
+  const canGroup = siblings && (selectedRows.every((r) => r.kind === "process") || selectedRows.every((r) => r.kind === "flow"));
   const canMerge = siblings && selectedRows.every((r) => r.kind === "process" || r.kind === "merged");
   function mergeSelected() {
     const scope = selectedRows[0].parent;
@@ -1482,8 +1622,11 @@ function App() {
   }
   function groupSelected() {
     const parent = selectedRows[0].parent;
-    const name = groupName.trim() || `group ${rules.filter((r) => r.predicate?.products).length + 1}`;
-    setRules([...rules, { name, predicate: { products: selectedRows.map((r) => productOf(r.id)) }, scope: parent }]);
+    const name = groupName.trim() || `group ${rules.filter((r) => r.predicate?.products || r.predicate?.flows).length + 1}`;
+    const rule = selectedRows[0].kind === "flow"
+      ? { predicate: { flows: selectedRows.map((r) => r.flow.index) }, target: "flows" }
+      : { predicate: { products: selectedRows.map((r) => productOf(r.id)) } };
+    setRules([...rules, { name, ...rule, scope: parent }]);
     setExpanded(new Set([...expanded, `${parent}/g:${name}`]));
     setSelection(new Set());
     setGroupName("");
@@ -1529,7 +1672,7 @@ function App() {
       model: { title: info.title, activities: info.activities },
       root, amount, method: info.methods[method].name, chartMethods: chartMethods.map((k) => info.methods[k].name),
       cutoff, cutoffBasis, expanded: [...expanded], rules, pinned: [...pinned], others: [...others], merges,
-      display: { naming: view.naming, recipe: view.recipe },
+      display: { naming: view.naming, recipe: view.recipe, groupProducts: view.groupProducts },
     };
   }
   function exportView() {

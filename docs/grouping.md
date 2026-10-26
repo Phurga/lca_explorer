@@ -107,6 +107,28 @@ On 1 kg of GLO wheat (feed), infrastructure is 10.0 % of EF 3.1 climate
 change (first-match rule, *Whole supply chain* tab). In the tree, like any
 named group, it only bundles two or more infrastructure siblings.
 
+### Direct emissions: elementary flows
+
+A "direct emissions" row expands into its **elementary flows** (kind
+`flow`, id `<direct id>/f<flow index>`): amount = operation level × `B`
+entry, impact = amount × characterisation factor, for every method, so the
+flows sum exactly to the direct row. Under a merged process the members'
+flows are summed. Flows without a factor in any method are left out (they
+weigh nothing anywhere); flows without impact for the *current* method go
+to "others" whatever the cut-off ("no impact" in its panel), since they are
+kept only for the other methods of the multi-method chart. The cut-off,
+pins, "To others" and the chart work on flows as on processes.
+
+Flows are grouped by rules with `target: "flows"`, which apply only under
+direct rows (and process rules only to processes). Their predicates and
+group-by fields refer to flow metadata (`query.derived_flows`: `name`,
+`compartment`, `subcompartment` split from the Brightway `categories`,
+`unit`): quick groups **by substance** (CO2 to urban, rural and
+unspecified air as one row, amounts summed) and **by compartment**, and
+Ctrl/⌘-click → Group for a manual `{"flows": [...]}` group. Flow groups are
+labelled by the value alone ("air", "Carbon dioxide, fossil"). Flow rules
+are left out of the *Whole supply chain* analysis, which groups activities.
+
 ## Queries (`query.py`)
 
 JSON predicates, evaluated vectorised over activity metadata

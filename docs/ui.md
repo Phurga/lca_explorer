@@ -36,7 +36,10 @@ API in `src/lca_viewer/server.py`.
   phrase, shorter names.
 - **Left — tree**: expand/collapse (▸/▾), amount (waste shown as
   "x kg treated"), impact, share bar. "Expand above x %" auto-expands every
-  node above a threshold (hotspot drill-down). Ctrl/⌘-click selects sibling
+  node above a threshold (hotspot drill-down). A "direct emissions" row
+  expands into its elementary flows (substance, compartment, amount
+  emitted), groupable by substance or compartment — see
+  [grouping.md](grouping.md). Ctrl/⌘-click selects sibling
   rows; a selection bar then offers **Group** (bundle them under one row,
   "ungroup" chip to undo), **Merge** (combine their inventories into one
   process, "merged ×" chip to undo — see [grouping.md](grouping.md)) and
@@ -61,7 +64,8 @@ API in `src/lca_viewer/server.py`.
   out. ± handle or double-click to expand, Ctrl/⌘-click to select, drag to
   pan, wheel to zoom, "Fit" for the whole tree. See below for the layout
   choice.
-- **View bar** (under the toolbar): *Full / Short / Custom* names, applied
+- **View bar** (under the toolbar): *Group by product* and *Full / Short /
+  Custom* names, applied
   to the list, the tree view, the others panel and the chart; see
   [charts.md](charts.md).
 
@@ -77,6 +81,16 @@ API in `src/lca_viewer/server.py`.
   authors and file; actions "Use as functional unit" and "Move to others".
   Descriptions are stored in the cached model (`details.pkl`, 77 MB for
   ecoinvent, loaded on first use).
+  **Exchanges** as recorded in the dataset: *Inputs* and *Elementary flows*
+  with their amount, impact per unit of product and share of the cumulative
+  impact, largest first; click a row (▸) for its comment, uncertainty
+  (distribution, σ with and without pedigree), pedigree scores, formula and
+  variable name. For a tree row, *In this tree* also shows the parent's
+  input of this product with its comment and uncertainty. *Reference product
+  exchange* gives the production volume and product properties (price,
+  carbon and water content, dry mass, …). Exchanges are stored in the cached
+  model (`exchanges.sqlite`, 105 MB for ecoinvent 3.9.1, read one activity
+  at a time); a model built before this has none — rebuild it to see them.
 - **Right — tabs**:
   - *Contribution chart*: current method bars, or several methods as 100 %
     stacked bars; CSV export. See [charts.md](charts.md).

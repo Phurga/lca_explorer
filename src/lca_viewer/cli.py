@@ -40,9 +40,10 @@ def serve(args) -> None:
     import uvicorn
 
     n = len(args.model)
-    if args.title and len(args.title) != n:
-        raise SystemExit(f"Give --title once per --model ({n})")
-    titles = args.title or [Path(path).name for path in args.model]
+    if len(args.title or []) > n:
+        raise SystemExit(f"More --title than --model ({n})")
+    # Titles go to the models in order; models without one are named after their directory
+    titles = (args.title or []) + [Path(path).name for path in args.model[len(args.title or []):]]
     roots = _per_model(args.default_root, n, "--default-root")
     models = [
         {"path": str(Path(path).resolve()), "title": title, "default_root": root or None}
@@ -66,26 +67,25 @@ def serve(args) -> None:
 
 
 def import_(args) -> None:
-    from .importing import import_ecospold2, import_simapro_csv, setup_project
-
-    os_env_check()
-    setup_project(args.project)
-    t = time.perf_counter()
-    if args.format == "ecospold2":
-        import_ecospold2(args.project, args.path, args.database)
-    else:
-        import_simapro_csv(
-            args.project, args.path, args.database, link_to=args.link_to, migrations=args.migration,
-            unlinked=args.unlinked, report=args.report,
-        )
-    print(f"imported {args.database} into project {args.project} ({time.perf_counter() - t:.0f}s)")
-
-
-def os_env_check() -> None:
     import os
 
     if not os.environ.get("BRIGHTWAY2_DIR"):
         print("warning: BRIGHTWAY2_DIR is not set, using Brightway's default data directory")
+    from .importing import import_ecospold2, import_simapro_csv, setup_project
+
+    t = time.perf_counter()
+    setup_project(args.project)  # biosphere and LCIA methods, first time only
+    if args.format == "ecospold2":
+        import_ecospold2(args.project, args.path, args.database)
+        print(f"imported {args.database} into project {args.project} ({time.perf_counter() - t:.0f}s)")
+    else:
+        result = import_simapro_csv(
+            args.project, args.path, args.database, link_to=args.link_to, migrations=args.migration,
+            unlinked=args.unlinked, report=args.report,
+        )
+        dropped = f", {result['unlinked']} unlinked exchanges dropped" if result["unlinked"] else ""
+        print(f"imported {result['processes']} processes into {args.database}, project {args.project}"
+              f"{dropped} ({time.perf_counter() - t:.0f}s)")
 
 
 def main(argv=None) -> None:
@@ -117,7 +117,8 @@ def main(argv=None) -> None:
     p = sub.add_parser("serve", help="Serve the explorer for one or several cached models")
     p.add_argument("--model", required=True, action="append",
                    help="Model directory; repeat to serve several models with a database picker")
-    p.add_argument("--title", action="append", help="Title shown in the UI; once per --model (default: directory name)")
+    p.add_argument("--title", action="append",
+                   help="Title shown in the UI; repeat for each --model, in the same order (default: directory name)")
     p.add_argument("--default-root", action="append",
                    help='Functional unit shown at start, as "activity name|location"; once, or once per --model')
     p.add_argument("--host", default="127.0.0.1")

@@ -17,7 +17,7 @@ from pydantic import BaseModel
 
 from .analysis import direct_contribution, first_match_contribution, group_contributors, main_path, matched
 from .model import LCAModel
-from .query import derived_activities, search, suggest_values
+from .query import derived_activities, derived_flows, search, suggest_values
 from .tree import Tree
 from .view import View
 
@@ -41,6 +41,7 @@ class ViewState(BaseModel):
     pinned: list[str] = []
     others: list[str] = []
     merges: list[dict] = []
+    group_products: bool = False
     methods: list[int] = []
     """Methods whose impacts are returned, in this order (default: ``method`` only)."""
 
@@ -90,6 +91,7 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
     app = FastAPI(title="lca_viewer")
     model.G  # factorise at start-up rather than on the first request
     activities = derived_activities(model)
+    flows = derived_flows(model)
     root = _find(activities, *default_root.split("|", 1)) if default_root else None
     try:
         default_method = model.method_index(("EF v3.1", "climate change", "global warming potential (GWP100)"))
@@ -179,6 +181,12 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
             elif r.kind == "merged":
                 out["products"] = [int(m.product) for m in r.merged]
                 out["metas"] = [meta(m.product) for m in r.merged]
+            elif r.kind == "flow":
+                f = flows.iloc[r.node.flow]
+                out["flow"] = {"index": int(r.node.flow), "name": f["name"], "compartment": f["compartment"],
+                               "subcompartment": f["subcompartment"]}
+            if r.kind != "direct" and r.sources is not None:
+                out["emitters"] = [meta(j) for j, _ in r.sources]  # processes whose direct emissions these are
             if r.members is not None:
                 out["members"] = [serialise(m) for m in r.members]
             return out
@@ -239,6 +247,41 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
                  "impact": float(column[f])}
                 for f in top if column[f] != 0
             ],
+        }
+
+    @app.get("/api/activity/{index}/exchanges")
+    def activity_exchanges(index: int, method: int | None = None, product: int | None = None):
+        """Exchanges of one activity as recorded in its dataset (amount, comment, uncertainty,
+        pedigree, …), with their impact per unit of reference product, largest first.
+        With ``product``, only the inputs of that product."""
+        if not 0 <= index < model.size:
+            raise HTTPException(404, f"No activity {index}")
+        k = default_method if method is None else method
+        per_unit = 1 / model.diagonal[index]
+        categories = model.flows["categories"] if "categories" in model.flows else None
+        production, inputs, emissions = [], [], []
+        for e in model.exchange_details(index):
+            kind, row = e.pop("type"), e.pop("row")
+            amount = float(e.get("amount", 0.0))
+            positive = kind in ("production", "substitution", "generic production")  # signs in A
+            if product is not None and (kind == "biosphere" or row != product or row == index):
+                continue
+            if kind == "biosphere":
+                emissions.append({
+                    "index": row, "name": model.flows["name"].iat[row],
+                    "categories": list(categories.iat[row]) if categories is not None else [],
+                    **e, "impact": amount * float(model.methods[k].cfs[row]) * per_unit,
+                })
+            elif positive and row == index:
+                production.append(e)
+            else:
+                impact = (-1 if positive else 1) * amount * float(model.G[row, k]) * per_unit
+                inputs.append({**meta(row), "type": kind, **e, "impact": impact})
+        inputs.sort(key=lambda x: -abs(x["impact"]))
+        emissions.sort(key=lambda x: -abs(x["impact"]))
+        return {
+            "available": model.has_exchanges, "method": k,
+            "production": production[0] if production else None, "inputs": inputs, "flows": emissions,
         }
 
     @app.get("/api/activity/{index}/users")
