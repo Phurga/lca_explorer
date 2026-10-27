@@ -144,3 +144,110 @@ def test_api_rows_describe_flows(flows_model):
     assert flow["flow"]["compartment"] == "air"
     assert flow["emitters"][0]["index"] == 1
     assert len(flow["impacts"]) == 2
+
+
+def test_flow_contribution_sums_to_the_score_and_merges_compartments(flows_model):
+    from fastapi.testclient import TestClient
+    from lca_viewer.server import create_app
+
+    client = TestClient(create_app(flows_model))
+    score = flows_model.score(0)[0]
+    by_flow = client.post("/api/flows", json={"root": 0, "method": 0, "by": "flow"}).json()
+    # water and nitrate have no climate change factor: left out
+    assert by_flow["count"] == 3
+    assert by_flow["total"] == pytest.approx(score)
+    assert sum(it["impact"] for it in by_flow["items"]) == pytest.approx(score)
+    # CO2 to urban air: farm FR emits 1 per kg (0.6 kg), farm DE 0.5 (0.4 kg)
+    urban = next(it for it in by_flow["items"] if it["flows"] == [0])
+    assert urban["amount"] == pytest.approx(0.6 * 1.0 + 0.4 * 0.5)
+
+    by_substance = client.post("/api/flows", json={"root": 0, "method": 0}).json()
+    co2 = next(it for it in by_substance["items"] if it["name"] == "Carbon dioxide, fossil")
+    assert sorted(co2["flows"]) == [0, 1] and co2["compartment"] == "2 compartments"
+    # compartment of each flow, to switch between them in the flow pop-up
+    assert dict(zip(co2["flows"], co2["compartments"])) == {0: "air, urban air close to ground", 1: "air, non-urban air or from high stacks"}
+    assert co2["amount"] == pytest.approx(0.6 * 3.0 + 0.4 * 0.5)
+    assert by_substance["count"] == 2
+    assert by_substance["items"][0]["impact"] >= by_substance["items"][1]["impact"]
+
+
+def test_flow_contributors_are_the_emitting_processes(flows_model):
+    from fastapi.testclient import TestClient
+    from lca_viewer.server import create_app
+
+    client = TestClient(create_app(flows_model))
+    result = client.post("/api/flows/contributors", json={"root": 0, "method": 0, "flows": [0, 1]}).json()
+    assert result["count"] == 2  # the two farms; the market emits nothing
+    by_location = {c["location"]: c for c in result["contributors"]}
+    assert by_location["FR"]["amount"] == pytest.approx(0.6 * 3.0)
+    assert by_location["DE"]["impact"] == pytest.approx(0.4 * 0.5)
+    # the compartment each farm mostly emits to (FR: rural air, DE: only urban air)
+    assert by_location["FR"]["flow"] == 1 and by_location["DE"]["flow"] == 0
+    assert result["total"] == pytest.approx(0.6 * 3.0 + 0.4 * 0.5)
+
+
+def test_flow_info_gives_factors_and_the_exchange_of_each_emitter(flows_model):
+    from fastapi.testclient import TestClient
+    from lca_viewer.server import create_app
+
+    client = TestClient(create_app(flows_model))
+    info = client.get("/api/flow/2?method=0&activities=1,2").json()
+    assert info["name"] == "Dinitrogen monoxide" and info["compartment"] == "air"
+    assert info["cf"] == 273.0
+    assert info["factors"] == [{"method": 0, "cf": 273.0}]  # no factor for water use
+    assert [e["activity"]["location"] for e in info["exchanges"]] == ["FR", "DE"]
+    # water: a factor only in the second method
+    assert client.get("/api/flow/3?method=0").json()["factors"] == [{"method": 1, "cf": 1.0}]
+    assert client.get("/api/flow/99").status_code == 404
+
+
+@pytest.mark.parametrize("rule", ["direct", "first_match"])
+def test_flow_groups_split_what_the_activity_groups_leave(flows_model, rule):
+    from lca_viewer.analysis import group_contributors, supply_chain_contribution
+
+    groups = {"farm FR": {"field": "location", "op": "eq", "value": "FR"}}
+    flow_groups = {"N2O": {"field": "name", "op": "eq", "value": "Dinitrogen monoxide"}}
+    result = supply_chain_contribution(flows_model, 0, groups, rule, flow_groups=flow_groups)
+    assert list(result) == ["farm FR", "N2O", "other"]
+    # the parts add up to the score, for every method
+    np.testing.assert_allclose(sum(result.values()), flows_model.score(0))
+    # the French farm is reached first: it keeps all its emissions, N2O included
+    assert result["farm FR"][0] == pytest.approx(0.6 * (3.0 + 0.01 * 273))
+    # the N2O group only has the N2O of the other farm (0.4 kg x 0.02 kg x 273)
+    assert result["N2O"][0] == pytest.approx(0.4 * 0.02 * 273)
+    assert result["other"][0] == pytest.approx(0.4 * 0.5)  # the German farm's CO2
+    # one method only gives the same numbers
+    single = supply_chain_contribution(flows_model, 0, groups, rule, flow_groups=flow_groups, methods=[0])
+    assert {k: v[0] for k, v in single.items()} == pytest.approx({k: v[0] for k, v in result.items()})
+
+    for group in result:
+        members, values = group_contributors(flows_model, 0, groups, group, rule, flow_groups=flow_groups)
+        np.testing.assert_allclose(values.sum(axis=0), result[group])
+    members, _ = group_contributors(flows_model, 0, groups, "N2O", rule, flow_groups=flow_groups)
+    assert list(members) == [2]  # the German farm
+
+
+def test_first_match_flows_upstream_of_a_matched_activity_stay_with_it(flows_model):
+    from lca_viewer.analysis import supply_chain_contribution
+
+    # The market reaches both farms first: all their N2O is the market's
+    groups = {"market": {"field": "name", "op": "eq", "value": "market for wheat"}}
+    flow_groups = {"N2O": {"field": "name", "op": "eq", "value": "Dinitrogen monoxide"}}
+    result = supply_chain_contribution(flows_model, 0, groups, "first_match", flow_groups=flow_groups)
+    assert result["N2O"][0] == pytest.approx(0)
+    assert result["market"][0] == pytest.approx(flows_model.score(0)[0])
+
+
+def test_global_api_with_flow_groups(flows_model):
+    from fastapi.testclient import TestClient
+    from lca_viewer.server import create_app
+
+    client = TestClient(create_app(flows_model))
+    body = {"root": 0, "groups": {}, "flow_groups": {"N2O": {"field": "name", "op": "eq", "value": "Dinitrogen monoxide"}},
+            "rule": "direct", "method": 0}
+    result = client.post("/api/global", json=body).json()
+    assert list(result) == ["N2O", "other"] and len(result["N2O"]) == 1
+    assert result["N2O"][0] + result["other"][0] == pytest.approx(flows_model.score(0)[0])  # no process group: all N2O
+    listed = client.post("/api/global/contributors", json={**body, "group": "N2O"}).json()
+    assert listed["flow_group"] and not listed["cumulative"] and listed["count"] == 2
+    assert listed["total"] == pytest.approx(result["N2O"][0])

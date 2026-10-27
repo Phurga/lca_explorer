@@ -119,11 +119,12 @@ def _product_rows(lca, activity_ids: np.ndarray) -> np.ndarray:
     return rows
 
 
-def from_brightway(project: str, database: str, methods: list[tuple]) -> LCAModel:
+def from_brightway(project: str, database: str, methods: list[tuple], log=None) -> LCAModel:
     """Load the technosphere of ``database`` and of the databases it links to, with ``methods``.
 
     The LCA is built from one activity of ``database``: Brightway then includes every database
     it depends on (e.g. ecoinvent and the biosphere for Agribalyse), so the model is complete.
+    ``log(message)`` is called at each step.
     """
     import bw2calc as bc
     import bw2data as bd
@@ -134,7 +135,12 @@ def from_brightway(project: str, database: str, methods: list[tuple]) -> LCAMode
     except ImportError:
         pass
 
+    log = log or (lambda message: None)
+    if not methods:
+        raise ValueError(f"Project {project!r} has no impact methods: install some first (e.g. with "
+                         f"bw2io's bw2setup or ecoinvent_interface)")
     bd.projects.set_current(project)
+    log(f"Reading the matrices of {database} and the databases it uses")
     any_node = next(iter(bd.Database(database)))
     lca = bc.LCA({any_node: 1}, method=methods[0])
     lca.load_lci_data()  # matrices only: the demand just selects the databases
@@ -147,6 +153,7 @@ def from_brightway(project: str, database: str, methods: list[tuple]) -> LCAMode
     A = sp.csr_matrix(lca.technosphere_matrix)[rows, :].tocsc()
     B = sp.csc_matrix(lca.biosphere_matrix)
 
+    log(f"Reading {len(activity_ids)} activities")
     records = {
         ds.id: ds.data
         for ds in AD.select(AD.id, AD.data).where(AD.id.in_(activity_ids.tolist()))
@@ -181,6 +188,7 @@ def from_brightway(project: str, database: str, methods: list[tuple]) -> LCAMode
         }
     )
 
+    log(f"Reading {len(methods)} impact methods")
     loaded = []
     for name in methods:
         lca.switch_method(name)
@@ -188,5 +196,6 @@ def from_brightway(project: str, database: str, methods: list[tuple]) -> LCAMode
         loaded.append(Method(tuple(name), bd.methods[name].get("unit", ""), cfs))
 
     details = [_details(records[i]) for i in activity_ids]
+    log("Reading the exchanges")
     exchanges = _exchanges(lca, rows, activity_ids)
     return LCAModel(A=A, B=B, activities=activities, flows=flows, methods=loaded, details=details, exchanges=exchanges)

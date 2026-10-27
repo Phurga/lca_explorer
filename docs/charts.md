@@ -15,7 +15,8 @@ configuration to keep in sync.
 ## Modes
 
 - **Current method**: one horizontal bar per frontier row, sorted by
-  absolute impact; groups in a distinct colour, negative contributions in
+  absolute impact, all in one colour (groups and merged rows are not told
+  apart by colour: the label says what they are); negative contributions in
   orange.
 - **Several methods (100 %)**: one 100 % stacked bar per selected method
   (default: the current method's family, e.g. the 25 EF 3.1 categories). The
@@ -28,6 +29,8 @@ rows name their parent ("direct: wheat production (RoW)",
 Elementary flows name the substance, then the emitter and compartment in
 grey ("Dinitrogen monoxide · direct: wheat production (RoW) · air, …"):
 the emitter comes first so that it survives when a long label is shortened.
+The others row of a process's flows reads "others under wheat production
+(RoW), direct".
 
 ## View settings: product grouping and row names
 
@@ -52,7 +55,12 @@ match.
   part (grey, default `{location}`), with tokens `{product} {name}
   {location} {unit} {type} {isic} {cpc} {database}`; combined rows list
   their values comma-separated ("FR, DE, US +2"; up to 6 in the secondary
-  part). Choices are per-browser preferences.
+  part). Elementary flows follow the same choice: *Full* = substance with
+  the compartment in grey, *Short* = substance only, *Custom* = a second
+  pair of recipes (default `{substance}` / `{compartment}`, tokens
+  `{substance} {compartment} {subcompartment}`). Choices are per-browser
+  preferences. Custom names given to rows (rename, ✎ / r) replace the main
+  part.
 
 Axis label widths are measured with a canvas (ECharts mis-measures two-tone
 rich-text labels with `containLabel`).

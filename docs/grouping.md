@@ -58,7 +58,10 @@ it is below the cut-off. Moving wins over pinning. The others row keeps its
 ticking a member shows it again (un-move + pin). Because others is just one
 more row on the frontier, totals stay exact whatever is moved or pinned.
 A single row below the cut-off is shown as itself, but a single moved row
-still gets an others row. Pins and moved rows are part of the saved view and
+still gets an others row. An others row expands like a group: its members
+are rendered under it (parent = the others row) and replace it on the
+frontier, so the chart breaks it down too; merges and group rules on them
+are still scoped to the real parent. Pins and moved rows are part of the saved view and
 are cleared when the functional unit changes.
 
 Decision: **changing the cut-off clears pins and moved rows** (with an Undo
@@ -86,6 +89,23 @@ sharing a name are listed once: "steel (RER + RoW)", "market for urea
 (RoW + CN)"; different names stay separate ("steel (RER) + iron (DE)"). Merges are
 kept by Reset view and cut-off changes, like groups, and cleared with the
 functional unit.
+
+A group of processes (named, group-by or by product) has a **merge** chip
+that turns it into a merged process with the same members under the same
+parent. Merges are applied before grouping rules, so the rule no longer
+claims those members; a manual group of that parent is removed, while a rule
+applying elsewhere ("group by location" everywhere) keeps grouping the other
+parents. Groups of elementary flows have no merge chip: their amounts are
+already summed.
+
+A whole rule can be merged too (`GroupRule.merge`, the **merge** button in
+the Grouping tab): every group it makes, at any depth and in rows expanded
+later, is shown as a merged process instead. Those rows are marked
+"merged" without the × (unmerging one would change the rule everywhere; the
+button in the Grouping tab does it). A rule can also be **disabled**
+(`GroupRule.disabled`): kept in the list and the saved view but not applied,
+in the tree or in the *Whole supply chain* analysis, to compare with and
+without it.
 
 ![Merge](img/merge.png)
 
@@ -126,8 +146,11 @@ group-by fields refer to flow metadata (`query.derived_flows`: `name`,
 `unit`): quick groups **by substance** (CO2 to urban, rural and
 unspecified air as one row, amounts summed) and **by compartment**, and
 Ctrl/⌘-click → Group for a manual `{"flows": [...]}` group. Flow groups are
-labelled by the value alone ("air", "Carbon dioxide, fossil"). Flow rules
-are left out of the *Whole supply chain* analysis, which groups activities.
+labelled by the value alone ("air", "Carbon dioxide, fossil"). Named flow
+rules (a predicate over flows, e.g. *Add as a group* on a substance in the
+Flow contribution tab: `{"field": "name", "op": "eq", "value": "Dinitrogen
+monoxide"}`, all compartments) are also **flow groups** of the *Whole supply
+chain* analysis (below); `by` flow rules are not.
 
 ## Queries (`query.py`)
 
@@ -175,6 +198,26 @@ Reference example (EF 3.1 climate change), same four groups:
 | other (incl. field emissions) | 62.0 % | 38.7 % |
 
 The two readings differ a lot, so charts must always state which rule is used.
+
+### Flow groups
+
+`supply_chain_contribution(..., flow_groups=...)` also takes groups of
+**elementary flows** ("how much N2O, outside the process groups?").
+Decision: process groups come first and keep every flow they reach first —
+under first match, a fertiliser's supply chain with its N2O; under direct, a
+fertiliser process's own N2O. Flow groups then split what is left, *other*:
+the direct emissions `s_j · (CF_g B_g)_j` of the activities outside any group
+(under first match, `s` is the cut supply, so emissions inside matched supply
+chains are not counted again). A first version took the flows from the whole
+supply chain before the process groups; under first match that moved N2O
+reached through fertilisers out of the fertiliser group, which reads wrong.
+The parts still add up to the score, and no extra solve is needed; the API
+computes the current method only (`method`).
+
+Reference example (EF 3.1 climate change, wheat grain feed), with
+pesticides / fertilisers / agricultural machinery and a *Dinitrogen
+monoxide* flow group: see the Whole supply chain tab; the flow group is the
+field N2O of the crops (the Flow contribution tab gives all N2O, 34.1 %).
 
 ### What a group is made of, and finding it in the tree
 

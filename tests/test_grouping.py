@@ -745,6 +745,29 @@ def test_rest_row_lists_hidden_members_and_pins_bring_them_back(grouping_model):
     assert View.from_dict(grouping_model, view.to_dict()).pinned == {pinned.id}
 
 
+def test_expanding_an_others_row_shows_its_members_in_place(grouping_model):
+    view = View(Tree(grouping_model, 0))
+    view.expand("0")
+    view.cutoff = _cutoff_between(view, "0", 2)
+    rest = next(r for r in view.rows() if r.kind == "rest")
+    assert rest.expandable and not rest.expanded
+    hidden = {m.id for m in rest.members}
+
+    view.expand(rest.id)
+    rows = view.rows()
+    inside = [r for r in rows if r.parent == rest.id]
+    assert {r.id for r in inside} == hidden
+    assert all(r.depth == rest.depth + 1 for r in inside)
+    # the members replace the others row in the frontier (and the chart)
+    frontier = {r.id for r in view.frontier()}
+    assert rest.id not in frontier and hidden <= frontier
+    assert np.allclose(sum(r.impacts for r in view.frontier()), view.tree.root.impacts)
+    # and they expand like any row
+    member = next(r for r in inside if r.expandable)
+    view.expand(member.id)
+    assert any(r.parent == member.id for r in view.rows())
+
+
 def test_pin_above_cutoff_is_not_flagged(grouping_model):
     view = View(Tree(grouping_model, 0), cutoff=1e-9)
     view.expand("0")
@@ -924,7 +947,59 @@ def test_rows_api_serialises_merged_rows(grouping_model):
     merged = next(r for r in rows if r["kind"] == "merged")
     assert sorted(merged["products"]) == sorted(b.node.product for b in breads)
     assert len(merged["metas"]) == 2
+    # each member's own amount and impact, for the right-click breakdown
+    parts = {p["index"]: p for p in merged["parts"]}
+    for b in breads:
+        assert parts[b.node.product]["amount"] == pytest.approx(b.amount)
+        assert parts[b.node.product]["impacts"][0] == pytest.approx(b.impacts[0])
+    assert sum(p["impacts"][0] for p in merged["parts"]) == pytest.approx(merged["impacts"][0])
     assert any(r["parent"] == merged_id for r in rows)
+
+
+def test_a_group_of_processes_converts_to_a_merge(grouping_model):
+    from fastapi.testclient import TestClient
+    from lca_viewer.server import create_app
+
+    client = TestClient(create_app(grouping_model))
+    state = {"root": [0], "expanded": ["0"], "method": 0, "rules": [{"by": "activity_type"}]}
+    rows = client.post("/api/rows", json=state).json()["rows"]
+    group = next(r for r in rows if r["kind"] == "group")
+    # groups carry their members' own amounts and impacts too (members panel)
+    assert len(group["parts"]) == len(group["products"])
+    assert sum(p["impacts"][0] for p in group["parts"]) == pytest.approx(group["impacts"][0])
+    # what the "merge" button sends: a merge of the group's members under the same parent
+    state["merges"] = [{"scope": group["parent"], "products": group["products"]}]
+    rows = client.post("/api/rows", json=state).json()["rows"]
+    merged = next(r for r in rows if r["kind"] == "merged")
+    assert sorted(merged["products"]) == sorted(group["products"])
+    assert merged["impacts"] == pytest.approx(group["impacts"])
+    assert group["id"] not in {r["id"] for r in rows}
+
+
+def test_a_disabled_rule_is_kept_but_not_applied(grouping_model):
+    view = View(Tree(grouping_model, 0), rules=[GroupRule(by="activity_type", disabled=True)])
+    view.expand("0")
+    assert not [r for r in view.rows() if r.kind == "group"]
+    copy = View.from_dict(grouping_model, view.to_dict())
+    assert copy.rules[0].disabled
+    copy.rules[0].disabled = None
+    assert [r for r in copy.rows() if r.kind == "group"]
+
+
+def test_a_merge_rule_turns_its_groups_into_merged_processes(grouping_model):
+    grouped = View(Tree(grouping_model, 0), rules=[GroupRule(by="activity_type")])
+    grouped.expand("0")
+    groups = [r for r in grouped.rows() if r.kind == "group"]
+    assert groups
+    view = View(Tree(grouping_model, 0), rules=[GroupRule(by="activity_type", merge=True)])
+    view.expand("0")
+    merged = [r for r in view.rows() if r.kind == "merged"]
+    assert len(merged) == len(groups) and all(r.by_rule for r in merged)
+    assert sorted(float(r.impacts[0]) for r in merged) == pytest.approx(sorted(float(g.impacts[0]) for g in groups))
+    for r in merged:  # expands into the union of the members' inputs
+        view.expand(r.id)
+    assert np.allclose(sum(r.impacts for r in view.frontier()), view.tree.root.impacts)
+    assert View.from_dict(grouping_model, view.to_dict()).rules[0].merge
 
 
 def test_merged_label_lists_a_shared_name_once(grouping_model):

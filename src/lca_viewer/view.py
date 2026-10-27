@@ -35,6 +35,10 @@ class GroupRule:
     With ``target="flows"`` the rule bundles the elementary flows under direct
     emissions rows instead of processes; its predicate and field then refer to
     flow metadata (``name``, ``compartment``, ``subcompartment``, ``unit``).
+
+    A ``disabled`` rule is kept (in the list, in saved views) but not applied. With
+    ``merge``, each group the rule makes becomes a merged process instead (process
+    rules only): its members' inventories combined, common inputs summed.
     """
 
     name: str | None = None
@@ -42,6 +46,8 @@ class GroupRule:
     by: str | None = None
     scope: str = ROOT_SCOPE
     target: str | None = None
+    disabled: bool | None = None
+    merge: bool | None = None
 
     def to_dict(self) -> dict:
         return {k: v for k, v in self.__dict__.items() if v is not None}
@@ -68,6 +74,8 @@ class Row:
     """Put in "others" by the user."""
     merged: list[Node] | None = None
     """For "merged" rows: the sibling processes whose inventories are combined."""
+    by_rule: bool = False
+    """For "merged" rows: made by a grouping rule with ``merge`` (not by ``View.merges``)."""
     sources: list[tuple[int, float]] | None = None
     """For direct rows and every row below them (flows, groups of flows, others):
     the (activity, operation level) pairs whose own emissions they are part of."""
@@ -207,6 +215,12 @@ class View:
             self._render(child, out)
 
     def _child_rows(self, row: Row) -> list[Row]:
+        if row.kind == "rest":
+            # An expanded others row shows its members in place, like a group (the
+            # chart then breaks it down too, as for any expanded row)
+            for m in row.members:
+                m.parent, m.depth = row.id, row.depth + 1
+            return row.members
         if row.kind == "group":
             members = row.node_members  # type: ignore[attr-defined]
             rows = [self._process_row(n, row.id, row.depth + 1) for n in members]
@@ -253,13 +267,14 @@ class View:
         index = (lambda c: c.flow) if flows else (lambda c: c.product)
         ordered = [r for r in self.rules if r.by is None] + [r for r in self.rules if r.by is not None]
         for rule in ordered:
-            if (rule.target == "flows") != flows or rule.scope not in (ROOT_SCOPE, parent.id) or not free:
+            if rule.disabled or (rule.target == "flows") != flows or rule.scope not in (ROOT_SCOPE, parent.id) or not free:
                 continue
+            bundle = self._rule_merged_row if rule.merge and not flows else self._group_row
             if rule.predicate is not None:
                 mask = self._mask(rule)
                 members = [c for c in free if mask[index(c)]]
                 if len(members) > 1:
-                    rows.append(self._group_row(rule.name or "group", members, parent, depth))
+                    rows.append(bundle(rule.name or "group", members, parent, depth))
                     free = [c for c in free if not mask[index(c)]]
             elif rule.by is not None:
                 column = table[rule.by]
@@ -271,7 +286,7 @@ class View:
                     if len(members) > 1:
                         # flows read better by value alone: "air", "Carbon dioxide, fossil"
                         name = (value or f"no {rule.by}") if flows else f"{rule.by}: {value}"
-                        rows.append(self._group_row(name, members, parent, depth))
+                        rows.append(bundle(name, members, parent, depth))
                     else:
                         free.extend(members)
         if self.group_products and not flows and len(free) > 1:
@@ -324,8 +339,8 @@ class View:
                 amount=0.0,
                 unit="",
                 impacts=sum(r.impacts for r in hidden),
-                expandable=False,
-                expanded=False,
+                expandable=True,
+                expanded=f"{parent.id}/rest" in self.expanded,
                 members=hidden,
                 sources=parent.sources,
             )
@@ -389,6 +404,11 @@ class View:
                    sum(m.amount for m in members) if same else 0.0,
                    acts["unit"].iat[0] if same else "",
                    sum(m.impacts for m in members), True, row_id in self.expanded, merged=members)
+
+    def _rule_merged_row(self, name: str, members: list[Node], parent: Row, depth: int) -> Row:
+        row = self._merged_row(members, parent, depth)
+        row.by_rule = True
+        return row
 
     def _group_row(self, name: str, members: list[Node], parent: Row, depth: int, label: str | None = None) -> Row:
         row_id = f"{parent.id}/g:{name}"

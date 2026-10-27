@@ -23,7 +23,37 @@ API in `src/lca_viewer/server.py`.
 
 ## Layout
 
-- **Header**: functional unit search, amount, impact method (all 762
+- **Load database** (top bar): the app starts with no database and shows
+  this dialog as its start page. Three lists: databases loaded (*Switch to*,
+  *Close* to free memory), built models (`data/models.json`, *Open*), and
+  the projects of a Brightway data folder (picked from the folders found, or
+  typed), each database with its process count and *Build and open* / *Open*
+  / *Rebuild and open*. A load runs on the server: the dialog shows its steps
+  (*Details* for the build's output) and opens the database when it is
+  ready; it can be closed meanwhile and finds the load again when reopened.
+  Decision: one database per page (`/db/<key>/`), switched with the picker
+  next to the title, rather than databases mixed in one workspace: tabs,
+  saved views and node ids are per model. An address of a database that is
+  not loaded (after a restart) shows the start page with a note.
+- **Tabs and panes** (like a notes app such as Obsidian): each tab is one
+  functional unit with its own tree, method, cut-off, rules and merges. Tabs
+  sit on top of their pane: **+** opens an empty tab (the search box takes
+  the focus; method, cut-off and tree-wide rules come from the tab it was
+  opened from), × or middle-click closes, drag to reorder. Drag a tab onto
+  another pane to move it there, or onto a pane's left, right, top or bottom
+  quarter to split it (side by side or one above the other); the dividers
+  between panes can be dragged. The two buttons at the right of a tab bar
+  split right / down with a *copy* of the active tab, e.g. to compare one
+  functional unit under two methods. *Open in new tab* in the right-click
+  pop-up opens a process as the functional unit of a new tab.
+  Decision: one shared **side panel** on the right (process and flow
+  contribution, grouping, whole supply chain), showing the active tab of the pane clicked
+  last, as in Obsidian's sidebars, rather than one per pane: panes stay wide
+  enough for the tree. It is collapsed with » (or *Side panel* in the top
+  bar), reopened with «, and resized by dragging its left edge. Each tab
+  renders its panels into its own slot of the side panel (a small portal), so
+  a tab keeps its panel state (current tab, chart choices) when hidden.
+- **Header** (per tab): functional unit search, amount, impact method (all 762
   ecoinvent methods, grouped by family), display cut-off.
 - **Search**: free words (each must appear in the name or product, or equal
   the location: `electricity low voltage fr`) and/or **filters** built with
@@ -35,27 +65,81 @@ API in `src/lca_viewer/server.py`.
   markets first, name/product starting with the text, text contained as a
   phrase, shorter names.
 - **Left — tree**: expand/collapse (▸/▾), amount (waste shown as
-  "x kg treated"), impact, share bar. "Expand above x %" auto-expands every
-  node above a threshold (hotspot drill-down). A "direct emissions" row
+  "x kg treated"), impact, share bar — the share **of the total** or **of
+  the parent row**, following the cut-off basis switch (total | parent; the
+  tree view's boxes too, while edge widths stay shares of the total). A "direct emissions" row
   expands into its elementary flows (substance, compartment, amount
   emitted), groupable by substance or compartment — see
   [grouping.md](grouping.md). Ctrl/⌘-click selects sibling
   rows; a selection bar then offers **Group** (bundle them under one row,
-  "ungroup" chip to undo), **Merge** (combine their inventories into one
+  "ungroup" chip to undo; a group of processes, from any rule or "Group by
+  product", has a "merge" chip — or select it and click Merge — to turn it into a
+  merged process), **Merge** (combine their inventories into one
   process, "merged ×" chip to undo — see [grouping.md](grouping.md)) and
   **To others**.
-  Every row has a **×** (on hover, next to ▸ in the list, at the box corner
-  in the tree view) that moves it to its parent's **others** row; "To others"
-  does the same for a selection. Hovering an "others" row previews its
-  panel (closed when the mouse leaves the row and the panel); clicking keeps
-  it open, clicking again closes it. The panel follows the view's naming
-  choice, and right-clicking one of its processes opens the info pop-up. It shows
-  listing what it contains and why (below cut-off / moved); ticking a process
-  shows it again — also how to pin exceptions to the cut-off ("pinned ×" chip
-  to undo). See [grouping.md](grouping.md).
-  **Reset view** collapses the tree and clears pins and moved rows (groups
-  kept); changing the cut-off also clears pins and moved rows. Both show a
-  notice with **Undo**.
+  Every row has a **×** (on hover: at the right end of the name in the list,
+  after the other row actions; at the box corner in the tree view) that moves
+  it to its parent's **others** row; "To others" does the same for a
+  selection. Rows shown inside an expanded others row have **pin** instead
+  (↑ in the tree view; "Pin" in the selection bar, **o** on the keyboard):
+  it takes them out of others, shown despite the cut-off ("pinned ×" to
+  undo), like ticking them in the others pop-up. Row actions ("(i)", "✎", "merge", "merged ×", "ungroup",
+  "pinned ×", "×") show only on the hovered or selected row.
+  **Rename** (✎, or **r** on the selected row): the name is edited in place
+  (Enter or leaving the field saves, Esc cancels, **↺** or an empty name
+  restores the original; the tree view asks in a dialog). It is a *display* name only,
+  part of the tab's view like groups and merges: the database is not changed.
+  A process or a flow is renamed wherever it appears (by activity / flow), a
+  merged or group row where it is. The custom name replaces the main part of
+  the label in the tree, the pop-ups' titles and the chart (direct emissions
+  and their flows follow their process's name); the grey qualifier and the
+  tooltip (which gives the original name) are kept. Names are saved with the
+  view and cleared by Reset view.
+  Groups are purple, merged processes blue, direct emissions and others
+  grey italic.
+  **Every kind of row is explored the same way**: ▸ expands it in place
+  (a process into its inputs, direct emissions into flows, a group into its
+  members, a merged process into the union of its inputs, others into the
+  rows it bundles — which then also replace it in the chart); click selects;
+  right-click — or the **(i)** shown on the hovered row, or Space — opens its
+  **pop-up**, whatever the kind: the info pop-up below for a process or direct
+  emissions, the flow pop-up for an elementary flow, and a **members pop-up**
+  for a bundle (others, group, merged; nothing opens on hover or on a plain
+  click, which only selects). Members pop-ups follow the view's naming choice;
+  clicking or right-clicking a member opens its own pop-up (← comes back).
+  - *Others*: what the row contains and why (below cut-off / moved);
+    ticking a member **pins** it: shown again in the tree and the chart
+    ("pinned ×" chip to undo; *Show all* / *Hide pinned*) — also how to pin
+    exceptions to the cut-off. See [grouping.md](grouping.md).
+  - *Group* and *merged*: each member's amount and impact (current method),
+    absolute and as a share of the row (amount shares only when every member
+    delivers the same product), with Merge / Ungroup / Unmerge.
+  Decision: bundles first had a panel docked under the tree (opened on
+  hover, then on click); it moved into the pop-up so that every row shows its
+  details the same way, with the same back navigation.
+  **Reset view** goes back to the plain tree: collapsed, no pins or moved
+  rows, no groups (every grouping rule, quick groups included, and *Group by
+  product*), no merges and no custom names. Changing the cut-off clears pins and moved rows.
+  Both show a notice with **Undo**, which restores everything they removed.
+- **Keyboard** (the tree clicked last; not while typing in a field):
+
+  | Key | Action |
+  |---|---|
+  | ↓ / ↑ | select the row below / above (from the last position if nothing is selected) |
+  | Shift + ↓ / ↑ | extend the selection over siblings (what Group and Merge act on) |
+  | → | expand; if already expanded, go to the first child |
+  | ← | collapse; if already collapsed, go to the parent |
+  | Space | open (or close) the row's pop-up (members pop-up for a bundle) |
+  | o | move the selection to others (inside an expanded others row: pin it out) |
+  | m | merge the selection, or unmerge a selected merged row |
+  | g | group the selection, or ungroup a selected group |
+  | r | rename the selected row (display name only) |
+  | Esc | clear the selection |
+  | Backspace | in a pop-up: back to the previous one |
+
+  After g / m the new group or merged row is selected (the same key undoes
+  it); after o, unmerge or ungroup, the row now at the same position is, so
+  the keys can be chained. The selected row is kept in view.
 - **Left — tree graph** ("Tree" toggle next to "List"): the same visible
   tree drawn as nodes and edges, sharing all state with the list (expansion,
   selection, groups — the chart follows either). Root on the left (→) or on
@@ -81,9 +165,14 @@ API in `src/lca_viewer/server.py`.
   authors and file; actions "Use as functional unit" and "Move to others".
   Descriptions are stored in the cached model (`details.pkl`, 77 MB for
   ecoinvent, loaded on first use).
-  **Exchanges** as recorded in the dataset: *Inputs* and *Elementary flows*
-  with their amount, impact per unit of product and share of the cumulative
-  impact, largest first; click a row (▸) for its comment, uncertainty
+  **Exchanges** as recorded in the dataset, by direction: *Products* (the
+  reference product, and co-products if any), *Inputs from technosphere*,
+  *Inputs from nature* (natural resources), *Outputs to treatment* (waste:
+  technosphere exchanges with a negative amount, shown as positive) and
+  *Emissions*, each with amount, impact per unit of product and share of the
+  cumulative impact, largest first. The **(i)** shown on the hovered item
+  opens its own pop-up (the supplying activity, or the elementary flow with
+  this process's exchange); click a row (▸) for its comment, uncertainty
   (distribution, σ with and without pedigree), pedigree scores, formula and
   variable name. For a tree row, *In this tree* also shows the parent's
   input of this product with its comment and uncertainty. *Reference product
@@ -91,17 +180,63 @@ API in `src/lca_viewer/server.py`.
   carbon and water content, dry mass, …). Exchanges are stored in the cached
   model (`exchanges.sqlite`, 105 MB for ecoinvent 3.9.1, read one activity
   at a time); a model built before this has none — rebuild it to see them.
-- **Right — tabs**:
-  - *Contribution chart*: current method bars, or several methods as 100 %
-    stacked bars; CSV export. See [charts.md](charts.md).
-  - *Grouping*: active rules (reorder / remove), quick groups (transport,
-    electricity, heat & fuels, waste treatment, by location / activity type /
-    ISIC), and the shared query builder — the same component as the search
+  The pop-up is split into tabs — *Exchange* (the parent's input of this
+  product: amount, comment, uncertainty, pedigree; "In this tree" for the root
+  or a direct emissions row), *Results*, *Exchanges*, *Used by*,
+  *Description* (with the reference product exchange) and *Metadata* — so the
+  target is one click away. A right-click on a tree row opens *Exchange*, on a
+  direct emissions row *Exchanges* (emissions first); following a link inside the pop-up keeps the
+  current tab. Empty tabs are not shown. Links followed inside a pop-up (a
+  supplier, a user, an exchange's (i), a flow's emitter) are kept in a
+  history: **←** next to × (or **Backspace**) goes back; opening a pop-up
+  from outside, or closing it, starts a new history.
+- **Right-click an elementary flow** (a flow row in the tree, in an others or
+  group panel, or a substance / flow of the *Flow contribution* tab): pop-up
+  with tabs *Exchange* (for each process emitting it there — the emitting
+  process, or every member of a merged one — the exchange as recorded in its
+  dataset: amount, comment, uncertainty, pedigree, formula), *Characterisation*
+  (its factor in every method of the model that has one, the current method
+  highlighted, filterable) and *Metadata* (name, compartment, unit, database
+  id). For a substance spread over several compartments, chips switch between
+  them. API: `/api/flow/{index}?method=&activities=`.
+- **Side panel — tabs**:
+  - *Process contribution* (the former contribution chart): current method
+    bars, or several methods as 100 % stacked bars; CSV export. See
+    [charts.md](charts.md).
+  - *Flow contribution*: the score split by elementary flow: the whole
+    inventory of the functional unit (B·s) times the current method's
+    characterisation factors, so it sums to the total. *By substance*
+    sums the compartments of a substance (one row per name and unit), *By
+    flow* keeps them apart. Bar chart of the 25 largest |impacts| (the rest
+    as *others*) and a table with amount, impact and share; click a
+    substance or flow (bar or row) to list the processes emitting it in the
+    supply chain, with their own amount and impact. As in *Whole supply
+    chain*, right-click (or double-click) one to go to it in the tree or
+    open its details, or *Exchange…* for its exchange of that flow.
+    Right-click a substance or flow for its pop-up (below). API:
+    `/api/flows`, `/api/flows/contributors` (`analysis.flow_contribution`,
+    `flow_contributors`).
+  - *Grouping*: active rules (reorder / remove; **merge** turns every group
+    of a process rule into a merged process, **disable** / **enable**
+    switches a rule off and on without losing it), quick groups (transport,
+    electricity, heat & fuels, infrastructure, waste treatment, pesticides
+    (CPC 3466 and "pesticide, unspecified"), fertilisers (CPC 3461–3465:
+    mineral, organic and organo-mineral fertilisers, manure), agricultural
+    machinery (tractors, harvesters, agricultural machinery and trailers, and
+    the field operations using them: tillage, sowing, harvesting, spraying,
+    fertilising, mowing, … — by product name, as ecoinvent names them), by
+    location / activity type / ISIC), and the shared query builder — the same component as the search
     filters, so a filter reads and behaves the same in both places — with a
     live "matches N activities, e.g. …" preview; scope everywhere or under
     the selected row.
-  - *Whole supply chain*: global grouping with the named groups, first-match
-    or direct attribution (see [grouping.md](grouping.md)). Clicking a group
+  - *Whole supply chain*: global grouping with the named groups, direct
+    (the default) or first-match attribution (see [grouping.md](grouping.md)),
+    groups sorted by decreasing impact with *other* last.
+    Named rules on elementary flows are **flow groups** ("flows" chip): process
+    groups come first and keep every flow they reach first; flow groups split
+    the rest (emissions of processes outside the groups);
+    add one with *Add as a group* on a substance (or a flow) in the *Flow
+    contribution* tab. Clicking a group
     lists the processes it is made of; right-click one for *Go to in tree*
     (opens and highlights it along its largest supply path) or *Details*.
 
@@ -124,8 +259,11 @@ Display choice (list / tree) and orientation are per-browser preferences
 
 The client owns the view state (`root`, `amount`, `method`, `cutoff`,
 `expanded`, `rules`, pins, moved rows, merges) and posts it to `/api/rows` on
-every change (~70 ms on ecoinvent). It is kept in `localStorage` per browser
-(convenience only).
+every change (~70 ms on ecoinvent). Each tab's state, the pane layout and
+the focused pane are kept in `localStorage` per browser (convenience only),
+so tabs and splits come back on reload; a view saved before tabs existed
+opens as the first tab. A tab moved to another pane is rebuilt from its
+saved state (selection and undo are not kept).
 
 **Save ▾** downloads the view as JSON; the arrow menu offers *Load view…*
 and *Copy view as JSON*. Saved files record the model (title, size), the

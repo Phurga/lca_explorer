@@ -18,7 +18,7 @@ def build(args) -> None:
     else:
         methods = list(bd.methods)
     t = time.perf_counter()
-    model = from_brightway(args.project, args.database, methods)
+    model = from_brightway(args.project, args.database, methods, log=lambda message: print(message, flush=True))
     model.save(args.output)
     print(f"{model.size} activities, {len(model.methods)} methods -> {args.output} ({time.perf_counter() - t:.1f}s)")
 
@@ -39,19 +39,23 @@ def serve(args) -> None:
 
     import uvicorn
 
-    n = len(args.model)
-    if len(args.title or []) > n:
-        raise SystemExit(f"More --title than --model ({n})")
-    # Titles go to the models in order; models without one are named after their directory
-    titles = (args.title or []) + [Path(path).name for path in args.model[len(args.title or []):]]
-    roots = _per_model(args.default_root, n, "--default-root")
-    models = [
-        {"path": str(Path(path).resolve()), "title": title, "default_root": root or None}
-        for path, title, root in zip(args.model, titles, roots)
-    ]
+    if args.model:
+        n = len(args.model)
+        if len(args.title or []) > n:
+            raise SystemExit(f"More --title than --model ({n})")
+        # Titles go to the models in order; models without one are named after their directory
+        titles = (args.title or []) + [Path(path).name for path in args.model[len(args.title or []):]]
+        roots = _per_model(args.default_root, n, "--default-root")
+        models = [
+            {"path": str(Path(path).resolve()), "title": title, "default_root": root or None}
+            for path, title, root in zip(args.model, titles, roots)
+        ]
+    else:
+        models, n = [], 0  # loaded from the page (Load database)
     if args.reload:
         # The reloader re-imports the app in a fresh process: pass settings by environment
         os.environ["LCA_VIEWER_MODELS"] = json.dumps(models)
+        os.environ["LCA_VIEWER_DATA"] = str(Path(args.data).resolve())
         print(f"serving http://{args.host}:{args.port} — restarts when the Python code changes")
         uvicorn.run("lca_viewer.server:app_from_env", factory=True, reload=True,
                     reload_dirs=[str(Path(__file__).parent)], host=args.host, port=args.port, log_level="warning")
@@ -60,10 +64,26 @@ def serve(args) -> None:
     from .server import app_for
 
     t = time.perf_counter()
-    app = app_for(models)
-    loaded = "model" if n == 1 else f"{n} models"
-    print(f"{loaded} loaded and factorised in {time.perf_counter() - t:.1f}s, serving http://{args.host}:{args.port}")
+    app = app_for(models, args.data)
+    if n:
+        loaded = "model" if n == 1 else f"{n} models"
+        print(f"{loaded} loaded and factorised in {time.perf_counter() - t:.1f}s, serving http://{args.host}:{args.port}")
+    else:
+        print(f"serving http://{args.host}:{args.port}: choose a database to load in the page (Load database)")
+    if args.open:
+        import threading
+        import webbrowser
+
+        host = "localhost" if args.host in ("127.0.0.1", "0.0.0.0") else args.host
+        print("Stop with Ctrl+C")
+        threading.Timer(1.5, webbrowser.open, [f"http://{host}:{args.port}"]).start()
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
+
+
+def setup(args) -> None:
+    from .quickstart import run
+
+    run(args)
 
 
 def import_(args) -> None:
@@ -114,9 +134,19 @@ def main(argv=None) -> None:
     p.add_argument("--report", help="CSV file listing unlinked exchanges (default: data/import-<database>-unlinked.csv)")
     p.set_defaults(func=import_)
 
-    p = sub.add_parser("serve", help="Serve the explorer for one or several cached models")
-    p.add_argument("--model", required=True, action="append",
-                   help="Model directory; repeat to serve several models with a database picker")
+    p = sub.add_parser("setup", help="First-time setup: unpack, import and build an ecoinvent ecoSpold2 release, asking for what it needs")
+    p.add_argument("source", nargs="?", help="ecoSpold2 archive (.7z) or the folder it was unpacked to; asked when omitted")
+    p.add_argument("--data", default="data", help="Folder for the Brightway project, the models and models.json (default: data)")
+    p.add_argument("--yes", action="store_true", help="Take the default answer to every question")
+    p.set_defaults(func=setup)
+
+    p = sub.add_parser("serve", help="Serve the explorer; databases are loaded from the page, or with --model")
+    p.add_argument("--model", action="append",
+                   help="Model directory loaded at start; repeat to load several (default: none, "
+                        "choose them in the page with Load database)")
+    p.add_argument("--data", default="data",
+                   help="Folder of the built models (models.json, cache/) and of lca_viewer's Brightway "
+                        "projects (brightway/), offered by Load database (default: data)")
     p.add_argument("--title", action="append",
                    help="Title shown in the UI; repeat for each --model, in the same order (default: directory name)")
     p.add_argument("--default-root", action="append",
@@ -124,6 +154,7 @@ def main(argv=None) -> None:
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8765)
     p.add_argument("--reload", action="store_true", help="Restart automatically when the Python code changes (development)")
+    p.add_argument("--open", action="store_true", help="Open the app in the browser once it is ready")
     p.set_defaults(func=serve)
 
     args = parser.parse_args(argv)

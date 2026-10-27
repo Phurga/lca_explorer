@@ -58,3 +58,12 @@ def test_api(model):
     # The input of one product, for a tree row's link to its parent
     assert client.get("/api/activity/2/exchanges?product=1").json()["inputs"] == [flour]
     assert client.get("/api/activity/2/exchanges?product=0").json()["inputs"] == []
+
+
+def test_flow_info_carries_the_exchange_comment(model):
+    client = TestClient(create_app(model))
+    info = client.get("/api/flow/0?method=0&activities=2,1").json()
+    assert info["exchanges_available"]
+    bread, flour = info["exchanges"]
+    assert bread["exchanges"] == [EXCHANGES[2][3]]  # amount, comment, formula as recorded
+    assert flour["exchanges"] == []  # activity 1 has no CO2 exchange recorded

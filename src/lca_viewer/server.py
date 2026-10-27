@@ -6,6 +6,7 @@ sends it with each request; the server only holds the model.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import numpy as np
@@ -15,7 +16,8 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from .analysis import direct_contribution, first_match_contribution, group_contributors, main_path, matched
+from .analysis import (flow_contribution, flow_contributors, group_contributors, main_path, matched,
+                       supply_chain_contribution)
 from .model import LCAModel
 from .query import derived_activities, derived_flows, search, suggest_values
 from .tree import Tree
@@ -62,11 +64,32 @@ class GlobalRequest(BaseModel):
     amount: float = 1.0
     groups: dict[str, dict]
     rule: str = "first_match"
+    flow_groups: dict[str, dict] = {}
+    """Groups of elementary flows: they split what the activity groups leave ("other")."""
+    method: int | None = None
+    """Only this method (faster with flow groups); all methods when omitted."""
 
 
 class ContributorsRequest(GlobalRequest):
     group: str
     method: int = 0
+    limit: int = 50
+
+
+class FlowsRequest(BaseModel):
+    root: int
+    amount: float = 1.0
+    method: int = 0
+    by: str = "substance"
+    """"substance": compartments summed (one row per name and unit); "flow": one row per flow."""
+    limit: int = 25
+
+
+class FlowContributorsRequest(BaseModel):
+    root: int
+    amount: float = 1.0
+    method: int = 0
+    flows: list[int]
     limit: int = 50
 
 
@@ -86,6 +109,24 @@ def _find(activities, name: str, location: str) -> int | None:
     return int(match[0]) if len(match) else None
 
 
+def _default_method(model: LCAModel) -> int:
+    """Climate change (GWP100) when the model has it: EF v3.1's (also when the method names start
+    with the ecoinvent release, as ecoinvent_interface writes them), else the first one found."""
+    names = [tuple(str(part).lower() for part in m.name) for m in model.methods]
+    ef = ("ef v3.1", "climate change", "global warming potential (gwp100)")
+    tests = [
+        lambda n: n[-3:] == ef,
+        lambda n: "climate change" in n and "gwp100" in n[-1] and "no lt" not in n[-1],
+        lambda n: "climate change" in " ".join(n) and "gwp100" in n[-1] and "no lt" not in " ".join(n),
+        lambda n: "climate change" in " ".join(n),
+    ]
+    for test in tests:
+        found = next((k for k, name in enumerate(names) if test(name)), None)
+        if found is not None:
+            return found
+    return 0
+
+
 def create_app(model: LCAModel, title: str = "", default_root: str | None = None) -> FastAPI:
     """``default_root`` is ``"activity name|location"``."""
     app = FastAPI(title="lca_viewer")
@@ -93,10 +134,7 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
     activities = derived_activities(model)
     flows = derived_flows(model)
     root = _find(activities, *default_root.split("|", 1)) if default_root else None
-    try:
-        default_method = model.method_index(("EF v3.1", "climate change", "global warming potential (GWP100)"))
-    except KeyError:
-        default_method = 0
+    default_method = _default_method(model)
 
     META_FIELDS = ["name", "reference_product", "location", "unit", "activity_type", "isic", "cpc", "database"]
     rows_by_product = model.A.tocsr()  # row j: the activities using product j
@@ -157,6 +195,17 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
             raise HTTPException(400, f"Invalid view: {e}")
         methods = [state.method] + [m for m in state.methods if m != state.method]
 
+        def part(node) -> dict:
+            """A member of a merged or group row, with its own amount and impacts (members panel)."""
+            common = {"amount": float(node.amount), "impacts": _floats(node.impacts[methods])}
+            if node.flow is not None:
+                f = flows.iloc[node.flow]
+                compartment = ", ".join(c for c in (f["compartment"], f["subcompartment"]) if c)
+                return {"flow": int(node.flow), "name": f["name"], "location": compartment, "unit": f["unit"],
+                        "waste": False, **common}
+            return {**meta(node.product), "unit": activities["unit"].iat[node.product],
+                    "waste": bool(model.diagonal[node.product] < 0), **common}
+
         def serialise(r) -> dict:
             out = {
                 "id": r.id,
@@ -181,6 +230,12 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
             elif r.kind == "merged":
                 out["products"] = [int(m.product) for m in r.merged]
                 out["metas"] = [meta(m.product) for m in r.merged]
+                out["parts"] = [part(m) for m in r.merged]
+                out["by_rule"] = r.by_rule
+            elif r.kind == "group":
+                out["parts"] = [part(m) for m in r.node_members]
+                if r.sources is None:
+                    out["products"] = [int(m.product) for m in r.node_members]  # a group of processes can be merged
             elif r.kind == "flow":
                 f = flows.iloc[r.node.flow]
                 out["flow"] = {"index": int(r.node.flow), "name": f["name"], "compartment": f["compartment"],
@@ -284,6 +339,30 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
             "production": production[0] if production else None, "inputs": inputs, "flows": emissions,
         }
 
+    @app.get("/api/flow/{index}")
+    def flow_info(index: int, method: int | None = None, activities: str = ""):
+        """An elementary flow: metadata, its characterisation factor in every method where it
+        has one and, for ``activities`` (comma-separated), the exchanges of this flow in their
+        datasets (amount, comment, uncertainty)."""
+        if not 0 <= index < len(flows):
+            raise HTTPException(404, f"No flow {index}")
+        k = default_method if method is None else method
+        f = flows.iloc[index]
+        factors = [{"method": i, "cf": float(m.cfs[index])} for i, m in enumerate(model.methods) if m.cfs[index] != 0]
+        exchanges = []
+        for j in (int(a) for a in activities.split(",") if a.strip()):
+            if not 0 <= j < model.size:
+                raise HTTPException(404, f"No activity {j}")
+            records = [{k_: v for k_, v in e.items() if k_ not in ("type", "row")}
+                       for e in model.exchange_details(j) if e.get("type") == "biosphere" and e.get("row") == index]
+            exchanges.append({"activity": meta(j), "exchanges": records})
+        return {
+            "index": index, "name": f["name"], "compartment": f["compartment"], "subcompartment": f["subcompartment"],
+            "unit": f["unit"], "id": None if "id" not in flows or pd.isna(f["id"]) else str(f["id"]),
+            "method": k, "cf": float(model.methods[k].cfs[index]), "factors": factors,
+            "exchanges_available": model.has_exchanges, "exchanges": exchanges,
+        }
+
     @app.get("/api/activity/{index}/users")
     def activity_users(index: int, root: int | None = None, amount: float = 1.0, method: int | None = None, limit: int = 15):
         """Activities using the product of ``index`` ("used by"); with ``root``, how much of
@@ -320,18 +399,20 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
 
     @app.post("/api/global")
     def global_contribution(req: GlobalRequest):
-        fn = first_match_contribution if req.rule == "first_match" else direct_contribution
-        result = fn(model, req.root, req.groups, req.amount)
+        methods = slice(None) if req.method is None else [req.method]
+        result = supply_chain_contribution(model, req.root, req.groups, req.rule, req.amount, req.flow_groups, methods)
         return {name: _floats(v) for name, v in result.items()}
 
     @app.post("/api/global/contributors")
     def global_contributors(req: ContributorsRequest):
         """Activities making up one group of the whole-supply-chain analysis, largest first."""
         try:
-            members, values = group_contributors(model, req.root, req.groups, req.group, req.rule, req.amount)
+            members, values = group_contributors(model, req.root, req.groups, req.group, req.rule, req.amount,
+                                                 req.flow_groups, [req.method])
         except ValueError as e:
             raise HTTPException(400, f"Unknown group {req.group!r}") from e
-        impacts = values[:, req.method]
+        impacts = values[:, 0]
+        flow_group = req.group in req.flow_groups and req.group not in req.groups
         order = np.argsort(-np.abs(impacts))
         shown, rest = order[: req.limit], order[req.limit:]
         return {
@@ -339,8 +420,59 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
             "total": float(impacts.sum()),
             "count": int(len(members)),
             # Under "first match", matched activities bring their supply chain; others only their own emissions
-            "cumulative": req.rule == "first_match" and req.group != "other",
+            "cumulative": req.rule == "first_match" and req.group != "other" and not flow_group,
+            "flow_group": flow_group,
             "contributors": [{**meta(int(members[i])), "impact": float(impacts[i])} for i in shown],
+            "others": {"count": int(len(rest)), "impact": float(impacts[rest].sum()) if len(rest) else 0.0},
+        }
+
+    @app.post("/api/flows")
+    def flows_contribution(req: FlowsRequest):
+        """Contribution of elementary flows to the score: the whole inventory of the
+        functional unit, characterised, largest |impact| first."""
+        if req.by not in ("substance", "flow"):
+            raise HTTPException(400, f"Unknown grouping {req.by!r}")
+        amounts, impacts = flow_contribution(model, req.root, req.method, req.amount)
+        table = pd.DataFrame({"name": flows["name"], "compartment": flows["compartment"],
+                              "subcompartment": flows["subcompartment"], "unit": flows["unit"],
+                              "amount": amounts, "impact": impacts})
+        table = table[table["impact"] != 0]
+        if req.by == "substance":
+            keys = ["name", "unit"]
+            items = [{"name": name, "compartment": f"{len(g)} compartments" if len(g) > 1
+                      else ", ".join(c for c in (g["compartment"].iat[0], g["subcompartment"].iat[0]) if c),
+                      "unit": unit, "amount": float(g["amount"].sum()), "impact": float(g["impact"].sum()),
+                      "flows": [int(i) for i in g.index],
+                      "compartments": [", ".join(c for c in cs if c) for cs in zip(g["compartment"], g["subcompartment"])]}
+                     for (name, unit), g in ((k, g.reindex(g["impact"].abs().sort_values(ascending=False).index))
+                                             for k, g in table.groupby(keys, sort=False))]
+        else:
+            items = [{"name": r.name, "compartment": ", ".join(c for c in (r.compartment, r.subcompartment) if c),
+                      "unit": r.unit, "amount": float(r.amount), "impact": float(r.impact), "flows": [int(i)]}
+                     for i, r in zip(table.index, table.itertuples(index=False))]
+        items.sort(key=lambda it: -abs(it["impact"]))
+        shown, rest = items[: req.limit], items[req.limit:]
+        return {
+            "total": float(impacts.sum()),
+            "count": len(items),
+            "items": shown,
+            "others": {"count": len(rest), "impact": sum(it["impact"] for it in rest)},
+        }
+
+    @app.post("/api/flows/contributors")
+    def flows_contributors(req: FlowContributorsRequest):
+        """Activities emitting some elementary flows in the supply chain, largest first."""
+        try:
+            members, amounts, impacts, main = flow_contributors(model, req.root, req.flows, req.method, req.amount)
+        except IndexError as e:
+            raise HTTPException(400, f"Unknown flow: {e}") from e
+        order = np.argsort(-np.abs(impacts))
+        shown, rest = order[: req.limit], order[req.limit:]
+        return {
+            "total": float(impacts.sum()),
+            "count": int(len(members)),
+            "contributors": [{**meta(int(members[i])), "amount": float(amounts[i]), "impact": float(impacts[i]),
+                              "flow": int(main[i])} for i in shown],
             "others": {"count": int(len(rest)), "impact": float(impacts[rest].sum()) if len(rest) else 0.0},
         }
 
@@ -379,61 +511,277 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
     return app
 
 
-def create_multi_app(entries: list[dict]) -> FastAPI:
-    """Several models in one server, each under ``/db/<key>/`` with the API of :func:`create_app`.
+class LoadRequest(BaseModel):
+    path: str | None = None
+    """A model listed in ``data/models.json``."""
+    brightway: str | None = None
+    """Or a Brightway data folder, with ``project`` and ``database``: built first if needed."""
+    project: str | None = None
+    database: str | None = None
+    rebuild: bool = False
 
-    ``entries`` are ``{"key", "model", "title", "default_root"}``. ``/`` opens the first one and
-    ``/api/databases`` lists them for the database picker; switching database reloads the page.
-    """
-    from fastapi.responses import RedirectResponse
 
-    app = FastAPI(title="lca_viewer")
-    listing = [{"key": e["key"], "title": e.get("title") or e["key"], "activities": e["model"].size} for e in entries]
-
-    @app.get("/api/databases")
-    def databases():
-        return listing
-
-    @app.get("/")
-    def index():
-        return RedirectResponse(f"/db/{entries[0]['key']}/")
-
-    for e in entries:
-        sub = create_app(e["model"], title=e.get("title") or e["key"], default_root=e.get("default_root"))
-        app.mount(f"/db/{e['key']}", sub)
-    app.mount("/static", StaticFiles(directory=STATIC), name="static")
-    return app
+class UnloadRequest(BaseModel):
+    key: str
 
 
 def model_key(path) -> str:
     """URL-safe name of a model directory, used in ``/db/<key>/``."""
-    import re
+    from .sources import slug
 
-    return re.sub(r"[^A-Za-z0-9_.-]+", "-", Path(path).name).strip("-") or "model"
+    return slug(Path(path).name)
 
 
-def app_for(models: list[dict]) -> FastAPI:
-    """App for one or several ``{"path", "title", "default_root"}`` models (loaded here)."""
-    loaded = [{**m, "key": model_key(m["path"]), "model": LCAModel.load(m["path"])} for m in models]
-    if len(loaded) == 1:
-        m = loaded[0]
-        return create_app(m["model"], title=m.get("title") or "", default_root=m.get("default_root"))
-    keys = [m["key"] for m in loaded]
-    if len(set(keys)) != len(keys):
-        raise ValueError(f"Model directories must have different names, got {keys}")
-    return create_multi_app(loaded)
+def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
+    """The app: databases are loaded while it runs, each served under ``/db/<key>/`` with the
+    API of :func:`create_app`.
+
+    ``data``: lca_viewer's data folder (``models.json``, ``cache/``, ``brightway/``); ``preload``:
+    ``{"path", "title", "default_root"}`` models loaded before the server starts. ``/`` opens
+    the first loaded database, or the page that asks which one to load.
+    """
+    import shutil
+    import subprocess
+    import sys
+    import threading
+    import time
+    import uuid
+
+    from fastapi.responses import RedirectResponse
+    from starlette.routing import Mount
+
+    from . import sources
+
+    data = Path(data or "data").resolve()
+    app = FastAPI(title="lca_viewer")
+    loaded: dict[str, dict] = {}  # key -> {"key", "title", "path", "activities", "route"}
+    jobs: dict[str, dict] = {}
+    lock = threading.Lock()
+
+    def listing() -> list[dict]:
+        return [{"key": m["key"], "title": m["title"], "activities": m["activities"]} for m in loaded.values()]
+
+    def loaded_key(path) -> str | None:
+        path = Path(path).resolve()
+        return next((k for k, m in loaded.items() if m["path"] == path), None)
+
+    def mount(path, title: str, default_root: str | None) -> str:
+        """Load, factorise and serve a model; returns its key."""
+        path = Path(path).resolve()
+        model = LCAModel.load(path)
+        sub = create_app(model, title=title, default_root=default_root)  # factorises
+        with lock:
+            key = loaded_key(path)
+            if key:
+                return key
+            key, n = model_key(path), 2
+            while key in loaded:
+                key, n = f"{model_key(path)}-{n}", n + 1
+            route = Mount(f"/db/{key}", app=sub)
+            app.router.routes.insert(0, route)  # before the "not loaded" page of /db/<key>/
+            loaded[key] = {"key": key, "title": title, "path": path, "activities": model.size, "route": route}
+        return key
+
+    for m in preload:
+        mount(m["path"], m.get("title") or Path(m["path"]).name, m.get("default_root"))
+
+    def built_from(entry: dict) -> tuple | None:
+        """(Brightway folder, project, database) a catalog model was built from."""
+        source = entry.get("source") or {}
+        if not source.get("brightway"):
+            return None
+        return (str(Path(source["brightway"]).resolve()), source.get("project"), source.get("database"))
+
+    def find_database(folder: str, project: str, database: str) -> dict:
+        try:
+            projects = sources.brightway_projects(folder)
+        except FileNotFoundError as e:
+            raise ValueError(str(e)) from None
+        p = next((p for p in projects if p["name"] == project), None)
+        if p is None:
+            raise ValueError(f"No project {project!r} in {folder}")
+        if not p["twofive"]:
+            raise ValueError(f"Project {project!r} was made with Brightway 2, and lca_viewer reads Brightway 2.5 "
+                             f"projects. Upgrade it with Brightway 2.5 (projects.migrate_project_25()) or "
+                             f"Activity Browser 3, or import its databases again into a 2.5 project.")
+        d = next((d for d in p["databases"] if d["name"] == database), None)
+        if d is None:
+            raise ValueError(f"No database {database!r} in project {project!r}")
+        if not d["processes"]:
+            raise ValueError(f"{database} has no processes (it is a biosphere database): load the database that uses it")
+        if not p["methods"]:
+            raise ValueError(f"Project {project!r} has no impact methods: install some first "
+                             f"(e.g. with bw2io's bw2setup or ecoinvent_interface)")
+        return d
+
+    def build(job: dict, folder: str, project: str, database: str, rebuild: bool) -> dict:
+        """The catalog entry of a Brightway database's model, built (in a separate process) if
+        there is none yet, or if the database changed since."""
+        import importlib.util
+
+        folder = str(Path(folder).expanduser().resolve())
+        db = find_database(folder, project, database)
+        output = sources.cache_dir(data, project, database).resolve()
+        entry = next((m for m in sources.catalog(data) if Path(m["path"]) == output), None)
+        if (entry and not rebuild and (output / "A.npz").exists()
+                and (entry.get("source") or {}).get("modified") == db["modified"]):
+            return entry
+        if importlib.util.find_spec("bw2data") is None:
+            raise ValueError("Brightway is not installed in the Python environment running lca_viewer: "
+                             "run pip install -e \".[brightway]\" in it, then restart the app")
+        building = f"Building the model of {database} (once; one or two minutes for ecoinvent)"
+        job["message"] = building
+        part = output.with_name(output.name + ".part")
+        shutil.rmtree(part, ignore_errors=True)
+        command = [sys.executable, "-m", "lca_viewer.cli", "build", "--project", project, "--database", database,
+                   "--output", str(part)]
+        env = {**os.environ, "BRIGHTWAY2_DIR": folder, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"}
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env,
+                                   text=True, encoding="utf-8", errors="replace")
+        for line in process.stdout:
+            line = line.rstrip()
+            if line:
+                job["log"].append(line)
+                if line.startswith("Reading"):  # the steps of from_brightway, not Brightway's own messages
+                    job["message"] = f"{building}: {line[0].lower()}{line[1:]}"
+        if process.wait() != 0:
+            shutil.rmtree(part, ignore_errors=True)
+            raise ValueError(f"The build failed: {job['log'][-1] if job['log'] else 'no output'}")
+        shutil.rmtree(output, ignore_errors=True)
+        part.rename(output)
+        title = f"{database} ({project})"
+        source = {"brightway": folder, "project": project, "database": database, "modified": db["modified"]}
+        sources.register(data, output, title, None, source)
+        return {"path": str(output), "title": title, "default_root": None}
+
+    def run(job: dict, req: LoadRequest) -> None:
+        try:
+            if req.brightway:
+                entry = build(job, req.brightway, req.project, req.database, req.rebuild)
+            else:
+                entry = next((m for m in sources.catalog(data) if Path(m["path"]) == Path(req.path).resolve()), None)
+                if entry is None:
+                    raise ValueError(f"{req.path} is not in {data / 'models.json'}")
+            key = loaded_key(entry["path"])
+            if key is None:
+                if not (Path(entry["path"]) / "A.npz").exists():
+                    raise ValueError(f"No model in {entry['path']} (no A.npz): build it again")
+                job["message"] = f"Loading {entry['title']} and factorising its matrix"
+                key = mount(entry["path"], entry["title"], entry.get("default_root"))
+            job.update(status="done", key=key, message=f"{entry['title']} is ready")
+        except Exception as e:  # reported to the page
+            job.update(status="failed", error=str(e) or type(e).__name__)
+        finally:
+            job["seconds"] = round(time.perf_counter() - job["_start"], 1)
+
+    def public(job: dict) -> dict:
+        return {k: v for k, v in job.items() if not k.startswith("_")}
+
+    @app.get("/api/databases")
+    def databases():
+        return listing()
+
+    @app.get("/api/sources")
+    def sources_():
+        """What can be loaded (built models, Brightway data folders), and the loads under way."""
+        models = []
+        for m in sources.catalog(data):
+            path = Path(m["path"])
+            models.append({"path": str(path), "title": m["title"], "key": loaded_key(path),
+                           "built": (path / "A.npz").exists(), "source": m.get("source")})
+        return {
+            "data": str(data),
+            "loaded": listing(),
+            "models": models,
+            "brightway": sources.brightway_dirs(data),
+            "jobs": [public(j) for j in jobs.values() if j["status"] == "running"],
+        }
+
+    @app.get("/api/brightway")
+    def brightway(folder: str):
+        """Projects and databases of a Brightway data folder, with the model built from each, if any."""
+        try:
+            projects = sources.brightway_projects(folder)
+        except FileNotFoundError as e:
+            raise HTTPException(404, str(e))
+        folder = str(Path(folder).expanduser().resolve())
+        built = {}
+        for m in sources.catalog(data):
+            origin = built_from(m)
+            if origin and origin[0] == folder and (Path(m["path"]) / "A.npz").exists():
+                built[origin[1:]] = {"key": loaded_key(m["path"]), "modified": m["source"].get("modified")}
+        for p in projects:
+            for d in p["databases"]:
+                b = built.get((p["name"], d["name"]))
+                d["model"] = b and {"key": b["key"], "outdated": b["modified"] != d["modified"]}
+        return {"folder": folder, "projects": projects}
+
+    @app.post("/api/load")
+    def load(req: LoadRequest):
+        """Load a database in the background; follow it with ``/api/jobs/<id>``."""
+        if not req.path and not (req.brightway and req.project and req.database):
+            raise HTTPException(400, "Give a model path, or a Brightway folder, project and database")
+        target = (req.path and str(Path(req.path).resolve()), req.brightway, req.project, req.database)
+        with lock:
+            for job in jobs.values():  # already under way
+                if job["status"] == "running" and job["_target"] == target:
+                    return public(job)
+            job = {"id": uuid.uuid4().hex[:12], "status": "running", "message": "Starting", "log": [],
+                   "title": req.database or Path(req.path).name, "_target": target, "_start": time.perf_counter()}
+            jobs[job["id"]] = job
+        threading.Thread(target=run, args=(job, req), daemon=True).start()
+        return public(job)
+
+    @app.get("/api/jobs/{job_id}")
+    def job_status(job_id: str):
+        if job_id not in jobs:
+            raise HTTPException(404, f"No job {job_id}")
+        return public(jobs[job_id])
+
+    @app.post("/api/unload")
+    def unload(req: UnloadRequest):
+        """Stop serving a database, to free its memory."""
+        import gc
+
+        with lock:
+            m = loaded.pop(req.key, None)
+            if m is None:
+                raise HTTPException(404, f"{req.key} is not loaded")
+            app.router.routes.remove(m["route"])
+        gc.collect()
+        return listing()
+
+    page_headers = {"Cache-Control": "no-cache"}  # what "/" shows changes with the databases loaded
+
+    @app.get("/")
+    def index():
+        if loaded:
+            return RedirectResponse(f"/db/{next(iter(loaded))}/", headers=page_headers)
+        return FileResponse(STATIC / "index.html", headers=page_headers)
+
+    @app.get("/db/{key}/")
+    def not_loaded(key: str):
+        """A database that is not loaded (any more), e.g. after a restart: the page offers to load one."""
+        return FileResponse(STATIC / "index.html", headers=page_headers)
+
+    app.mount("/static", StaticFiles(directory=STATIC), name="static")
+    return app
+
+
+def app_for(models: list[dict], data=None) -> FastAPI:
+    """App serving ``{"path", "title", "default_root"}`` models (loaded here), able to load others."""
+    return create_library(data, models)
 
 
 def app_from_env() -> FastAPI:
     """App factory for ``uvicorn --reload``: settings come from environment variables."""
     import json
-    import os
 
-    if "LCA_VIEWER_MODELS" in os.environ:
-        return app_for(json.loads(os.environ["LCA_VIEWER_MODELS"]))
-    model = LCAModel.load(os.environ["LCA_VIEWER_MODEL"])
-    return create_app(
-        model,
-        title=os.environ.get("LCA_VIEWER_TITLE", ""),
-        default_root=os.environ.get("LCA_VIEWER_DEFAULT_ROOT") or None,
-    )
+    if "LCA_VIEWER_MODEL" in os.environ:
+        model = LCAModel.load(os.environ["LCA_VIEWER_MODEL"])
+        return create_app(
+            model,
+            title=os.environ.get("LCA_VIEWER_TITLE", ""),
+            default_root=os.environ.get("LCA_VIEWER_DEFAULT_ROOT") or None,
+        )
+    return app_for(json.loads(os.environ.get("LCA_VIEWER_MODELS", "[]")), os.environ.get("LCA_VIEWER_DATA"))

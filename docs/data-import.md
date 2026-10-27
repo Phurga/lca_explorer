@@ -4,16 +4,50 @@
 
 | source | status |
 |---|---|
-| Brightway 2.5 project (bw2data 4) | done: `lca_viewer.brightway.from_brightway` |
+| Brightway 2.5 project (bw2data 4) | done: `lca_viewer.brightway.from_brightway`; from the app with *Load database* (`lca_viewer.sources`) |
 | ecoinvent ecoSpold2 release (`.7z`) | done via Brightway import (`lca-viewer import ecospold2`, or `scripts/import_ecoinvent.py`) |
 | SimaPro CSV process export (Agribalyse 3.2) | done via Brightway import (`lca-viewer import simapro-csv`), tested on toy data only |
 | direct ecoSpold2 → `LCAModel` (no Brightway) | later, only if a non-Brightway deployment needs it |
 | openLCA JSON-LD | later |
 
-Every database goes through the same steps: `lca-viewer import` into the
-Brightway project in `data/brightway`, then `lca-viewer build` into
-`data/cache/<name>`, then `lca-viewer serve --model …` (repeat `--model` to
-get a database picker). The README has the commands ("Adding Agribalyse").
+Every database goes through the same steps: into a Brightway project
+(`lca-viewer import`, or the user's own projects), then built into a model in
+`data/cache/<name>`, then loaded by the server. The README has the commands
+("Adding Agribalyse").
+
+## Loading from the app
+
+`lca-viewer serve` starts with no database (unless given `--model`); *Load
+database* lists what can be loaded (`/api/sources`, `/api/brightway`) and
+loads it in the background (`/api/load`, followed with `/api/jobs/<id>`).
+Each loaded model is mounted at `/db/<key>/` with the API of `create_app`;
+`/api/unload` removes it.
+
+- **Built models**: the catalog `data/models.json` (`sources.catalog` /
+  `sources.register`). Entries built from Brightway record their `source`
+  (folder, project, database and the database's `modified` time), so a
+  database changed since its build is offered for a rebuild.
+- **Brightway projects** are listed by reading the files directly:
+  `projects.db` (project names; the pickled metadata, read with an unpickler
+  that refuses any class, says whether the project is Brightway 2.5), each
+  project's `databases.json` and `methods.json`, and `lci/databases.db`
+  (nodes per database and type, to count processes and tell biosphere
+  databases apart). No bw2data import, so listing is instant and read-only.
+  Project folders are named as bw2data names them (`safe_filename`, short or
+  full md5 hash).
+- **Building** runs `lca-viewer build` in a separate process with
+  `BRIGHTWAY2_DIR` set to the chosen folder: bw2data's data folder is fixed
+  when it is imported, and the build's memory is freed when it ends. Its steps
+  are shown in the dialog. Output goes to `data/cache/bw-<project>-<database>`
+  through a `.part` folder, so an interrupted build leaves nothing half
+  written. Checked on ecoinvent 3.11 consequential (633 methods, 22,241
+  activities, 1.5 min): same score as bw2calc.
+- Brightway 2 projects (no `25` flag) are refused with a message: opening
+  them with bw2data 4 needs `projects.migrate_project_25()`, which changes
+  them, and that is the user's call.
+- Default method of a model: EF v3.1 climate change (GWP100), also when the
+  method names start with the ecoinvent release (as `ecoinvent_interface`
+  writes them), else the first climate change GWP100 method.
 
 ## Decision: go through Brightway for ecoSpold2
 

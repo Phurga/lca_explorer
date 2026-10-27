@@ -13,9 +13,20 @@ Two exact rules are provided; both sum to the total score.
   their direct emissions. Computed exactly by cutting the inputs of matched
   activities and solving once, so loops are handled without traversal.
 
+**Flow groups** (``flow_groups``: predicates over elementary flows, e.g. all
+"Dinitrogen monoxide") split what the activity groups leave: the direct
+emissions of activities outside any group (under first match: outside the
+supply chains of matched activities too). An activity group keeps every flow
+it reaches first, the N2O of a fertiliser's supply chain included; the parts
+still add up exactly to the total.
+
 :func:`group_contributors` lists the activities making up one group, and
 :func:`main_path` finds the supply path along which an activity weighs most,
 to show it in the tree.
+
+:func:`flow_contribution` splits the score by elementary flow instead (the
+whole inventory of the functional unit, characterised), and
+:func:`flow_contributors` lists the activities emitting some flows.
 """
 
 from __future__ import annotations
@@ -25,7 +36,7 @@ import scipy.sparse as sp
 from scipy.sparse.csgraph import dijkstra
 
 from .model import LCAModel, _factorized_solver
-from .query import derived_activities, evaluate
+from .query import derived_activities, derived_flows, evaluate
 
 OTHER = "other"
 
@@ -58,46 +69,117 @@ def _cut_inputs(model: LCAModel, is_matched: np.ndarray) -> sp.csc_matrix:
     return sp.csc_matrix((A.data[keep], (A.row[keep], A.col[keep])), shape=A.shape)
 
 
-def _activity_values(model: LCAModel, product: int, assignment: np.ndarray, n_groups: int, rule: str, amount: float):
-    """Impacts attributed to each activity (activities x methods) under ``rule``."""
+def _flow_assign(model: LCAModel, flow_groups: dict[str, dict]) -> np.ndarray:
+    """Flow group index per elementary flow (first match wins), ``len(flow_groups)`` for none."""
+    flows = derived_flows(model)
+    assignment = np.full(len(flows), len(flow_groups))
+    for g, predicate in reversed(list(enumerate(flow_groups.values()))):
+        assignment[evaluate(predicate, flows)] = g
+    return assignment
+
+
+def _direct_of(model: LCAModel, flows: np.ndarray, methods) -> np.ndarray:
+    """Direct impacts of ``flows`` only, per unit of activity operation (methods x activities)."""
+    cf = sp.csr_matrix(model.CF[methods][:, flows])
+    return np.asarray((cf @ model.B[flows]).todense())
+
+
+def _supply(model: LCAModel, product: int, assignment: np.ndarray, n_groups: int, rule: str, amount: float):
+    """Operation levels the impacts are attributed from: the supply chain, or under first
+    match the supply chain cut below matched activities."""
     if rule == "direct":
-        s = model.supply(product, amount)
-        return s[:, None] * model.U.T
-    is_matched = assignment < n_groups
+        return model.supply(product, amount)
     demand = np.zeros(model.size)
     demand[product] = amount
-    s = _factorized_solver(_cut_inputs(model, is_matched))(demand)
+    return _factorized_solver(_cut_inputs(model, assignment < n_groups))(demand)
+
+
+def _activity_values(model: LCAModel, s: np.ndarray, assignment: np.ndarray, n_groups: int, rule: str,
+                     methods=slice(None)):
+    """Impacts attributed to each activity (activities x methods) under ``rule``."""
+    U = model.U[methods]
+    if rule == "direct":
+        return s[:, None] * U.T
     return np.where(
-        is_matched[:, None],
-        (s * model.diagonal)[:, None] * model.G,  # amount of product reaching it × cumulative
-        s[:, None] * model.U.T,  # direct emissions of unmatched activities
+        (assignment < n_groups)[:, None],
+        (s * model.diagonal)[:, None] * model.G[:, methods],  # amount of product reaching it × cumulative
+        s[:, None] * U.T,  # direct emissions of unmatched activities
     )
+
+
+def _attribute(model: LCAModel, product: int, groups: dict[str, dict], rule: str, amount: float,
+               flow_groups: dict[str, dict], methods):
+    """Per activity (activities x methods): the impacts of each activity and flow group and of
+    *other*. Flow groups take their flows from the direct emissions of unmatched activities."""
+    assignment = _assign(model, groups)
+    s = _supply(model, product, assignment, len(groups), rule, amount)
+    values = _activity_values(model, s, assignment, len(groups), rule, methods)
+    unmatched = (assignment == len(groups))[:, None]
+    flow_assignment = _flow_assign(model, flow_groups)
+    flow_values = {}
+    for g, name in enumerate(flow_groups):
+        flow_values[name] = np.where(unmatched, s[:, None] * _direct_of(model, flow_assignment == g, methods).T, 0.0)
+    other = np.where(unmatched, values, 0.0) - sum(flow_values.values(), 0.0)
+    return assignment, values, flow_values, other
+
+
+def supply_chain_contribution(model: LCAModel, product: int, groups: dict[str, dict], rule: str = "first_match",
+                              amount: float = 1.0, flow_groups: dict[str, dict] | None = None, methods=slice(None)):
+    """Activity groups (``rule``), flow groups and *other*: name -> impacts (``methods``)."""
+    assignment, values, flow_values, other = _attribute(model, product, groups, rule, amount, flow_groups or {}, methods)
+    result = _sum_by_group(values, assignment, groups)
+    del result[OTHER]
+    return {**result, **{name: v.sum(axis=0) for name, v in flow_values.items()}, OTHER: other.sum(axis=0)}
 
 
 def direct_contribution(model: LCAModel, product: int, groups: dict[str, dict], amount: float = 1.0):
     """Direct emissions of all activities in the supply chain, summed by group."""
-    assignment = _assign(model, groups)
-    values = _activity_values(model, product, assignment, len(groups), "direct", amount)
-    return _sum_by_group(values, assignment, groups)
+    return supply_chain_contribution(model, product, groups, "direct", amount)
 
 
 def first_match_contribution(model: LCAModel, product: int, groups: dict[str, dict], amount: float = 1.0):
     """Cumulative impacts of the first matching activities on each supply path, by group."""
-    assignment = _assign(model, groups)
-    values = _activity_values(model, product, assignment, len(groups), "first_match", amount)
-    return _sum_by_group(values, assignment, groups)
+    return supply_chain_contribution(model, product, groups, "first_match", amount)
 
 
 def group_contributors(model: LCAModel, product: int, groups: dict[str, dict], group: str,
-                       rule: str = "first_match", amount: float = 1.0) -> tuple[np.ndarray, np.ndarray]:
-    """Activities making up ``group`` (or ``OTHER``), in index order, and their impacts
-    (activities x methods); the impacts sum to the group's total."""
-    names = list(groups) + [OTHER]
-    assignment = _assign(model, groups)
-    values = _activity_values(model, product, assignment, len(groups), rule, amount)
-    members = np.flatnonzero(assignment == names.index(group))
-    members = members[np.any(values[members] != 0, axis=1)]
+                       rule: str = "first_match", amount: float = 1.0, flow_groups: dict[str, dict] | None = None,
+                       methods=slice(None)) -> tuple[np.ndarray, np.ndarray]:
+    """Activities making up ``group`` (an activity or flow group, or ``OTHER``), in index
+    order, and their impacts (activities x methods); the impacts sum to the group's total."""
+    flow_groups = flow_groups or {}
+    assignment, values, flow_values, other = _attribute(model, product, groups, rule, amount, flow_groups, methods)
+    if group == OTHER:
+        values = other
+    elif group in groups:
+        values = np.where((assignment == list(groups).index(group))[:, None], values, 0.0)
+    elif group in flow_values:
+        values = flow_values[group]
+    else:
+        raise ValueError(f"Unknown group {group!r}")
+    members = np.flatnonzero(np.any(values != 0, axis=1))
     return members, values[members]
+
+
+def flow_contribution(model: LCAModel, product: int, method: int, amount: float = 1.0):
+    """Inventory of the whole supply chain (amount per elementary flow) and its
+    characterised impacts for ``method``; the impacts sum to the total score."""
+    inventory = model.B @ model.supply(product, amount)
+    return inventory, inventory * model.methods[method].cfs
+
+
+def flow_contributors(model: LCAModel, product: int, flows, method: int, amount: float = 1.0):
+    """Activities emitting ``flows`` in the supply chain (index order), with the amount
+    they emit (summed over ``flows``), its impact for ``method`` and, for each, the flow
+    weighing most (e.g. the compartment a substance mostly goes to)."""
+    flows = np.asarray(flows, dtype=int)
+    s = model.supply(product, amount)
+    B = model.B[flows]
+    amounts = np.asarray(B.sum(axis=0)).ravel() * s
+    per_flow = np.abs(B.toarray() * model.methods[method].cfs[flows][:, None])
+    impacts = (model.methods[method].cfs[flows] @ B) * s
+    members = np.flatnonzero(impacts != 0)
+    return members, amounts[members], impacts[members], flows[per_flow[:, members].argmax(axis=0)]
 
 
 def main_path(model: LCAModel, product: int, target: int, method: int,

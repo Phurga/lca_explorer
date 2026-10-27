@@ -40,4 +40,8 @@ FastAPI (local, `lca-viewer serve`) ── JSON ──► browser UI
 - **API**: thin FastAPI layer over `View` — the view state is held
   client-side and sent with each request (stateless server, views are plain
   JSON, easy to save/share).
+- **Databases** are loaded while the server runs (`server.create_library`):
+  each model is mounted at `/db/<key>/` with that API, and Brightway
+  databases are built into models in a separate process the first time (see
+  [data-import.md](data-import.md#loading-from-the-app)).
 - **UI**: see [ui.md](ui.md).
