@@ -161,6 +161,17 @@ API in `src/lca_viewer/server.py`.
   the total unless it has a single parent. ± expands it at its first place
   and collapses it everywhere; click, right-click and the row actions act on
   its first place.
+- **Left — Sankey** ("Sankey" next to "List" and "Tree"): the same visible
+  tree as a flowchart. Each row is a bar as tall as its |impact| (the root
+  480 px at 100 %), joined to its parent by a band of the same thickness, so
+  the bands leaving a process add up to its bar and the main supply paths
+  are the widest. Bars and bands are coloured like the list (groups purple,
+  merged processes blue, direct emissions and others grey); the label beside
+  each bar gives the name, qualifier, amount and share (of the total or of
+  the parent, as in the other views). ▸ or double-click expands, click and
+  Ctrl/⌘-click select, right-click opens the pop-up, drag pans, wheel zooms;
+  row actions are in the selection bar and the pop-ups. Always a tree drawn
+  left to right: the Cycles and orientation controls are hidden here.
 - **View bar** (under the toolbar): *Group by product* and *Full / Short /
   Custom* names, applied
   to the list, the tree view, the others panel and the chart; see
@@ -273,7 +284,15 @@ the far side of the source box to the near side of the target. Decision:
 no force-directed or layered (Sugiyama) layout, so that switching the mode
 keeps the familiar left-to-right reading of the tree.
 
-Display choice (list / tree), orientation and cycles mode are per-browser
+The Sankey has its own layout in the same SVG shell (pan, zoom, Fit), not
+the ECharts sankey series: ECharts lays out nodes itself, which would move
+every bar on each expansion, and has no expand, selection or pop-up
+interactions. A column per depth; a subtree takes the height of its bar, of
+its children stacked, or of two label lines, whichever is largest, with the
+bar centred on it; bands leave the parent stacked in row order. A row too
+small to see keeps a 1.5 px bar.
+
+Display choice (list / tree / Sankey), orientation and cycles mode are per-browser
 preferences (`localStorage`).
 
 ## State
