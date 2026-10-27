@@ -1942,6 +1942,16 @@ function FlowInfoPopup({ target, method, methods, onClose, onOpen, onBack }) {
     </div>`;
 }
 
+// The processes in whose dataset a row (or a bundle's members) is an input: the nearest
+// process or merged row above it, past group and others rows
+function suppliedTo(row, rowsById) {
+  let p = row && rowsById.get(row.parent);
+  while (p && (p.kind === "group" || p.kind === "rest")) p = rowsById.get(p.parent);
+  return p?.kind === "process" && p.meta ? [p.meta] : p?.kind === "merged" ? p.metas || [] : [];
+}
+
+// ``target.parents``: for a process opened from a bundle pop-up (no row of its own), the
+// processes it is an input of, for its exchange tab
 function InfoPopup({ target, method, methodInfo, rootImpact, rowsById, onClose, onUseAsRoot, onOpenTab, onMoveToOthers, root, amount, onOpen, onGoTo, onFlow, onBack }) {
   const [info, setInfo] = useState(null);
   const [error, setError] = useState(null);
@@ -1956,21 +1966,27 @@ function InfoPopup({ target, method, methodInfo, rootImpact, rowsById, onClose, 
     request(`/api/activity/${target.index}?method=${method}`).then(setInfo).catch((e) => setError(e.message));
   }, [target.index, method]);
   useEffect(() => { setAllUsers(false); box.current?.querySelector(".info-body")?.scrollTo(0, 0); }, [target.index]);
-  // Exchanges as in the dataset, and for a tree row, the parent's input of this product (comment, uncertainty)
+  // Exchanges as in the dataset, and for a tree row, the parent's input of this product
+  // (comment, uncertainty): ``link`` is [{ meta, inputs }], one per parent dataset using it
+  // (several under a merged row), also when the row is in a group or an others row
   const [exchanges, setExchanges] = useState(null);
   const [link, setLink] = useState(null);
-  const parent = target.row?.kind === "process" ? rowsById.get(target.row.parent) : null;
-  const parentMeta = parent?.kind === "process" ? parent.meta : null;
+  const parentMetas = target.row ? (target.row.kind === "process" ? suppliedTo(target.row, rowsById) : []) : target.parents || [];
+  const parentKey = parentMetas.map((m) => m.index).join(",");
   useEffect(() => {
     setExchanges(null);
     request(`/api/activity/${target.index}/exchanges?method=${method}`).then(setExchanges).catch(() => setExchanges(null));
   }, [target.index, method]);
   useEffect(() => {
     setLink(null);
-    if (parentMeta) {
-      request(`/api/activity/${parentMeta.index}/exchanges?method=${method}&product=${target.index}`).then(setLink).catch(() => setLink(null));
-    }
-  }, [target.index, parentMeta?.index, method]);
+    if (!parentMetas.length) return;
+    let live = true;
+    Promise.all(parentMetas.map((m) => request(`/api/activity/${m.index}/exchanges?method=${method}&product=${target.index}`)
+      .then((r) => ({ meta: m, inputs: r.inputs }))))
+      .then((links) => live && setLink(links.filter((l) => l.inputs.length)))
+      .catch(() => live && setLink(null));
+    return () => { live = false; };
+  }, [target.index, parentKey, method]);
   useEffect(() => {
     setUsers(null);
     const fu = root ? `&root=${root.index}&amount=${amount}` : "";
@@ -1991,11 +2007,11 @@ function InfoPopup({ target, method, methodInfo, rootImpact, rowsById, onClose, 
   const production = exchanges?.production;
   // Tabs: for a tree row, the exchange (the parent's input of this process: comment,
   // uncertainty) comes first and is opened; a direct emissions row opens on its flows
-  const inTree = row && (row.kind === "process" || row.kind === "direct");
+  const inTree = (row && (row.kind === "process" || row.kind === "direct")) || parentMetas.length > 0;
   const hasDescription = DETAIL_SECTIONS.some(([k]) => d[k])
     || (production && (production.comment || production.properties || production["production volume"]));
   const tabs = info ? [
-    inTree && { id: "tree", label: parentMeta ? "Exchange" : "In this tree" },
+    inTree && { id: "tree", label: parentMetas.length ? "Exchange" : "In this tree" },
     { id: "results", label: "Results" },
     exchanges?.available && { id: "exchanges", label: `Exchanges · ${(production ? 1 : 0) + exchanges.inputs.length + exchanges.flows.length}` },
     { id: "users", label: `${users?.waste ? "Treats" : "Used by"}${users ? ` · ${users.count}` : ""}` },
@@ -2050,15 +2066,17 @@ function InfoPopup({ target, method, methodInfo, rootImpact, rowsById, onClose, 
             <section>
               <h4>In this tree</h4>
               <table class="kv">
-                ${row.kind === "process" && html`<tr><th>Amount</th><td>${row.waste ? `${fmt(-row.amount)} ${unit(row.unit)} treated` : `${fmt(row.amount)} ${unit(row.unit)}`}</td></tr>`}
-                <tr><th>Impact</th><td>${fmt(row.impacts[0])} ${methodInfo.unit} (${pct(rootImpact ? row.impacts[0] / rootImpact : 0)} of the total)</td></tr>
-                <tr><th>Path</th><td>${path.join(" → ")}</td></tr>
-                ${link?.inputs.map((e) => html`
-                  <tr><th>Input</th><td>${fmt(e.amount)} ${unit(e.unit)} in the dataset of ${parentMeta.name}
-                    <span class="loc-chip">${parentMeta.location}</span>${e.type !== "technosphere" ? html` <span class="muted">(${e.type})</span>` : ""}</td></tr>`)}
+                ${row?.kind === "process" && html`<tr><th>Amount</th><td>${row.waste ? `${fmt(-row.amount)} ${unit(row.unit)} treated` : `${fmt(row.amount)} ${unit(row.unit)}`}</td></tr>`}
+                ${row && html`<tr><th>Impact</th><td>${fmt(row.impacts[0])} ${methodInfo.unit} (${pct(rootImpact ? row.impacts[0] / rootImpact : 0)} of the total)</td></tr>`}
+                ${row && html`<tr><th>Path</th><td>${path.join(" → ")}</td></tr>`}
+                ${link?.map(({ meta, inputs }) => inputs.map((e) => html`
+                  <tr><th>Input</th><td>${fmt(e.amount)} ${unit(e.unit)} in the dataset of ${meta.name}
+                    <span class="loc-chip">${meta.location}</span>${e.type !== "technosphere" ? html` <span class="muted">(${e.type})</span>` : ""}</td></tr>`))}
               </table>
-              ${link?.inputs.filter(hasExchangeMeta).map((e) => html`<${ExchangeMeta} e=${e} />`)}
-              ${link && !link.inputs.some(hasExchangeMeta) && html`
+              ${link?.map(({ meta, inputs }) => inputs.filter(hasExchangeMeta).map((e) => html`
+                ${link.length > 1 && html`<p class="muted">In the dataset of ${meta.name} <span class="loc-chip">${meta.location}</span></p>`}
+                <${ExchangeMeta} e=${e} />`))}
+              ${link && !link.some((l) => l.inputs.some(hasExchangeMeta)) && html`
                 <p class="text muted">No comment or uncertainty recorded for this exchange.</p>`}
             </section>`}
           ${shown === "results" && html`
@@ -3525,13 +3543,13 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
                   ${manualRuleFor(bundle) >= 0 && html`<button onClick=${() => ungroup(bundle)}>Ungroup</button>`}`}
               onPart=${(p) => followInfo(p.flow !== undefined
                 ? { flow: p.flow, activities: (bundle.emitters || []).map((m) => m.index) }
-                : { index: p.index, row: null })} />`}
+                : { index: p.index, row: null, parents: suppliedTo(bundle, rowsById) })} />`}
           ${infoTarget?.flow !== undefined && html`<${FlowInfoPopup} target=${infoTarget} method=${method} methods=${info.methods}
               onClose=${() => setInfoTarget(null)} onOpen=${(index) => followInfo({ index, row: null })} onBack=${backInfo} />`}
           ${infoTarget && infoTarget.flow === undefined && !infoTarget.bundle && html`<${InfoPopup} target=${infoTarget} method=${method} methodInfo=${methodInfo}
               rootImpact=${rootImpact} rowsById=${rowsById} onClose=${() => setInfoTarget(null)}
               onUseAsRoot=${selectRoot} onOpenTab=${(r) => onOpenTab(id, r)} onMoveToOthers=${moveToOthers} root=${root} amount=${amount}
-              onOpen=${(index) => followInfo({ ...infoTarget, index, row: null, direct: false })} onGoTo=${(index) => goTo(index)}
+              onOpen=${(index) => followInfo({ ...infoTarget, index, row: null, direct: false, parents: null })} onGoTo=${(index) => goTo(index)}
               onFlow=${(flow, activity) => followInfo({ flow, activities: [activity] })} onBack=${backInfo} />`}
           <div class="toolbar"><span class="hint">
             ${root ? `Total: ${fmt(rootImpact)} ${methodInfo.unit} — ${methodLabel(methodInfo)}` : ""}
