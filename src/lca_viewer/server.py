@@ -563,6 +563,21 @@ class ImportRequest(BaseModel):
     unlinked: str = "fail"
 
 
+class EcoinventLogin(BaseModel):
+    username: str
+    password: str
+    remember: bool = True
+    """Keep them in the system's credential store; else in the server's memory until it stops."""
+
+
+class EcoinventImport(BaseModel):
+    folder: str
+    project: str
+    """A new project."""
+    version: str
+    system_model: str = "cutoff"
+
+
 class DatasetRequest(BaseModel):
     folder: str
     project: str
@@ -659,12 +674,13 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
                              f"(e.g. with bw2io's bw2setup or ecoinvent_interface)")
         return d
 
-    def cli(job: dict, folder: str, args: list[str], message=None) -> list[str]:
+    def cli(job: dict, folder: str, args: list[str], message=None, env: dict | None = None) -> list[str]:
         """Run ``lca-viewer <args>`` on the Brightway data folder ``folder`` in a separate process
         (bw2data's folder is fixed when it is imported), its output going to the job's log;
-        ``message(line)`` gives the job's message for a line, or a false value to keep it."""
+        ``message(line)`` gives the job's message for a line, or a false value to keep it.
+        ``env``: more environment variables (secrets go there, never in ``args``)."""
         command = [sys.executable, "-m", "lca_viewer.cli", *args]
-        env = {**os.environ, "BRIGHTWAY2_DIR": folder, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"}
+        env = {**os.environ, **(env or {}), "BRIGHTWAY2_DIR": folder, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"}
         Path(folder).mkdir(parents=True, exist_ok=True)
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env,
                                    text=True, encoding="utf-8", errors="replace")
@@ -979,6 +995,115 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
             return {"message": lines[-1] if lines else f"{database} imported", "database": database}
 
         return start(f"{database} ({req.project})", ("import", folder, req.project, database), work)
+
+    # ------------------------------------------------ ecoinvent releases, with the user's account
+
+    session_login: dict = {}  # {"username", "password"} given without "remember": memory only
+
+    def local_only(request: Request) -> None:
+        """Passwords travel to the server unencrypted: only from this computer."""
+        if request.client and request.client.host not in ("127.0.0.1", "::1", "localhost", "testclient"):
+            raise HTTPException(403, "ecoinvent credentials can only be given on the computer running lca_viewer")
+
+    def account() -> tuple[str, str] | None:
+        from . import credentials
+
+        if session_login:
+            return session_login["username"], session_login["password"]
+        return credentials.load()
+
+    def account_status() -> dict:
+        import importlib.util
+
+        from . import credentials
+
+        found = account()
+        return {
+            "installed": importlib.util.find_spec("ecoinvent_interface") is not None,
+            "store": credentials.store(),
+            "username": found and found[0],
+            "remembered": bool(found) and not session_login,
+        }
+
+    @app.get("/api/ecoinvent")
+    def ecoinvent_status(request: Request):
+        """Whether ecoinvent credentials are known (the user name only, never the password)."""
+        local_only(request)
+        return account_status()
+
+    @app.post("/api/ecoinvent/login")
+    def ecoinvent_login(req: EcoinventLogin, request: Request):
+        """Check the credentials with ecoinvent, then keep them (credential store, or memory)."""
+        from . import credentials
+
+        local_only(request)
+        username = req.username.strip()
+        if not username or not req.password:
+            raise HTTPException(400, "Give your ecoinvent user name and password")
+        try:
+            versions = credentials.check(username, req.password)
+            session_login.clear()
+            if req.remember:
+                credentials.save(username, req.password)
+            else:
+                session_login.update(username=username, password=req.password)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from None
+        return {**account_status(), "versions": versions}
+
+    @app.post("/api/ecoinvent/logout")
+    def ecoinvent_logout(request: Request):
+        from . import credentials
+
+        local_only(request)
+        session_login.clear()
+        credentials.forget()
+        return account_status()
+
+    @app.get("/api/ecoinvent/releases")
+    def ecoinvent_releases(request: Request, version: str | None = None):
+        """The versions this account can download, or the system models of ``version``."""
+        import ecoinvent_interface as ei
+
+        from . import credentials
+
+        local_only(request)
+        found = account()
+        if not found:
+            raise HTTPException(401, "Log in to ecoinvent first")
+        try:
+            settings = ei.Settings(username=found[0], password=found[1])
+            if version:
+                return {"system_models": ei.EcoinventRelease(settings).list_system_models(version)}
+            return {"versions": credentials.releases(settings)}
+        except Exception as e:  # network, expired account…
+            raise HTTPException(502, f"ecoinvent: {e}") from None
+
+    @app.post("/api/ecoinvent/import")
+    def ecoinvent_import(req: EcoinventImport, request: Request):
+        """Download a release and import it into a new project (``lca-viewer ecoinvent import``)."""
+        from . import credentials
+
+        local_only(request)
+        folder = folder_of(req.folder)
+        project = req.project.strip()
+        if not project:
+            raise HTTPException(400, "Give the project a name")
+        if project in project_names(folder):
+            raise HTTPException(400, f"Project {project!r} already exists in {folder}")
+        found = account()
+        if not found:
+            raise HTTPException(401, "Log in to ecoinvent first")
+        secrets = credentials.environment(*found)
+
+        def work(job):
+            lines = cli(job, folder, ["ecoinvent", "import", "--project", project, "--version", req.version,
+                                      "--system-model", req.system_model],
+                        lambda line: line if line.startswith(("Logging in", "Downloading", "Importing")) else None,
+                        env=secrets)
+            return {"message": lines[-1] if lines else f"ecoinvent {req.version} imported into {project}"}
+
+        return start(f"ecoinvent {req.version} {req.system_model}", ("ecoinvent", folder, project), work)
 
     @app.get("/api/brightway/search")
     def search_nodes(folder: str, project: str, q: str = "", kind: str = "process", database: str | None = None,

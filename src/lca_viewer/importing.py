@@ -1,6 +1,8 @@
 """Import LCI databases into a Brightway project, before ``lca-viewer build``.
 
 - ecoSpold2 (ecoinvent releases) with bw2io's ``SingleOutputEcospold2Importer``.
+- ecoinvent releases downloaded with the user's account, into a new project, with bw2io's
+  ``import_ecoinvent_release`` (credentials: :mod:`lca_viewer.credentials`).
 - SimaPro CSV (e.g. Agribalyse) with bw2io's ``SimaProBlockCSVImporter``; inputs taken
   from another database already in the project (e.g. ecoinvent) are renamed from SimaPro
   to ecoinvent names with Pré's correspondence files (``randonneur_data``) then linked.
@@ -248,6 +250,46 @@ def import_simapro_csv(
     importer.write_database()
     processes = sum(1 for ds in importer.data if ds.get("type") in bd.labels.process_node_types)
     return {"processes": processes, "unlinked": len(rows), "report": str(report) if rows else None}
+
+
+def import_ecoinvent_release(project: str, version: str, system_model: str, username: str, password: str) -> str:
+    """Download an ecoinvent release with the user's account (``ecoinvent_interface``, which keeps
+    the archives in its own cache) and import it into the new project ``project``, with its own
+    biosphere (``ecoinvent-<version>-biosphere``) and its LCIA methods (named
+    ``("ecoinvent-<version>", …)``). Returns the database's name.
+
+    The project must be new or empty: bw2io's importer must not follow ``bw2setup``. A project
+    created here is deleted again if the import fails.
+    """
+    import bw2data as bd
+    import bw2io as bi
+    import ecoinvent_interface as ei
+
+    existed = project in bd.projects
+    bd.projects.set_current(project)
+    if bd.databases or bd.methods:
+        raise SystemExit(f"Project {project!r} already has databases or methods: choose a new project name")
+    try:
+        settings = ei.Settings(username=username, password=password)
+        release = ei.EcoinventRelease(settings)
+        print("Logging in to ecoinvent", flush=True)
+        if version not in release.list_versions():
+            raise SystemExit(f"ecoinvent {version} is not available to this account")
+        if system_model not in release.list_system_models(version):  # short names: cutoff, apos, …
+            raise SystemExit(f"No system model {system_model!r} in ecoinvent {version}")
+        print(f"Downloading ecoinvent {version} {system_model} (once: kept in ecoinvent_interface's cache, "
+              f"{release.storage.dir})", flush=True)
+        release.get_release(version=version, system_model=system_model, release_type=ei.ReleaseType.ecospold)
+        print(f"Importing ecoinvent {version} {system_model} (about 10 minutes), then its impact methods", flush=True)
+        bi.import_ecoinvent_release(version=version, system_model=system_model, username=username, password=password)
+    except BaseException:
+        if not existed:
+            others = [p.name for p in bd.projects if p.name != project]
+            if others:
+                bd.projects.set_current(others[0], update=False)
+                bd.projects.delete_project(project, delete_dir=True)
+        raise
+    return f"ecoinvent-{version}-{system_model}"
 
 
 def import_ecospold2(project: str, path, database: str, biosphere: str | None = None) -> None:
