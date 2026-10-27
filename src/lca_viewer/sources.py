@@ -143,13 +143,8 @@ def _node_counts(project_dir: Path) -> dict[str, dict[str, int]]:
     return out
 
 
-def brightway_projects(base) -> list[dict]:
-    """Projects of a Brightway data folder and their databases, read-only.
-
-    Each project: ``{"name", "twofive", "methods", "databases": [{"name", "processes",
-    "flows", "depends", "modified", "backend"}]}``. ``twofive`` is False for projects made with
-    Brightway 2 (bw2data 3), which lca_viewer (Brightway 2.5) cannot read without upgrading them.
-    """
+def _projects(base) -> list[tuple[str, bool, Path]]:
+    """(name, made with Brightway 2.5, folder) of the projects in a Brightway data folder."""
     base = Path(base).expanduser()
     projects_db = base / "projects.db"
     if not projects_db.is_file():
@@ -158,10 +153,20 @@ def brightway_projects(base) -> list[dict]:
         columns = {row[1] for row in con.execute("PRAGMA table_info(projectdataset)")}
         full = "full_hash" if "full_hash" in columns else "0"
         rows = con.execute(f"SELECT name, data, {full} FROM projectdataset ORDER BY name COLLATE NOCASE").fetchall()
+    return [(name, bool(_project_data(blob).get("25")), base / _safe_filename(name, bool(full_hash)))
+            for name, blob, full_hash in rows]
+
+
+def brightway_projects(base) -> list[dict]:
+    """Projects of a Brightway data folder and their databases, read-only.
+
+    Each project: ``{"name", "twofive", "methods", "databases": [{"name", "processes",
+    "flows", "depends", "modified", "backend"}]}``. ``twofive`` is False for projects made with
+    Brightway 2 (bw2data 3), which lca_viewer (Brightway 2.5) cannot read without upgrading them.
+    """
     out = []
-    for name, blob, full_hash in rows:
-        project_dir = base / _safe_filename(name, bool(full_hash))
-        project = {"name": name, "twofive": bool(_project_data(blob).get("25")), "methods": 0, "databases": []}
+    for name, twofive, project_dir in _projects(base):
+        project = {"name": name, "twofive": twofive, "methods": 0, "databases": [], "dir": str(project_dir)}
         if not project_dir.is_dir():
             out.append({**project, "missing": True})
             continue
@@ -175,7 +180,7 @@ def brightway_projects(base) -> list[dict]:
             types = counts.get(database, {})
             project["databases"].append({
                 "name": database,
-                "processes": sum(n for t, n in types.items() if t not in NON_PROCESS_TYPES),
+                "processes": sum(n for t, n in types.items() if t not in NOT_SUPPLIERS),
                 "flows": sum(n for t, n in types.items() if t in NON_PROCESS_TYPES - {"product", "waste"}),
                 "depends": meta.get("depends", []),
                 "modified": meta.get("modified"),
@@ -183,3 +188,124 @@ def brightway_projects(base) -> list[dict]:
             })
         out.append(project)
     return out
+
+
+def project_dir(base, project: str) -> Path:
+    """Folder of a Brightway 2.5 project (its databases, ``lci/databases.db``)."""
+    for name, twofive, folder in _projects(base):
+        if name == project:
+            if not twofive:
+                raise ValueError(f"Project {project!r} was made with Brightway 2: upgrade it to Brightway 2.5 first")
+            return folder
+    raise ValueError(f"No project {project!r} in {base}")
+
+
+FLOW_TYPES = NON_PROCESS_TYPES - {"product", "waste"}
+NOT_SUPPLIERS = NON_PROCESS_TYPES | {"multifunctional"}  # what a dataset cannot take as a technosphere input
+
+
+_flows_cache: dict[str, tuple[float, list[dict]]] = {}
+
+
+def _node(row) -> dict:
+    database, code, name, product, location, kind, blob = row
+    data = _project_data(blob)
+    return {"database": database, "code": code, "name": name, "reference_product": product, "location": location,
+            "unit": data.get("unit"), "categories": list(data.get("categories") or ()), "type": kind}
+
+
+def _flows(path: Path) -> list[dict]:
+    """Elementary flows of a project, cached until its database file changes."""
+    stamp = path.stat().st_mtime
+    cached = _flows_cache.get(str(path))
+    if cached and cached[0] == stamp:
+        return cached[1]
+    with closing(sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)) as con:
+        rows = con.execute(f"SELECT database, code, name, product, location, type, data FROM activitydataset "
+                           f"WHERE type IN ({','.join('?' * len(FLOW_TYPES))})", sorted(FLOW_TYPES)).fetchall()
+    flows = sorted((_node(r) for r in rows), key=lambda f: (len(f["name"] or ""), f["name"] or ""))
+    for f in flows:
+        f["_text"] = " ".join([f["name"] or "", *f["categories"]]).lower()
+    _flows_cache[str(path)] = (stamp, flows)
+    return flows
+
+
+RESOURCE_COMPARTMENTS = {"natural resource", "resources", "resource", "raw", "raw materials"}
+
+
+def _resource(flow: dict) -> bool:
+    """A resource (input from nature): by its type, or by its compartment in databases from
+    SimaPro, where every flow is an "emission" and resources are in "Resources" (e.g. BAFU)."""
+    return flow["type"] == "natural resource" or (bool(flow["categories"])
+                                                   and flow["categories"][0].lower() in RESOURCE_COMPARTMENTS)
+
+
+def search_nodes(base, project: str, text: str, kind: str = "process", database: str | None = None,
+                 limit: int = 40) -> list[dict]:
+    """Processes (``kind="process"``), resources or emissions of a project matching the words of
+    ``text`` (in the name, product and location of processes; name and compartment of flows), read-only.
+
+    Each: ``{"database", "code", "name", "reference_product", "location", "unit", "categories", "type"}``.
+    """
+    path = project_dir(base, project) / "lci" / "databases.db"
+    words = [w for w in text.lower().split() if w]
+    first = words[0] if words else ""
+    if kind != "process":
+        found = [f for f in _flows(path)
+                 if _resource(f) == (kind == "resource") and (not database or f["database"] == database)
+                 and all(w in f["_text"] for w in words)]
+        found.sort(key=lambda f: not (f["name"] or "").lower().startswith(first))  # stable: then shortest names
+        return [{k: v for k, v in f.items() if k != "_text"} for f in found[:limit]]
+    where = [f"COALESCE(type, 'process') NOT IN ({','.join('?' * len(NOT_SUPPLIERS))})"]
+    params: list = sorted(NOT_SUPPLIERS)
+    if database:
+        where.append("database = ?")
+        params.append(database)
+    for word in words:
+        where.append("(LOWER(name) LIKE ? OR LOWER(COALESCE(product, '')) LIKE ? OR LOWER(COALESCE(location, '')) LIKE ?)")
+        params += [f"%{word}%"] * 3
+    query = (f"SELECT database, code, name, product, location, type, data FROM activitydataset "
+             f"WHERE {' AND '.join(where)} ORDER BY LOWER(name) NOT LIKE ?, LENGTH(name), name LIMIT ?")
+    with closing(sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)) as con:
+        found = [_node(r) for r in con.execute(query, [*params, f"{first}%", limit * 10])]
+    # A word that is a location code ("fr") picks that location rather than words containing it ("from")
+    found.sort(key=lambda n: (n["location"] or "").lower() not in words)  # stable: keeps the SQL order
+    return found[:limit]
+
+
+def adapters() -> list[dict]:
+    """randonneur_data transformations (Départ de Sentier), applied when importing a SimaPro CSV to
+    rename its inputs and flows to those of a background database: ``{"name", "description",
+    "source", "target"}``."""
+    try:
+        import randonneur_data
+    except ImportError:
+        return []
+    out = []
+    for name, meta in randonneur_data.Registry().items():
+        out.append({"name": name, "description": meta.get("description", ""),
+                    "source": meta.get("source_id", ""), "target": meta.get("target_id", "")})
+    return sorted(out, key=lambda a: a["name"].lower())
+
+
+REMOTE = "https://files.brightway.dev/"
+REMOTE_PROJECTS = {  # files.brightway.dev/projects-config.json, when it cannot be reached
+    "BAFU-2025-v2": "bafu-2025-v2.tar.gz",
+    "USEEIO-1.1": "USEEIO-1.1.tar.gz",
+    "forwast": "forwast.tar.gz",
+    "ecoinvent-3.9.1-biosphere": "ecoinvent-3.9.1-biosphere.tar.gz",
+    "ecoinvent-3.10-biosphere": "ecoinvent-3.10-biosphere.tar.gz",
+    "ecoinvent-3.11-biosphere": "ecoinvent-3.11-biosphere.tar.gz",
+    "ecoinvent-3.12-biosphere": "ecoinvent-3.12-biosphere.tar.gz",
+}
+
+
+def remote_projects() -> dict[str, str]:
+    """Brightway 2.5 projects published on files.brightway.dev (e.g. BAFU), name -> archive file."""
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(REMOTE + "projects-config.json", timeout=10) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except (OSError, ValueError):
+        return dict(REMOTE_PROJECTS)

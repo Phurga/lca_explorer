@@ -43,5 +43,9 @@ FastAPI (local, `lca-viewer serve`) ── JSON ──► browser UI
 - **Databases** are loaded while the server runs (`server.create_library`):
   each model is mounted at `/db/<key>/` with that API, and Brightway
   databases are built into models in a separate process the first time (see
-  [data-import.md](data-import.md#loading-from-the-app)).
+  [data-import.md](data-import.md#loading-from-the-app)). Changes to
+  Brightway projects (new, deleted, restored, imports, datasets made in the
+  app) also run as `lca-viewer` commands in a separate process: the server
+  reads Brightway's files directly (listing, search) and never imports
+  bw2data, whose data folder is fixed per process.
 - **UI**: see [ui.md](ui.md).

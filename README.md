@@ -12,7 +12,9 @@ your own Brightway 2.5 projects (Activity Browser 3 included), chosen with
   ecoinvent if you have the archive, and open it in your browser.
 - [Manual setup](#manual-setup-step-by-step): the same, one command at a time.
 - [Using the explorer](#using-the-explorer)
-- [Loading a database, e.g. from your Brightway projects](#loading-a-database-eg-from-your-brightway-projects)
+- [Loading a database, e.g. from your Brightway projects](#loading-a-database-eg-from-your-brightway-projects),
+  [managing projects](#managing-brightway-projects-from-the-app) (BAFU, imports) and
+  [creating a dataset](#creating-a-dataset)
 - [Adding Agribalyse](#adding-agribalyse-or-another-simapro-csv-database)
 - [Shared server (SSH)](#using-the-explorer-on-the-shared-server-ssh)
 - Design decisions and status: [docs/](docs/README.md)
@@ -303,7 +305,9 @@ The app opens in your browser after a few seconds, at
   upstream?" using the named groups, and "how much N2O outside them?" with
   flow groups (*Add as a group* on a substance in *Flow contribution*). Click a group (e.g. *other*) to list
   the processes it is made of; right-click one and *Go to in tree* to open
-  the tree where it sits (along its largest supply path).
+  the tree where it sits (along its largest supply path). *Export CSV* saves
+  the table of groups, and the list of a group's processes (all of them, not
+  only those shown).
 
 ## Loading a database, e.g. from your Brightway projects
 
@@ -325,13 +329,68 @@ Several databases can be open at once: switch with the picker in the top bar
 (each keeps its own tabs), and **Close** the ones you no longer need to free
 their memory. Things to know:
 
-- Your projects are only read, never changed. Projects made with Brightway 2
+- Loading a database only reads its project. Projects made with Brightway 2
   (bw2data 3) are listed but can't be opened: upgrade them in Activity
   Browser 3 or Brightway 2.5 first.
 - The impact methods are those of the project. Foreground databases work as
   they are: their model includes the background databases they use.
-- Other formats (an ecoinvent ecoSpold2 release, a SimaPro CSV export) are
-  imported into a Brightway project first, e.g. Agribalyse below.
+
+### Managing Brightway projects from the app
+
+The Brightway projects section also changes projects. These are the same
+projects Brightway and Activity Browser use, so changes show there too:
+
+- **+ New project** in the folder; tick *Install the biosphere and impact
+  methods* (those of ecoinvent 3.9 that come with Brightway, a few minutes)
+  to import ecoSpold2 or SimaPro CSV databases into it.
+- **+ Add a project from a backup (BAFU, …)**: download a ready Brightway
+  project from [files.brightway.dev](https://files.brightway.dev): **BAFU
+  2025** (the Swiss LCI database of BAFU/UVEK, 60 MB, with the Ecological
+  Scarcity 2021 methods), USEEIO, forwast, or the ecoinvent biospheres. Or
+  give a backup file (`.tar.gz`) you downloaded or made with
+  `bw2io.backup_project_directory`.
+- **+ ecoSpold2** on a project: import an ecoSpold2 release (the ecoinvent
+  `.7z` archive or the folder it was unpacked to; about 10 minutes for
+  ecoinvent).
+- **+ SimaPro CSV** on a project: import a SimaPro CSV export (e.g.
+  Agribalyse), linked to the background databases you tick (e.g. ecoinvent)
+  through the *adapters* of Départ de Sentier's randonneur_data: PRé's
+  SimaPro ↔ ecoinvent name correspondences and flow mappings. Those for the
+  ticked databases are chosen for you. If some inputs or flows can't be
+  linked, nothing is written and they are listed; then *Import without them*.
+- **Delete** a project and its folder (type its name to confirm). Models
+  already built from it stay in the app.
+
+Files can be given as a path on the computer running the app, or with
+*Choose file…*, which copies the file into `data/uploads` for the import (handy
+on the shared server). Each of these runs in the background like a build,
+with its progress in the dialog.
+
+## Creating a dataset
+
+**Create dataset** (top bar) enters a new process as in SimaPro, and writes
+it into a Brightway project:
+
+- **Save into**: a folder, a project and a database of it, or a new database.
+- **Process**: name, location, comment, and the documentation fields
+  (technology, time period, geography, data sources, collection method, data
+  treatment, allocation rules, verification, data entry by).
+- **Products**: the reference product, or several **co-products** with their
+  allocation percentages (adding up to 100). The process is then split into
+  one allocated process per product with Brightway's `multifunctional`
+  library, as for an imported SimaPro CSV: each product takes its percentage
+  of every input and emission.
+- **Inputs from technosphere**, **inputs from nature**, **emissions**, **waste
+  to treatment** and **avoided products**: search the processes or flows of
+  the project (all its databases, e.g. ecoinvent and its biosphere), then give
+  each one its amount (for the product amounts above), an optional lognormal
+  uncertainty (SD², as in SimaPro) and a comment.
+
+*Save to Brightway*, then *Build and open* to explore it. The form is kept
+in the browser until you *Clear* it, so a dataset can be entered in several
+sittings. A dataset with co-products goes into a database made by this panel
+(Brightway's `multifunctional` backend); a single-output one can go into any
+database of the project.
 
 ## Adding Agribalyse (or another SimaPro CSV database)
 

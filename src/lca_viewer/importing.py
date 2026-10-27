@@ -250,14 +250,17 @@ def import_simapro_csv(
     return {"processes": processes, "unlinked": len(rows), "report": str(report) if rows else None}
 
 
-def import_ecospold2(project: str, path, database: str) -> None:
-    """An ecoinvent release, extracted (``path`` is its ``datasets`` folder)."""
+def import_ecospold2(project: str, path, database: str, biosphere: str | None = None) -> None:
+    """An ecoinvent release, extracted (``path`` is its ``datasets`` folder), linked to ``biosphere``
+    (default: Brightway's, ``biosphere3``)."""
     import bw2data as bd
     import bw2io as bi
 
     bd.projects.set_current(project)
     _check_new(database)
-    importer = bi.SingleOutputEcospold2Importer(str(path), database, use_mp=True)
+    if biosphere and biosphere not in bd.databases:
+        raise SystemExit(f"Database {biosphere!r} is not in project {project!r}")
+    importer = bi.SingleOutputEcospold2Importer(str(path), database, biosphere_database_name=biosphere, use_mp=True)
     importer.apply_strategies()
     importer.statistics()
     importer.write_database()

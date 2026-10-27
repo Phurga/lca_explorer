@@ -35,6 +35,25 @@ API in `src/lca_viewer/server.py`.
   next to the title, rather than databases mixed in one workspace: tabs,
   saved views and node ids are per model. An address of a database that is
   not loaded (after a restart) shows the start page with a note.
+  The Brightway section also changes projects: *+ New project*, *+ Add a
+  project from a backup* (files.brightway.dev, e.g. BAFU, or a `.tar.gz`),
+  and on each project *+ ecoSpold2*, *+ SimaPro CSV* and *Delete* (typing
+  the name to confirm). Each opens a small form above the list
+  (`ProjectForm`); file fields take a path or *Choose file…* (uploaded). A
+  SimaPro import that leaves exchanges unlinked shows them, with *Import
+  without them…*. Decision: these forms sit in the Load database dialog,
+  next to the projects they change, rather than in a separate manager.
+- **Create dataset** (top bar, next to Load database): a wide dialog to enter
+  a process as in SimaPro: target (folder, project, database or new one),
+  process and documentation, products (co-products with allocation %, their
+  sum shown), then one section per exchange kind (technosphere, nature,
+  emissions, waste to treatment, avoided products), each with a search box
+  over the project (↑↓ Enter to add) and rows with amount, unit, SD² and
+  comment. The footer says what is missing before *Save to Brightway*; after
+  saving, *Build and open* loads the database. The form is a draft kept in
+  `localStorage` (per browser) until *Clear*. Decision: a dialog over the
+  explorer rather than a page of its own, so that one can look up processes
+  in the open database while entering a dataset.
 - **Tabs and panes** (like a notes app such as Obsidian): each tab is one
   functional unit with its own tree, method, cut-off, rules and merges. Tabs
   sit on top of their pane: **+** opens an empty tab (the search box takes

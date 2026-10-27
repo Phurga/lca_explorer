@@ -120,7 +120,8 @@ def test_brightway_projects_are_listed_without_brightway(tmp_path):
     client = TestClient(create_library(tmp_path / "data"))
     listed = client.get("/api/brightway", params={"folder": str(tmp_path / "bw")}).json()
     assert [d["model"] for d in listed["projects"][0]["databases"]] == [None, None, None]
-    assert client.get("/api/brightway", params={"folder": str(tmp_path)}).status_code == 404
+    assert client.get("/api/brightway", params={"folder": str(tmp_path)}).json()["projects"] == []  # no project yet
+    assert client.get("/api/brightway", params={"folder": str(tmp_path / "nothing")}).status_code == 404
     # What cannot be loaded is said before building
     for project, database, message in [("old", "db", "Brightway 2"), ("my project", "biosphere3", "no processes"),
                                        ("my project", "nope", "No database")]:

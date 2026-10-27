@@ -91,21 +91,67 @@ def import_(args) -> None:
 
     if not os.environ.get("BRIGHTWAY2_DIR"):
         print("warning: BRIGHTWAY2_DIR is not set, using Brightway's default data directory")
+    import shutil
+
     from .importing import import_ecospold2, import_simapro_csv, setup_project
 
     t = time.perf_counter()
-    setup_project(args.project)  # biosphere and LCIA methods, first time only
+    if args.biosphere == "biosphere3":
+        setup_project(args.project)  # biosphere and LCIA methods, first time only
     if args.format == "ecospold2":
-        import_ecospold2(args.project, args.path, args.database)
+        from .quickstart import find_datasets, unpack
+
+        path, unpacked = Path(args.path), None
+        if path.is_file() and path.suffix.lower() == ".7z":
+            unpacked = Path(args.data) / "unpacked" / path.stem.replace(" ", "_")
+            if not find_datasets(unpacked):
+                shutil.rmtree(unpacked, ignore_errors=True)
+                unpack(path, unpacked)
+            path = unpacked
+        datasets = find_datasets(path)
+        if datasets is None:
+            raise SystemExit(f"No ecoSpold2 datasets (.spold files) in {path}")
+        print(f"Importing the datasets of {datasets} (about 10 minutes for ecoinvent)", flush=True)
+        import_ecospold2(args.project, datasets, args.database, biosphere=args.biosphere)
+        if unpacked:
+            shutil.rmtree(unpacked, ignore_errors=True)
         print(f"imported {args.database} into project {args.project} ({time.perf_counter() - t:.0f}s)")
     else:
+        print("Reading the SimaPro CSV, then linking it (a few minutes)", flush=True)
         result = import_simapro_csv(
             args.project, args.path, args.database, link_to=args.link_to, migrations=args.migration,
-            unlinked=args.unlinked, report=args.report,
+            unlinked=args.unlinked, report=args.report, biosphere=args.biosphere,
         )
         dropped = f", {result['unlinked']} unlinked exchanges dropped" if result["unlinked"] else ""
         print(f"imported {result['processes']} processes into {args.database}, project {args.project}"
               f"{dropped} ({time.perf_counter() - t:.0f}s)")
+
+
+def project(args) -> None:
+    """Brightway projects of BRIGHTWAY2_DIR: create, delete, restore from a backup archive."""
+    from . import editing
+
+    if args.action == "create":
+        editing.create_project(args.name, setup=args.setup)
+    elif args.action == "delete":
+        editing.delete_project(args.name)
+    else:
+        editing.restore_project(args.file, args.name)
+
+
+def dataset(args) -> None:
+    """Write the dataset described in a JSON file (the Create dataset panel) into a project."""
+    import json
+
+    from .editing import write_dataset
+
+    spec = json.loads(Path(args.spec).read_text(encoding="utf-8"))
+    try:
+        result = write_dataset(args.project, spec)
+    except ValueError as e:
+        raise SystemExit(str(e)) from None
+    print(f"Wrote {spec['process']['name']} into {result['database']}", flush=True)
+    print("RESULT " + json.dumps(result), flush=True)
 
 
 def main(argv=None) -> None:
@@ -121,7 +167,7 @@ def main(argv=None) -> None:
 
     p = sub.add_parser("import", help="Import a database into a Brightway project (before build)")
     p.add_argument("format", choices=["ecospold2", "simapro-csv"])
-    p.add_argument("path", help="ecoSpold2 datasets folder, or SimaPro CSV file")
+    p.add_argument("path", help="ecoSpold2 release (.7z archive, or the folder it was unpacked to), or SimaPro CSV file")
     p.add_argument("--project", required=True)
     p.add_argument("--database", required=True, help="Name of the new database")
     p.add_argument("--link-to", nargs="*", default=[],
@@ -132,7 +178,24 @@ def main(argv=None) -> None:
     p.add_argument("--unlinked", choices=["fail", "drop"], default="fail",
                    help="Inputs or emissions that cannot be linked: stop (default), or drop them and write the database")
     p.add_argument("--report", help="CSV file listing unlinked exchanges (default: data/import-<database>-unlinked.csv)")
+    p.add_argument("--biosphere", default="biosphere3",
+                   help="Biosphere database of the project that emissions link to (default: biosphere3, installed "
+                        "with the ecoinvent 3.9 impact methods if missing)")
+    p.add_argument("--data", default="data", help="Folder where a .7z archive is unpacked during the import (default: data)")
     p.set_defaults(func=import_)
+
+    p = sub.add_parser("project", help="Create, delete or restore a Brightway project (in BRIGHTWAY2_DIR)")
+    p.add_argument("action", choices=["create", "delete", "restore"])
+    p.add_argument("name", nargs="?", help="Project name (for restore: default, the name in the archive)")
+    p.add_argument("--file", help="Backup archive (.tar.gz) to restore, e.g. BAFU from files.brightway.dev")
+    p.add_argument("--setup", action="store_true",
+                   help="With create: install the biosphere and impact methods bundled with Brightway (ecoinvent 3.9)")
+    p.set_defaults(func=project)
+
+    p = sub.add_parser("dataset", help="Write a dataset described in a JSON file into a project (in BRIGHTWAY2_DIR)")
+    p.add_argument("spec", help="JSON file: see lca_viewer.editing.write_dataset")
+    p.add_argument("--project", required=True)
+    p.set_defaults(func=dataset)
 
     p = sub.add_parser("setup", help="First-time setup; optionally unpacks, imports and builds an ecoinvent ecoSpold2 release")
     p.add_argument("source", nargs="?", help="ecoSpold2 archive (.7z) or the folder it was unpacked to; asked when omitted (Enter skips ecoinvent)")

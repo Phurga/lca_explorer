@@ -41,8 +41,12 @@ def _exchange_data(data: dict) -> dict:
     out = {}
     for k in fields:
         v = data.get(k)
-        if v in (None, "", [], {}) or (isinstance(v, float) and v != v):  # NaN is not valid JSON
-            continue
+        if isinstance(v, np.ndarray):  # some imports (e.g. BAFU) store numpy values
+            v = v.tolist()
+        elif isinstance(v, np.generic):
+            v = v.item()
+        if v is None or (isinstance(v, (str, list, tuple, dict)) and not v) or (isinstance(v, float) and v != v):
+            continue  # empty, or NaN (not valid JSON)
         out[k] = v
     return out
 
