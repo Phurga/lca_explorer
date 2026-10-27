@@ -415,7 +415,15 @@ browser keeps its own tree, groups and charts.
   script uses files under `/home/user1` (code, the `lca_viewer` conda env,
   the cached ecoinvent model), which other accounts cannot read.
 
-## Licence of the data
+## Licence
+
+lca_viewer is licensed under the [PolyForm Strict License 1.0.0](LICENSE):
+you may use it for noncommercial purposes only, and you may not distribute
+it, change it or make new works based on it. For any other use, ask the
+copyright holder. The libraries in `src/lca_viewer/static/vendor/` keep their
+own licences (MIT, Apache-2.0).
+
+### Licence of the data
 
 ecoinvent and Agribalyse are licensed. Only people covered by an ecoinvent
 licence may use the explorer on them, and results must not be shared beyond
