@@ -150,7 +150,8 @@ def from_brightway(project: str, database: str, methods: list[tuple], log=None) 
     lca.load_lci_data()  # matrices only: the demand just selects the databases
 
     # Reorder rows so that column j produces row j
-    activity_ids = np.empty(len(lca.dicts.activity), dtype=int)
+    # int64: Brightway 2.5 node ids are 64-bit, and dtype=int is 32-bit on Windows
+    activity_ids = np.empty(len(lca.dicts.activity), dtype=np.int64)
     for node_id, col in lca.dicts.activity.items():
         activity_ids[col] = node_id
     rows = _product_rows(lca, activity_ids)
@@ -176,7 +177,7 @@ def from_brightway(project: str, database: str, methods: list[tuple], log=None) 
         }
     )
 
-    flow_ids = np.empty(len(lca.dicts.biosphere), dtype=int)
+    flow_ids = np.empty(len(lca.dicts.biosphere), dtype=np.int64)
     for node_id, row in lca.dicts.biosphere.items():
         flow_ids[row] = node_id
     flow_records = {
