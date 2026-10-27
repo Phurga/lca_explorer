@@ -127,6 +127,21 @@ def _default_method(model: LCAModel) -> int:
     return 0
 
 
+def _layout(model: LCAModel) -> str:
+    """What the positions of activities, flows and methods stand for: a saved view, which refers
+    to them by position, applies as it is only to a model with the same layout (not to one
+    rebuilt after its Brightway project changed, where they may have moved)."""
+    import hashlib
+
+    digest = hashlib.sha1()
+    for frame, columns in [(model.activities, ["database", "code", "name", "reference_product", "location"]),
+                           (model.flows, ["name", "categories", "unit"])]:
+        present = [c for c in columns if c in frame.columns]
+        digest.update(pd.util.hash_pandas_object(frame[present].astype(str), index=False).values.tobytes())
+    digest.update(repr([tuple(m.name) for m in model.methods]).encode())
+    return digest.hexdigest()[:16]
+
+
 def create_app(model: LCAModel, title: str = "", default_root: str | None = None) -> FastAPI:
     """``default_root`` is ``"activity name|location"``."""
     app = FastAPI(title="lca_viewer")
@@ -135,6 +150,7 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
     flows = derived_flows(model)
     root = _find(activities, *default_root.split("|", 1)) if default_root else None
     default_method = _default_method(model)
+    layout = _layout(model)
 
     META_FIELDS = ["name", "reference_product", "location", "unit", "activity_type", "isic", "cpc", "database"]
     rows_by_product = model.A.tocsr()  # row j: the activities using product j
@@ -165,6 +181,7 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
         return {
             "title": title,
             "activities": model.size,
+            "layout": layout,
             "methods": [{"name": list(m.name), "unit": m.unit} for m in model.methods],
             "query_fields": QUERY_FIELDS,
             "group_by_fields": GROUP_BY_FIELDS,
@@ -515,10 +532,11 @@ class LoadRequest(BaseModel):
     path: str | None = None
     """A model listed in ``data/models.json``."""
     brightway: str | None = None
-    """Or a Brightway data folder, with ``project`` and ``database``: built first if needed."""
+    """Or a Brightway data folder, with ``project`` and ``database``: built first if it never was."""
     project: str | None = None
     database: str | None = None
     rebuild: bool = False
+    """Build it again (after its project changed); refused while it is open."""
 
 
 class UnloadRequest(BaseModel):
@@ -592,7 +610,8 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
             return None
         return (str(Path(source["brightway"]).resolve()), source.get("project"), source.get("database"))
 
-    def find_database(folder: str, project: str, database: str) -> dict:
+    def find_database(folder: str, project: str, database: str) -> tuple[dict, dict]:
+        """(project, database) as listed by :func:`sources.brightway_projects`, if a model can be built from it."""
         try:
             projects = sources.brightway_projects(folder)
         except FileNotFoundError as e:
@@ -612,20 +631,24 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
         if not p["methods"]:
             raise ValueError(f"Project {project!r} has no impact methods: install some first "
                              f"(e.g. with bw2io's bw2setup or ecoinvent_interface)")
-        return d
+        return p, d
 
     def build(job: dict, folder: str, project: str, database: str, rebuild: bool) -> dict:
         """The catalog entry of a Brightway database's model, built (in a separate process) if
-        there is none yet, or if the database changed since."""
+        there is none yet, or again with ``rebuild`` (the page asks for it when the project
+        changed since). A database that is open is not rebuilt: it would mix its old matrices
+        with the new metadata files."""
         import importlib.util
 
         folder = str(Path(folder).expanduser().resolve())
-        db = find_database(folder, project, database)
-        output = sources.cache_dir(data, project, database).resolve()
-        entry = next((m for m in sources.catalog(data) if Path(m["path"]) == output), None)
-        if (entry and not rebuild and (output / "A.npz").exists()
-                and (entry.get("source") or {}).get("modified") == db["modified"]):
+        p, _ = find_database(folder, project, database)
+        state = sources.database_state(p, database)
+        entry = next((m for m in sources.catalog(data) if built_from(m) == (folder, project, database)), None)
+        output = Path(entry["path"]) if entry else sources.cache_dir(data, folder, project, database).resolve()
+        if entry and not rebuild and (output / "A.npz").exists():
             return entry
+        if loaded_key(output):
+            raise ValueError(f"{database} is open: close it first (Close, in the list of loaded databases), then rebuild it")
         if importlib.util.find_spec("bw2data") is None:
             raise ValueError("Brightway is not installed in the Python environment running lca_viewer: "
                              "run pip install -e \".[brightway]\" in it, then restart the app")
@@ -647,10 +670,24 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
         if process.wait() != 0:
             shutil.rmtree(part, ignore_errors=True)
             raise ValueError(f"The build failed: {job['log'][-1] if job['log'] else 'no output'}")
-        shutil.rmtree(output, ignore_errors=True)
-        part.rename(output)
+        old = output.with_name(output.name + ".old")
+        shutil.rmtree(old, ignore_errors=True)
+        with lock:  # not while the database is being opened
+            if loaded_key(output):
+                shutil.rmtree(part, ignore_errors=True)
+                raise ValueError(f"{database} was opened during the build: close it, then rebuild it")
+            try:
+                if output.exists():
+                    output.rename(old)  # fails, leaving the previous build whole, when a file in it is in use
+                part.rename(output)
+            except OSError as e:
+                if old.exists() and not output.exists():
+                    old.rename(output)
+                shutil.rmtree(part, ignore_errors=True)
+                raise ValueError(f"Could not replace the previous build in {output}: {e}") from None
+        shutil.rmtree(old, ignore_errors=True)
         title = f"{database} ({project})"
-        source = {"brightway": folder, "project": project, "database": database, "modified": db["modified"]}
+        source = {"brightway": folder, "project": project, "database": database, **state}
         sources.register(data, output, title, None, source)
         return {"path": str(output), "title": title, "default_root": None}
 
@@ -709,11 +746,12 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
         for m in sources.catalog(data):
             origin = built_from(m)
             if origin and origin[0] == folder and (Path(m["path"]) / "A.npz").exists():
-                built[origin[1:]] = {"key": loaded_key(m["path"]), "modified": m["source"].get("modified")}
+                built[origin[1:]] = {"key": loaded_key(m["path"]), "source": m["source"]}
         for p in projects:
             for d in p["databases"]:
                 b = built.get((p["name"], d["name"]))
-                d["model"] = b and {"key": b["key"], "outdated": b["modified"] != d["modified"]}
+                # outdated: what changed in the project since the build (None: nothing)
+                d["model"] = b and {"key": b["key"], "outdated": sources.changes(b["source"], sources.database_state(p, d["name"]))}
         return {"folder": folder, "projects": projects}
 
     @app.post("/api/load")
@@ -721,7 +759,8 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
         """Load a database in the background; follow it with ``/api/jobs/<id>``."""
         if not req.path and not (req.brightway and req.project and req.database):
             raise HTTPException(400, "Give a model path, or a Brightway folder, project and database")
-        target = (req.path and str(Path(req.path).resolve()), req.brightway, req.project, req.database)
+        target = (req.path and str(Path(req.path).resolve()), req.brightway and str(Path(req.brightway).expanduser().resolve()),
+                  req.project, req.database)
         with lock:
             for job in jobs.values():  # already under way
                 if job["status"] == "running" and job["_target"] == target:

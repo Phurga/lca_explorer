@@ -318,8 +318,10 @@ The app starts with no database loaded. **Load database** (top bar) lists:
   `projects.db` file). Pick a database and click **Build and open**: the app
   builds the matrices it reads from the database and every database it uses
   (one or two minutes for ecoinvent), keeps them in `data/cache/` and adds
-  them to *Built models*. A database changed in Brightway since then is
-  offered as *Rebuild and open*.
+  them to *Built models*. A database changed in Brightway since then (or a
+  database it links to, or the impact methods) is offered as *Rebuild and
+  open*; an open database is closed first. The app does not watch the
+  projects: an open database stays as it was built until it is rebuilt.
 
 Several databases can be open at once: switch with the picker in the top bar
 (each keeps its own tabs), and **Close** the ones you no longer need to free

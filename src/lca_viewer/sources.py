@@ -62,9 +62,13 @@ def slug(text: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "-", text).strip("-") or "model"
 
 
-def cache_dir(data, project: str, database: str) -> Path:
-    """Where the model built from a Brightway database is kept."""
-    return Path(data) / "cache" / f"bw-{slug(project)}-{slug(database)}"
+def cache_dir(data, folder, project: str, database: str) -> Path:
+    """Where the model built from a Brightway database is kept: one folder per Brightway data
+    folder, project and database (the same names in two data folders, or names that differ
+    only in punctuation, are different models)."""
+    origin = "\n".join([str(Path(folder).expanduser().resolve()), project, database])
+    digest = hashlib.sha1(origin.encode("utf-8")).hexdigest()[:10]
+    return Path(data) / "cache" / f"bw-{digest}" / f"{slug(project)}-{slug(database)}"
 
 
 # ---------------------------------------------------------------- Brightway
@@ -131,6 +135,29 @@ def _read_json(path: Path) -> dict:
         return {}
 
 
+def _methods_stamp(project_dir: Path) -> str | None:
+    """Changes when impact methods are added, removed or written again. ``methods.json`` has no
+    dates, but each method's factors are written to ``processed/<abbreviation>.zip``."""
+    try:
+        text = (project_dir / "methods.json").read_bytes()
+        methods = json.loads(text)
+    except (OSError, ValueError):
+        return None
+    digest = hashlib.sha1(text)
+    # bw2data writes [[name, metadata], ...]; older versions {"(name)": metadata}
+    metadata = methods.values() if isinstance(methods, dict) else [m[1] for m in methods if isinstance(m, list) and len(m) == 2]
+    for meta in metadata:
+        abbreviation = meta.get("abbreviation") if isinstance(meta, dict) else None
+        if not abbreviation:
+            continue
+        try:
+            stat = (project_dir / "processed" / f"{abbreviation}.zip").stat()
+        except OSError:
+            continue
+        digest.update(f"{abbreviation} {stat.st_mtime_ns} {stat.st_size}".encode())
+    return digest.hexdigest()[:16]
+
+
 def _node_counts(project_dir: Path) -> dict[str, dict[str, int]]:
     """database -> {node type -> count}, from the project's SQLite database."""
     path = project_dir / "lci" / "databases.db"
@@ -146,9 +173,10 @@ def _node_counts(project_dir: Path) -> dict[str, dict[str, int]]:
 def brightway_projects(base) -> list[dict]:
     """Projects of a Brightway data folder and their databases, read-only.
 
-    Each project: ``{"name", "twofive", "methods", "databases": [{"name", "processes",
-    "flows", "depends", "modified", "backend"}]}``. ``twofive`` is False for projects made with
-    Brightway 2 (bw2data 3), which lca_viewer (Brightway 2.5) cannot read without upgrading them.
+    Each project: ``{"name", "twofive", "methods", "methods_stamp", "databases": [{"name",
+    "processes", "flows", "depends", "modified", "backend"}]}``. ``twofive`` is False for projects
+    made with Brightway 2 (bw2data 3), which lca_viewer (Brightway 2.5) cannot read without
+    upgrading them. ``methods_stamp`` changes when impact methods are added, removed or written.
     """
     base = Path(base).expanduser()
     projects_db = base / "projects.db"
@@ -161,12 +189,14 @@ def brightway_projects(base) -> list[dict]:
     out = []
     for name, blob, full_hash in rows:
         project_dir = base / _safe_filename(name, bool(full_hash))
-        project = {"name": name, "twofive": bool(_project_data(blob).get("25")), "methods": 0, "databases": []}
+        project = {"name": name, "twofive": bool(_project_data(blob).get("25")), "methods": 0, "methods_stamp": None,
+                   "databases": []}
         if not project_dir.is_dir():
             out.append({**project, "missing": True})
             continue
         metadata = _read_json(project_dir / "databases.json")
         project["methods"] = len(_read_json(project_dir / "methods.json"))
+        project["methods_stamp"] = _methods_stamp(project_dir)
         try:
             counts = _node_counts(project_dir)
         except sqlite3.Error:
@@ -183,3 +213,35 @@ def brightway_projects(base) -> list[dict]:
             })
         out.append(project)
     return out
+
+
+def database_state(project: dict, database: str) -> dict:
+    """What a model built from ``database`` of ``project`` (as :func:`brightway_projects` lists
+    it) depends on: when the database and the databases it links to (theirs too) were last
+    written, and the impact methods. Recorded with the build, to tell when it is out of date."""
+    by_name = {d["name"]: d for d in project["databases"]}
+    depends, todo = {}, list(by_name[database]["depends"])
+    while todo:
+        name = todo.pop()
+        if name == database or name in depends:
+            continue
+        linked = by_name.get(name)
+        depends[name] = linked and linked["modified"]
+        todo.extend(linked["depends"] if linked else [])
+    return {"modified": by_name[database]["modified"], "depends": depends, "methods": project.get("methods_stamp")}
+
+
+def changes(source: dict, state: dict) -> str | None:
+    """What changed in the project since a model was built (``source``: as registered with the
+    build; ``state``: :func:`database_state` now), or None. Builds registered before the linked
+    databases and the methods were recorded are compared on their database alone."""
+    if source.get("modified") != state["modified"]:
+        return "changed since the model was built"
+    if "depends" in source:
+        before, now = source["depends"], state["depends"]
+        changed = sorted((n for n in set(before) | set(now) if before.get(n) != now.get(n)), key=str.lower)
+        if changed:
+            return f"{', '.join(changed)} (linked) changed since the model was built"
+    if source.get("methods") and source["methods"] != state["methods"]:
+        return "impact methods changed since the model was built"
+    return None

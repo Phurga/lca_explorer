@@ -17,7 +17,7 @@ import sys
 import time
 from pathlib import Path
 
-from .sources import register
+from .sources import brightway_projects, database_state, register
 
 SYSTEM_MODELS = {"cutoff": "cut-off", "apos": "APOS", "consequential": "consequential", "en15804": "EN15804"}
 DEFAULT_ROOT = "market for wheat grain, feed|GLO"
@@ -195,8 +195,9 @@ def setup_ecoinvent(p: Prompt, data: Path, archive: Path | None, datasets: Path 
         built.save(partial)
         partial.rename(output)
         print(f"  {built.size} activities, {len(built.methods)} methods ({time.perf_counter() - t:.0f} s)")
-    source = {"brightway": str(brightway_dir), "project": project, "database": database,
-              "modified": bd.databases[database].get("modified")}
+    listed = next(p for p in brightway_projects(brightway_dir) if p["name"] == project)
+    source = {"brightway": str(brightway_dir.resolve()), "project": project, "database": database,
+              **database_state(listed, database)}
     register(data, output, title, DEFAULT_ROOT, source)
 
     if archive and unpacked.exists() and p.confirm(f"\nDelete the unpacked files in {unpacked}? "

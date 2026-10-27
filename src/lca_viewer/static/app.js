@@ -524,7 +524,7 @@ function LoadDatabase({ onClose, missing, onDatabases }) {
               </tr>
               ${p.databases.map((d) => html`
                 <tr key=${`d:${p.name}/${d.name}`} class=${p.twofive && d.processes ? "" : "muted"}>
-                  <td class="indent">${d.name}${d.model?.outdated && html`<div class="muted small">changed since the model was built</div>`}</td>
+                  <td class="indent">${d.name}${d.model?.outdated && html`<div class="muted small">${d.model.outdated}${d.model.key ? ": close it to rebuild it" : ""}</div>`}</td>
                   <td class="num muted">${d.processes ? `${count(d.processes)} processes` : `${count(d.flows)} flows`}</td>
                   <td class="actions">${dbAction(p, d)}</td>
                 </tr>`)}`)}
@@ -2239,17 +2239,55 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
   useEffect(() => savePreference("orientation", orientation), [orientation]);
 
   useEffect(() => {
-    const i = info;
-    const saved = initial?.state;
-    if (saved && saved.root && saved.root.index < i.activities && saved.method < i.methods.length) {
-      setRoot(saved.root); setAmount(saved.amount); setMethod(saved.method); setCutoff(saved.cutoff);
-      setExpanded(new Set(saved.expanded)); setRules(saved.rules); setChartMethods(saved.chartMethods || []);
-      setPinned(new Set(saved.pinned || [])); setOthers(new Set(saved.others || []));
-      setCutoffBasis(saved.cutoffBasis || "parent");
-      setMerges(saved.merges || []);
-      setLabels(saved.labels || {});
+    if (initial?.state?.root) restoreTab(initial.state);
+    else startTab();
+  }, []);
+  useEffect(() => onTitle(id, root), [root]);
+
+  const methodIndex = (name) => info.methods.findIndex((m) => m.name.join("|") === (name || []).join("|"));
+  // Where a saved functional unit is in this database: { target, same }, same when it is still
+  // at its saved position, else found by name and location; null when it is not there
+  async function locateRoot(saved) {
+    if (saved.index < info.activities) {
+      const there = await request(`/api/activity/${saved.index}`);
+      if (there.name === saved.name && there.location === saved.location) return { target: saved, same: true };
+    }
+    const found = await request("/api/search", { text: "", predicate: { all: [
+      { field: "name", op: "eq", value: saved.name }, { field: "location", op: "eq", value: saved.location }] }, limit: 1 });
+    return found.results.length ? { target: found.results[0], same: false } : null;
+  }
+
+  // A tab of the saved workspace. Its state refers to activities, flows and methods by position:
+  // when the database was rebuilt since with another layout (positions may have moved), the
+  // functional unit and methods are found again by name, and what refers to other positions
+  // (expanded rows, pins, moved rows, merges, names, groups of this tree) is not restored.
+  // Tabs saved before layouts were recorded: as long as the functional unit did not move.
+  async function restoreTab(saved) {
+    const sameLayout = saved.layout === info.layout;
+    const found = sameLayout ? { target: saved.root, same: true } : await locateRoot(saved.root).catch(() => null);
+    if (!found) {
+      startTab();
+      setError(`${saved.root.name} (${saved.root.location}), the functional unit of this tab, is not in this database any more.`);
       return;
     }
+    const { target } = found;
+    const same = found.same && (sameLayout || !saved.layout);
+    const method = (k, name) => (sameLayout || !name ? (k < info.methods.length ? k : -1) : methodIndex(name));
+    const m = method(saved.method, saved.methodName);
+    setRoot(target); setAmount(saved.amount ?? 1); setMethod(m >= 0 ? m : info.default_method);
+    setChartMethods((saved.chartMethods || []).map((k, n) => method(k, saved.chartMethodNames?.[n])).filter((k) => k >= 0));
+    setCutoff(saved.cutoff ?? 1); setCutoffBasis(saved.cutoffBasis || "parent");
+    setRules(same ? saved.rules || [] : (saved.rules || []).filter((r) => r.scope === "*"));
+    setExpanded(new Set(same ? saved.expanded : [String(target.index)]));
+    setPinned(new Set(same ? saved.pinned || [] : []));
+    setOthers(new Set(same ? saved.others || [] : []));
+    setMerges(same ? saved.merges || [] : []);
+    setLabels(same ? saved.labels || {} : {});
+    if (!same) setUndo({ message: "This database was rebuilt since the tab was saved: expansions, pins, moved rows, merges and names were not restored.", state: {} });
+  }
+
+  function startTab() {
+    const i = info;
     // A new tab keeps the method, cut-off and tree-wide rules of the tab it was opened from
     const base = initial?.inherit;
     if (base && base.method < i.methods.length) {
@@ -2266,8 +2304,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
     if (initial?.root) selectRoot(initial.root);
     else if (initial?.defaultRoot && i.default_root) selectRoot(i.default_root);
     else box.current?.querySelector(".fu-input input")?.focus({ preventScroll: true });
-  }, []);
-  useEffect(() => onTitle(id, root), [root]);
+  }
 
   function selectRoot(r) {
     setRoot(r);
@@ -2337,7 +2374,8 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
   // The tab's state is kept for the next visit (renaming does not reload the rows)
   useEffect(() => {
     if (!root || !info) return;
-    onSave(id, { root, amount, method, cutoff, cutoffBasis, expanded: [...expanded], rules, chartMethods, pinned: [...pinned], others: [...others], merges, labels });
+    onSave(id, { root, amount, method, cutoff, cutoffBasis, expanded: [...expanded], rules, chartMethods, pinned: [...pinned], others: [...others], merges, labels,
+      layout: info.layout, methodName: info.methods[method]?.name, chartMethodNames: chartMethods.map((k) => info.methods[k]?.name) });
   }, [root, amount, method, cutoff, cutoffBasis, expanded, rules, chartMethods, pinned, others, merges, labels, info]);
   function startRename(row) {
     if (!labelKey(row)) return;
@@ -2506,20 +2544,10 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
     try {
       const saved = JSON.parse(await file.text());
       if (!saved.root || !Array.isArray(saved.expanded)) throw new Error("This file is not a saved view.");
-      const methodIndex = (name) => info.methods.findIndex((m) => m.name.join("|") === (name || []).join("|"));
       // Same functional unit at the same position: everything applies; otherwise find it by name
-      let target = saved.root;
-      let sameModel = saved.root.index < info.activities;
-      if (sameModel) {
-        const there = await request(`/api/activity/${saved.root.index}`);
-        sameModel = there.name === saved.root.name && there.location === saved.root.location;
-      }
-      if (!sameModel) {
-        const found = await request("/api/search", { text: "", predicate: { all: [
-          { field: "name", op: "eq", value: saved.root.name }, { field: "location", op: "eq", value: saved.root.location }] }, limit: 1 });
-        if (!found.results.length) throw new Error(`${saved.root.name} (${saved.root.location}) is not in this database.`);
-        target = found.results[0];
-      }
+      const found = await locateRoot(saved.root);
+      if (!found) throw new Error(`${saved.root.name} (${saved.root.location}) is not in this database.`);
+      const { target, same: sameModel } = found;
       setUndo({
         message: `View loaded from ${file.name}${sameModel ? "" : " — saved from another model: expansions, pins, moved rows, merges and names were not restored"}.`,
         state: { root, amount, method, cutoff, cutoffBasis, expanded, rules, pinned, others, merges, labels, chartMethods, view },
@@ -2705,7 +2733,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
           ${undo && html`
             <div class="notice" role="status">
               <span>${undo.message}</span>
-              <button onClick=${applyUndo}>Undo</button>
+              ${Object.keys(undo.state).length > 0 && html`<button onClick=${applyUndo}>Undo</button>`}
               <button onClick=${() => setUndo(null)} aria-label="Dismiss">×</button>
             </div>`}
           ${error && html`<div class="error">${error}</div>`}

@@ -129,6 +129,80 @@ def test_brightway_projects_are_listed_without_brightway(tmp_path):
         assert job["status"] == "failed" and message in job["error"]
 
 
+def test_brightway_builds_are_kept_per_folder_and_tell_what_changed(tmp_path, linear_chain_model):
+    import json
+
+    from lca_viewer import sources
+
+    for folder in ("bw", "other"):
+        make_brightway(tmp_path / folder, {"p": (True, {"bio": {"emission": 2}, "ei": {"process": 3}, "agb": {"process": 3}})})
+    project = tmp_path / "bw" / _safe_filename("p", False)
+
+    def edit(name, change):
+        meta = json.loads((project / name).read_text())
+        change(meta)
+        (project / name).write_text(json.dumps(meta))
+
+    edit("databases.json", lambda m: (m["agb"].update(depends=["ei"]), m["ei"].update(depends=["bio"])))
+    data = tmp_path / "data"
+    # The same names in two Brightway folders, or names differing in punctuation only: two models
+    assert sources.cache_dir(data, tmp_path / "bw", "p", "agb") != sources.cache_dir(data, tmp_path / "other", "p", "agb")
+    assert sources.cache_dir(data, tmp_path / "bw", "a b", "agb") != sources.cache_dir(data, tmp_path / "bw", "a-b", "agb")
+
+    state = sources.database_state(brightway_projects(tmp_path / "bw")[0], "agb")
+    assert state["depends"] == {"ei": "2026-01-01T00:00:00", "bio": "2026-01-01T00:00:00"} and state["methods"]
+    # A build of agb, as the app registers it (building needs Brightway)
+    output = sources.cache_dir(data, tmp_path / "bw", "p", "agb")
+    linear_chain_model.save(output)
+    register(data, output, "agb (p)", None,
+             {"brightway": str((tmp_path / "bw").resolve()), "project": "p", "database": "agb", **state})
+    client = TestClient(create_library(data))
+
+    def models(folder="bw"):
+        listed = client.get("/api/brightway", params={"folder": str(tmp_path / folder)}).json()
+        return {d["name"]: d["model"] for d in listed["projects"][0]["databases"]}
+
+    assert models() == {"agb": {"key": None, "outdated": None}, "bio": None, "ei": None}
+    assert models("other") == {"agb": None, "bio": None, "ei": None}  # not built from that folder
+    edit("databases.json", lambda m: m["bio"].update(modified="2026-02-01T00:00:00"))  # a database it links to, indirectly
+    assert models()["agb"]["outdated"] == "bio (linked) changed since the model was built"
+    edit("databases.json", lambda m: m["bio"].update(modified="2026-01-01T00:00:00"))
+    edit("methods.json", lambda m: m.update({"('IPCC', 'GWP20')": {}}))
+    assert models()["agb"]["outdated"] == "impact methods changed since the model was built"
+    edit("databases.json", lambda m: m["agb"].update(modified="2026-03-01T00:00:00"))
+    assert models()["agb"]["outdated"] == "changed since the model was built"
+
+    # Out of date, the build made before is still opened when asked (no rebuild unless asked)
+    body = {"brightway": str(tmp_path / "bw"), "project": "p", "database": "agb"}
+    job = wait(client, client.post("/api/load", json=body).json())
+    assert job["status"] == "done" and job["key"] == "p-agb"
+    assert models()["agb"] == {"key": "p-agb", "outdated": "changed since the model was built"}
+    # Open, it is not rebuilt: its matrices in memory would not match the new files
+    job = wait(client, client.post("/api/load", json={**body, "rebuild": True}).json())
+    assert job["status"] == "failed" and "is open" in job["error"]
+    assert (output / "A.npz").exists()
+
+
+def test_old_builds_are_compared_on_their_database_only():
+    from lca_viewer.sources import changes
+
+    state = {"modified": "1", "depends": {"bio": "2"}, "methods": "abc"}
+    assert changes({"modified": "1"}, state) is None
+    assert changes({"modified": "0"}, state) == "changed since the model was built"
+    assert changes({"modified": "1", "depends": {"bio": "2"}, "methods": "abc"}, state) is None
+
+
+def test_layout_tells_whether_positions_moved(linear_chain_model, loop_model):
+    from lca_viewer.server import _layout
+
+    assert _layout(linear_chain_model) == _layout(linear_chain_model)
+    assert _layout(linear_chain_model) != _layout(loop_model)
+    moved = linear_chain_model.activities.iloc[[1, 0, 2]].reset_index(drop=True)
+    assert _layout(type(linear_chain_model)(A=linear_chain_model.A, B=linear_chain_model.B, activities=moved,
+                                            flows=linear_chain_model.flows, methods=linear_chain_model.methods)) \
+        != _layout(linear_chain_model)
+
+
 def test_model_keys():
     assert model_key("data/cache/agb32") == "agb32"
     assert model_key("C:/x/ei 3.9.1 (cut-off)/") == "ei-3.9.1-cut-off"
