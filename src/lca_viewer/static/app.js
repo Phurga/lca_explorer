@@ -652,41 +652,137 @@ const GAP = {
   vertical: { depth: 56, slot: 16 }, // root on top, inputs below
 };
 
-// Tidy tree: leaves take consecutive slots, a parent is centred on its children
-function layoutTree(rows, orientation) {
-  const children = new Map();
-  for (const r of rows) {
-    if (r.parent == null) continue;
-    if (!children.has(r.parent)) children.set(r.parent, []);
-    children.get(r.parent).push(r);
-  }
+// Tidy tree: leaves take consecutive slots, a parent is centred on its children.
+// Sets x, y and depth on each node reachable from ``root`` through ``childrenOf``.
+function tidyLayout(root, childrenOf, orientation) {
   const gap = GAP[orientation];
   const depthStep = (orientation === "horizontal" ? BOX.w : BOX.h) + gap.depth;
   const slotStep = (orientation === "horizontal" ? BOX.h : BOX.w) + gap.slot;
-  const nodes = [];
-  const edges = [];
   let nextSlot = 0;
-  function place(row, depth) {
-    const kids = children.get(row.id) || [];
+  function place(node, depth) {
+    const kids = childrenOf(node);
     const slot = kids.length
       ? (() => { const s = kids.map((k) => place(k, depth + 1)); return (s[0] + s[s.length - 1]) / 2; })()
       : nextSlot++;
-    const [x, y] = orientation === "horizontal" ? [depth * depthStep, slot * slotStep] : [slot * slotStep, depth * depthStep];
-    nodes.push({ row, x, y });
+    [node.x, node.y] = orientation === "horizontal" ? [depth * depthStep, slot * slotStep] : [slot * slotStep, depth * depthStep];
+    node.depth = depth;
     return slot;
   }
-  if (rows.length) place(rows[0], 0);
-  const byId = new Map(nodes.map((n) => [n.row.id, n]));
-  for (const n of nodes) {
-    const parent = byId.get(n.row.parent);
-    if (parent) edges.push({ from: parent, to: n });
-  }
-  const width = Math.max(...nodes.map((n) => n.x)) + BOX.w;
-  const height = Math.max(...nodes.map((n) => n.y)) + BOX.h;
-  return { nodes, edges, width, height };
+  place(root, 0);
 }
 
-function edgePath(from, to, orientation) {
+function graphSize(nodes) {
+  return { width: Math.max(...nodes.map((n) => n.x)) + BOX.w, height: Math.max(...nodes.map((n) => n.y)) + BOX.h };
+}
+
+// One node per row, one edge per parent → child
+function layoutTree(rows, orientation, share, ofTotal) {
+  const nodes = rows.map((row) => ({ key: row.id, row, rows: [row], share: share(row) }));
+  const byId = new Map(nodes.map((n) => [n.key, n]));
+  const children = new Map();
+  for (const n of nodes) {
+    const parent = byId.get(n.row.parent);
+    if (!parent) continue;
+    if (!children.has(parent)) children.set(parent, []);
+    children.get(parent).push(n);
+  }
+  tidyLayout(nodes[0], (n) => children.get(n) || [], orientation);
+  const edges = nodes.filter((n) => byId.has(n.row.parent))
+    .map((n) => ({ key: n.key, from: byId.get(n.row.parent), to: n, rows: [n.row], share: ofTotal(n.row) }));
+  return { nodes, edges, ...graphSize(nodes) };
+}
+
+// Key of the graph node a row belongs to: a process is one node wherever it is used;
+// rows under it (direct emissions, flows, groups, others) are keyed by that node
+function nodeKey(r, keys) {
+  const parent = keys.get(r.parent) ?? "";
+  if (r.kind === "process" && r.meta) return `p:${r.meta.index}`;
+  if (r.kind === "flow" && r.flow) return `f:${parent}:${r.flow.index}`;
+  if (r.kind === "merged") return `m:${parent}:${(r.products || []).join(",")}`;
+  if (r.kind === "direct" || r.kind === "rest") return `${r.kind}:${parent}`;
+  return `${r.kind}:${parent}:${r.label}`;
+}
+
+// Impacts of some rows, without counting twice a row inside another one's supply
+// chain (a loop: the outer row's cumulative impact already includes it)
+function outerImpacts(rows, rowById) {
+  const ids = new Set(rows.map((r) => r.id));
+  const outer = rows.filter((r) => {
+    for (let p = rowById.get(r.parent); p; p = rowById.get(p.parent)) if (ids.has(p.id)) return false;
+    return true;
+  });
+  return outer[0].impacts.map((_, i) => outer.reduce((sum, r) => sum + r.impacts[i], 0));
+}
+
+// Supply chain graph: a process used in several places is one node with several edges
+// into it, and a loop is an edge back to a node already shown (a cycle). Laid out as
+// the tidy tree of a breadth-first spanning tree (each node at its shortest depth); the
+// other edges are drawn on top. A node's amount sums its places, its impact counts
+// loops once; its share follows the basis when it has one parent, else of the total.
+function layoutGraph(rows, orientation, rootImpact, shareBasis) {
+  const rowById = new Map(rows.map((r) => [r.id, r]));
+  const keys = new Map();
+  const nodes = new Map();
+  for (const r of rows) {
+    const key = nodeKey(r, keys);
+    keys.set(r.id, key);
+    if (!nodes.has(key)) nodes.set(key, { key, rows: [], children: [], parents: new Set() });
+    nodes.get(key).rows.push(r);
+  }
+  const links = new Map();
+  for (const r of rows) {
+    if (r.parent == null || !rowById.has(r.parent)) continue;
+    const from = nodes.get(keys.get(r.parent)), to = nodes.get(keys.get(r.id));
+    const key = `${from.key}→${to.key}`;
+    if (!links.has(key)) {
+      links.set(key, { key, from, to, rows: [] });
+      from.children.push(to);
+      to.parents.add(from);
+    }
+    links.get(key).rows.push(r);
+  }
+  for (const n of nodes.values()) {
+    const impacts = outerImpacts(n.rows, rowById);
+    const amount = n.rows.reduce((sum, r) => sum + r.amount, 0);
+    n.row = { ...n.rows[0], impacts, amount, expanded: n.rows.some((r) => r.expanded) };
+  }
+  const total = (impact) => (rootImpact ? impact / rootImpact : 0);
+  const root = nodes.get(keys.get(rows[0].id));
+  for (const n of nodes.values()) {
+    const [parent] = n.parents;
+    const reference = shareBasis === "parent" && n !== root && n.parents.size === 1 ? parent.row.impacts[0] : rootImpact;
+    n.share = reference ? n.row.impacts[0] / reference : 0;
+  }
+  // Breadth-first spanning tree from the root
+  const tree = new Map([[root, []]]);
+  for (const queue = [root]; queue.length;) {
+    const n = queue.shift();
+    for (const c of n.children) {
+      if (tree.has(c)) continue;
+      tree.set(c, []);
+      tree.get(n).push(c);
+      queue.push(c);
+    }
+  }
+  tidyLayout(root, (n) => tree.get(n), orientation);
+  const edges = [...links.values()].map((e) => ({
+    ...e, share: total(outerImpacts(e.rows, rowById)[0]), back: e.to.depth <= e.from.depth,
+  }));
+  const shown = [...nodes.values()];
+  return { nodes: shown, edges, ...graphSize(shown) };
+}
+
+// An edge to a node at the same depth or nearer the root (a loop) leaves the source
+// box on its far side and comes round to the target's near side
+function edgePath(from, to, orientation, back = false) {
+  if (back) {
+    if (orientation === "horizontal") {
+      const x1 = from.x + BOX.w, y1 = from.y + BOX.h / 2, x2 = to.x, y2 = to.y + BOX.h / 2, d = BOX.h * 1.4;
+      return `M${x1},${y1} C${x1 + 90},${y1 + d} ${x2 - 90},${y2 + d} ${x2},${y2}`;
+    }
+    const x1 = from.x + BOX.w / 2, y1 = from.y + BOX.h, x2 = to.x + BOX.w / 2, y2 = to.y, d = BOX.w * 0.7;
+    return `M${x1},${y1} C${x1 + d},${y1 + 80} ${x2 + d},${y2 - 80} ${x2},${y2}`;
+  }
   if (orientation === "horizontal") {
     const x1 = from.x + BOX.w, y1 = from.y + BOX.h / 2, x2 = to.x, y2 = to.y + BOX.h / 2, xm = (x1 + x2) / 2;
     return `M${x1},${y1} C${xm},${y1} ${xm},${y2} ${x2},${y2}`;
@@ -695,12 +791,19 @@ function edgePath(from, to, orientation) {
   return `M${x1},${y1} C${x1},${ym} ${x2},${ym} ${x2},${y2}`;
 }
 
-function TreeGraph({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onUngroup, ungroupable, onMergeGroup, onUnpin, onPin, onMoveToOthers, onInfo, onUnmerge, view, orientation, setOrientation, focus }) {
+function TreeGraph({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onUngroup, ungroupable, onMergeGroup, onUnpin, onPin, onMoveToOthers, onInfo, onUnmerge, view, orientation, setOrientation, cycles, setCycles, focus }) {
   const byId = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
   const container = useRef(null);
   const drag = useRef(null);
   const [transform, setTransform] = useState({ k: 1, x: 16, y: 16 });
-  const graph = useMemo(() => layoutTree(rows, orientation), [rows, orientation]);
+  // Boxes show the share of the total or of the parent; edges always the share of the
+  // total, so that the main supply paths stand out
+  const graph = useMemo(() => {
+    if (!rows.length) return { nodes: [], edges: [] };
+    if (cycles) return layoutGraph(rows, orientation, rootImpact, shareBasis);
+    const ofTotal = (r) => (rootImpact ? r.impacts[0] / rootImpact : 0);
+    return layoutTree(rows, orientation, (r) => shareOf(r, byId, rootImpact, shareBasis), ofTotal);
+  }, [rows, orientation, cycles, rootImpact, shareBasis, byId]);
   const rootId = rows[0]?.id;
 
   // Whole tree in view; with ``readable``, never zoom out below 60 % and centre on the root instead
@@ -710,17 +813,17 @@ function TreeGraph({ rows, rootImpact, shareBasis, selection, onToggle, onSelect
     const margin = 24;
     const whole = Math.min(1, (el.clientWidth - 2 * margin) / graph.width, (el.clientHeight - 2 * margin) / graph.height);
     const k = readable ? Math.max(whole, 0.6) : Math.max(whole, 0.1);
-    const root = graph.nodes.find((n) => n.row.id === rootId);
+    const root = graph.nodes.find((n) => n.rows.some((r) => r.id === rootId));
     setTransform(orientation === "horizontal"
       ? { k, x: margin, y: el.clientHeight / 2 - (root.y + BOX.h / 2) * k }
       : { k, x: el.clientWidth / 2 - (root.x + BOX.w / 2) * k, y: margin });
   }
-  // Re-fit when the functional unit or the orientation changes, not on every expand
-  useEffect(() => fit(true), [rootId, orientation]);
+  // Re-fit when the functional unit, the orientation or the layout changes, not on every expand
+  useEffect(() => fit(true), [rootId, orientation, cycles]);
   // Centre once on a node found from elsewhere ("Go to in tree"), when it has been laid out
   const centredOn = useRef(null);
   useEffect(() => {
-    const node = focus && focus !== centredOn.current && graph.nodes.find((n) => n.row.id === focus);
+    const node = focus && focus !== centredOn.current && graph.nodes.find((n) => n.rows.some((r) => r.id === focus));
     const el = container.current;
     if (!node || !el) return;
     centredOn.current = focus;
@@ -751,14 +854,15 @@ function TreeGraph({ rows, rootImpact, shareBasis, selection, onToggle, onSelect
   const onPointerUp = () => { drag.current = null; };
 
   if (!rows.length) return html`<div class="empty">Choose a functional unit to start.</div>`;
-  // Boxes show the share of the total or of the parent; edges always the share of the
-  // total, so that the main supply paths stand out
-  const share = (r) => shareOf(r, byId, rootImpact, shareBasis);
-  const ofTotal = (r) => (rootImpact ? r.impacts[0] / rootImpact : 0);
+  const edgeTitle = ({ from, to, rows: links, share: s, back }) =>
+    `${rowNames(to.row, byId, view).main} → ${rowNames(from.row, byId, view).main}${back ? " (loop)" : ""}\n`
+    + `${pct(s)} of the total${links.length > 1 ? ` · ${links.length} places in the tree` : ""}`;
   return html`
     <div class="graph" ref=${container} onWheel=${onWheel} onPointerDown=${onPointerDown}
          onPointerMove=${onPointerMove} onPointerUp=${onPointerUp}>
       <div class="graph-controls">
+        <button class=${cycles ? "primary" : ""} onClick=${() => setCycles(!cycles)}
+          title="Show each process once: a process used in several places has several edges into it, and loops become cycles">Cycles</button>
         <button class=${orientation === "horizontal" ? "primary" : ""} onClick=${() => setOrientation("horizontal")}
           title="Root on the left">→</button>
         <button class=${orientation === "vertical" ? "primary" : ""} onClick=${() => setOrientation("vertical")}
@@ -768,28 +872,30 @@ function TreeGraph({ rows, rootImpact, shareBasis, selection, onToggle, onSelect
       </div>
       <svg width="100%" height="100%">
         <g transform=${`translate(${transform.x},${transform.y}) scale(${transform.k})`}>
-          ${graph.edges.map(({ from, to }) => {
-            const s = ofTotal(to.row);
-            return html`<path key=${`e-${to.row.id}`} class="edge ${s < 0 ? "neg" : ""}" d=${edgePath(from, to, orientation)}
-              stroke-width=${1 + 14 * Math.min(1, Math.abs(s))} />`;
-          })}
-          ${graph.nodes.map(({ row: r, x, y }) => {
-            const s = share(r);
+          ${graph.edges.map((e) => html`
+            <path key=${`e-${e.key}`} class="edge ${e.share < 0 ? "neg" : ""} ${e.back ? "back" : ""}"
+              d=${edgePath(e.from, e.to, orientation, e.back)} stroke-width=${1 + 14 * Math.min(1, Math.abs(e.share))}>
+              <title>${edgeTitle(e)}</title>
+            </path>`)}
+          ${graph.nodes.map(({ key, row: r, rows: places, share: s, x, y }) => {
             const [product, name, location] = r.kind === "process" ? r.label.split(" | ") : [r.label];
             const names = rowNames(r, byId, view);
             const title = names.main;
             const amountText = rowAmount(r);
             const qualifier = r.kind === "process" && view.naming === "full" ? location : names.qual;
-            const subtitle = [qualifier, r.kind === "merged" && "merged", r.kind === "group" && "group",
+            const subtitle = [places.length > 1 && `×${places.length}`, qualifier, r.kind === "merged" && "merged", r.kind === "group" && "group",
               r.kind === "direct" && "of the parent process", amountText].filter(Boolean).join(" · ");
             const toggleAt = orientation === "horizontal" ? [x + BOX.w, y + BOX.h / 2] : [x + BOX.w / 2, y + BOX.h];
             const barWidth = BOX.w - 20 - 52;
+            // A node shown in several places expands at its first place, and collapses everywhere
+            const toggle = () => onToggle(r.expanded ? places.filter((p) => p.expanded) : [places.find((p) => p.expandable)]);
+            const first = places[0];
             return html`
-              <g key=${r.id} data-id=${r.id} class="node ${r.kind} ${selection.has(r.id) ? "selected" : ""} ${focus === r.id ? "focus" : ""}"
-                 onClick=${(e) => onSelect(r, e.ctrlKey || e.metaKey || e.shiftKey)}
-                 onDblClick=${() => r.expandable && onToggle(r)}
-                 onContextMenu=${(e) => onInfo(r, e)}>
-                <title>${r.kind === "process" ? `${product} | ${name} | ${location}` : r.label}\n${fmt(r.impacts[0])} (${pct(s)})</title>
+              <g key=${key} data-id=${first.id} class="node ${r.kind} ${places.some((p) => selection.has(p.id)) ? "selected" : ""} ${places.some((p) => focus === p.id) ? "focus" : ""}"
+                 onClick=${(e) => onSelect(first, e.ctrlKey || e.metaKey || e.shiftKey)}
+                 onDblClick=${() => r.expandable && toggle()}
+                 onContextMenu=${(e) => onInfo(first, e)}>
+                <title>${r.kind === "process" ? `${product} | ${name} | ${location}` : r.label}\n${fmt(r.impacts[0])} (${pct(s)})${places.length > 1 ? `\nIn ${places.length} places in the tree: amounts summed, loops counted once` : ""}</title>
                 <rect x=${x} y=${y} width=${BOX.w} height=${BOX.h} rx="6" />
                 <text x=${x + 10} y=${y + 17} class="title">${truncate(title, 30)}</text>
                 <text x=${x + 10} y=${y + 32} class="subtitle">${truncate(subtitle, 34)}</text>
@@ -823,7 +929,7 @@ function TreeGraph({ rows, rootImpact, shareBasis, selection, onToggle, onSelect
                       <text x=${x + BOX.w} y=${y + 4} text-anchor="middle">×</text>
                     </g>`)}
                 ${r.expandable && html`
-                  <g class="toggle" onClick=${(e) => { e.stopPropagation(); onToggle(r); }}>
+                  <g class="toggle" onClick=${(e) => { e.stopPropagation(); toggle(); }}>
                     <circle cx=${toggleAt[0]} cy=${toggleAt[1]} r="8" />
                     <text x=${toggleAt[0]} y=${toggleAt[1] + 4} text-anchor="middle">${r.expanded ? "−" : "+"}</text>
                   </g>`}
@@ -2237,6 +2343,8 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
   const [orientation, setOrientation] = useState(() => loadPreference("orientation", "horizontal"));
   useEffect(() => savePreference("display", display), [display]);
   useEffect(() => savePreference("orientation", orientation), [orientation]);
+  const [cycles, setCycles] = useState(() => loadPreference("cycles", "off") === "on");
+  useEffect(() => savePreference("cycles", cycles ? "on" : "off"), [cycles]);
 
   useEffect(() => {
     const i = info;
@@ -2393,15 +2501,18 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
       && m.products.every((p) => row.products.includes(p)))));
   }
 
-  function toggle(row) {
-    // Same semantics as View.expand / View.collapse ("!" marks a group collapsed on purpose)
+  function toggle(rows) {
+    // Same semantics as View.expand / View.collapse ("!" marks a group collapsed on purpose);
+    // several rows for a node of the tree view's cycles mode, shown in several places
     const next = new Set(expanded);
-    if (row.expanded) {
-      next.delete(row.id);
-      if (row.kind === "group") next.add(`!${row.id}`);
-    } else {
-      next.delete(`!${row.id}`);
-      next.add(row.id);
+    for (const row of Array.isArray(rows) ? rows : [rows]) {
+      if (row.expanded) {
+        next.delete(row.id);
+        if (row.kind === "group") next.add(`!${row.id}`);
+      } else {
+        next.delete(`!${row.id}`);
+        next.add(row.id);
+      }
     }
     setExpanded(next);
   }
@@ -2715,7 +2826,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
                 onUngroup=${ungroup} ungroupable=${(r) => manualRuleFor(r) >= 0} onMergeGroup=${(r) => mergeRows([r])} onUnpin=${unpin} onPin=${pin} onMoveToOthers=${moveToOthers} onInfo=${showInfo} onUnmerge=${unmerge} view=${view} focus=${focus} />`
             : html`<${TreeGraph} rows=${data.rows} rootImpact=${rootImpact} shareBasis=${cutoffBasis} selection=${selection} onToggle=${toggle} onSelect=${select}
                 onUngroup=${ungroup} ungroupable=${(r) => manualRuleFor(r) >= 0} onMergeGroup=${(r) => mergeRows([r])} onUnpin=${unpin} onPin=${pin} onMoveToOthers=${moveToOthers} onInfo=${showInfo} onUnmerge=${unmerge} view=${view}
-                orientation=${orientation} setOrientation=${setOrientation} focus=${focus} />`}
+                orientation=${orientation} setOrientation=${setOrientation} cycles=${cycles} setCycles=${setCycles} focus=${focus} />`}
           ${bundle?.kind === "rest" && html`<${OthersPopup} target=${infoTarget} rest=${bundle} rows=${data.rows} rootImpact=${rootImpact}
               cutoff=${cutoff} cutoffBasis=${cutoffBasis} pinned=${pinned} setPinned=${setPinned} others=${others} setOthers=${setOthers}
               view=${view} onClose=${() => setInfoTarget(null)} onBack=${backInfo}

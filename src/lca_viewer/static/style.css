@@ -253,6 +253,8 @@ table.results td.num { text-align: right; font-family: var(--mono); }
 .graph-hint { position: absolute; bottom: 6px; left: 10px; color: var(--muted); font-size: 11px; pointer-events: none; }
 .graph .edge { fill: none; stroke: var(--bar); stroke-opacity: .55; }
 .graph .edge.neg { stroke: var(--bar-negative); }
+.graph .edge.back { stroke-dasharray: 6 4; }
+.graph .edge:hover { stroke-opacity: .85; }
 .graph .node { cursor: pointer; }
 .graph .node > rect:first-of-type { fill: var(--panel); stroke: var(--border); stroke-width: 1; }
 .graph .node:hover > rect:first-of-type { stroke: var(--accent); }
