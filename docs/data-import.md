@@ -63,7 +63,75 @@ Each loaded model is mounted at `/db/<key>/` with the API of `create_app`;
   them, and that is the user's call.
 - Default method of a model: EF v3.1 climate change (GWP100), also when the
   method names start with the ecoinvent release (as `ecoinvent_interface`
-  writes them), else the first climate change GWP100 method.
+  writes them), else the first climate change GWP100 method, else the first
+  "global warming" one (Ecological Scarcity 2021 in BAFU).
+
+## Changing projects from the app
+
+The Brightway projects section of *Load database* and the *Create dataset*
+panel change projects. Each change runs as `lca-viewer project …`,
+`lca-viewer import …` or `lca-viewer dataset …` in a separate process with
+`BRIGHTWAY2_DIR` set to the chosen folder (`server.create_library.cli`), as
+builds do: the server itself never imports bw2data.
+
+- **Projects** (`lca_viewer.editing`): `create_project` (optionally with
+  `importing.setup_project`: biosphere3 and the ecoinvent 3.9 methods bundled
+  with bw2io), `delete_project` (with its folder; bw2data refuses to delete
+  the last project of a folder), `restore_project` (`bw2io.restore_project_directory`).
+  bw2data adds a `default` project to a folder that has none when it is
+  imported, so a new folder gets one.
+- **Backups from files.brightway.dev**: the list is its
+  `projects-config.json` (with a built-in copy when offline). `BAFU-2025-v2`
+  is the Swiss LCI database (BAFU/UVEK 2025) as a Brightway 2.5 project: its
+  own biosphere (`BAFU-2025-biosphere`, every flow typed `emission`, resources
+  told apart by their SimaPro compartment `resources`), 11,747 processes and
+  the 21 Ecological Scarcity 2021 methods. Downloaded to `data/downloads`
+  (60 MB), restored, then deleted. Checked: restore, build (20 s) and a
+  dataset written into it.
+- **Imports**: `lca-viewer import ecospold2` now takes the `.7z` archive too
+  (unpacked into `data/unpacked`, deleted after the import) and `--biosphere`
+  (default `biosphere3`, installed with the methods if missing; with another
+  biosphere database, nothing is installed). The SimaPro CSV import is
+  unchanged; the page lists randonneur_data's transformations (`/api/adapters`,
+  with those `default_migrations` picks for the ticked background databases)
+  and, when exchanges stay unlinked, the rows of the report CSV, then offers
+  `--unlinked drop`.
+- **Uploads**: a file chosen in the page is streamed to `data/uploads`
+  (`/api/upload`, raw body, no multipart dependency) and deleted once an
+  import or restore used it.
+- `/api/brightway` lists a folder without `projects.db` as empty (New project
+  creates it), and 404 only for a folder that does not exist.
+
+## Datasets created in the app
+
+`editing.write_dataset` writes a dataset entered in *Create dataset*:
+
+- **Single output**: a process with a production exchange to itself (as
+  ecoinvent), in any database of the project.
+- **Co-products**: a `multifunctional` node with one product node per
+  co-product, each functional production exchange carrying
+  `properties["manual_allocation"]` = its percentage, then
+  `node.allocate("manual_allocation")`: one read-only allocated process per
+  product, scaling every non-functional exchange by its share (the structure
+  of a SimaPro CSV import, which `brightway._product_rows` already handles).
+  Needs a database with the `multifunctional` backend: new databases made by
+  the panel have it (`default_allocation="manual_allocation"`).
+- **Exchanges**: technosphere inputs link to a process's product node when it
+  has a separate one (`editing._supplier`); waste to treatment is a negative
+  technosphere amount (as in ecoinvent, where treatment produces -1); avoided
+  products are `substitution` exchanges; resources and emissions `biosphere`.
+  Each carries its comment, and SimaPro's lognormal SD² becomes
+  `uncertainty type` 2 with `scale = ln(SD²)/2`.
+- **Documentation**: the fields go to `documentation` (a dict) and, after the
+  comment, into `comment`, which the process pop-up shows.
+- **Search** for the exchanges reads the project's SQLite file directly
+  (`sources.search_nodes`): processes with SQL `LIKE` on name, product and
+  location (a word equal to a location ranks that location first), flows from
+  a per-project cache matched on name and compartment. About 0.1 s on
+  ecoinvent, without bw2data.
+- Checked: co-product scores equal the hand calculation, on toy data
+  (`tests/test_editing.py`) and on BAFU (Swiss electricity, methane, river
+  water; Ecological Scarcity 2021).
 
 ## Decision: go through Brightway for ecoSpold2
 

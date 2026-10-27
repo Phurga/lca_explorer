@@ -11,7 +11,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -119,6 +119,7 @@ def _default_method(model: LCAModel) -> int:
         lambda n: "climate change" in n and "gwp100" in n[-1] and "no lt" not in n[-1],
         lambda n: "climate change" in " ".join(n) and "gwp100" in n[-1] and "no lt" not in " ".join(n),
         lambda n: "climate change" in " ".join(n),
+        lambda n: "global warming" in " ".join(n),  # e.g. Ecological Scarcity 2021 (BAFU)
     ]
     for test in tests:
         found = next((k for k, name in enumerate(names) if test(name)), None)
@@ -543,6 +544,50 @@ class UnloadRequest(BaseModel):
     key: str
 
 
+class ProjectRequest(BaseModel):
+    folder: str
+    """A Brightway data folder (created if needed)."""
+    name: str
+    setup: bool = False
+    """Install the biosphere and impact methods bundled with Brightway (ecoinvent 3.9)."""
+
+
+class DeleteProjectRequest(BaseModel):
+    folder: str
+    project: str
+    confirm: str
+    """The project's name again, typed by the user."""
+
+
+class RestoreRequest(BaseModel):
+    folder: str
+    file: str | None = None
+    """A backup archive (.tar.gz) on this computer, or ``remote``: a project of files.brightway.dev."""
+    remote: str | None = None
+    name: str | None = None
+
+
+class ImportRequest(BaseModel):
+    folder: str
+    project: str
+    format: str
+    """"ecospold2" (a .7z release or the folder it was unpacked to) or "simapro-csv"."""
+    path: str
+    database: str
+    biosphere: str = "biosphere3"
+    link_to: list[str] = []
+    migrations: list[str] | None = None
+    """randonneur_data transformations (SimaPro CSV); default: chosen from ``link_to``."""
+    unlinked: str = "fail"
+
+
+class DatasetRequest(BaseModel):
+    folder: str
+    project: str
+    spec: dict
+    """See :func:`lca_viewer.editing.write_dataset`."""
+
+
 def model_key(path) -> str:
     """URL-safe name of a model directory, used in ``/db/<key>/``."""
     from .sources import slug
@@ -633,6 +678,28 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
                              f"(e.g. with bw2io's bw2setup or ecoinvent_interface)")
         return p, d
 
+    def cli(job: dict, folder: str, args: list[str], message=None) -> list[str]:
+        """Run ``lca-viewer <args>`` on the Brightway data folder ``folder`` in a separate process
+        (bw2data's folder is fixed when it is imported), its output going to the job's log;
+        ``message(line)`` gives the job's message for a line, or a false value to keep it."""
+        command = [sys.executable, "-m", "lca_viewer.cli", *args]
+        env = {**os.environ, "BRIGHTWAY2_DIR": folder, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"}
+        Path(folder).mkdir(parents=True, exist_ok=True)
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env,
+                                   text=True, encoding="utf-8", errors="replace")
+        lines = []
+        for line in process.stdout:
+            line = line.rstrip()
+            if line:
+                lines.append(line)
+                job["log"].append(line)
+                shown = message(line) if message else None
+                if shown:
+                    job["message"] = shown
+        if process.wait() != 0:
+            raise ValueError(lines[-1] if lines else "no output")
+        return lines
+
     def build(job: dict, folder: str, project: str, database: str, rebuild: bool) -> dict:
         """The catalog entry of a Brightway database's model, built (in a separate process) if
         there is none yet, or again with ``rebuild`` (the page asks for it when the project
@@ -656,20 +723,13 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
         job["message"] = building
         part = output.with_name(output.name + ".part")
         shutil.rmtree(part, ignore_errors=True)
-        command = [sys.executable, "-m", "lca_viewer.cli", "build", "--project", project, "--database", database,
-                   "--output", str(part)]
-        env = {**os.environ, "BRIGHTWAY2_DIR": folder, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"}
-        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env,
-                                   text=True, encoding="utf-8", errors="replace")
-        for line in process.stdout:
-            line = line.rstrip()
-            if line:
-                job["log"].append(line)
-                if line.startswith("Reading"):  # the steps of from_brightway, not Brightway's own messages
-                    job["message"] = f"{building}: {line[0].lower()}{line[1:]}"
-        if process.wait() != 0:
+        try:
+            # The steps of from_brightway, not Brightway's own messages
+            cli(job, folder, ["build", "--project", project, "--database", database, "--output", str(part)],
+                lambda line: line.startswith("Reading") and f"{building}: {line[0].lower()}{line[1:]}")
+        except ValueError as e:
             shutil.rmtree(part, ignore_errors=True)
-            raise ValueError(f"The build failed: {job['log'][-1] if job['log'] else 'no output'}")
+            raise ValueError(f"The build failed: {e}") from None
         old = output.with_name(output.name + ".old")
         shutil.rmtree(old, ignore_errors=True)
         with lock:  # not while the database is being opened
@@ -691,28 +751,46 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
         sources.register(data, output, title, None, source)
         return {"path": str(output), "title": title, "default_root": None}
 
-    def run(job: dict, req: LoadRequest) -> None:
-        try:
-            if req.brightway:
-                entry = build(job, req.brightway, req.project, req.database, req.rebuild)
-            else:
-                entry = next((m for m in sources.catalog(data) if Path(m["path"]) == Path(req.path).resolve()), None)
-                if entry is None:
-                    raise ValueError(f"{req.path} is not in {data / 'models.json'}")
-            key = loaded_key(entry["path"])
-            if key is None:
-                if not (Path(entry["path"]) / "A.npz").exists():
-                    raise ValueError(f"No model in {entry['path']} (no A.npz): build it again")
-                job["message"] = f"Loading {entry['title']} and factorising its matrix"
-                key = mount(entry["path"], entry["title"], entry.get("default_root"))
-            job.update(status="done", key=key, message=f"{entry['title']} is ready")
-        except Exception as e:  # reported to the page
-            job.update(status="failed", error=str(e) or type(e).__name__)
-        finally:
-            job["seconds"] = round(time.perf_counter() - job["_start"], 1)
+    def run(job: dict, req: LoadRequest) -> dict:
+        if req.brightway:
+            entry = build(job, req.brightway, req.project, req.database, req.rebuild)
+        else:
+            entry = next((m for m in sources.catalog(data) if Path(m["path"]) == Path(req.path).resolve()), None)
+            if entry is None:
+                raise ValueError(f"{req.path} is not in {data / 'models.json'}")
+        key = loaded_key(entry["path"])
+        if key is None:
+            if not (Path(entry["path"]) / "A.npz").exists():
+                raise ValueError(f"No model in {entry['path']} (no A.npz): build it again")
+            job["message"] = f"Loading {entry['title']} and factorising its matrix"
+            key = mount(entry["path"], entry["title"], entry.get("default_root"))
+        return {"key": key, "message": f"{entry['title']} is ready"}
 
     def public(job: dict) -> dict:
         return {k: v for k, v in job.items() if not k.startswith("_")}
+
+    def start(title: str, target: tuple, work, *args) -> dict:
+        """Run ``work(job, *args)`` in the background, one job per ``target`` at a time; what it
+        returns is added to the job, which the page follows with ``/api/jobs/<id>``."""
+        with lock:
+            for job in jobs.values():  # already under way
+                if job["status"] == "running" and job["_target"] == target:
+                    return public(job)
+            job = {"id": uuid.uuid4().hex[:12], "status": "running", "message": "Starting", "log": [],
+                   "title": title, "_target": target, "_start": time.perf_counter()}
+            jobs[job["id"]] = job
+
+        def go():
+            try:
+                job.update(work(job, *args) or {})
+                job["status"] = "done"
+            except Exception as e:  # reported to the page
+                job.update(status="failed", error=str(e) or type(e).__name__)
+            finally:
+                job["seconds"] = round(time.perf_counter() - job["_start"], 1)
+
+        threading.Thread(target=go, daemon=True).start()
+        return public(job)
 
     @app.get("/api/databases")
     def databases():
@@ -740,7 +818,9 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
         try:
             projects = sources.brightway_projects(folder)
         except FileNotFoundError as e:
-            raise HTTPException(404, str(e))
+            if not Path(folder).expanduser().is_dir():
+                raise HTTPException(404, str(e))
+            projects = []  # a folder without projects yet: New project creates the first one
         folder = str(Path(folder).expanduser().resolve())
         built = {}
         for m in sources.catalog(data):
@@ -759,17 +839,9 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
         """Load a database in the background; follow it with ``/api/jobs/<id>``."""
         if not req.path and not (req.brightway and req.project and req.database):
             raise HTTPException(400, "Give a model path, or a Brightway folder, project and database")
-        target = (req.path and str(Path(req.path).resolve()), req.brightway and str(Path(req.brightway).expanduser().resolve()),
-                  req.project, req.database)
-        with lock:
-            for job in jobs.values():  # already under way
-                if job["status"] == "running" and job["_target"] == target:
-                    return public(job)
-            job = {"id": uuid.uuid4().hex[:12], "status": "running", "message": "Starting", "log": [],
-                   "title": req.database or Path(req.path).name, "_target": target, "_start": time.perf_counter()}
-            jobs[job["id"]] = job
-        threading.Thread(target=run, args=(job, req), daemon=True).start()
-        return public(job)
+        target = ("load", req.path and str(Path(req.path).resolve()),
+                  req.brightway and str(Path(req.brightway).expanduser().resolve()), req.project, req.database)
+        return start(req.database or Path(req.path).name, target, run, req)
 
     @app.get("/api/jobs/{job_id}")
     def job_status(job_id: str):
@@ -789,6 +861,197 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
             app.router.routes.remove(m["route"])
         gc.collect()
         return listing()
+
+    # ------------------------------------------------ Brightway projects: changes, in jobs
+
+    def folder_of(path: str) -> str:
+        return str(Path(path.strip().strip("'\"")).expanduser().resolve())
+
+    def project_names(folder: str) -> list[str]:
+        try:
+            return [p["name"] for p in sources.brightway_projects(folder)]
+        except FileNotFoundError:
+            return []
+
+    def ours(line: str):
+        """The progress lines of lca_viewer.editing, not Brightway's own messages."""
+        return line if line.startswith(("Created project", "Installing", "Deleted project", "Restor")) \
+            or line.endswith("impact methods installed") else None
+
+    def uploaded(path: Path) -> None:
+        """Delete a file the page uploaded (``/api/upload``) once it has been used."""
+        if Path(path).resolve().parent == (data / "uploads").resolve():
+            Path(path).unlink(missing_ok=True)
+
+    @app.post("/api/brightway/projects")
+    def create_project(req: ProjectRequest):
+        folder = folder_of(req.folder)
+        name = req.name.strip()
+        if not name:
+            raise HTTPException(400, "Give the project a name")
+        if name in project_names(folder):
+            raise HTTPException(400, f"Project {name!r} already exists in {folder}")
+
+        def work(job):
+            cli(job, folder, ["project", "create", name, *(["--setup"] if req.setup else [])], ours)
+            return {"message": f"Project {name} is ready" + (" (with biosphere and impact methods)" if req.setup else "")}
+
+        return start(f"project {name}", ("create", folder, name), work)
+
+    @app.post("/api/brightway/projects/delete")
+    def delete_project(req: DeleteProjectRequest):
+        folder = folder_of(req.folder)
+        if req.confirm != req.project:
+            raise HTTPException(400, "Type the project's name to confirm")
+        if req.project not in project_names(folder):
+            raise HTTPException(404, f"No project {req.project!r} in {folder}")
+
+        def work(job):
+            cli(job, folder, ["project", "delete", req.project], ours)
+            return {"message": f"Project {req.project} deleted"}
+
+        return start(f"project {req.project}", ("delete", folder, req.project), work)
+
+    @app.get("/api/brightway/remote")
+    def remote():
+        """Brightway projects published on files.brightway.dev (BAFU, USEEIO, …)."""
+        return [{"name": k, "file": v} for k, v in sources.remote_projects().items()]
+
+    @app.post("/api/brightway/restore")
+    def restore(req: RestoreRequest):
+        """A project from a backup archive: a file on this computer, or downloaded from files.brightway.dev."""
+        import urllib.request
+
+        folder = folder_of(req.folder)
+        name = (req.name or "").strip() or None
+        if name and name in project_names(folder):
+            raise HTTPException(400, f"Project {name!r} already exists in {folder}")
+        if not req.file and not req.remote:
+            raise HTTPException(400, "Give a backup file, or a project of files.brightway.dev")
+        if req.file and not Path(folder_of(req.file)).is_file():
+            raise HTTPException(404, f"No file {req.file}")
+
+        def work(job):
+            path = Path(folder_of(req.file)) if req.file else None
+            if req.remote:
+                archive = sources.remote_projects().get(req.remote)
+                if not archive:
+                    raise ValueError(f"No project {req.remote!r} on files.brightway.dev")
+                path = data / "downloads" / archive
+                path.parent.mkdir(parents=True, exist_ok=True)
+                part = path.with_name(path.name + ".part")
+                with urllib.request.urlopen(sources.REMOTE + archive, timeout=60) as response, open(part, "wb") as out:
+                    size, done = int(response.headers.get("Content-Length") or 0), 0
+                    while chunk := response.read(1 << 20):
+                        out.write(chunk)
+                        done += len(chunk)
+                        job["message"] = (f"Downloading {archive}: {done >> 20} of {size >> 20} MB" if size
+                                          else f"Downloading {archive}: {done >> 20} MB")
+                part.replace(path)
+            lines = cli(job, folder, ["project", "restore", *([name] if name else []), "--file", str(path)],
+                        ours)
+            if req.remote:
+                path.unlink(missing_ok=True)
+            else:
+                uploaded(path)
+            return {"message": lines[-1] if lines else "Restored"}
+
+        return start(f"project {name or req.remote or Path(req.file).name}", ("restore", folder, name, req.file, req.remote), work)
+
+    @app.post("/api/upload")
+    async def upload(request: Request, name: str):
+        """A file chosen in the page (an archive, a SimaPro CSV), kept in ``data/uploads`` until used."""
+        target = data / "uploads" / sources.slug(Path(name).name)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        part = target.with_name(target.name + ".part")
+        with open(part, "wb") as out:
+            async for chunk in request.stream():
+                out.write(chunk)
+        part.replace(target)
+        return {"path": str(target), "size": target.stat().st_size}
+
+    @app.get("/api/adapters")
+    def adapters(link_to: list[str] = Query([])):
+        """randonneur_data transformations for SimaPro CSV imports, and those chosen by default
+        for the background databases ``link_to``."""
+        from .importing import default_migrations
+
+        return {"adapters": sources.adapters(), "default": default_migrations(link_to)}
+
+    @app.post("/api/brightway/import")
+    def import_database(req: ImportRequest):
+        """Import an ecoSpold2 release or a SimaPro CSV into a project (``lca-viewer import``)."""
+        folder = folder_of(req.folder)
+        path = Path(folder_of(req.path))
+        database = req.database.strip()
+        if req.format not in ("ecospold2", "simapro-csv"):
+            raise HTTPException(400, f"Unknown format {req.format!r}")
+        if not path.exists():
+            raise HTTPException(404, f"Nothing at {path}")
+        if not database:
+            raise HTTPException(400, "Give the new database a name")
+        if req.project not in project_names(folder):
+            raise HTTPException(404, f"No project {req.project!r} in {folder}")
+        report = data / f"import-{sources.slug(database)}-unlinked.csv"
+
+        def work(job):
+            import csv
+
+            args = ["import", req.format, str(path), "--project", req.project, "--database", database,
+                    "--biosphere", req.biosphere, "--data", str(data)]
+            if req.format == "simapro-csv":
+                args += ["--unlinked", req.unlinked, "--report", str(report)]
+                if req.link_to:
+                    args += ["--link-to", *req.link_to]
+                if req.migrations is not None:
+                    args += ["--migration", *req.migrations]
+            report.unlink(missing_ok=True)
+            try:
+                lines = cli(job, folder, args, lambda line: line if not line.startswith((" ", "\t", "[")) else None)
+            except ValueError as e:
+                if report.exists():  # unlinked exchanges: the page lists them and offers to drop them
+                    with open(report, encoding="utf-8") as f:
+                        job["report"] = list(csv.DictReader(f))[:300]
+                    job["report_path"] = str(report)
+                raise ValueError(str(e)) from None
+            uploaded(path)
+            return {"message": lines[-1] if lines else f"{database} imported", "database": database}
+
+        return start(f"{database} ({req.project})", ("import", folder, req.project, database), work)
+
+    @app.get("/api/brightway/search")
+    def search_nodes(folder: str, project: str, q: str = "", kind: str = "process", database: str | None = None,
+                     limit: int = 40):
+        """Processes, resources or emissions of a project, for the exchanges of a new dataset."""
+        if kind not in ("process", "resource", "emission"):
+            raise HTTPException(400, f"Unknown kind {kind!r}")
+        try:
+            return sources.search_nodes(folder_of(folder), project, q, kind, database, limit)
+        except (FileNotFoundError, ValueError) as e:
+            raise HTTPException(404, str(e))
+
+    @app.post("/api/brightway/dataset")
+    def write_dataset(req: DatasetRequest):
+        """Write a new dataset into a project (``lca-viewer dataset``)."""
+        import json
+        import tempfile
+
+        folder = folder_of(req.folder)
+        if req.project not in project_names(folder):
+            raise HTTPException(404, f"No project {req.project!r} in {folder}")
+
+        def work(job):
+            with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as f:
+                json.dump(req.spec, f)
+            try:
+                lines = cli(job, folder, ["dataset", f.name, "--project", req.project], lambda line: None)
+            finally:
+                Path(f.name).unlink(missing_ok=True)
+            result = next((json.loads(line[7:]) for line in reversed(lines) if line.startswith("RESULT ")), {})
+            return {"result": result, "message": f"{req.spec['process']['name']} saved in {result.get('database')}"}
+
+        name = (req.spec.get("process") or {}).get("name") or "dataset"
+        return start(name, ("dataset", folder, req.project, name, uuid.uuid4().hex), work)
 
     page_headers = {"Cache-Control": "no-cache"}  # what "/" shows changes with the databases loaded
 

@@ -21,7 +21,7 @@ async function serverRequest(url, body) {
   if (!response.ok) {
     let detail = await response.text();
     try { detail = JSON.parse(detail).detail ?? detail; } catch { /* not JSON */ }
-    if (response.status === 404 || response.status === 405) {
+    if ((response.status === 404 && detail === "Not Found") || response.status === 405) {  // an unknown route
       detail = `The server does not know this request (${detail}). It is probably running older code: restart it.`;
     }
     throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
@@ -379,9 +379,175 @@ function DatabaseSelect({ databases }) {
     </select>`;
 }
 
+// A file chosen in the page, sent to the server (data/uploads) for an import: resolves to its path there
+function uploadFile(file, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `/api/upload?name=${encodeURIComponent(file.name)}`);
+    xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded / e.total);
+    xhr.onload = () => (xhr.status < 300 ? resolve(JSON.parse(xhr.responseText).path) : reject(new Error(xhr.responseText)));
+    xhr.onerror = () => reject(new Error("The upload failed"));
+    xhr.send(file);
+  });
+}
+
+// A path on the server's computer: typed or pasted, or a file chosen here and uploaded
+function PathInput({ value, onChange, accept, placeholder }) {
+  const [progress, setProgress] = useState(null);
+  const [error, setError] = useState(null);
+  const input = useRef(null);
+  function choose(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    setError(null);
+    setProgress(0);
+    uploadFile(file, setProgress).then((path) => { setProgress(null); onChange(path); })
+      .catch((err) => { setProgress(null); setError(err.message); });
+  }
+  return html`
+    <div class="path-input">
+      <input value=${value} placeholder=${placeholder} onInput=${(e) => onChange(e.target.value.trim().replace(/^["']|["']$/g, ""))} />
+      <input type="file" ref=${input} accept=${accept} style="display:none" onChange=${choose} />
+      <button type="button" disabled=${progress !== null} onClick=${() => input.current.click()}
+        title="Choose the file here: it is copied to the app's data folder for the import, then deleted">
+        ${progress !== null ? `Uploading ${Math.round(progress * 100)} %` : "Choose file…"}</button>
+    </div>
+    ${error && html`<div class="error">${error}</div>`}`;
+}
+
+const ECOSPOLD_NAME = (path) => {
+  // "ecoinvent 3.9.1_cutoff_ecoSpold02.7z" -> "ecoinvent-3.9.1-cutoff"
+  const name = path.split(/[\\/]/).filter(Boolean).pop() || "";
+  const version = name.match(/\d+\.\d+(\.\d+)?/)?.[0];
+  const model = ["cutoff", "apos", "consequential", "en15804"].find((m) => name.toLowerCase().replace(/[-_ ]/g, "").includes(m));
+  return version ? `ecoinvent-${version}${model ? `-${model}` : ""}` : name.replace(/\.(7z|csv)$/i, "");
+};
+
+// The forms of the Brightway projects section: a new project, one from a backup (BAFU on
+// files.brightway.dev), an ecoSpold2 or SimaPro CSV import, a deletion. Each starts a job.
+function ProjectForm({ form, folder, projects, onJob, onCancel, busy }) {
+  const project = projects?.projects.find((p) => p.name === form.project);
+  const flowDbs = (project?.databases || []).filter((d) => !d.processes).map((d) => d.name);
+  const processDbs = (project?.databases || []).filter((d) => d.processes).map((d) => d.name);
+  const [name, setName] = useState("");
+  const [setup, setSetup] = useState(true);
+  const [path, setPath] = useState("");
+  const [database, setDatabase] = useState("");
+  const [biosphere, setBiosphere] = useState(flowDbs.includes("biosphere3") || !flowDbs.length ? "biosphere3" : flowDbs[0]);
+  const [linkTo, setLinkTo] = useState(processDbs.filter((d) => /ecoinvent/i.test(d)).slice(0, 1));
+  const [adapters, setAdapters] = useState(null);
+  const [chosen, setChosen] = useState(null);  // null: the defaults for linkTo
+  const [remote, setRemote] = useState(null);
+  const [source, setSource] = useState("remote");
+  const [remoteName, setRemoteName] = useState("BAFU-2025-v2");
+  const [confirm, setConfirm] = useState("");
+  useEffect(() => { if (path && !database) setDatabase(ECOSPOLD_NAME(path)); }, [path]);
+  useEffect(() => {
+    if (form.kind === "simapro") {
+      serverRequest(`/api/adapters?${linkTo.map((d) => `link_to=${encodeURIComponent(d)}`).join("&")}`).then(setAdapters).catch(() => setAdapters({ adapters: [], default: [] }));
+    }
+  }, [form.kind, linkTo.join("|")]);
+  useEffect(() => { if (form.kind === "restore") serverRequest("/api/brightway/remote").then(setRemote).catch(() => setRemote([])); }, [form.kind]);
+  const migrations = chosen ?? adapters?.default ?? [];
+  const toggle = (list, item) => (list.includes(item) ? list.filter((x) => x !== item) : [...list, item]);
+  const submit = (url, body) => (e) => { e.preventDefault(); onJob(url, body); };
+  const actions = (label, disabled, danger) => html`
+    <div class="form-actions">
+      <button type="submit" class=${danger ? "danger" : "primary"} disabled=${disabled || busy}>${label}</button>
+      <button type="button" onClick=${onCancel}>Cancel</button>
+    </div>`;
+  const biosphereSelect = html`
+    <label>Elementary flows from
+      <select value=${biosphere} onChange=${(e) => setBiosphere(e.target.value)}>
+        ${flowDbs.map((d) => html`<option value=${d}>${d}</option>`)}
+        ${!flowDbs.includes("biosphere3") && html`<option value="biosphere3">biosphere3 (installed now, with the ecoinvent 3.9 impact methods)</option>`}
+      </select>
+    </label>`;
+
+  if (form.kind === "new") return html`
+    <form class="project-form" onSubmit=${submit("/api/brightway/projects", { folder, name, setup })}>
+      <h4>New Brightway project</h4>
+      <label>Name <input value=${name} onInput=${(e) => setName(e.target.value)} placeholder="e.g. my study" autofocus /></label>
+      <label class="check"><input type="checkbox" checked=${setup} onChange=${(e) => setSetup(e.target.checked)} />
+        Install the biosphere and impact methods that come with Brightway (those of ecoinvent 3.9, a few minutes):
+        needed to import an ecoSpold2 or SimaPro CSV database into it</label>
+      ${actions("Create project", !name.trim())}
+    </form>`;
+  if (form.kind === "restore") return html`
+    <form class="project-form" onSubmit=${submit("/api/brightway/restore", source === "remote"
+      ? { folder, remote: remoteName, name: name || null } : { folder, file: path, name: name || null })}>
+      <h4>Add a project from a Brightway backup</h4>
+      <label class="check"><input type="radio" checked=${source === "remote"} onChange=${() => setSource("remote")} />
+        Download from files.brightway.dev</label>
+      ${source === "remote" && html`
+        <select value=${remoteName} onChange=${(e) => setRemoteName(e.target.value)} aria-label="Project to download">
+          ${(remote || [{ name: "BAFU-2025-v2" }]).map((r) => html`<option value=${r.name}>${r.name}${r.name.startsWith("BAFU") ? " — Swiss LCI database (BAFU/UVEK)" : ""}</option>`)}
+        </select>`}
+      <label class="check"><input type="radio" checked=${source === "file"} onChange=${() => setSource("file")} />
+        From a backup file (.tar.gz) you downloaded, e.g. BAFU from files.brightway.dev</label>
+      ${source === "file" && html`<${PathInput} value=${path} onChange=${setPath} accept=".gz,.tar.gz" placeholder="Path of the .tar.gz file" />`}
+      <label>Project name <input value=${name} onInput=${(e) => setName(e.target.value)} placeholder="default: the name in the archive" /></label>
+      ${actions(source === "remote" ? "Download and add" : "Add project", source === "file" && !path)}
+    </form>`;
+  if (form.kind === "ecospold2") return html`
+    <form class="project-form" onSubmit=${submit("/api/brightway/import", { folder, project: form.project, format: "ecospold2", path, database, biosphere })}>
+      <h4>Add an ecoSpold2 database to ${form.project}</h4>
+      <label>ecoSpold2 release: the .7z archive, or the folder it was unpacked to
+        <${PathInput} value=${path} onChange=${setPath} accept=".7z" placeholder="e.g. C:\\Downloads\\ecoinvent 3.9.1_cutoff_ecoSpold02.7z" /></label>
+      <label>Database name <input value=${database} onInput=${(e) => setDatabase(e.target.value)} placeholder="e.g. ecoinvent-3.9.1-cutoff" /></label>
+      ${biosphereSelect}
+      ${biosphere === "biosphere3" && database && !/3\.9/.test(database) && html`
+        <p class="note">biosphere3 and the impact methods that come with Brightway are those of ecoinvent 3.9: with another
+          version, some elementary flows may not link and some factors may not match.</p>`}
+      <p class="muted small">About 10 minutes for ecoinvent; an archive is unpacked first (2.6 GB, deleted afterwards).</p>
+      ${actions("Import", !path || !database.trim())}
+    </form>`;
+  if (form.kind === "simapro") return html`
+    <form class="project-form" onSubmit=${submit("/api/brightway/import", {
+      folder, project: form.project, format: "simapro-csv", path, database, biosphere, link_to: linkTo, migrations,
+      unlinked: form.unlinked || "fail" })}>
+      <h4>Add a SimaPro CSV database to ${form.project}</h4>
+      <label>SimaPro CSV export (processes)
+        <${PathInput} value=${path} onChange=${setPath} accept=".csv,.CSV" placeholder="e.g. C:\\Downloads\\AGB32_final.CSV" /></label>
+      <label>Database name <input value=${database} onInput=${(e) => setDatabase(e.target.value)} placeholder="e.g. agribalyse-3.2" /></label>
+      <fieldset>
+        <legend>Background databases its inputs link to</legend>
+        ${processDbs.length ? processDbs.map((d) => html`
+          <label class="check"><input type="checkbox" checked=${linkTo.includes(d)} onChange=${() => { setLinkTo(toggle(linkTo, d)); setChosen(null); }} /> ${d}</label>`)
+          : html`<p class="muted small">None in this project: inputs from ecoinvent or another database will not link.</p>`}
+      </fieldset>
+      ${biosphereSelect}
+      <details class="adapters" open=${migrations.length > 0}>
+        <summary>Adapters: ${migrations.length ? migrations.join(", ") : "none"}</summary>
+        <p class="muted small">Correspondence files from Départ de Sentier's randonneur_data (with PRé's SimaPro ↔ ecoinvent
+          names): they rename the SimaPro inputs and flows to those of the background database before linking. Those for
+          the background databases chosen above are ticked.</p>
+        <div class="adapter-list">
+          ${(adapters?.adapters || []).map((a) => html`
+            <label class="check" title=${a.description}><input type="checkbox" checked=${migrations.includes(a.name)}
+              onChange=${() => setChosen(toggle(migrations, a.name))} /> ${a.name}
+              <span class="muted small">${a.source} → ${a.target}</span></label>`)}
+        </div>
+      </details>
+      <p class="muted small">A few minutes; needs internet access (unit definitions). If some inputs or flows can't be linked,
+        nothing is written and they are listed, to fix the links or import without them.</p>
+      ${actions(form.unlinked === "drop" ? "Import without the unlinked exchanges" : "Import", !path || !database.trim())}
+    </form>`;
+  if (form.kind === "delete") return html`
+    <form class="project-form danger" onSubmit=${submit("/api/brightway/projects/delete", { folder, project: form.project, confirm })}>
+      <h4>Delete the project ${form.project}</h4>
+      <p>This deletes the project and its folder (${project?.databases.length || 0} databases), for Brightway and Activity
+        Browser too. It cannot be undone. Models already built from it stay in the app.</p>
+      <label>Type <b>${form.project}</b> to confirm <input value=${confirm} onInput=${(e) => setConfirm(e.target.value)} /></label>
+      ${actions("Delete project", confirm !== form.project, true)}
+    </form>`;
+  return null;
+}
+
 // Load database: the models already built (data/models.json, e.g. ecoinvent from the setup) open
 // in seconds; a database of a Brightway project is first built into a model (once, kept in
 // data/cache). Loads run on the server, the dialog follows them and opens the database when ready.
+// The Brightway projects can also be changed here (new, deleted, restored, databases imported).
 function LoadDatabase({ onClose, missing, onDatabases }) {
   const [sources, setSources] = useState(null);
   const [error, setError] = useState(null);
@@ -391,6 +557,7 @@ function LoadDatabase({ onClose, missing, onDatabases }) {
   const [projects, setProjects] = useState(null);
   const [projectsError, setProjectsError] = useState(null);
   const [showLog, setShowLog] = useState(false);
+  const [form, setForm] = useState(null);  // { kind, project }: a ProjectForm open
   const box = useRef(null);
 
   const refresh = () => serverRequest("/api/sources").then((s) => {
@@ -417,18 +584,24 @@ function LoadDatabase({ onClose, missing, onDatabases }) {
   }
   useEffect(() => { if (folder) listProjects(folder); }, [folder]);
 
-  // Follow the load under way; open the database when it is ready
+  // Follow the job under way: open the database a load made ready; after a change to the
+  // projects, list them again
   useEffect(() => {
     if (!job || job.status !== "running") return;
     const timer = setTimeout(() => serverRequest(`/api/jobs/${job.id}`).then((j) => {
       setJob(j);
-      if (j.status === "done") openDatabase(j.key);
+      if (j.status === "done" && j.key) openDatabase(j.key);
+      else if (j.status === "done") { setForm(null); listProjects(folder); }
     }).catch((e) => setJob({ ...job, status: "failed", error: e.message })), 700);
     return () => clearTimeout(timer);
   }, [job]);
 
-  const start = (body) => { setShowLog(false); serverRequest("/api/load", body).then(setJob).catch((e) => setJob({ status: "failed", error: e.message, log: [] })); };
-  const busy = job?.status === "running" || job?.status === "done";
+  const startJob = (url, body) => {
+    setShowLog(false);
+    serverRequest(url, body).then(setJob).catch((e) => setJob({ status: "failed", error: e.message, log: [] }));
+  };
+  const start = (body) => startJob("/api/load", body);
+  const busy = job?.status === "running" || (job?.status === "done" && !!job.key);
   const unload = (key) => serverRequest("/api/unload", { key }).then((list) => {
     if (key === DATABASE) { location.href = "/"; return; }
     onDatabases?.(list);
@@ -459,11 +632,22 @@ function LoadDatabase({ onClose, missing, onDatabases }) {
       <div class=${`load-job ${job.status}`}>
         <div class="load-job-head">
           ${job.status === "running" && html`<span class="spinner" aria-hidden="true"></span>`}
-          <span>${job.status === "failed" ? html`<b>Could not load ${job.title || "the database"}.</b> ${job.error}` : job.message}</span>
+          <span>${job.status === "failed" ? html`<b>${job.title || "It"} failed.</b> ${job.error}` : job.message}</span>
           ${job.log?.length > 0 && html`<button class="link" onClick=${() => setShowLog(!showLog)}>${showLog ? "Hide details" : "Details"}</button>`}
-          ${job.status === "failed" && html`<button class="link" onClick=${() => setJob(null)}>Dismiss</button>`}
+          ${job.status !== "running" && html`<button class="link" onClick=${() => setJob(null)}>Dismiss</button>`}
         </div>
         ${showLog && html`<pre class="load-log">${job.log.slice(-40).join("\n")}</pre>`}
+        ${job.report && html`
+          <div class="unlinked">
+            <p>${job.report.length} distinct inputs or flows could not be linked (listed in <code>${job.report_path}</code>).
+              Link them with other background databases or adapters, or import without them.</p>
+            ${form?.kind === "simapro" && html`<button onClick=${() => { setForm({ ...form, unlinked: "drop" }); setJob(null); }}>Import without them…</button>`}
+            <div class="unlinked-list"><table class="load-table">
+              <tr><th>Type</th><th>Name</th><th>Compartment</th><th>Unit</th><th class="num">Exchanges</th></tr>
+              ${job.report.slice(0, 100).map((r) => html`<tr><td>${r.type}</td><td>${r.name}</td><td>${r.categories}</td>
+                <td>${r.unit}</td><td class="num">${r.exchanges}</td></tr>`)}
+            </table></div>
+          </div>`}
       </div>`}
     ${!sources ? (!error && html`<div class="empty">Looking for databases…</div>`) : html`
       ${sources.loaded.length > 0 && html`
@@ -513,14 +697,31 @@ function LoadDatabase({ onClose, missing, onDatabases }) {
               <button type="submit">List projects</button>
             </form>`}
         </div>
+        ${folder && html`
+          <div class="project-tools">
+            <button class="link" onClick=${() => setForm({ kind: "new" })}>+ New project</button>
+            <button class="link" onClick=${() => setForm({ kind: "restore" })}
+              title="A Brightway backup archive (.tar.gz): a file, or a project of files.brightway.dev such as BAFU">+ Add a project from a backup (BAFU, …)</button>
+          </div>`}
+        ${form && html`<${ProjectForm} key=${`${form.kind}:${form.project || ""}`} form=${form} folder=${folder} projects=${projects}
+          busy=${busy} onJob=${startJob} onCancel=${() => setForm(null)} />`}
         ${projectsError && html`<div class="error">${projectsError}</div>`}
         ${folder && !projects && !projectsError && html`<div class="empty">Reading the projects…</div>`}
         ${projects && html`
           <table class="load-table">
-            ${projects.projects.filter((p) => p.databases.length).map((p) => html`
+            ${projects.projects.filter((p) => p.databases.length || p.twofive).map((p) => html`
               <tr class="project" key=${`p:${p.name}`}>
-                <td colspan="3"><b>${p.name}</b>
-                  <span class="muted"> · ${p.twofive ? `${count(p.methods)} impact methods` : "Brightway 2 project: lca_viewer reads Brightway 2.5 projects only (upgrade it in Activity Browser 3 or Brightway 2.5)"}</span></td>
+                <td colspan="2"><b>${p.name}</b>
+                  <span class="muted"> · ${!p.twofive ? "Brightway 2 project: lca_viewer reads Brightway 2.5 projects only (upgrade it in Activity Browser 3 or Brightway 2.5)"
+                    : p.databases.length ? `${count(p.methods)} impact methods` : "empty"}</span></td>
+                <td class="actions project-actions">
+                  ${p.twofive && html`
+                    <button class="link" onClick=${() => setForm({ kind: "ecospold2", project: p.name })}
+                      title="Import an ecoSpold2 release (e.g. ecoinvent: the .7z archive or its unpacked folder) into this project">+ ecoSpold2</button>
+                    <button class="link" onClick=${() => setForm({ kind: "simapro", project: p.name })}
+                      title="Import a SimaPro CSV export (e.g. Agribalyse) into this project, linked to its background databases">+ SimaPro CSV</button>`}
+                  <button class="link danger" onClick=${() => setForm({ kind: "delete", project: p.name })} title="Delete this project">Delete</button>
+                </td>
               </tr>
               ${p.databases.map((d) => html`
                 <tr key=${`d:${p.name}/${d.name}`} class=${p.twofive && d.processes ? "" : "muted"}>
@@ -529,10 +730,11 @@ function LoadDatabase({ onClose, missing, onDatabases }) {
                   <td class="actions">${dbAction(p, d)}</td>
                 </tr>`)}`)}
           </table>
-          ${!projects.projects.some((p) => p.databases.length) && html`<p class="muted">No project with databases in this folder.</p>`}`}
+          ${!projects.projects.length && html`<p class="muted">No project in this folder yet: create one with <i>New project</i>.</p>`}`}
         ${!folder && !known.length && html`<p class="muted">No Brightway data folder found on this computer: give one with <i>Other folder…</i>.</p>`}
       </section>
-      <p class="muted small">Other formats (an ecoinvent ecoSpold2 release, a SimaPro CSV export such as Agribalyse) are imported into a Brightway project first, with <code>lca-viewer import</code>: see the README.</p>`}`;
+      <p class="muted small">ecoSpold2 releases and SimaPro CSV exports are imported into a project first (<i>+ ecoSpold2</i>,
+        <i>+ SimaPro CSV</i>), then opened from it like any Brightway database. Your own datasets: <i>Create dataset</i> in the top bar.</p>`}`;
 
   if (!onClose) return html`<div class="load-page"><h2>Load a database</h2>${content}</div>`;
   return html`
@@ -543,6 +745,263 @@ function LoadDatabase({ onClose, missing, onDatabases }) {
           <button onClick=${onClose} aria-label="Close">×</button>
         </div>
         <div class="load-body">${content}</div>
+      </div>
+    </div>`;
+}
+
+// ---------------------------------------------------------------- create dataset
+// A new process, entered as in SimaPro, written into a Brightway project (lca_viewer.editing)
+const DATASET_SECTIONS = [
+  ["technosphere", "Inputs from technosphere", "process", "Materials, fuels, electricity, transport… search a process"],
+  ["resource", "Inputs from nature", "resource", "Resources: search a flow, e.g. water river, occupation"],
+  ["emission", "Emissions", "emission", "To air, water or soil: search a flow and its compartment, e.g. methane air"],
+  ["waste", "Waste to treatment", "process", "The process treating the waste: amount of waste sent to it"],
+  ["avoided", "Avoided products", "process", "Products this process replaces, credited: search their process"],
+];
+const DOCUMENTATION_FIELDS = [
+  ["technology", "Technology"], ["time period", "Time period"], ["geography", "Geography"],
+  ["data sources", "Data sources and literature"], ["collection method", "Collection method"],
+  ["data treatment", "Data treatment"], ["allocation rules", "Allocation rules"], ["verification", "Verification"],
+  ["data entry by", "Data entry by"],
+];
+const BW_UNITS = ["kilogram", "cubic meter", "kilowatt hour", "megajoule", "unit", "ton kilometer", "square meter",
+  "square meter-year", "hectare", "litre", "meter", "kilometer", "hour", "person kilometer", "kilogram day"];
+const DRAFT_KEY = "lca_viewer.datasetDraft";
+const emptyDraft = () => ({
+  project: "", database: "", newDatabase: "",
+  process: { name: "", location: "GLO", comment: "", documentation: {} },
+  products: [{ name: "", amount: "1", unit: "kilogram", allocation: "100", comment: "" }],
+  exchanges: [],
+});
+// A flow's compartment, a process's location (processes imported from SimaPro have categories too)
+const FLOW_NODE_TYPES = ["emission", "natural resource", "economic", "inventory indicator", "social"];
+const nodeLabel = (n) => (FLOW_NODE_TYPES.includes(n.type) ? (n.categories || []).join(", ") : n.location);
+
+// Search box over the processes or flows of a project; picking one adds it as an exchange
+function NodePicker({ folder, project, kind, placeholder, onPick }) {
+  const [text, setText] = useState("");
+  const [results, setResults] = useState(null);
+  const [active, setActive] = useState(0);
+  useEffect(() => {
+    if (!text.trim()) { setResults(null); return; }
+    let live = true;
+    const timer = setTimeout(() => serverRequest(`/api/brightway/search?folder=${encodeURIComponent(folder)}&project=${encodeURIComponent(project)}&kind=${kind}&q=${encodeURIComponent(text)}`)
+      .then((r) => { if (live) { setResults(r); setActive(0); } }).catch(() => live && setResults([])), 200);
+    return () => { live = false; clearTimeout(timer); };
+  }, [text, folder, project, kind]);
+  const pick = (n) => { onPick(n); setText(""); setResults(null); };
+  function onKey(e) {
+    if (!results?.length) return;
+    if (e.key === "ArrowDown") { e.preventDefault(); setActive(Math.min(active + 1, results.length - 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setActive(Math.max(active - 1, 0)); }
+    else if (e.key === "Enter") { e.preventDefault(); pick(results[active]); }
+    else if (e.key === "Escape") setResults(null);
+  }
+  return html`
+    <div class="node-picker">
+      <input value=${text} placeholder=${placeholder} onInput=${(e) => setText(e.target.value)} onKeyDown=${onKey}
+        onBlur=${() => setTimeout(() => setResults(null), 150)} disabled=${!project} />
+      ${results && html`
+        <div class="search-panel">
+          <div class="search-meta">${results.length ? `${results.length}${results.length === 40 ? "+" : ""} found · ↑↓ Enter` : "Nothing found"}</div>
+          <div class="search-results">
+            ${results.map((n, i) => html`
+              <div key=${`${n.database}/${n.code}`} class=${i === active ? "active" : ""} onMouseEnter=${() => setActive(i)}
+                   onMouseDown=${(e) => { e.preventDefault(); pick(n); }}>
+                <div><b>${n.name}</b> <span class="loc-chip">${nodeLabel(n)}</span></div>
+                <small>${kind === "process" && n.reference_product ? `${n.reference_product} · ` : ""}${unit(n.unit || "")} · ${n.database}</small>
+              </div>`)}
+          </div>
+        </div>`}
+    </div>`;
+}
+
+function CreateDataset({ onClose }) {
+  const [dirs, setDirs] = useState(null);
+  const [folder, setFolder] = useState(() => loadPreference("brightwayFolder", ""));
+  const [projects, setProjects] = useState(null);
+  const [error, setError] = useState(null);
+  const [draft, setDraft] = useState(() => {
+    try { return { ...emptyDraft(), ...JSON.parse(localStorage.getItem(DRAFT_KEY) || "null") }; } catch { return emptyDraft(); }
+  });
+  const [job, setJob] = useState(null);
+  const [showLog, setShowLog] = useState(false);
+  useEffect(() => { try { localStorage.setItem(DRAFT_KEY, JSON.stringify(draft)); } catch { /* storage unavailable */ } }, [draft]);
+  useEffect(() => {
+    serverRequest("/api/sources").then((s) => {
+      setDirs(s.brightway);
+      if (!folder && s.brightway.length) setFolder(s.brightway[0].path);
+    }).catch((e) => setError(e.message));
+    const onKey = (e) => e.key === "Escape" && !e.target.closest?.(".node-picker") && onClose();
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
+  useEffect(() => {
+    setProjects(null);
+    if (folder) serverRequest(`/api/brightway?folder=${encodeURIComponent(folder)}`).then(setProjects).catch((e) => setError(e.message));
+  }, [folder]);
+  // Follow the save, then the build and load of the database when asked
+  useEffect(() => {
+    if (!job || job.status !== "running") return;
+    const timer = setTimeout(() => serverRequest(`/api/jobs/${job.id}`).then((j) => {
+      setJob(j);
+      if (j.status === "done" && j.key) openDatabase(j.key);
+    }).catch((e) => setJob({ ...job, status: "failed", error: e.message })), 700);
+    return () => clearTimeout(timer);
+  }, [job]);
+
+  const usable = (projects?.projects || []).filter((p) => p.twofive);
+  const project = usable.find((p) => p.name === draft.project);
+  const writable = (project?.databases || []).filter((d) => d.processes || d.backend === "multifunctional");
+  const set = (changes) => setDraft((d) => ({ ...d, ...changes }));
+  const setProcess = (changes) => set({ process: { ...draft.process, ...changes } });
+  const setProduct = (i, changes) => set({ products: draft.products.map((p, k) => (k === i ? { ...p, ...changes } : p)) });
+  const setExchange = (i, changes) => set({ exchanges: draft.exchanges.map((e, k) => (k === i ? { ...e, ...changes } : e)) });
+  const several = draft.products.length > 1;
+  const shares = draft.products.reduce((s, p) => s + (Number(p.allocation) || 0), 0);
+  const target = draft.database === "__new__" ? draft.newDatabase.trim() : draft.database;
+  const targetDb = writable.find((d) => d.name === draft.database);
+  const problems = [
+    !project && "choose a project",
+    !target && "choose a database",
+    !draft.process.name.trim() && "name the process",
+    draft.products.some((p) => !p.name.trim() || !Number(p.amount)) && "give each product a name and an amount",
+    several && Math.abs(shares - 100) > 1e-6 && `the allocation percentages add up to ${shares}, not 100`,
+    several && targetDb && targetDb.backend !== "multifunctional" && `${targetDb.name} cannot hold co-products: write into a new database`,
+    draft.exchanges.some((e) => e.amount === "" || Number.isNaN(Number(e.amount))) && "give each exchange an amount",
+    draft.exchanges.some((e) => e.sd2 && !(Number(e.sd2) > 1)) && "SD² must be greater than 1",
+  ].filter(Boolean);
+
+  function save() {
+    const spec = {
+      database: target, new_database: draft.database === "__new__",
+      process: draft.process,
+      products: draft.products.map((p) => ({ ...p, amount: Number(p.amount), allocation: several ? Number(p.allocation) : 100 })),
+      exchanges: draft.exchanges.map((e) => ({ section: e.section, database: e.node.database, code: e.node.code,
+        amount: Number(e.amount), comment: e.comment, sd2: e.sd2 ? Number(e.sd2) : null })),
+    };
+    setShowLog(false);
+    serverRequest("/api/brightway/dataset", { folder, project: draft.project, spec }).then(setJob)
+      .catch((e) => setJob({ status: "failed", error: e.message, log: [] }));
+  }
+  const openIt = () => serverRequest("/api/load", { brightway: folder, project: draft.project, database: job.result.database, rebuild: true })
+    .then(setJob).catch((e) => setJob({ status: "failed", error: e.message, log: [] }));
+  const saved = job?.status === "done" && job.result;
+
+  return html`
+    <div class="modal-backdrop" onMouseDown=${(e) => e.target === e.currentTarget && onClose()}>
+      <div class="load-dialog dataset-dialog" role="dialog" aria-label="Create a dataset">
+        <div class="info-head">
+          <div class="info-title">Create a dataset <span class="muted">· written into a Brightway project</span></div>
+          <button onClick=${onClose} aria-label="Close">×</button>
+        </div>
+        <div class="load-body">
+          ${error && html`<div class="error">${error}</div>`}
+          <section>
+            <h3>Save into</h3>
+            <div class="dataset-target">
+              <label>Folder
+                <select value=${folder} onChange=${(e) => { setFolder(e.target.value); set({ project: "", database: "" }); }}>
+                  ${(dirs || []).map((d) => html`<option value=${d.path}>${d.label}</option>`)}
+                  ${folder && dirs && !dirs.some((d) => d.path === folder) && html`<option value=${folder}>${folder}</option>`}
+                </select></label>
+              <label>Project
+                <select value=${draft.project} onChange=${(e) => set({ project: e.target.value, database: "" })}>
+                  <option value="">Choose…</option>
+                  ${usable.map((p) => html`<option value=${p.name}>${p.name}</option>`)}
+                </select></label>
+              <label>Database
+                <select value=${draft.database} onChange=${(e) => set({ database: e.target.value })} disabled=${!project}>
+                  <option value="">Choose…</option>
+                  ${writable.map((d) => html`<option value=${d.name}>${d.name}${d.backend === "multifunctional" ? "" : " (single-output only)"}</option>`)}
+                  <option value="__new__">New database…</option>
+                </select></label>
+              ${draft.database === "__new__" && html`
+                <label>Name of the new database <input value=${draft.newDatabase} placeholder="e.g. my datasets"
+                  onInput=${(e) => set({ newDatabase: e.target.value })} /></label>`}
+            </div>
+            <p class="muted small">Inputs and emissions are searched in this project, in all its databases.</p>
+          </section>
+          <section>
+            <h3>Process</h3>
+            <div class="dataset-process">
+              <label class="grow">Name <input value=${draft.process.name} onInput=${(e) => setProcess({ name: e.target.value })}
+                placeholder="e.g. dairy farm, grass-based" /></label>
+              <label>Location <input class="short" value=${draft.process.location} onInput=${(e) => setProcess({ location: e.target.value })}
+                placeholder="GLO, FR, RER…" /></label>
+            </div>
+            <label>Comment <textarea rows="2" value=${draft.process.comment} onInput=${(e) => setProcess({ comment: e.target.value })}
+              placeholder="What the process covers, its functional unit, main assumptions"></textarea></label>
+            <details>
+              <summary>Documentation (${DOCUMENTATION_FIELDS.filter(([k]) => draft.process.documentation[k]).length} of ${DOCUMENTATION_FIELDS.length} filled)</summary>
+              <div class="dataset-doc">
+                ${DOCUMENTATION_FIELDS.map(([k, label]) => html`
+                  <label>${label} <textarea rows="2" value=${draft.process.documentation[k] || ""}
+                    onInput=${(e) => setProcess({ documentation: { ...draft.process.documentation, [k]: e.target.value } })}></textarea></label>`)}
+              </div>
+            </details>
+          </section>
+          <section>
+            <h3>Products <span class="muted">${several ? `co-products, allocated with these percentages (sum: ${shares} %)` : "the reference product"}</span></h3>
+            <table class="dataset-table">
+              <tr><th>Name</th><th class="num">Amount</th><th>Unit</th>${several && html`<th class="num">Allocation %</th>`}<th>Comment</th><th></th></tr>
+              ${draft.products.map((p, i) => html`
+                <tr key=${i}>
+                  <td><input value=${p.name} onInput=${(e) => setProduct(i, { name: e.target.value })} placeholder=${i ? "co-product" : "e.g. raw milk"} /></td>
+                  <td class="num"><input class="num" value=${p.amount} onInput=${(e) => setProduct(i, { amount: e.target.value })} /></td>
+                  <td><input list="bw-units" value=${p.unit} onInput=${(e) => setProduct(i, { unit: e.target.value })} /></td>
+                  ${several && html`<td class="num"><input class="num" value=${p.allocation} onInput=${(e) => setProduct(i, { allocation: e.target.value })} /></td>`}
+                  <td><input value=${p.comment} onInput=${(e) => setProduct(i, { comment: e.target.value })} /></td>
+                  <td>${several && html`<button class="link" aria-label="Remove" onClick=${() => set({ products: draft.products.filter((_, k) => k !== i) })}>×</button>`}</td>
+                </tr>`)}
+            </table>
+            <datalist id="bw-units">${BW_UNITS.map((u) => html`<option value=${u} />`)}</datalist>
+            <button class="link" onClick=${() => set({ products: [...draft.products,
+              { name: "", amount: "1", unit: draft.products[0].unit, allocation: "0", comment: "" }] })}>+ Co-product</button>
+          </section>
+          ${DATASET_SECTIONS.map(([section, title, kind, placeholder]) => {
+            const rows = draft.exchanges.map((e, i) => [e, i]).filter(([e]) => e.section === section);
+            return html`
+              <section key=${section}>
+                <h3>${title} ${rows.length > 0 && html`<span class="muted">${rows.length}</span>`}</h3>
+                ${rows.length > 0 && html`
+                  <table class="dataset-table">
+                    <tr><th>${kind === "process" ? "Process" : "Flow"}</th><th class="num">Amount</th><th>Unit</th>
+                      <th class="num" title="Lognormal uncertainty: squared geometric standard deviation, as in SimaPro (empty: none)">SD²</th><th>Comment</th><th></th></tr>
+                    ${rows.map(([e, i]) => html`
+                      <tr key=${i}>
+                        <td class="node" title=${`${e.node.name} | ${nodeLabel(e.node)} | ${e.node.database}`}>
+                          ${e.node.name} <span class="loc-chip">${nodeLabel(e.node)}</span></td>
+                        <td class="num"><input class="num" value=${e.amount} onInput=${(ev) => setExchange(i, { amount: ev.target.value })} /></td>
+                        <td class="muted">${unit(e.node.unit || "")}</td>
+                        <td class="num"><input class="num short" value=${e.sd2 || ""} placeholder="—" onInput=${(ev) => setExchange(i, { sd2: ev.target.value })} /></td>
+                        <td><input value=${e.comment || ""} onInput=${(ev) => setExchange(i, { comment: ev.target.value })} placeholder="Source, assumption…" /></td>
+                        <td><button class="link" aria-label="Remove" onClick=${() => set({ exchanges: draft.exchanges.filter((_, k) => k !== i) })}>×</button></td>
+                      </tr>`)}
+                  </table>`}
+                <${NodePicker} folder=${folder} project=${draft.project} kind=${kind} placeholder=${draft.project ? placeholder : "Choose a project first"}
+                  onPick=${(node) => set({ exchanges: [...draft.exchanges, { section, node, amount: "", comment: "", sd2: "" }] })} />
+              </section>`;
+          })}
+        </div>
+        <div class="dataset-footer">
+          ${job && html`
+            <div class=${`load-job ${job.status}`}>
+              <div class="load-job-head">
+                ${job.status === "running" && html`<span class="spinner" aria-hidden="true"></span>`}
+                <span>${job.status === "failed" ? html`<b>${job.title || "It"} failed.</b> ${job.error}` : job.message}</span>
+                ${job.log?.length > 0 && html`<button class="link" onClick=${() => setShowLog(!showLog)}>${showLog ? "Hide details" : "Details"}</button>`}
+                ${saved && html`<button class="primary" onClick=${openIt} title="Build the model of this database (with the databases it uses) and open it">Build and open ${job.result.database}</button>`}
+              </div>
+              ${showLog && html`<pre class="load-log">${job.log.slice(-40).join("\n")}</pre>`}
+            </div>`}
+          <div class="form-actions">
+            <span class="muted small">${problems.length ? `To save: ${problems.join(", ")}.` : "Ready to save."}</span>
+            <span class="spacer"></span>
+            <button onClick=${() => { if (confirm("Clear this dataset (the form, not what was saved)?")) { setDraft({ ...emptyDraft(), project: draft.project, database: draft.database }); setJob(null); } }}>Clear</button>
+            <button class="primary" disabled=${problems.length > 0 || job?.status === "running"} onClick=${save}>Save to Brightway</button>
+          </div>
+        </div>
       </div>
     </div>`;
 }
@@ -2109,6 +2568,25 @@ function GlobalPanel({ info, root, amount, method, rules, onLocate, onInfo }) {
   const menu = useProcessMenu(goTo, onInfo);
   const ofTotal = (v) => pct(total ? v / total : 0);
   const ofGroup = (v) => pct(contributors?.total ? v / contributors.total : 0);
+  const quote = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  const methodName = `${methodLabel(info.methods[k])} [${unit}]`;
+  const fileName = (what) => `whole-supply-chain-${what}-${(root?.name || "").replace(/[^A-Za-z0-9]+/g, "-").slice(0, 40)}.csv`;
+  function exportGroups() {
+    const lines = entries.map(([n, v]) => [quote(n), n in flowGroups ? "flow group" : n === "other" ? "other" : "process group",
+      v, total ? v / total : 0].join(","));
+    const header = ["group", "kind", quote(methodName), "share of total"].join(",");
+    download(fileName("groups"), [`# ${rule === "first_match" ? "First match" : "Direct"} attribution`, header, ...lines].join("\n"), "text/csv");
+  }
+  function exportContributors() {
+    // Every process of the group, not only those listed
+    request("/api/global/contributors", { root: root.index, amount, groups, flow_groups: flowGroups, rule, group, method: k, limit: 1000000 })
+      .then((d) => {
+        const header = ["process", "reference product", "location", "database", quote(methodName), "share of group", "share of total"].join(",");
+        const lines = d.contributors.map((c) => [quote(c.name), quote(c.reference_product), quote(c.location), quote(c.database),
+          c.impact, d.total ? c.impact / d.total : 0, total ? c.impact / total : 0].join(","));
+        download(fileName(`group-${group.replace(/[^A-Za-z0-9]+/g, "-")}`), [header, ...lines].join("\n"), "text/csv");
+      }).catch((e) => setError(e.message));
+  }
   const option = useMemo(() => {
     const o = baseOption();
     o.yAxis = { ...o.yAxis, type: "category", data: entries.map(([n]) => n), inverse: true, triggerEvent: true };
@@ -2145,7 +2623,9 @@ function GlobalPanel({ info, root, amount, method, rules, onLocate, onInfo }) {
         <${Chart} option=${option} height=${Math.max(200, entries.length * 34 + 60)}
           onClick=${(e) => choose(e.componentType === "yAxis" ? e.value : e.name)} />
         <table class="results">
-          <thead><tr><th>Group <span class="muted">· click to see its processes</span></th><th class="num">${unit}</th><th class="num">Share</th></tr></thead>
+          <thead><tr><th>Group <span class="muted">· click to see its processes</span>
+            <button class="link" onClick=${exportGroups} title="Download this table as CSV">Export CSV</button></th>
+            <th class="num">${unit}</th><th class="num">Share</th></tr></thead>
           <tbody>${entries.map(([n, v]) => html`
             <tr class="clickable ${n === group ? "selected" : ""}" onClick=${() => choose(n)}>
               <td>${n === group ? "▾" : "▸"} ${n}${n in flowGroups && html` <span class="loc-chip">flows</span>`}</td>
@@ -2159,6 +2639,7 @@ function GlobalPanel({ info, root, amount, method, rules, onLocate, onInfo }) {
             <span class="details-title"><b>${group}</b>${contributors
               ? `: ${contributors.count} ${contributors.count === 1 ? "process" : "processes"} · ${fmt(contributors.total)} ${unit} (${ofTotal(contributors.total)})`
               : " …"}</span>
+            ${contributors && html`<button onClick=${exportContributors} title="Download every process of this group as CSV">Export CSV</button>`}
             <button onClick=${() => setGroup(null)} aria-label="Close">×</button>
           </div>
           ${contributors && html`
@@ -3159,6 +3640,7 @@ function App() {
   // Databases loaded in the server; null: a server without Load database (one model, plain URLs)
   const [databases, setDatabases] = useState(undefined);
   const [loadOpen, setLoadOpen] = useState(false);
+  const [datasetOpen, setDatasetOpen] = useState(false);
   const [layout, setLayout] = useState(null);
   const [focus, setFocus] = useState(null);
   const [titles, setTitles] = useState({});
@@ -3265,10 +3747,13 @@ function App() {
       <${DatabaseSelect} databases=${databases} />
       ${databases && html`<button onClick=${() => setLoadOpen(true)}
         title="Open another database: a model already built, or a database of your Brightway projects">Load database</button>`}
+      ${databases && html`<button onClick=${() => setDatasetOpen(true)}
+        title="Enter a new process, as in SimaPro, and save it into a Brightway project">Create dataset</button>`}
       <span class="spacer"></span>
       ${sidePanel}
     </header>
-    ${loadOpen && html`<${LoadDatabase} onClose=${() => setLoadOpen(false)} onDatabases=${setDatabases} />`}`;
+    ${loadOpen && html`<${LoadDatabase} onClose=${() => setLoadOpen(false)} onDatabases=${setDatabases} />`}
+    ${datasetOpen && html`<${CreateDataset} onClose=${() => setDatasetOpen(false)} />`}`;
   if (databases && !databases.some((d) => d.key === DATABASE)) {
     // Nothing loaded yet, or the database of this address is not loaded any more
     return html`

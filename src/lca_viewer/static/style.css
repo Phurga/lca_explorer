@@ -538,3 +538,57 @@ table.load-table tr.muted td { color: var(--muted); }
 .spinner { flex: none; width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--accent);
   border-radius: 50%; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* Brightway projects: forms (new, backup, imports, delete) */
+.project-tools { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 4px 0 6px; }
+td.project-actions { white-space: nowrap; }
+button.link.danger, .project-form.danger h4 { color: var(--bar-negative); }
+button.danger:not(.link) { background: var(--bar-negative); border-color: var(--bar-negative); color: var(--panel); }
+.project-form { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 10px; padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }
+.project-form h4 { margin: 0; font-size: 13px; }
+.project-form label, .dataset-dialog label { display: flex; flex-direction: column; gap: 3px; color: var(--muted); font-size: 12px; }
+.project-form label.check { flex-direction: row; align-items: baseline; gap: 6px; color: var(--text); font-size: 13px; }
+.project-form fieldset { border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; margin: 0; }
+.project-form legend { color: var(--muted); font-size: 12px; padding: 0 4px; }
+.project-form input:not([type]), .project-form select { color: var(--text); font-size: 13px; }
+.form-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.form-actions .spacer { flex: 1; }
+.path-input { display: flex; gap: 6px; }
+.path-input input { flex: 1; min-width: 0; }
+.adapters summary { cursor: pointer; font-size: 12px; }
+.adapter-list { max-height: 180px; overflow: auto; display: flex; flex-direction: column; gap: 2px; }
+.unlinked { margin-top: 8px; }
+.unlinked p { margin: 0 0 6px; }
+.unlinked-list { max-height: 220px; overflow: auto; margin-top: 6px; background: var(--panel); border-radius: 4px; }
+.unlinked-list th { text-align: left; font-weight: 600; padding: 3px 6px; }
+
+/* Create dataset */
+.load-dialog.dataset-dialog { width: min(1100px, 100%); max-height: 92vh; }
+.dataset-dialog section h3 .muted { font-weight: 400; }
+.dataset-target, .dataset-process { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: flex-end; }
+.dataset-target label { flex: 1 1 180px; min-width: 0; }
+.dataset-target select, .dataset-target input { max-width: 100%; color: var(--text); font-size: 13px; }
+.dataset-process label.grow { flex: 1 1 300px; }
+.dataset-dialog input, .dataset-dialog textarea { color: var(--text); font-size: 13px; }
+.dataset-dialog textarea { font: inherit; background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+  padding: 4px 8px; resize: vertical; width: 100%; }
+.dataset-dialog details summary { cursor: pointer; margin: 6px 0; color: var(--muted); font-size: 12px; }
+.dataset-doc { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 8px; }
+table.dataset-table { width: 100%; border-collapse: collapse; margin-bottom: 4px; }
+table.dataset-table th { text-align: left; font-weight: 400; color: var(--muted); font-size: 12px; padding: 2px 4px; }
+table.dataset-table td { padding: 2px 4px; border-bottom: 1px solid var(--border); }
+table.dataset-table th.num, table.dataset-table td.num { text-align: right; width: 90px; }
+table.dataset-table td input { width: 100%; min-width: 0; }
+table.dataset-table td.node { max-width: 380px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+input.num { text-align: right; font-family: var(--mono); }
+input.short { width: 70px; }
+.node-picker { position: relative; }
+.node-picker input { width: 100%; }
+.node-picker .search-panel { width: 100%; }
+.dataset-footer { border-top: 1px solid var(--border); padding: 8px 16px 10px; display: flex; flex-direction: column; gap: 6px; }
+.dataset-footer .load-job { margin-top: 0; }
+@media (max-width: 640px) {
+  table.dataset-table th:nth-child(4), table.dataset-table td:nth-child(4) { display: none; }
+  table.dataset-table td.node { max-width: 140px; }
+}
