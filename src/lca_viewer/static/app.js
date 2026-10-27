@@ -791,7 +791,86 @@ function edgePath(from, to, orientation, back = false) {
   return `M${x1},${y1} C${x1},${ym} ${x2},${ym} ${x2},${y2}`;
 }
 
-function TreeGraph({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onUngroup, ungroupable, onMergeGroup, onUnpin, onPin, onMoveToOthers, onInfo, onUnmerge, view, orientation, setOrientation, cycles, setCycles, focus }) {
+const SANKEY = { height: 480, bar: 12, column: 300, gap: 6, label: 30 };
+
+// Sankey: a column per depth, each row a bar whose height is its |impact| (``height`` px
+// for the root), joined to its parent by a band of the same thickness. A subtree takes
+// the height of its bar, of its children stacked, or of two label lines, whichever is
+// largest; the bar is centred on it.
+function layoutSankey(rows, rootImpact, share, ofTotal) {
+  const scale = rootImpact ? SANKEY.height / Math.abs(rootImpact) : 0;
+  const nodes = rows.map((row) => ({ key: row.id, row, rows: [row], share: share(row), w: SANKEY.bar,
+    t: Math.max(1.5, Math.abs(row.impacts[0]) * scale) }));
+  const byId = new Map(nodes.map((n) => [n.key, n]));
+  const children = new Map(nodes.map((n) => [n, []]));
+  for (const n of nodes) byId.has(n.row.parent) && children.get(byId.get(n.row.parent)).push(n);
+  const stacked = (kids, size) => kids.reduce((sum, k) => sum + size(k), 0) + SANKEY.gap * Math.max(0, kids.length - 1);
+  function measure(n) {
+    const kids = children.get(n);
+    kids.forEach(measure);
+    n.h = Math.max(n.t, kids.reduce((sum, k) => sum + k.t, 0));
+    n.span = Math.max(n.h, SANKEY.label, stacked(kids, (k) => k.span));
+  }
+  function place(n, top, depth) {
+    [n.x, n.y, n.depth] = [depth * SANKEY.column, top + (n.span - n.h) / 2, depth];
+    const kids = children.get(n);
+    let y = top + (n.span - stacked(kids, (k) => k.span)) / 2;
+    for (const k of kids) { place(k, y, depth + 1); y += k.span + SANKEY.gap; }
+  }
+  measure(nodes[0]);
+  place(nodes[0], 0, 0);
+  // Bands leave the parent's bar stacked in order, centred on it, and enter the child's bar centred
+  const edges = [];
+  for (const [from, kids] of children) {
+    let y1 = from.y + (from.h - kids.reduce((sum, k) => sum + k.t, 0)) / 2;
+    for (const to of kids) {
+      edges.push({ key: to.key, from, to, rows: [to.row], share: ofTotal(to.row), y1, y2: to.y + (to.h - to.t) / 2, t: to.t });
+      y1 += to.t;
+    }
+  }
+  const width = Math.max(...nodes.map((n) => n.x)) + SANKEY.column;
+  return { nodes, edges, width, height: nodes[0].span };
+}
+
+function bandPath({ from, to, y1, y2, t }) {
+  const x1 = from.x + SANKEY.bar, x2 = to.x, xm = (x1 + x2) / 2;
+  return `M${x1},${y1} C${xm},${y1} ${xm},${y2} ${x2},${y2} L${x2},${y2 + t} C${xm},${y2 + t} ${xm},${y1 + t} ${x1},${y1 + t} Z`;
+}
+
+// Tooltip of a box or a Sankey bar
+function nodeTitle(r, s, places) {
+  return `${r.label}\n${fmt(r.impacts[0])} (${pct(s)})${places.length > 1 ? `\nIn ${places.length} places in the tree: amounts summed, loops counted once` : ""}`;
+}
+
+function sankeyMarks({ graph, byId, view, selection, focus, onSelect, onToggle, onInfo }) {
+  return html`
+    ${graph.edges.map((e) => html`
+      <path key=${`b-${e.key}`} class="band ${e.share < 0 ? "neg" : ""} ${e.to.row.kind}" d=${bandPath(e)}>
+        <title>${rowNames(e.to.row, byId, view).main} → ${rowNames(e.from.row, byId, view).main}\n${fmt(e.to.row.impacts[0])} (${pct(e.share)} of the total)</title>
+      </path>`)}
+    ${graph.nodes.map(({ key, row: r, share: s, x, y, h }) => {
+      const names = rowNames(r, byId, view);
+      const detail = [names.qual && truncate(names.qual, 24), rowAmount(r), pct(s)].filter(Boolean).join(" · ");
+      const cy = y + h / 2, lx = x + SANKEY.bar + 6;
+      return html`
+        <g key=${key} data-id=${r.id} class="snode ${r.kind} ${selection.has(r.id) ? "selected" : ""} ${focus === r.id ? "focus" : ""} ${r.impacts[0] < 0 ? "neg" : ""}"
+           onClick=${(e) => onSelect(r, e.ctrlKey || e.metaKey || e.shiftKey)}
+           onDblClick=${() => r.expandable && onToggle(r)}
+           onContextMenu=${(e) => onInfo(r, e)}>
+          <title>${nodeTitle(r, s, [r])}</title>
+          <rect x=${x} y=${y} width=${SANKEY.bar} height=${h} />
+          ${r.expandable && html`
+            <text x=${lx} y=${cy - 2} class="caret" onClick=${(e) => { e.stopPropagation(); onToggle(r); }}>${r.expanded ? "▾" : "▸"}</text>`}
+          <text x=${lx + 13} y=${cy - 2} class="name">${truncate(names.main, 34)}</text>
+          <text x=${lx + 13} y=${cy + 11} class="detail">${detail}</text>
+        </g>`;
+    })}`;
+}
+
+function TreeGraph({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onUngroup, ungroupable, onMergeGroup, onUnpin, onPin, onMoveToOthers, onInfo, onUnmerge, view, orientation: chosenOrientation, setOrientation, cycles: chosenCycles, setCycles, sankey, focus }) {
+  // The Sankey is a tree drawn left to right
+  const orientation = sankey ? "horizontal" : chosenOrientation;
+  const cycles = chosenCycles && !sankey;
   const byId = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
   const container = useRef(null);
   const drag = useRef(null);
@@ -802,8 +881,10 @@ function TreeGraph({ rows, rootImpact, shareBasis, selection, onToggle, onSelect
     if (!rows.length) return { nodes: [], edges: [] };
     if (cycles) return layoutGraph(rows, orientation, rootImpact, shareBasis);
     const ofTotal = (r) => (rootImpact ? r.impacts[0] / rootImpact : 0);
-    return layoutTree(rows, orientation, (r) => shareOf(r, byId, rootImpact, shareBasis), ofTotal);
-  }, [rows, orientation, cycles, rootImpact, shareBasis, byId]);
+    const share = (r) => shareOf(r, byId, rootImpact, shareBasis);
+    return sankey ? layoutSankey(rows, rootImpact, share, ofTotal) : layoutTree(rows, orientation, share, ofTotal);
+  }, [rows, orientation, cycles, sankey, rootImpact, shareBasis, byId]);
+  const size = (n) => ({ w: n.w ?? BOX.w, h: n.h ?? BOX.h });
   const rootId = rows[0]?.id;
 
   // Whole tree in view; with ``readable``, never zoom out below 60 % and centre on the root instead
@@ -814,12 +895,13 @@ function TreeGraph({ rows, rootImpact, shareBasis, selection, onToggle, onSelect
     const whole = Math.min(1, (el.clientWidth - 2 * margin) / graph.width, (el.clientHeight - 2 * margin) / graph.height);
     const k = readable ? Math.max(whole, 0.6) : Math.max(whole, 0.1);
     const root = graph.nodes.find((n) => n.rows.some((r) => r.id === rootId));
+    const { w, h } = size(root);
     setTransform(orientation === "horizontal"
-      ? { k, x: margin, y: el.clientHeight / 2 - (root.y + BOX.h / 2) * k }
-      : { k, x: el.clientWidth / 2 - (root.x + BOX.w / 2) * k, y: margin });
+      ? { k, x: margin, y: el.clientHeight / 2 - (root.y + h / 2) * k }
+      : { k, x: el.clientWidth / 2 - (root.x + w / 2) * k, y: margin });
   }
   // Re-fit when the functional unit, the orientation or the layout changes, not on every expand
-  useEffect(() => fit(true), [rootId, orientation, cycles]);
+  useEffect(() => fit(true), [rootId, orientation, cycles, sankey]);
   // Centre once on a node found from elsewhere ("Go to in tree"), when it has been laid out
   const centredOn = useRef(null);
   useEffect(() => {
@@ -827,9 +909,10 @@ function TreeGraph({ rows, rootImpact, shareBasis, selection, onToggle, onSelect
     const el = container.current;
     if (!node || !el) return;
     centredOn.current = focus;
+    const { w, h } = size(node);
     setTransform((t) => {
       const k = Math.max(t.k, 0.8);
-      return { k, x: el.clientWidth / 2 - (node.x + BOX.w / 2) * k, y: el.clientHeight / 2 - (node.y + BOX.h / 2) * k };
+      return { k, x: el.clientWidth / 2 - (node.x + w / 2) * k, y: el.clientHeight / 2 - (node.y + h / 2) * k };
     });
   }, [focus, graph]);
 
@@ -843,7 +926,7 @@ function TreeGraph({ rows, rootImpact, shareBasis, selection, onToggle, onSelect
     });
   }
   function onPointerDown(e) {
-    if (e.target.closest(".node, .graph-controls")) return;
+    if (e.target.closest(".node, .snode, .graph-controls")) return;
     drag.current = { x: e.clientX, y: e.clientY, t: transform };
     e.currentTarget.setPointerCapture(e.pointerId);
   }
@@ -861,24 +944,26 @@ function TreeGraph({ rows, rootImpact, shareBasis, selection, onToggle, onSelect
     <div class="graph" ref=${container} onWheel=${onWheel} onPointerDown=${onPointerDown}
          onPointerMove=${onPointerMove} onPointerUp=${onPointerUp}>
       <div class="graph-controls">
-        <button class=${cycles ? "primary" : ""} onClick=${() => setCycles(!cycles)}
-          title="Show each process once: a process used in several places has several edges into it, and loops become cycles">Cycles</button>
-        <button class=${orientation === "horizontal" ? "primary" : ""} onClick=${() => setOrientation("horizontal")}
-          title="Root on the left">→</button>
-        <button class=${orientation === "vertical" ? "primary" : ""} onClick=${() => setOrientation("vertical")}
-          title="Root on top">↓</button>
+        ${!sankey && html`
+          <button class=${cycles ? "primary" : ""} onClick=${() => setCycles(!cycles)}
+            title="Show each process once: a process used in several places has several edges into it, and loops become cycles">Cycles</button>
+          <button class=${orientation === "horizontal" ? "primary" : ""} onClick=${() => setOrientation("horizontal")}
+            title="Root on the left">→</button>
+          <button class=${orientation === "vertical" ? "primary" : ""} onClick=${() => setOrientation("vertical")}
+            title="Root on top">↓</button>`}
         <button onClick=${() => fit(false)}>Fit</button>
         <button onClick=${() => setTransform((t) => ({ ...t, k: 1 }))}>100 %</button>
       </div>
       <svg width="100%" height="100%">
         <g transform=${`translate(${transform.x},${transform.y}) scale(${transform.k})`}>
+          ${sankey ? sankeyMarks({ graph, byId, view, selection, focus, onSelect, onToggle, onInfo }) : html`
           ${graph.edges.map((e) => html`
             <path key=${`e-${e.key}`} class="edge ${e.share < 0 ? "neg" : ""} ${e.back ? "back" : ""}"
               d=${edgePath(e.from, e.to, orientation, e.back)} stroke-width=${1 + 14 * Math.min(1, Math.abs(e.share))}>
               <title>${edgeTitle(e)}</title>
             </path>`)}
           ${graph.nodes.map(({ key, row: r, rows: places, share: s, x, y }) => {
-            const [product, name, location] = r.kind === "process" ? r.label.split(" | ") : [r.label];
+            const location = r.kind === "process" ? r.label.split(" | ")[2] : null;
             const names = rowNames(r, byId, view);
             const title = names.main;
             const amountText = rowAmount(r);
@@ -895,7 +980,7 @@ function TreeGraph({ rows, rootImpact, shareBasis, selection, onToggle, onSelect
                  onClick=${(e) => onSelect(first, e.ctrlKey || e.metaKey || e.shiftKey)}
                  onDblClick=${() => r.expandable && toggle()}
                  onContextMenu=${(e) => onInfo(first, e)}>
-                <title>${r.kind === "process" ? `${product} | ${name} | ${location}` : r.label}\n${fmt(r.impacts[0])} (${pct(s)})${places.length > 1 ? `\nIn ${places.length} places in the tree: amounts summed, loops counted once` : ""}</title>
+                <title>${nodeTitle(r, s, places)}</title>
                 <rect x=${x} y=${y} width=${BOX.w} height=${BOX.h} rx="6" />
                 <text x=${x + 10} y=${y + 17} class="title">${truncate(title, 30)}</text>
                 <text x=${x + 10} y=${y + 32} class="subtitle">${truncate(subtitle, 34)}</text>
@@ -934,10 +1019,10 @@ function TreeGraph({ rows, rootImpact, shareBasis, selection, onToggle, onSelect
                     <text x=${toggleAt[0]} y=${toggleAt[1] + 4} text-anchor="middle">${r.expanded ? "−" : "+"}</text>
                   </g>`}
               </g>`;
-          })}
+          })}`}
         </g>
       </svg>
-      <div class="graph-hint">Drag to pan · wheel to zoom · double-click or ± to expand · Ctrl/⌘-click to select</div>
+      <div class="graph-hint">Drag to pan · wheel to zoom · double-click or ${sankey ? "▸" : "±"} to expand · Ctrl/⌘-click to select${sankey ? " · band thickness ∝ impact" : ""}</div>
     </div>`;
 }
 
@@ -2449,8 +2534,8 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
   }, [root, amount, method, cutoff, cutoffBasis, expanded, rules, chartMethods, pinned, others, merges, labels, info]);
   function startRename(row) {
     if (!labelKey(row)) return;
-    // The tree view has no inline editor: ask
-    if (display === "graph") {
+    // The tree and Sankey views have no inline editor: ask
+    if (display !== "list") {
       const name = window.prompt("Rename (empty: original name)", rowNames(row, rowsById, view).main);
       if (name !== null) rename(row, name);
     } else setRenaming(row.id);
@@ -2790,6 +2875,8 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
             <div class="segmented" role="group" aria-label="Display">
               <button class=${display === "list" ? "primary" : ""} onClick=${() => setDisplay("list")}>List</button>
               <button class=${display === "graph" ? "primary" : ""} onClick=${() => setDisplay("graph")}>Tree</button>
+              <button class=${display === "sankey" ? "primary" : ""} onClick=${() => setDisplay("sankey")}
+                title="The tree as a flowchart: bands as thick as the impact flowing from each supplier to its user">Sankey</button>
             </div>
             <button onClick=${() => setExpanded(new Set(root ? [String(root.index)] : []))} title="Collapse everything below the root">Collapse</button>
             <button onClick=${resetView} disabled=${!root} title="Collapse the tree, clear pinned rows and rows moved to others, and remove all groups, merges and custom names (undoable)">Reset view</button>
@@ -2826,7 +2913,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
                 onUngroup=${ungroup} ungroupable=${(r) => manualRuleFor(r) >= 0} onMergeGroup=${(r) => mergeRows([r])} onUnpin=${unpin} onPin=${pin} onMoveToOthers=${moveToOthers} onInfo=${showInfo} onUnmerge=${unmerge} view=${view} focus=${focus} />`
             : html`<${TreeGraph} rows=${data.rows} rootImpact=${rootImpact} shareBasis=${cutoffBasis} selection=${selection} onToggle=${toggle} onSelect=${select}
                 onUngroup=${ungroup} ungroupable=${(r) => manualRuleFor(r) >= 0} onMergeGroup=${(r) => mergeRows([r])} onUnpin=${unpin} onPin=${pin} onMoveToOthers=${moveToOthers} onInfo=${showInfo} onUnmerge=${unmerge} view=${view}
-                orientation=${orientation} setOrientation=${setOrientation} cycles=${cycles} setCycles=${setCycles} focus=${focus} />`}
+                orientation=${orientation} setOrientation=${setOrientation} cycles=${cycles} setCycles=${setCycles} sankey=${display === "sankey"} focus=${focus} />`}
           ${bundle?.kind === "rest" && html`<${OthersPopup} target=${infoTarget} rest=${bundle} rows=${data.rows} rootImpact=${rootImpact}
               cutoff=${cutoff} cutoffBasis=${cutoffBasis} pinned=${pinned} setPinned=${setPinned} others=${others} setOthers=${setOthers}
               view=${view} onClose=${() => setInfoTarget(null)} onBack=${backInfo}

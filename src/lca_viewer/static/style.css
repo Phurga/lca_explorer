@@ -255,6 +255,30 @@ table.results td.num { text-align: right; font-family: var(--mono); }
 .graph .edge.neg { stroke: var(--bar-negative); }
 .graph .edge.back { stroke-dasharray: 6 4; }
 .graph .edge:hover { stroke-opacity: .85; }
+/* Sankey: bars, bands under the labels (haloed so that they stay readable) */
+.graph .band { fill: var(--bar); fill-opacity: .3; }
+.graph .band.neg { fill: var(--bar-negative); }
+.graph .band.group { fill: var(--group); }
+.graph .band.merged { fill: var(--merged); }
+.graph .band.direct, .graph .band.rest, .graph .band.flow { fill: var(--muted); fill-opacity: .22; }
+.graph .band:hover { fill-opacity: .5; }
+.graph .snode { cursor: pointer; }
+.graph .snode rect { fill: var(--bar); }
+.graph .snode.neg rect { fill: var(--bar-negative); }
+.graph .snode.group rect { fill: var(--group); }
+.graph .snode.merged rect { fill: var(--merged); }
+.graph .snode.direct rect, .graph .snode.rest rect, .graph .snode.flow rect { fill: var(--muted); }
+.graph .snode.selected rect { stroke: var(--accent); stroke-width: 2; }
+.graph .snode.focus rect { stroke: var(--accent); stroke-width: 3; }
+.graph .snode text { fill: var(--text); font-size: 12px; paint-order: stroke; stroke: var(--bg); stroke-width: 3px; stroke-linejoin: round; }
+.graph .snode .name { font-weight: 500; }
+.graph .snode.selected .name { fill: var(--accent); }
+.graph .snode.group .name { fill: var(--group); }
+.graph .snode.merged .name { fill: var(--merged); }
+.graph .snode.direct .name, .graph .snode.rest .name { fill: var(--muted); font-style: italic; font-weight: 400; }
+.graph .snode .detail { fill: var(--muted); font-size: 11px; }
+.graph .snode .caret { fill: var(--accent); font-size: 11px; }
+.graph .snode:hover .name { text-decoration: underline; }
 .graph .node { cursor: pointer; }
 .graph .node > rect:first-of-type { fill: var(--panel); stroke: var(--border); stroke-width: 1; }
 .graph .node:hover > rect:first-of-type { stroke: var(--accent); }
