@@ -11,7 +11,7 @@ license = { file = "LICENSE" }
 dependencies = ["numpy", "scipy", "pandas"]
 
 [project.optional-dependencies]
-brightway = ["bw2data>=4", "bw2calc>=2", "bw2io>=0.9.17", "bw_simapro_csv"]
+brightway = ["bw2data>=4", "bw2calc>=2", "bw2io>=0.9.17", "bw_simapro_csv", "ecoinvent_interface", "keyring"]
 fast = ["pypardiso"]
 dev = ["pytest"]
 

@@ -139,6 +139,34 @@ def project(args) -> None:
         editing.restore_project(args.file, args.name)
 
 
+def ecoinvent(args) -> None:
+    """ecoinvent account (kept in the system's credential store) and release downloads."""
+    from . import credentials
+
+    if args.action == "login":
+        import getpass
+
+        username = input("ecoinvent user name: ").strip()
+        password = getpass.getpass("ecoinvent password: ")
+        versions = credentials.check(username, password)
+        credentials.save(username, password)
+        print(f"Logged in; saved in {credentials.store()}. Versions available: {', '.join(versions)}")
+    elif args.action == "logout":
+        credentials.forget()
+        print("ecoinvent credentials removed from this computer")
+    else:
+        from .importing import import_ecoinvent_release
+
+        if not args.version or not args.project:
+            raise SystemExit("Give --version and --project")
+        found = credentials.load()
+        if found is None:
+            raise SystemExit("No ecoinvent credentials: run lca-viewer ecoinvent login first")
+        t = time.perf_counter()
+        database = import_ecoinvent_release(args.project, args.version, args.system_model, *found)
+        print(f"imported {database} into project {args.project} ({time.perf_counter() - t:.0f}s)")
+
+
 def dataset(args) -> None:
     """Write the dataset described in a JSON file (the Create dataset panel) into a project."""
     import json
@@ -191,6 +219,16 @@ def main(argv=None) -> None:
     p.add_argument("--setup", action="store_true",
                    help="With create: install the biosphere and impact methods bundled with Brightway (ecoinvent 3.9)")
     p.set_defaults(func=project)
+
+    p = sub.add_parser("ecoinvent", help="Download an ecoinvent release into a new project (in BRIGHTWAY2_DIR) "
+                                         "with your ecoinvent account")
+    p.add_argument("action", choices=["login", "logout", "import"],
+                   help="login: save your account in the system's credential store (Windows Credential Manager, "
+                        "macOS Keychain, Secret Service); logout: remove it; import: download and import a release")
+    p.add_argument("--project", help="With import: the new project")
+    p.add_argument("--version", help="With import: e.g. 3.10.1")
+    p.add_argument("--system-model", default="cutoff", choices=["cutoff", "apos", "consequential", "EN15804"])
+    p.set_defaults(func=ecoinvent)
 
     p = sub.add_parser("dataset", help="Write a dataset described in a JSON file into a project (in BRIGHTWAY2_DIR)")
     p.add_argument("spec", help="JSON file: see lca_viewer.editing.write_dataset")

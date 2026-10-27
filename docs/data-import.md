@@ -6,6 +6,7 @@
 |---|---|
 | Brightway 2.5 project (bw2data 4) | done: `lca_viewer.brightway.from_brightway`; from the app with *Load database* (`lca_viewer.sources`) |
 | ecoinvent ecoSpold2 release (`.7z`) | done via Brightway import (`lca-viewer import ecospold2`, or `scripts/import_ecoinvent.py`) |
+| ecoinvent release downloaded with the user's account | done: a new project per release (`lca-viewer ecoinvent import`, *New project from ecoinvent*) |
 | SimaPro CSV process export (Agribalyse 3.2) | done via Brightway import (`lca-viewer import simapro-csv`), tested on toy data only |
 | direct ecoSpold2 → `LCAModel` (no Brightway) | later, only if a non-Brightway deployment needs it |
 | openLCA JSON-LD | later |
@@ -96,6 +97,26 @@ builds do: the server itself never imports bw2data.
   with those `default_migrations` picks for the ticked background databases)
   and, when exchanges stay unlinked, the rows of the report CSV, then offers
   `--unlinked drop`.
+- **ecoinvent with the user's account** (*New project from ecoinvent*, or
+  `lca-viewer ecoinvent login` then `lca-viewer ecoinvent import --project P
+  --version 3.10.1 --system-model cutoff`): `importing.import_ecoinvent_release`
+  downloads the release with `ecoinvent_interface` (kept in its own cache,
+  `%LOCALAPPDATA%\pylca\EcoinventInterface\cache` on Windows, so a second
+  project of the same release downloads nothing) and runs bw2io's
+  `import_ecoinvent_release` into a new project: its own biosphere
+  (`ecoinvent-<version>-biosphere`) and LCIA methods (`("ecoinvent-<version>",
+  …)`), no `bw2setup`. A project created for it is deleted if the import fails.
+- **Credentials** (`lca_viewer.credentials`): kept with `keyring` in the
+  system's credential store (Windows Credential Manager, macOS Keychain,
+  Secret Service), never in a file of the repository or of `data/`;
+  plain-file backends (`keyrings.alt`) are refused. Without a secure store, or
+  without *Remember*, they stay in the server's memory until it stops. The
+  password is sent once, to `/api/ecoinvent/login` (checked with ecoinvent
+  first, accepted from this computer only); the API returns the user name,
+  never the password. The import process gets them in its environment
+  (`EI_USERNAME`, `EI_PASSWORD`, which `ecoinvent_interface` reads), not on
+  its command line nor in the job log. `ecoinvent_interface`'s own
+  `permanent_setting` (plain files) is not used.
 - **Uploads**: a file chosen in the page is streamed to `data/uploads`
   (`/api/upload`, raw body, no multipart dependency) and deleted once an
   import or restore used it.
@@ -178,6 +199,18 @@ added later.
   [sentier-agribalyse](https://github.com/sentier-dev/sentier-agribalyse),
   is a pipeline that reads the same CSV (`AGB32_final.CSV`) and needs a local
   ecoinvent 3.9.1.
+- sentier-agribalyse also lists `source/harmonised-flows-simple.json.gz`
+  among its inputs. It is a list of EF 3.1 elementary flows with their
+  synonyms (`identifier`, `prefLabel`, `altLabel`, `context_iri`), used only
+  as one fallback tier when matching Agribalyse emissions to EF flows; its
+  reader returns nothing when the file is missing. `lca-viewer import
+  simapro-csv` does not use it (flows go through bw2io's SimaPro → ecoinvent
+  normalisation and randonneur_data).
+- An **Agribalyse 3.1** SimaPro export (`AGB3.1.CSV`, 17,550 processes)
+  contains the ecoinvent processes it uses as aggregated system processes
+  (1,792 "Cut-off, S - Copied from Ecoinvent", 143 "Adapted from Ecoinvent"),
+  so its technosphere links inside the file; only its emissions need linking
+  to a biosphere.
 - openLCA (Nexus) has a full version and a "core" version without ecoinvent;
   ADEME advises against the core version (about 200 ecoinvent datasets are
   adjusted in the official one).

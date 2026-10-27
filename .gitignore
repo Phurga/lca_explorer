@@ -4,6 +4,13 @@
 *.spold
 data/
 
+# Credentials: lca_viewer keeps the ecoinvent account in the system's credential store
+# (keyring), never in files; ignore the usual secret files in case one is made by hand
+.env
+.env.*
+!.env.example
+*.secret
+
 # Python
 __pycache__/
 *.egg-info/

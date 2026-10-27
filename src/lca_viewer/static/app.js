@@ -423,8 +423,94 @@ const ECOSPOLD_NAME = (path) => {
   return version ? `ecoinvent-${version}${model ? `-${model}` : ""}` : name.replace(/\.(7z|csv)$/i, "");
 };
 
+// A new project with an ecoinvent release downloaded with the user's account. The password goes
+// to the server once (checked with ecoinvent, then kept in the system's credential store, or in
+// the server's memory only); the page only ever gets the user name back.
+function EcoinventForm({ folder, onJob, onCancel, busy, actions }) {
+  const [status, setStatus] = useState(null);
+  const [error, setError] = useState(null);
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [remember, setRemember] = useState(true);
+  const [checking, setChecking] = useState(false);
+  const [versions, setVersions] = useState(null);
+  const [version, setVersion] = useState("");
+  const [models, setModels] = useState(null);
+  const [model, setModel] = useState("cutoff");
+  const [name, setName] = useState("");
+  const [named, setNamed] = useState(false);  // the user typed a project name
+  useEffect(() => { serverRequest("/api/ecoinvent").then(setStatus).catch((e) => setError(e.message)); }, []);
+  useEffect(() => {
+    if (!status?.username || versions) return;
+    serverRequest("/api/ecoinvent/releases").then((r) => { setVersions(r.versions); setVersion(r.versions[0] || ""); })
+      .catch((e) => setError(e.message));
+  }, [status?.username]);
+  useEffect(() => {
+    setModels(null);
+    if (!version) return;
+    serverRequest(`/api/ecoinvent/releases?version=${encodeURIComponent(version)}`)
+      .then((r) => { setModels(r.system_models); if (!r.system_models.includes(model)) setModel(r.system_models[0]); })
+      .catch((e) => setError(e.message));
+  }, [version]);
+  useEffect(() => { if (!named && version) setName(`ecoinvent-${version}-${model}`); }, [version, model]);
+
+  function login(e) {
+    e.preventDefault();
+    setChecking(true);
+    setError(null);
+    serverRequest("/api/ecoinvent/login", { username, password, remember }).then((r) => {
+      setPassword("");
+      setVersions(r.versions);
+      setVersion(r.versions[0] || "");
+      setStatus(r);
+    }).catch((err) => setError(err.message)).finally(() => setChecking(false));
+  }
+  const logout = () => serverRequest("/api/ecoinvent/logout", {}).then((s) => { setStatus(s); setVersions(null); setVersion(""); })
+    .catch((e) => setError(e.message));
+
+  if (!status) return html`<form class="project-form"><h4>New project from ecoinvent</h4>
+    ${error ? html`<div class="error">${error}</div>` : html`<p class="muted">…</p>`}</form>`;
+  if (!status.installed) return html`<form class="project-form" onSubmit=${(e) => e.preventDefault()}>
+    <h4>New project from ecoinvent</h4>
+    <p>The download needs <code>ecoinvent_interface</code> and <code>keyring</code> in the Python environment running
+      lca_viewer: run <code>pip install ecoinvent_interface keyring</code> in it, then restart the app.</p>
+    <div class="form-actions"><button type="button" onClick=${onCancel}>Cancel</button></div></form>`;
+  if (!status.username) return html`
+    <form class="project-form" onSubmit=${login}>
+      <h4>New project from ecoinvent: your ecoinvent account</h4>
+      <p class="muted small">The account of ecoquery.ecoinvent.org, with a licence for the releases you download.</p>
+      <label>User name <input value=${username} onInput=${(e) => setUsername(e.target.value)} autocomplete="username" autofocus /></label>
+      <label>Password <input type="password" value=${password} onInput=${(e) => setPassword(e.target.value)} autocomplete="current-password" /></label>
+      <label class="check"><input type="checkbox" checked=${remember} disabled=${!status.store} onChange=${(e) => setRemember(e.target.checked)} />
+        ${status.store ? `Remember on this computer, in ${status.store}` : "Remember: no secure credential store on this computer, kept until the app stops"}</label>
+      ${error && html`<div class="error">${error}</div>`}
+      ${actions(checking ? "Checking with ecoinvent…" : "Log in", checking || !username.trim() || !password)}
+    </form>`;
+  return html`
+    <form class="project-form" onSubmit=${(e) => { e.preventDefault(); onJob("/api/ecoinvent/import", { folder, project: name.trim(), version, system_model: model }); }}>
+      <h4>New project from ecoinvent</h4>
+      <p class="muted small">Account <b>${status.username}</b> ${status.remembered ? `(remembered in ${status.store})` : "(until the app stops)"} ·
+        <button type="button" class="link" onClick=${logout}>${status.remembered ? "Forget it" : "Log out"}</button></p>
+      <label>Version
+        <select value=${version} onChange=${(e) => setVersion(e.target.value)} disabled=${!versions}>
+          ${!versions && html`<option>Asking ecoinvent…</option>`}
+          ${(versions || []).map((v) => html`<option value=${v}>${v}</option>`)}
+        </select></label>
+      <label>System model
+        <select value=${model} onChange=${(e) => setModel(e.target.value)} disabled=${!models}>
+          ${(models || [model]).map((m) => html`<option value=${m}>${m}</option>`)}
+        </select></label>
+      <label>Project name <input value=${name} onInput=${(e) => { setName(e.target.value); setNamed(true); }} /></label>
+      ${error && html`<div class="error">${error}</div>`}
+      <p class="muted small">Downloads the release (about 1 GB, kept in ecoinvent_interface's cache for next time), imports it
+        with its own biosphere and its impact methods (10 to 20 minutes), into a new project of this folder.</p>
+      ${actions("Download and import", busy || !version || !models || !name.trim())}
+    </form>`;
+}
+
 // The forms of the Brightway projects section: a new project, one from a backup (BAFU on
-// files.brightway.dev), an ecoSpold2 or SimaPro CSV import, a deletion. Each starts a job.
+// files.brightway.dev), one from ecoinvent, an ecoSpold2 or SimaPro CSV import, a deletion.
+// Each starts a job.
 function ProjectForm({ form, folder, projects, onJob, onCancel, busy }) {
   const project = projects?.projects.find((p) => p.name === form.project);
   const flowDbs = (project?.databases || []).filter((d) => !d.processes).map((d) => d.name);
@@ -473,6 +559,7 @@ function ProjectForm({ form, folder, projects, onJob, onCancel, busy }) {
         needed to import an ecoSpold2 or SimaPro CSV database into it</label>
       ${actions("Create project", !name.trim())}
     </form>`;
+  if (form.kind === "ecoinvent") return html`<${EcoinventForm} folder=${folder} onJob=${onJob} onCancel=${onCancel} busy=${busy} actions=${actions} />`;
   if (form.kind === "restore") return html`
     <form class="project-form" onSubmit=${submit("/api/brightway/restore", source === "remote"
       ? { folder, remote: remoteName, name: name || null } : { folder, file: path, name: name || null })}>
@@ -702,6 +789,8 @@ function LoadDatabase({ onClose, missing, onDatabases }) {
             <button class="link" onClick=${() => setForm({ kind: "new" })}>+ New project</button>
             <button class="link" onClick=${() => setForm({ kind: "restore" })}
               title="A Brightway backup archive (.tar.gz): a file, or a project of files.brightway.dev such as BAFU">+ Add a project from a backup (BAFU, …)</button>
+            <button class="link" onClick=${() => setForm({ kind: "ecoinvent" })}
+              title="Download an ecoinvent release with your ecoinvent account, into a new project">+ New project from ecoinvent</button>
           </div>`}
         ${form && html`<${ProjectForm} key=${`${form.kind}:${form.project || ""}`} form=${form} folder=${folder} projects=${projects}
           busy=${busy} onJob=${startJob} onCancel=${() => setForm(null)} />`}
