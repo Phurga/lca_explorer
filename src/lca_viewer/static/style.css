@@ -231,6 +231,11 @@ section { display: flex; flex-direction: column; min-height: 0; border-right: 1p
 .rules li .desc { flex: 1; overflow: hidden; text-overflow: ellipsis; }
 .rules li small { color: var(--muted); }
 .rules li.disabled .desc { opacity: 0.5; }
+.rules li[draggable="true"] { cursor: grab; }
+.rules li .grip { color: var(--muted); user-select: none; }
+.rules li.dragging { opacity: 0.4; }
+.rules li.drop-before { box-shadow: 0 -3px 0 var(--accent); }
+.rules li.drop-after { box-shadow: 0 3px 0 var(--accent); }
 .condition select, .condition input { max-width: 200px; }
 .methods-list { max-height: 180px; overflow: auto; border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; }
 .methods-list label { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
