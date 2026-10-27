@@ -341,6 +341,20 @@ EDITOR_KEY = "lca_viewer"  # set by lca_viewer.editing on the datasets written f
 NODE_COLUMNS = "database, code, name, product, location, type, data"
 
 
+def guess_system_model(databases) -> str | None:
+    """The system model of databases, from their names (as ecoinvent's are named, e.g.
+    ``ecoinvent-3.12-consequential``): "consequential", "attributional" (allocation: cut-off,
+    APOS, EN15804), or None when none tells or they disagree."""
+    found = set()
+    for name in databases:
+        name = (name or "").lower()
+        if "conseq" in name:
+            found.add("consequential")
+        elif re.search(r"cut-?off|apos|en15804|attributional", name):
+            found.add("attributional")
+    return found.pop() if len(found) == 1 else None
+
+
 def _own_comment(data: dict) -> str:
     """The comment entered in the app, without the documentation appended to it in the process comment."""
     from .editing import DOCUMENTATION
@@ -396,8 +410,12 @@ def read_dataset(base, project: str, database: str, code: str) -> dict:
             if info is None:
                 raise ValueError(f"The process with co-products that {code!r} was allocated from is gone")
         key = (info["database"], info["code"])
+        from .editing import ALLOCATION_RULES
 
+        record = data.get(EDITOR_KEY) if isinstance(data.get(EDITOR_KEY), dict) else {}
+        rule = record.get("allocation") if record.get("allocation") in ALLOCATION_RULES else "manual"
         products, exchanges, warnings, lost_uncertainty = [], [], [], 0
+        waste_products = []
         for kind, in_key, _, e in edges("output_database = ? AND output_code = ?", *key):
             amount = e.get("amount", 0)
             if kind == "production":
@@ -411,7 +429,8 @@ def read_dataset(base, project: str, database: str, code: str) -> dict:
                     share = 100 * e["mf_allocation_factor"]
                 products.append({
                     "name": (data.get("reference product") or info["name"]) if in_key == key else product["name"],
-                    "amount": amount, "unit": product["unit"] or "unit", "allocation": share,
+                    "amount": amount, "unit": product["unit"] or "unit", "class": "allocatable", "allocation": share,
+                    "property": properties.get(ALLOCATION_RULES[rule]) if ALLOCATION_RULES[rule] else None,
                     "comment": e.get("comment") or "", "code": None if in_key == key else in_key[1],
                 })
                 continue
@@ -425,6 +444,10 @@ def read_dataset(base, project: str, database: str, code: str) -> dict:
                 other, sign = supplier(other)
                 if other is None:
                     warnings.append(f"No process supplies {node(*in_key)[0]['name']}: left out")
+                    continue
+                if isinstance(e.get("lca_viewer_product"), dict):  # a waste product of the dataset, sent to treatment
+                    waste_products.append({**e["lca_viewer_product"], "amount": -amount, "class": "waste", "treatment": other,
+                                           "allocation": None, "property": None, "comment": e.get("comment") or "", "code": None})
                     continue
                 if kind == "substitution":
                     section = "avoided"
@@ -443,8 +466,13 @@ def read_dataset(base, project: str, database: str, code: str) -> dict:
             exchanges.append({"section": section, "node": other, "amount": amount, "comment": e.get("comment") or "", "sd2": sd2})
     if lost_uncertainty:
         warnings.append(f"{lost_uncertainty} exchanges have an uncertainty other than lognormal: not kept")
+    products += [{"name": p.get("name") or "", "amount": p.get("amount"), "unit": p.get("unit") or "unit", "class": "recyclable",
+                  "allocation": None, "property": None, "comment": p.get("comment") or "", "code": None}
+                 for p in record.get("recyclable") or []]
+    products += waste_products
     return {
-        "database": key[0], "code": key[1], "editable": isinstance(data.get(EDITOR_KEY), dict),
+        "database": key[0], "code": key[1], "editable": bool(record),
+        "system_model": record.get("system_model") or guess_system_model([key[0]]), "allocation": rule,
         "process": {"name": info["name"] or "", "location": info["location"] or "GLO", "comment": _own_comment(data),
                     "documentation": {k: v for k, v in (data.get("documentation") or {}).items() if isinstance(v, str)}},
         "products": products, "exchanges": exchanges, "warnings": warnings,

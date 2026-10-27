@@ -169,6 +169,53 @@ def test_edit_a_dataset_in_place(project):
                                           products=[{"name": "electricity", "amount": 1}]))
 
 
+def test_allocation_rules_and_product_classes(project):
+    from lca_viewer.brightway import from_brightway
+
+    products = [{"name": "milk", "amount": 10, "unit": "kilogram", "property": 0.5},
+                {"name": "meat", "amount": 2, "unit": "kilogram", "property": 5},
+                {"name": "hide", "amount": 1, "unit": "kilogram", "class": "recyclable"},
+                {"name": "slurry", "amount": 4, "unit": "kilogram", "class": "waste", "treatment": {"database": "bg", "code": "manure"}}]
+    result = editing.write_dataset("toy", spec(allocation="value", products=products,
+                                               exchanges=[{"section": "emission", "database": "bio", "code": "co2", "amount": 3}]))
+    model = from_brightway("toy", "my datasets", [GWP])
+    acts = model.activities
+    shared = 3 + 4 * 0.2  # direct CO2, and the slurry's treatment; the hide is cut off
+    milk = acts.index[(acts["database"] == "my datasets") & (acts["reference_product"] == "milk")][0]
+    meat = acts.index[(acts["database"] == "my datasets") & (acts["reference_product"] == "meat")][0]
+    assert np.isclose(model.score(milk)[0], shared / 3 / 10)  # revenue: milk 10 × 0.5 = 5, meat 2 × 5 = 10
+    assert np.isclose(model.score(meat)[0], shared * 2 / 3 / 2)
+    assert len(result["codes"]) == 2
+
+    read = sources.read_dataset(project, "toy", "my datasets", result["codes"][0])
+    assert (read["allocation"], read["system_model"]) == ("value", "attributional")
+    assert [(p["name"], p["class"], p["amount"], p["property"]) for p in read["products"]] == [
+        ("milk", "allocatable", 10, 0.5), ("meat", "allocatable", 2, 5), ("hide", "recyclable", 1, None), ("slurry", "waste", 4, None)]
+    assert read["products"][3]["treatment"]["code"] == "manure"
+    assert [e["section"] for e in read["exchanges"]] == ["emission"]  # the slurry is a product, not a waste input
+
+
+def test_allocation_errors_and_consequential_datasets(project):
+    two = [{"name": "milk", "amount": 10, "property": 0.5}, {"name": "meat", "amount": 2}]
+    with pytest.raises(ValueError, match="value per unit"):
+        editing.write_dataset("toy", spec(allocation="value", products=two))
+    with pytest.raises(ValueError, match="add up to 0"):
+        editing.write_dataset("toy", spec(allocation="value", products=[{**p, "property": 0} for p in two]))
+    with pytest.raises(ValueError, match="Unknown allocation"):
+        editing.write_dataset("toy", spec(allocation="economic"))
+    with pytest.raises(ValueError, match="treatment"):
+        editing.write_dataset("toy", spec(products=[{"name": "milk", "amount": 1}, {"name": "slurry", "amount": 1, "class": "waste"}]))
+    with pytest.raises(ValueError, match="consequential"):
+        editing.write_dataset("toy", spec(system_model="consequential"))
+    # Consequential: the determining product, the co-product substituting its marginal supply
+    result = editing.write_dataset("toy", spec(system_model="consequential", products=[{"name": "milk", "amount": 10}],
+                                               exchanges=[{"section": "avoided", "database": "bg", "code": "feed", "amount": 2}]))
+    read = sources.read_dataset(project, "toy", "my datasets", result["codes"][0])
+    assert read["system_model"] == "consequential" and [e["section"] for e in read["exchanges"]] == ["avoided"]
+    assert sources.guess_system_model(["ecoinvent-3.12-consequential", "biosphere3"]) == "consequential"
+    assert sources.guess_system_model(["ecoinvent-3.12-cutoff", "ecoinvent-3.12-consequential"]) is None
+
+
 def test_search_reads_the_project_files(project):
     found = sources.search_nodes(project, "toy", "electricity fr")
     assert [(n["name"], n["unit"]) for n in found] == [("electricity", "kilogram")]
