@@ -856,7 +856,10 @@ const DOCUMENTATION_FIELDS = [
 const BW_UNITS = ["kilogram", "cubic meter", "kilowatt hour", "megajoule", "unit", "ton kilometer", "square meter",
   "square meter-year", "hectare", "litre", "meter", "kilometer", "hour", "person kilometer", "kilogram day"];
 const DRAFT_KEY = "lca_viewer.datasetDraft";
+// mode: "new", "copy" (of any process: saved as a new dataset) or "edit" (of a dataset written from
+// the app: saving replaces it, keeping its code); source: the process loaded; code: the dataset edited
 const emptyDraft = () => ({
+  mode: "new", source: null, code: null, multi: false, warnings: [],
   project: "", database: "", newDatabase: "",
   process: { name: "", location: "GLO", comment: "", documentation: {} },
   products: [{ name: "", amount: "1", unit: "kilogram", allocation: "100", comment: "" }],
@@ -905,13 +908,20 @@ function NodePicker({ folder, project, kind, placeholder, onPick }) {
     </div>`;
 }
 
-function CreateDataset({ onClose }) {
+// start: {folder, project, node} to open on the dataset of node, to edit it (from a view)
+function CreateDataset({ onClose, start }) {
   const [dirs, setDirs] = useState(null);
-  const [folder, setFolder] = useState(() => loadPreference("brightwayFolder", ""));
+  const [folder, setFolder] = useState(() => start?.folder || loadPreference("brightwayFolder", ""));
   const [projects, setProjects] = useState(null);
   const [error, setError] = useState(null);
   const [draft, setDraft] = useState(() => {
-    try { return { ...emptyDraft(), ...JSON.parse(localStorage.getItem(DRAFT_KEY) || "null") }; } catch { return emptyDraft(); }
+    try {
+      const saved = JSON.parse(localStorage.getItem(DRAFT_KEY) || "null");
+      if (!saved) return emptyDraft();
+      // A dataset is edited from its view (Edit dataset): opened otherwise, the form starts a new one
+      if (saved.mode === "edit") return { ...emptyDraft(), project: saved.project || "" };
+      return { ...emptyDraft(), ...saved };
+    } catch { return emptyDraft(); }
   });
   const [job, setJob] = useState(null);
   const [showLog, setShowLog] = useState(false);
@@ -943,6 +953,39 @@ function CreateDataset({ onClose }) {
   const project = usable.find((p) => p.name === draft.project);
   const writable = (project?.databases || []).filter((d) => d.processes || d.backend === "multifunctional");
   const set = (changes) => setDraft((d) => ({ ...d, ...changes }));
+  const filled = draft.process.name.trim() || draft.exchanges.length > 0;
+  function setMode(mode) {
+    if (mode === draft.mode) return;
+    if (draft.source && filled && !confirm("Start again? The form is cleared (not what was saved).")) return;
+    setDraft(draft.source ? { ...emptyDraft(), project: draft.project, database: draft.mode === "edit" ? "" : draft.database, mode }
+      : { ...draft, mode });
+    setJob(null);
+  }
+  // Fill the form with a process: a copy (saved as a new dataset) or the dataset to edit
+  function loadFrom(node, mode, at = { folder, project: draft.project }) {
+    if (filled && !(draft.code === node.code && mode === "edit") && !confirm(`Replace the form with ${node.name}?`)) return;
+    setError(null);
+    serverRequest(`/api/brightway/dataset?folder=${encodeURIComponent(at.folder)}&project=${encodeURIComponent(at.project)}`
+      + `&database=${encodeURIComponent(node.database)}&code=${encodeURIComponent(node.code)}`).then((d) => {
+      const multi = d.products.length > 1;
+      setDraft({
+        ...emptyDraft(), mode, project: at.project,
+        database: mode === "edit" ? d.database : draft.database, newDatabase: draft.newDatabase,
+        source: { database: d.database, name: d.process.name, location: d.process.location },
+        code: mode === "edit" ? d.code : null, multi, warnings: d.warnings,
+        process: { ...d.process, name: mode === "copy" ? `${d.process.name} (copy)` : d.process.name },
+        products: d.products.map((p) => ({
+          name: p.name, amount: String(p.amount), unit: p.unit, comment: p.comment, code: mode === "edit" ? p.code : null,
+          allocation: multi ? (p.allocation == null ? "" : String(p.allocation)) : "100",
+        })),
+        exchanges: d.exchanges.map((e) => ({ section: e.section, node: e.node, amount: String(e.amount), comment: e.comment,
+          sd2: e.sd2 ? String(e.sd2) : "" })),
+      });
+      setJob(null);
+    }).catch((e) => setError(e.message));
+  }
+  useEffect(() => { if (start) loadFrom(start.node, "edit", start); }, []);
+  const editing = draft.mode === "edit" && draft.code;
   const setProcess = (changes) => set({ process: { ...draft.process, ...changes } });
   const setProduct = (i, changes) => set({ products: draft.products.map((p, k) => (k === i ? { ...p, ...changes } : p)) });
   const setExchange = (i, changes) => set({ exchanges: draft.exchanges.map((e, k) => (k === i ? { ...e, ...changes } : e)) });
@@ -952,7 +995,10 @@ function CreateDataset({ onClose }) {
   const targetDb = writable.find((d) => d.name === draft.database);
   const problems = [
     !project && "choose a project",
+    draft.mode !== "new" && !draft.source && `choose the dataset to ${draft.mode}`,
     !target && "choose a database",
+    editing && several !== draft.multi && (draft.multi ? "keep its co-products (a dataset with co-products stays one: copy it to make it single-output)"
+      : "remove the co-products (a single-output dataset stays one: copy it to add co-products)"),
     !draft.process.name.trim() && "name the process",
     draft.products.some((p) => !p.name.trim() || !Number(p.amount)) && "give each product a name and an amount",
     several && Math.abs(shares - 100) > 1e-6 && `the allocation percentages add up to ${shares}, not 100`,
@@ -963,7 +1009,7 @@ function CreateDataset({ onClose }) {
 
   function save() {
     const spec = {
-      database: target, new_database: draft.database === "__new__",
+      database: target, new_database: draft.database === "__new__", code: editing ? draft.code : null,
       process: draft.process,
       products: draft.products.map((p) => ({ ...p, amount: Number(p.amount), allocation: several ? Number(p.allocation) : 100 })),
       exchanges: draft.exchanges.map((e) => ({ section: e.section, database: e.node.database, code: e.node.code,
@@ -979,9 +1025,9 @@ function CreateDataset({ onClose }) {
 
   return html`
     <div class="modal-backdrop" onMouseDown=${(e) => e.target === e.currentTarget && onClose()}>
-      <div class="load-dialog dataset-dialog" role="dialog" aria-label="Create a dataset">
+      <div class="load-dialog dataset-dialog" role="dialog" aria-label=${editing ? "Edit a dataset" : "Create a dataset"}>
         <div class="info-head">
-          <div class="info-title">Create a dataset <span class="muted">· written into a Brightway project</span></div>
+          <div class="info-title">${editing ? "Edit a dataset" : "Create a dataset"} <span class="muted">· written into a Brightway project</span></div>
           <button onClick=${onClose} aria-label="Close">×</button>
         </div>
         <div class="load-body">
@@ -995,21 +1041,46 @@ function CreateDataset({ onClose }) {
                   ${folder && dirs && !dirs.some((d) => d.path === folder) && html`<option value=${folder}>${folder}</option>`}
                 </select></label>
               <label>Project
-                <select value=${draft.project} onChange=${(e) => set({ project: e.target.value, database: "" })}>
+                <select value=${draft.project}
+                  onChange=${(e) => set({ project: e.target.value, database: "", ...(draft.code && { mode: "new", code: null, source: null }) })}>
                   <option value="">Choose…</option>
                   ${usable.map((p) => html`<option value=${p.name}>${p.name}</option>`)}
                 </select></label>
               <label>Database
-                <select value=${draft.database} onChange=${(e) => set({ database: e.target.value })} disabled=${!project}>
+                <select value=${draft.database} onChange=${(e) => set({ database: e.target.value })} disabled=${!project || editing}
+                  title=${editing ? "An edited dataset stays in its database" : ""}>
                   <option value="">Choose…</option>
                   ${writable.map((d) => html`<option value=${d.name}>${d.name}${d.backend === "multifunctional" ? "" : " (single-output only)"}</option>`)}
-                  <option value="__new__">New database…</option>
+                  ${editing && !writable.some((d) => d.name === draft.database) && html`<option value=${draft.database}>${draft.database}</option>`}
+                  ${!editing && html`<option value="__new__">New database…</option>`}
                 </select></label>
               ${draft.database === "__new__" && html`
                 <label>Name of the new database <input value=${draft.newDatabase} placeholder="e.g. my datasets"
                   onInput=${(e) => set({ newDatabase: e.target.value })} /></label>`}
             </div>
             <p class="muted small">Inputs and emissions are searched in this project, in all its databases.</p>
+          </section>
+          <section>
+            ${editing ? html`
+              <h3>Editing</h3>
+              <p class="note"><b>${draft.source.name}</b> [${draft.source.location}] · ${draft.source.database}
+                · <button class="link" onClick=${() => setMode("new")}>start a new dataset instead</button></p>
+              <p class="muted small">Saving replaces the dataset in place: the datasets using it stay linked to it. Rebuild the databases that use it to see the change.</p>`
+            : html`
+              <h3>Start from</h3>
+              <div class="segmented" role="radiogroup" aria-label="Start from">
+                ${[["new", "Empty dataset"], ["copy", "Copy of a process"]].map(([m, label]) => html`
+                  <button role="radio" aria-checked=${draft.mode === m} class=${draft.mode === m ? "primary" : ""}
+                    onClick=${() => setMode(m)}>${label}</button>`)}
+              </div>
+              ${draft.mode === "copy" && html`
+                <${NodePicker} folder=${folder} project=${draft.project} kind="process"
+                  placeholder=${draft.project ? "Search the process to copy, in any database of the project (e.g. ecoinvent)" : "Choose a project first"}
+                  onPick=${(node) => loadFrom(node, "copy")} />
+                <p class="muted small">Its products, exchanges, uncertainties and documentation fill the form; saving writes a new dataset, the original is unchanged.</p>`}
+              ${draft.source && html`
+                <p class="note">Copy of <b>${draft.source.name}</b> [${draft.source.location}] · ${draft.source.database}</p>`}`}
+            ${draft.warnings?.length > 0 && html`<ul class="note">${draft.warnings.map((w) => html`<li>${w}</li>`)}</ul>`}
           </section>
           <section>
             <h3>Process</h3>
@@ -1087,8 +1158,8 @@ function CreateDataset({ onClose }) {
           <div class="form-actions">
             <span class="muted small">${problems.length ? `To save: ${problems.join(", ")}.` : "Ready to save."}</span>
             <span class="spacer"></span>
-            <button onClick=${() => { if (confirm("Clear this dataset (the form, not what was saved)?")) { setDraft({ ...emptyDraft(), project: draft.project, database: draft.database }); setJob(null); } }}>Clear</button>
-            <button class="primary" disabled=${problems.length > 0 || job?.status === "running"} onClick=${save}>Save to Brightway</button>
+            <button onClick=${() => { if (confirm("Clear this dataset (the form, not what was saved)?")) { setDraft({ ...emptyDraft(), project: draft.project, database: editing ? "" : draft.database }); setJob(null); } }}>Clear</button>
+            <button class="primary" disabled=${problems.length > 0 || job?.status === "running"} onClick=${save}>${editing ? "Save changes" : "Save to Brightway"}</button>
           </div>
         </div>
       </div>
@@ -2949,7 +3020,7 @@ function Portal({ slot, children }) {
 let keyboardOwner = null;
 // ``initial``: { state } a saved view, { inherit, root? } settings taken from another tab,
 // or { defaultRoot: true } (first start: the model's default functional unit)
-function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onCollapseSide }) {
+function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onCollapseSide, source, onEditable }) {
   const box = useRef(null);
   const treeSection = useRef(null);
   // Keyboard navigation: the row the arrows move from (and its position, kept when it
@@ -2960,6 +3031,18 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
   // position (moved to others, unmerged, ungrouped), so that the keys keep going
   const followCursor = useRef(false);
   const [root, setRoot] = useState(null);
+  // Tell the app the root's Brightway dataset when it was written from the app (Edit dataset, top bar)
+  useEffect(() => {
+    onEditable(id, null);
+    if (!root || !source?.brightway) return;
+    let live = true;
+    (root.code ? Promise.resolve(root) : request(`/api/activity/${root.index}`))  // views saved before roots had codes
+      .then((node) => node.code && serverRequest(`/api/brightway/dataset?folder=${encodeURIComponent(source.brightway)}`
+        + `&project=${encodeURIComponent(source.project)}&database=${encodeURIComponent(node.database)}&code=${encodeURIComponent(node.code)}`))
+      .then((d) => { if (live && d?.editable) onEditable(id, { database: d.database, code: d.code, name: d.process.name }); })
+      .catch(() => {});
+    return () => { live = false; };
+  }, [root?.index, source?.brightway, source?.project]);
   const [amount, setAmount] = useState(1);
   const [method, setMethod] = useState(0);
   const [cutoff, setCutoff] = useState(1);
@@ -3748,6 +3831,8 @@ function App() {
   const [databases, setDatabases] = useState(undefined);
   const [loadOpen, setLoadOpen] = useState(false);
   const [datasetOpen, setDatasetOpen] = useState(false);
+  const [datasetStart, setDatasetStart] = useState(null);  // the dataset to edit (Edit dataset)
+  const [editables, setEditables] = useState({});  // tab id → its root's dataset, when written from the app
   const [layout, setLayout] = useState(null);
   const [focus, setFocus] = useState(null);
   const [titles, setTitles] = useState({});
@@ -3848,19 +3933,23 @@ function App() {
     },
   };
 
+  const source = databases?.find((d) => d.key === DATABASE)?.source;  // the Brightway project it was built from
+  const editTarget = layout && source ? editables[activeTabOf(focus)] : null;  // the focused tab's root, if editable
   const topBar = (sidePanel) => html`
     <header class="top-bar">
       <h1>LCA Process Explorer</h1>
       <${DatabaseSelect} databases=${databases} />
       ${databases && html`<button onClick=${() => setLoadOpen(true)}
         title="Open another database: a model already built, or a database of your Brightway projects">Load database</button>`}
-      ${databases && html`<button onClick=${() => setDatasetOpen(true)}
-        title="Enter a new process, as in SimaPro, and save it into a Brightway project">Create dataset</button>`}
+      ${databases && html`<button onClick=${() => { setDatasetStart(null); setDatasetOpen(true); }}
+        title="Enter a new process as in SimaPro, or start from a copy of another one; saved into a Brightway project">Create dataset</button>`}
+      ${editTarget && html`<button onClick=${() => { setDatasetStart({ folder: source.brightway, project: source.project, node: editTarget }); setDatasetOpen(true); }}
+        title=${`Edit ${editTarget.name}, the functional unit of this tab (written from the app into ${source.project}); rebuild ${editTarget.database} to see the change`}>Edit dataset</button>`}
       <span class="spacer"></span>
       ${sidePanel}
     </header>
     ${loadOpen && html`<${LoadDatabase} onClose=${() => setLoadOpen(false)} onDatabases=${setDatabases} />`}
-    ${datasetOpen && html`<${CreateDataset} onClose=${() => setDatasetOpen(false)} />`}`;
+    ${datasetOpen && html`<${CreateDataset} start=${datasetStart} onClose=${() => setDatasetOpen(false)} />`}`;
   if (databases && !databases.some((d) => d.key === DATABASE)) {
     // Nothing loaded yet, or the database of this address is not loaded any more
     return html`
@@ -3885,7 +3974,8 @@ function App() {
       titles=${titles} dragging=${dragging} drop=${drop} setDrop=${setDrop} actions=${actions}>
       ${pane.tabs.map((id) => html`
         <${FUView} key=${id} id=${id} info=${info} initial=${initialOf(id)} visible=${id === pane.active}
-          onSave=${onSave} onTitle=${onTitle} onCollapseSide=${() => setSideOpen(false)}
+          onSave=${onSave} onTitle=${onTitle} onCollapseSide=${() => setSideOpen(false)} source=${source}
+          onEditable=${(tab, node) => setEditables((e) => (e[tab] === node ? e : { ...e, [tab]: node }))}
           onOpenTab=${(from, root) => openTab(paneOfTab(layout, from).id, { inherit: states.current[from], root })} />`)}
     <//>`;
   return html`

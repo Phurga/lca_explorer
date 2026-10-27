@@ -113,6 +113,62 @@ def test_dataset_errors(project):
                                                       "amount": 1, "sd2": 0.5}]))
 
 
+def test_read_dataset_gives_back_what_was_entered(project):
+    result = editing.write_dataset("toy", spec())
+    read = sources.read_dataset(project, "toy", "my datasets", result["codes"][0])  # an allocated process: its parent
+    assert read["editable"] and read["process"]["comment"] == "Toy farm"
+    assert read["process"]["documentation"] == spec()["process"]["documentation"]
+    assert [(p["name"], p["amount"], p["allocation"]) for p in read["products"]] == [("milk", 10, 80), ("meat", 2, 20)]
+    exchanges = [(e["section"], e["node"]["code"], e["amount"], e["sd2"]) for e in read["exchanges"]]
+    assert exchanges == [("technosphere", "elec", 5, 1.21), ("technosphere", "feed", 4, None), ("waste", "manure", 3, None),
+                         ("emission", "co2", 3, None), ("resource", "water", 0.2, None)]
+
+
+def test_read_a_background_process_to_copy_it(project):
+    import bw2data as bd
+
+    bd.Database("bg").write({**{n.key: {**n._data, "exchanges": [e._data for e in n.exchanges()]} for n in bd.Database("bg")},
+        ("bg", "chlorine"): {"name": "chlor-alkali", "reference product": "chlorine", "location": "FR", "unit": "kilogram",
+                             "type": "process", "exchanges": [
+                                 {"input": ("bg", "chlorine"), "amount": 1, "type": "production"},
+                                 {"input": ("bg", "feed"), "amount": -1.1, "type": "technosphere"},  # by-product
+                                 {"input": ("bg", "manure"), "amount": -0.5, "type": "technosphere"}]}})  # waste
+    read = sources.read_dataset(project, "toy", "bg", "chlorine")
+    assert not read["editable"] and [p["name"] for p in read["products"]] == ["chlorine"]
+    assert [(e["section"], e["node"]["code"], e["amount"]) for e in read["exchanges"]] == [("avoided", "feed", 1.1),
+                                                                                           ("waste", "manure", 0.5)]
+
+
+def test_edit_a_dataset_in_place(project):
+    import bw2data as bd
+
+    from lca_viewer.brightway import from_brightway
+
+    first = editing.write_dataset("toy", spec())
+    meat = next(c for c in first["codes"] if bd.get_node(database="my datasets", code=c)["reference product"] == "meat")
+    burger = editing.write_dataset("toy", spec(new_database=False, process={"name": "burger"},
+                                               products=[{"name": "burger", "amount": 1, "unit": "kilogram"}],
+                                               exchanges=[{"section": "technosphere", "database": "my datasets",
+                                                           "code": meat, "amount": 0.5}]))["codes"][0]
+    read = sources.read_dataset(project, "toy", "my datasets", first["codes"][0])
+    edited = spec(new_database=False, code=read["code"], process={**read["process"], "name": "dairy farm v2"},
+                  products=[{**p, "allocation": 50} for p in read["products"]],
+                  exchanges=[{"section": "emission", "database": "bio", "code": "co2", "amount": 10}])
+    second = editing.write_dataset("toy", edited)
+    assert set(second["codes"]) == set(first["codes"])  # same processes: their users stay linked
+    model = from_brightway("toy", "my datasets", [GWP])
+    acts = model.activities
+    row = acts.index[acts["name"] == "burger"][0]
+    assert np.isclose(model.score(row)[0], 0.5 * 0.5 * 10 / 2)  # half of the farm's 10 kg CO2, over 2 kg of meat
+    assert bd.get_node(database="my datasets", code=read["code"])["lca_viewer"]["modified"]
+
+    with pytest.raises(ValueError, match="cannot switch"):
+        editing.write_dataset("toy", spec(new_database=False, code=burger, products=edited["products"]))
+    with pytest.raises(ValueError, match="copy it instead"):
+        editing.write_dataset("toy", spec(database="bg", new_database=False, code="elec",
+                                          products=[{"name": "electricity", "amount": 1}]))
+
+
 def test_search_reads_the_project_files(project):
     found = sources.search_nodes(project, "toy", "electricity fr")
     assert [(n["name"], n["unit"]) for n in found] == [("electricity", "kilogram")]
@@ -162,6 +218,11 @@ def test_through_the_api(project, tmp_path):
     projects = client.get("/api/brightway", params={"folder": folder}).json()["projects"]
     listed = next(p for p in projects if p["name"] == "toy")["databases"]
     assert ("my datasets", 2) in [(d["name"], d["processes"]) for d in listed]  # the two allocated processes
+    read = client.get("/api/brightway/dataset", params={"folder": folder, "project": "toy", "database": "my datasets",
+                                                        "code": job["result"]["codes"][0]}).json()
+    assert read["editable"] and len(read["products"]) == 2
+    assert client.get("/api/brightway/dataset", params={"folder": folder, "project": "toy", "database": "bg",
+                                                        "code": "nothing"}).status_code == 404
     failed = wait(client.post("/api/brightway/dataset", json={"folder": folder, "project": "toy",
                                                              "spec": spec(products=[])}).json())
     assert failed["status"] == "failed" and "name and an amount" in failed["error"]

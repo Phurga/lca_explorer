@@ -178,7 +178,7 @@ def dataset(args) -> None:
         result = write_dataset(args.project, spec)
     except ValueError as e:
         raise SystemExit(str(e)) from None
-    print(f"Wrote {spec['process']['name']} into {result['database']}", flush=True)
+    print(f"{'Updated' if spec.get('code') else 'Wrote'} {spec['process']['name']} in {result['database']}", flush=True)
     print("RESULT " + json.dumps(result), flush=True)
 
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import math
 import os
 import pickle
 import re
@@ -334,6 +335,120 @@ def search_nodes(base, project: str, text: str, kind: str = "process", database:
     # A word that is a location code ("fr") picks that location rather than words containing it ("from")
     found.sort(key=lambda n: (n["location"] or "").lower() not in words)  # stable: keeps the SQL order
     return found[:limit]
+
+
+EDITOR_KEY = "lca_viewer"  # set by lca_viewer.editing on the datasets written from the app
+NODE_COLUMNS = "database, code, name, product, location, type, data"
+
+
+def _own_comment(data: dict) -> str:
+    """The comment entered in the app, without the documentation appended to it in the process comment."""
+    from .editing import DOCUMENTATION
+
+    stored = (data.get(EDITOR_KEY) or {}).get("comment")
+    if stored is not None:
+        return stored
+    doc = data.get("documentation") or {}
+    added = {f"{label}: {doc[key]}" for key, label in DOCUMENTATION.items() if doc.get(key)}
+    return "\n\n".join(p for p in (data.get("comment") or "").split("\n\n") if p not in added)
+
+
+def read_dataset(base, project: str, database: str, code: str) -> dict:
+    """A process of a project as the *Create dataset* panel enters it (the ``spec`` of
+    :func:`lca_viewer.editing.write_dataset`), to copy it or, when written from the app, edit it.
+
+    A process allocated from one with co-products gives that one. Technosphere inputs with a
+    negative amount are waste sent to treatment when their supplier treats waste (negative
+    production, as in ecoinvent), else avoided products (substitution, as in consequential
+    databases). Returns ``{"database", "code", "editable", "process", "products", "exchanges",
+    "warnings"}``, exchanges with the node they link to (as :func:`search_nodes` gives them).
+    """
+    path = project_dir(base, project) / "lci" / "databases.db"
+    with closing(sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)) as con:
+        def node(db, c):
+            row = con.execute(f"SELECT {NODE_COLUMNS} FROM activitydataset WHERE database = ? AND code = ?", (db, c)).fetchone()
+            return (_node(row), _project_data(row[6])) if row else (None, {})
+
+        def edges(where: str, *params):
+            return [(kind, (in_db, in_code), (out_db, out_code), _project_data(blob)) for kind, in_db, in_code, out_db, out_code, blob
+                    in con.execute("SELECT type, input_database, input_code, output_database, output_code, data "
+                                   f"FROM exchangedataset WHERE {where} ORDER BY id", params)]
+
+        def supplier(n):
+            """The process supplying node ``n`` (itself, or the producer of a product node) and the
+            sign of its production."""
+            if n["type"] not in NON_PROCESS_TYPES:
+                made = [e[3].get("amount", 1) for e in edges("output_database = ? AND output_code = ? AND type = 'production'",
+                                                             n["database"], n["code"])]
+                return n, -1 if made and made[0] < 0 else 1
+            for _, _, out_key, data in edges("input_database = ? AND input_code = ? AND type = 'production'",
+                                             n["database"], n["code"]):
+                producer, _ = node(*out_key)
+                if producer and (producer["type"] or "process") not in NOT_SUPPLIERS:
+                    return producer, -1 if data.get("amount", 1) < 0 else 1
+            return None, 1
+
+        info, data = node(database, code)
+        if info is None:
+            raise ValueError(f"No process {code!r} in {database}")
+        if data.get("mf_parent_key"):
+            info, data = node(*data["mf_parent_key"])
+            if info is None:
+                raise ValueError(f"The process with co-products that {code!r} was allocated from is gone")
+        key = (info["database"], info["code"])
+
+        products, exchanges, warnings, lost_uncertainty = [], [], [], 0
+        for kind, in_key, _, e in edges("output_database = ? AND output_code = ?", *key):
+            amount = e.get("amount", 0)
+            if kind == "production":
+                product = info if in_key == key else node(*in_key)[0]
+                if product is None:
+                    warnings.append(f"A product of the process is missing ({in_key[1]})")
+                    continue
+                properties = e.get("properties") or {}
+                share = properties.get("manual_allocation")
+                if share is None and e.get("mf_allocation_factor") is not None:
+                    share = 100 * e["mf_allocation_factor"]
+                products.append({
+                    "name": (data.get("reference product") or info["name"]) if in_key == key else product["name"],
+                    "amount": amount, "unit": product["unit"] or "unit", "allocation": share,
+                    "comment": e.get("comment") or "", "code": None if in_key == key else in_key[1],
+                })
+                continue
+            other, _ = node(*in_key)
+            if other is None:
+                warnings.append(f"An exchange links to a missing node ({in_key[0]}, {in_key[1]}): left out")
+                continue
+            if kind == "biosphere":
+                section = "resource" if _resource(other) else "emission"
+            elif kind in ("technosphere", "substitution"):
+                other, sign = supplier(other)
+                if other is None:
+                    warnings.append(f"No process supplies {node(*in_key)[0]['name']}: left out")
+                    continue
+                if kind == "substitution":
+                    section = "avoided"
+                elif amount >= 0:
+                    section = "technosphere"
+                else:
+                    section, amount = ("waste" if sign < 0 else "avoided"), -amount
+            else:
+                warnings.append(f"Exchange of type {kind!r} with {other['name']}: left out")
+                continue
+            sd2 = None
+            if e.get("uncertainty type") == 2 and e.get("scale"):
+                sd2 = round(math.exp(2 * e["scale"]), 4)
+            elif (e.get("uncertainty type") or 0) > 2:
+                lost_uncertainty += 1
+            exchanges.append({"section": section, "node": other, "amount": amount, "comment": e.get("comment") or "", "sd2": sd2})
+    if lost_uncertainty:
+        warnings.append(f"{lost_uncertainty} exchanges have an uncertainty other than lognormal: not kept")
+    return {
+        "database": key[0], "code": key[1], "editable": isinstance(data.get(EDITOR_KEY), dict),
+        "process": {"name": info["name"] or "", "location": info["location"] or "GLO", "comment": _own_comment(data),
+                    "documentation": {k: v for k, v in (data.get("documentation") or {}).items() if isinstance(v, str)}},
+        "products": products, "exchanges": exchanges, "warnings": warnings,
+    }
 
 
 def adapters() -> list[dict]:
