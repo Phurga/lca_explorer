@@ -1,6 +1,7 @@
+import argparse
 import json
 
-from lca_viewer.quickstart import clean_path, find_datasets, parse_release
+from lca_viewer.quickstart import Prompt, ask_source, clean_path, find_datasets, parse_release, run
 from lca_viewer.sources import catalog, register
 
 
@@ -36,3 +37,20 @@ def test_register_and_catalog(tmp_path):
     assert models[0] == {"path": str((tmp_path / "cache" / "a").resolve()), "title": "A2", "default_root": "x|GLO"}
     assert models[1]["default_root"] is None
     assert catalog(tmp_path / "nothing") == []
+
+
+def test_ecoinvent_is_optional(tmp_path, monkeypatch):
+    assert ask_source(Prompt(yes=True), None) is None  # --yes without an archive: no ecoinvent
+    monkeypatch.setattr("builtins.input", lambda prompt="": "")
+    assert ask_source(Prompt(), None) is None  # Enter skips
+    archive = tmp_path / "ecoinvent 3.9.1_cutoff_ecoSpold02.7z"
+    archive.write_text("")
+    assert ask_source(Prompt(yes=True), str(archive)) == (archive, None)
+
+    # The setup then only records the Python for the start scripts, and offers to start the app
+    started = []
+    monkeypatch.setattr("lca_viewer.cli.main", lambda argv: started.append(argv))
+    run(argparse.Namespace(data=str(tmp_path / "data"), yes=True, source=None))
+    assert (tmp_path / "data" / "python.txt").exists()
+    assert not (tmp_path / "data" / "models.json").exists()
+    assert started == [["serve", "--data", str((tmp_path / "data").resolve()), "--open"]]

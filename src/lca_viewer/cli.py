@@ -134,10 +134,10 @@ def main(argv=None) -> None:
     p.add_argument("--report", help="CSV file listing unlinked exchanges (default: data/import-<database>-unlinked.csv)")
     p.set_defaults(func=import_)
 
-    p = sub.add_parser("setup", help="First-time setup: unpack, import and build an ecoinvent ecoSpold2 release, asking for what it needs")
-    p.add_argument("source", nargs="?", help="ecoSpold2 archive (.7z) or the folder it was unpacked to; asked when omitted")
+    p = sub.add_parser("setup", help="First-time setup; optionally unpacks, imports and builds an ecoinvent ecoSpold2 release")
+    p.add_argument("source", nargs="?", help="ecoSpold2 archive (.7z) or the folder it was unpacked to; asked when omitted (Enter skips ecoinvent)")
     p.add_argument("--data", default="data", help="Folder for the Brightway project, the models and models.json (default: data)")
-    p.add_argument("--yes", action="store_true", help="Take the default answer to every question")
+    p.add_argument("--yes", action="store_true", help="Take the default answer to every question (without a source: no ecoinvent)")
     p.set_defaults(func=setup)
 
     p = sub.add_parser("serve", help="Serve the explorer; databases are loaded from the page, or with --model")

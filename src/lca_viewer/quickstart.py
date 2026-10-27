@@ -1,9 +1,11 @@
-"""``lca-viewer setup``: from an ecoinvent ecoSpold2 download to a model the app serves.
+"""``lca-viewer setup``: get the app ready, with ecoinvent if wanted.
 
-Asks for the archive (or the folder it was unpacked to), then unpacks it, imports it into a
-Brightway project in ``data/brightway`` and builds the model, skipping the steps already
-done, so it can simply be run again after an interruption. Built models are listed in
-``data/models.json``, which the app offers in its *Load database* dialog.
+ecoinvent is optional: without it, the app starts with no database and loads those of the
+user's Brightway projects (*Load database*). Given an ecoSpold2 release (the archive, or the
+folder it was unpacked to), it unpacks it, imports it into a Brightway project in
+``data/brightway`` and builds the model, skipping the steps already done, so it can simply
+be run again after an interruption. Built models are listed in ``data/models.json``, which
+the app offers in its *Load database* dialog.
 """
 
 from __future__ import annotations
@@ -80,12 +82,18 @@ def unpack(archive: Path, target: Path) -> None:
     partial.rename(target)
 
 
-def ask_source(p: Prompt, given: str | None) -> tuple[Path | None, Path]:
-    """(archive or None, datasets folder), asking until the path is usable."""
+def ask_source(p: Prompt, given: str | None) -> tuple[Path | None, Path | None] | None:
+    """(archive or None, datasets folder), asking until the path is usable; None to skip
+    ecoinvent (Enter, or ``--yes`` without a path)."""
+    if not given and p.yes:
+        return None
     while True:
         text = given or p.ask("Path of the ecoinvent ecoSpold2 archive (.7z), or of the folder it was unpacked to\n"
-                              "(you can drag the file onto this window)")
+                              "(you can drag the file onto this window). Press Enter to skip: the app can\n"
+                              "load the databases of your Brightway projects instead")
         given = None
+        if not text.strip():
+            return None
         path = clean_path(text)
         if path.is_file() and path.suffix.lower() == ".7z":
             return path, None
@@ -104,8 +112,24 @@ def run(args) -> None:
     (data / "python.txt").write_text(sys.executable + "\n", encoding="utf-8")
     p = Prompt(args.yes)
 
-    print("\nlca_viewer setup: ecoinvent ecoSpold2 -> Brightway -> model for the app\n")
-    archive, datasets = ask_source(p, args.source)
+    print("\nlca_viewer is installed. Import an ecoinvent release too? (optional)\n")
+    source = ask_source(p, args.source)
+    if source is None:
+        print("  No ecoinvent for now: run the setup again with the archive to add it later.")
+    else:
+        setup_ecoinvent(p, data, *source)
+
+    start = "double-click start.cmd" if os.name == "nt" else "run: sh start.sh"
+    print(f"\nDone. To start the app next time, {start} (or run: lca-viewer serve).\n"
+          f"In the app, Load database opens the built models and the databases of your Brightway projects.")
+    if p.confirm("Start the app now?", default=True):
+        from .cli import main
+
+        main(["serve", "--data", str(data), "--open"])
+
+
+def setup_ecoinvent(p: Prompt, data: Path, archive: Path | None, datasets: Path | None) -> None:
+    """Unpack, import into Brightway and build an ecoinvent release, listed in ``data/models.json``."""
     version, model = parse_release(archive.name if archive else f"{datasets.parent.name} {datasets.name}")
     version = p.ask("ecoinvent version", version or "")
     while not re.fullmatch(r"\d+\.\d+(\.\d+)?", version):
@@ -178,10 +202,3 @@ def run(args) -> None:
     if archive and unpacked.exists() and p.confirm(f"\nDelete the unpacked files in {unpacked}? "
                                                    f"They are not needed any more", default=True):
         shutil.rmtree(unpacked)
-
-    start = "double-click start.cmd" if os.name == "nt" else "run: sh start.sh"
-    print(f"\nDone. To start the app next time, {start} (or run: lca-viewer serve)")
-    if p.confirm("Start the app now?", default=True):
-        from .cli import main
-
-        main(["serve", "--data", str(data), "--open"])

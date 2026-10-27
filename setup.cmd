@@ -1,5 +1,5 @@
 @echo off
-rem First-time setup on Windows: double-click this file, or drag your ecoinvent .7z onto it.
+rem First-time setup on Windows: double-click this file (or drag your ecoinvent .7z onto it, optional).
 rem Finds conda (or offers to install Miniforge), then runs scripts\bootstrap.py, which sets
 rem up the Python environment and the data.
 setlocal

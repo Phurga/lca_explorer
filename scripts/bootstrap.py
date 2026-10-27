@@ -1,5 +1,5 @@
 """First-time setup, step 0: choose or create the Python environment, install lca_viewer in
-it, then run ``lca-viewer setup`` there (ecoinvent unpack, import and model build).
+it, then run ``lca-viewer setup`` there (optional ecoinvent unpack, import and model build).
 
 Run by setup.cmd / setup.sh with whatever Python they find (conda's base one, or any
 Python 3.7+), so it uses the standard library only. Arguments are passed on to

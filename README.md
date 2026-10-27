@@ -8,8 +8,8 @@ exports (e.g. Agribalyse), imported with Brightway 2.5, and the databases of
 your own Brightway 2.5 projects (Activity Browser 3 included), chosen with
 **Load database** in the app.
 
-- [Quick start](#quick-start-from-an-ecoinvent-download-to-a-running-app):
-  from the ecoinvent archive you downloaded to the app in your browser.
+- [Quick start](#quick-start-install-and-run-the-app): install the app, with
+  ecoinvent if you have the archive, and open it in your browser.
 - [Manual setup](#manual-setup-step-by-step): the same, one command at a time.
 - [Using the explorer](#using-the-explorer)
 - [Loading a database, e.g. from your Brightway projects](#loading-a-database-eg-from-your-brightway-projects)
@@ -17,22 +17,30 @@ your own Brightway 2.5 projects (Activity Browser 3 included), chosen with
 - [Shared server (SSH)](#using-the-explorer-on-the-shared-server-ssh)
 - Design decisions and status: [docs/](docs/README.md)
 
-## Quick start: from an ecoinvent download to a running app
+## Quick start: install and run the app
 
 You don't need Python or any programming tools installed: the setup installs
 everything the app needs. You need:
 
-- **The ecoinvent ecoSpold2 archive**, downloaded from
-  [ecoinvent.org](https://ecoinvent.org) with your licence, e.g.
-  `ecoinvent 3.9.1_cutoff_ecoSpold02.7z`. The impact methods that come with
-  the app are those of ecoinvent **3.9**, so 3.9.1 is the tested version
-  (cut-off or another system model). With another ecoinvent version, the
-  inventory imports but the impact factors may not match it.
+- **Databases to explore**, either or both of:
+  - **your Brightway 2.5 projects** (made with Brightway or Activity Browser
+    3): nothing to prepare, the app lists them under **Load database**;
+  - **the ecoinvent ecoSpold2 archive**, downloaded from
+    [ecoinvent.org](https://ecoinvent.org) with your licence, e.g.
+    `ecoinvent 3.9.1_cutoff_ecoSpold02.7z`, which the setup imports for you.
+    The impact methods it installs are those of ecoinvent **3.9**, so 3.9.1
+    is the tested version (cut-off or another system model). With another
+    ecoinvent version, the inventory imports but the impact factors may not
+    match it.
+
+  The archive is optional: skip it if your Brightway projects already have
+  the databases you need. You can add it later by running the setup again.
 - **Access to the code.** The GitHub repository is private: ask its owner to
   add your GitHub account, or to send you the code as a ZIP file.
-- **About 10 GB of free disk space** (the unpacked archive takes 2.6 GB and is
-  deleted after the import), an internet connection, and about 30 minutes,
-  mostly waiting.
+- **About 10 GB of free disk space** with ecoinvent (the unpacked archive
+  takes 2.6 GB and is deleted after the import; 2 GB without it), an internet
+  connection, and about 30 minutes with ecoinvent (10 without), mostly
+  waiting.
 
 ### 1. Get the code
 
@@ -79,16 +87,18 @@ The setup asks up to four things. Press Enter to take the suggested answer
    environment named `lca_viewer`, kept apart from any other Python on your
    computer. If you have run the setup before, it suggests the one you used
    then.
-3. **Where the ecoinvent archive is**: drag the `.7z` file into the window and
-   press Enter, or paste its path. A folder where you already unpacked it
-   works too.
-4. **The ecoinvent version and system model**: these are read from the file
-   name, so you only need to confirm them.
+3. **Where the ecoinvent archive is** (optional): drag the `.7z` file into
+   the window and press Enter, or paste its path. A folder where you already
+   unpacked it works too. **Press Enter without a path to skip ecoinvent**:
+   the app then starts with no database, and you load those of your
+   Brightway projects from it.
+4. **The ecoinvent version and system model** (only with an archive): these
+   are read from the file name, so you only need to confirm them.
 
 Then it does the rest on its own. It installs Python and the packages in the
-new environment, which takes about 5 minutes. It unpacks the archive, imports
-it into Brightway (about 10 minutes), builds the model the app reads, and
-opens the app in your browser. If it stops halfway, run it again: the steps
+new environment, which takes about 5 minutes. With an archive, it unpacks
+it, imports it into Brightway (about 10 minutes) and builds the model the app
+reads. Then it opens the app in your browser. If it stops halfway, run it again: the steps
 already done are skipped.
 
 ### 3. Start the app next time
@@ -97,7 +107,8 @@ already done are skipped.
 - **macOS / Linux**: run `sh start.sh` in the folder, as in step 2.
 
 The app opens in your browser at http://localhost:8765, on the list of
-databases it can load: click **Open** next to ecoinvent (a few seconds). It
+databases it can load: click **Open** next to ecoinvent (a few seconds), or
+**Build and open** next to a database of your Brightway projects. It
 runs as long as that window is open: close the window, or press Ctrl+C in it,
 to stop the app.
 

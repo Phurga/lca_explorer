@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# First-time setup on macOS and Linux: sh setup.sh [path/to/ecoinvent.7z]
+# First-time setup on macOS and Linux: sh setup.sh [path/to/ecoinvent.7z, optional]
 # Finds conda (or offers to install Miniforge), then runs scripts/bootstrap.py, which sets up
 # the Python environment and the data.
 cd "$(dirname "$0")" || exit 1
