@@ -858,13 +858,31 @@ const BW_UNITS = ["kilogram", "cubic meter", "kilowatt hour", "megajoule", "unit
 const DRAFT_KEY = "lca_viewer.datasetDraft";
 // mode: "new", "copy" (of any process: saved as a new dataset) or "edit" (of a dataset written from
 // the app: saving replaces it, keeping its code); source: the process loaded; code: the dataset edited
+// systemModel: null follows the databases (consequential: co-products are avoided products;
+// attributional: they share the burdens by the allocation rule)
+const emptyProduct = (unit = "kilogram") => ({ name: "", amount: "1", unit, class: "allocatable", allocation: "", property: "", treatment: null, comment: "" });
 const emptyDraft = () => ({
   mode: "new", source: null, code: null, multi: false, warnings: [],
-  project: "", database: "", newDatabase: "",
+  // allocation: "manual" (the % of each allocatable product) or "value" (a value per unit: % = amount × value over the total)
+  project: "", database: "", newDatabase: "", systemModel: null, allocation: "manual",
   process: { name: "", location: "GLO", comment: "", documentation: {} },
-  products: [{ name: "", amount: "1", unit: "kilogram", allocation: "100", comment: "" }],
+  products: [emptyProduct()],
   exchanges: [],
 });
+const PRODUCT_CLASSES = [
+  ["allocatable", "Allocatable", "Shares the burdens of the process"],
+  ["recyclable", "Recyclable (cut off)", "Cut off, as in ecoinvent's cut-off model: no burden, and supplies no one"],
+  ["waste", "Waste", "Sent to a treatment process, which the process pays for"],
+];
+// The system model of databases from their names, as lca_viewer.sources.guess_system_model
+function guessSystemModel(names) {
+  const found = new Set();
+  for (const name of names) {
+    if (/conseq/i.test(name || "")) found.add("consequential");
+    else if (/cut-?off|apos|en15804|attributional/i.test(name || "")) found.add("attributional");
+  }
+  return found.size === 1 ? [...found][0] : null;
+}
 // A flow's compartment, a process's location (processes imported from SimaPro have categories too)
 const FLOW_NODE_TYPES = ["emission", "natural resource", "economic", "inventory indicator", "social"];
 const nodeLabel = (n) => (FLOW_NODE_TYPES.includes(n.type) ? (n.categories || []).join(", ") : n.location);
@@ -920,7 +938,9 @@ function CreateDataset({ onClose, start }) {
       if (!saved) return emptyDraft();
       // A dataset is edited from its view (Edit dataset): opened otherwise, the form starts a new one
       if (saved.mode === "edit") return { ...emptyDraft(), project: saved.project || "" };
-      return { ...emptyDraft(), ...saved };
+      // Drafts from before product classes and allocation rules: percentages entered
+      return { ...emptyDraft(), allocation: "manual", ...saved,
+        products: (saved.products || [emptyProduct()]).map((p) => ({ ...emptyProduct(p.unit), ...p, class: p.class || "allocatable" })) };
     } catch { return emptyDraft(); }
   });
   const [job, setJob] = useState(null);
@@ -967,16 +987,18 @@ function CreateDataset({ onClose, start }) {
     setError(null);
     serverRequest(`/api/brightway/dataset?folder=${encodeURIComponent(at.folder)}&project=${encodeURIComponent(at.project)}`
       + `&database=${encodeURIComponent(node.database)}&code=${encodeURIComponent(node.code)}`).then((d) => {
-      const multi = d.products.length > 1;
+      const multi = d.products.filter((p) => p.class === "allocatable").length > 1;
       setDraft({
         ...emptyDraft(), mode, project: at.project,
         database: mode === "edit" ? d.database : draft.database, newDatabase: draft.newDatabase,
         source: { database: d.database, name: d.process.name, location: d.process.location },
         code: mode === "edit" ? d.code : null, multi, warnings: d.warnings,
+        systemModel: mode === "edit" ? d.system_model : null, allocation: multi ? d.allocation : "manual",
         process: { ...d.process, name: mode === "copy" ? `${d.process.name} (copy)` : d.process.name },
         products: d.products.map((p) => ({
-          name: p.name, amount: String(p.amount), unit: p.unit, comment: p.comment, code: mode === "edit" ? p.code : null,
-          allocation: multi ? (p.allocation == null ? "" : String(p.allocation)) : "100",
+          ...emptyProduct(p.unit), name: p.name, amount: String(p.amount), class: p.class, comment: p.comment,
+          code: mode === "edit" ? p.code : null, treatment: p.treatment || null,
+          allocation: p.allocation == null ? "" : String(p.allocation), property: p.property == null ? "" : String(p.property),
         })),
         exchanges: d.exchanges.map((e) => ({ section: e.section, node: e.node, amount: String(e.amount), comment: e.comment,
           sd2: e.sd2 ? String(e.sd2) : "" })),
@@ -989,19 +1011,37 @@ function CreateDataset({ onClose, start }) {
   const setProcess = (changes) => set({ process: { ...draft.process, ...changes } });
   const setProduct = (i, changes) => set({ products: draft.products.map((p, k) => (k === i ? { ...p, ...changes } : p)) });
   const setExchange = (i, changes) => set({ exchanges: draft.exchanges.map((e, k) => (k === i ? { ...e, ...changes } : e)) });
-  const several = draft.products.length > 1;
-  const shares = draft.products.reduce((s, p) => s + (Number(p.allocation) || 0), 0);
+  // System model: chosen, else that of the databases the exchanges link to, else of the project's
+  const detected = guessSystemModel(draft.exchanges.map((e) => e.node.database))
+    || guessSystemModel((project?.databases || []).map((d) => d.name));
+  const systemModel = draft.systemModel || detected || "attributional";
+  const consequential = systemModel === "consequential";
+  const allocatable = draft.products.filter((p) => p.class === "allocatable");
+  const several = allocatable.length > 1;
+  const manual = draft.allocation !== "value";
+  // Share (%) of each allocatable product: entered (manual), or amount × value over the total
+  const factors = allocatable.map((p) => (manual ? Number(p.allocation) : Math.abs(Number(p.amount)) * Number(p.property)));
+  const totalFactor = factors.reduce((s, f) => s + (f || 0), 0);
+  const shareOf = (p) => {
+    const f = factors[allocatable.indexOf(p)];
+    return !several ? 100 : manual ? f : totalFactor > 0 && f >= 0 ? (100 * f) / totalFactor : NaN;
+  };
   const target = draft.database === "__new__" ? draft.newDatabase.trim() : draft.database;
   const targetDb = writable.find((d) => d.name === draft.database);
   const problems = [
     !project && "choose a project",
     draft.mode !== "new" && !draft.source && `choose the dataset to ${draft.mode}`,
     !target && "choose a database",
-    editing && several !== draft.multi && (draft.multi ? "keep its co-products (a dataset with co-products stays one: copy it to make it single-output)"
-      : "remove the co-products (a single-output dataset stays one: copy it to add co-products)"),
+    editing && several !== draft.multi && (draft.multi ? "keep several allocatable products (a dataset with co-products stays one: copy it to make it single-output)"
+      : "keep one allocatable product (a single-output dataset stays one: copy it to add co-products)"),
     !draft.process.name.trim() && "name the process",
     draft.products.some((p) => !p.name.trim() || !Number(p.amount)) && "give each product a name and an amount",
-    several && Math.abs(shares - 100) > 1e-6 && `the allocation percentages add up to ${shares}, not 100`,
+    consequential && draft.products.length > 1 && "keep only the determining product (consequential: the other co-products are avoided products)",
+    !allocatable.length && "keep at least one allocatable product",
+    several && manual && Math.abs(totalFactor - 100) > 1e-6 && `the allocation percentages add up to ${totalFactor}, not 100`,
+    several && !manual && allocatable.some((p) => p.property === "" || !(Number(p.property) >= 0)) && "give each allocatable product its value per unit (0 or more)",
+    several && !manual && !(totalFactor > 0) && "the values of the products add up to 0",
+    draft.products.some((p) => p.class === "waste" && !p.treatment) && "choose the treatment of each waste product",
     several && targetDb && targetDb.backend !== "multifunctional" && `${targetDb.name} cannot hold co-products: write into a new database`,
     draft.exchanges.some((e) => e.amount === "" || Number.isNaN(Number(e.amount))) && "give each exchange an amount",
     draft.exchanges.some((e) => e.sd2 && !(Number(e.sd2) > 1)) && "SD² must be greater than 1",
@@ -1010,8 +1050,14 @@ function CreateDataset({ onClose, start }) {
   function save() {
     const spec = {
       database: target, new_database: draft.database === "__new__", code: editing ? draft.code : null,
+      system_model: systemModel, allocation: manual ? "manual" : "value",
       process: draft.process,
-      products: draft.products.map((p) => ({ ...p, amount: Number(p.amount), allocation: several ? Number(p.allocation) : 100 })),
+      products: draft.products.map((p) => ({
+        name: p.name, amount: Number(p.amount), unit: p.unit, class: p.class, comment: p.comment, code: p.code || null,
+        allocation: p.class !== "allocatable" ? null : several ? Number(p.allocation) || 0 : 100,
+        property: p.class === "allocatable" && p.property !== "" ? Number(p.property) : null,
+        treatment: p.class === "waste" && p.treatment ? { database: p.treatment.database, code: p.treatment.code } : null,
+      })),
       exchanges: draft.exchanges.map((e) => ({ section: e.section, database: e.node.database, code: e.node.code,
         amount: Number(e.amount), comment: e.comment, sd2: e.sd2 ? Number(e.sd2) : null })),
     };
@@ -1102,28 +1148,76 @@ function CreateDataset({ onClose, start }) {
             </details>
           </section>
           <section>
-            <h3>Products <span class="muted">${several ? `co-products, allocated with these percentages (sum: ${shares} %)` : "the reference product"}</span></h3>
+            <h3>Products <span class="muted">${consequential ? "the determining product; co-products are avoided products"
+              : several ? "co-products, sharing the burdens" : "the reference product"}</span></h3>
+            <div class="row">
+              <span class="segmented" role="radiogroup" aria-label="System model">
+                <button role="radio" aria-checked=${!consequential} class=${!consequential ? "primary" : ""} onClick=${() => set({ systemModel: "attributional" })}
+                  title="Cut-off, APOS: co-products share the burdens by an allocation rule">Attributional (allocation)</button>
+                <button role="radio" aria-checked=${consequential} class=${consequential ? "primary" : ""} onClick=${() => set({ systemModel: "consequential" })}
+                  title="Consequential: one determining product; the co-products substitute the marginal supply of what they replace">Consequential (substitution)</button>
+              </span>
+              <span class="muted small">${draft.systemModel
+                ? html`chosen${detected && detected !== draft.systemModel ? html`, the databases look ${detected}` : ""} · <button class="link" onClick=${() => set({ systemModel: null })}>follow the databases</button>`
+                : detected ? `detected from the databases (${detected})` : "default: no database name tells the system model"}</span>
+            </div>
+            ${!consequential && several && html`
+              <div class="row">
+                <span class="muted">Allocation: enter</span>
+                <span class="segmented" role="radiogroup" aria-label="Allocation entered as">
+                  <button role="radio" aria-checked=${!manual} class=${!manual ? "primary" : ""} onClick=${() => set({ allocation: "value" })}
+                    title="A value per unit of each product (a price, a mass, an energy content…): its % is its amount × value over the total">the value</button>
+                  <button role="radio" aria-checked=${manual} class=${manual ? "primary" : ""} onClick=${() => set({ allocation: "manual" })}
+                    title="The % of the burdens each product takes, adding up to 100">the %</button>
+                </span>
+              </div>`}
             <table class="dataset-table">
-              <tr><th>Name</th><th class="num">Amount</th><th>Unit</th>${several && html`<th class="num">Allocation %</th>`}<th>Comment</th><th></th></tr>
+              <tr><th>Name</th><th class="num">Amount</th><th>Unit</th>
+                ${!consequential && draft.products.length > 1 && html`<th title="As ecoinvent's cut-off classifies by-products">Class</th>`}
+                ${!consequential && several && html`${!manual && html`<th class="num" title="Per unit of product: a price, a mass, an energy content…">Value</th>`}<th class="num">%</th>`}
+                <th>Comment</th><th></th></tr>
               ${draft.products.map((p, i) => html`
                 <tr key=${i}>
                   <td><input value=${p.name} onInput=${(e) => setProduct(i, { name: e.target.value })} placeholder=${i ? "co-product" : "e.g. raw milk"} /></td>
                   <td class="num"><input class="num" value=${p.amount} onInput=${(e) => setProduct(i, { amount: e.target.value })} /></td>
                   <td><input list="bw-units" value=${p.unit} onInput=${(e) => setProduct(i, { unit: e.target.value })} /></td>
-                  ${several && html`<td class="num"><input class="num" value=${p.allocation} onInput=${(e) => setProduct(i, { allocation: e.target.value })} /></td>`}
+                  ${!consequential && draft.products.length > 1 && html`
+                    <td><select value=${p.class} onChange=${(e) => setProduct(i, { class: e.target.value })} aria-label="Class">
+                      ${PRODUCT_CLASSES.map(([k, label, help]) => html`<option value=${k} title=${help}>${label}</option>`)}
+                    </select></td>`}
+                  ${!consequential && several && (p.class === "allocatable" ? (manual
+                    ? html`<td class="num"><input class="num" value=${p.allocation} aria-label="Allocation %"
+                        onInput=${(e) => setProduct(i, { allocation: e.target.value })} /></td>`
+                    : html`<td class="num"><input class="num" value=${p.property} aria-label="Allocation value per unit"
+                        onInput=${(e) => setProduct(i, { property: e.target.value })} /></td>
+                      <td class="num muted">${Number.isFinite(shareOf(p)) ? `${shareOf(p).toFixed(1)} %` : "–"}</td>`)
+                  : html`<td colspan=${manual ? 1 : 2} class="muted small">${p.class === "recyclable" ? "cut off: no burden" : ""}</td>`)}
                   <td><input value=${p.comment} onInput=${(e) => setProduct(i, { comment: e.target.value })} /></td>
-                  <td>${several && html`<button class="link" aria-label="Remove" onClick=${() => set({ products: draft.products.filter((_, k) => k !== i) })}>×</button>`}</td>
-                </tr>`)}
+                  <td>${draft.products.length > 1 && html`<button class="link" aria-label="Remove" onClick=${() => set({ products: draft.products.filter((_, k) => k !== i) })}>×</button>`}</td>
+                </tr>
+                ${p.class === "waste" && !consequential && html`
+                  <tr key=${`t${i}`} class="treatment-row"><td colspan="8">
+                    ${p.treatment ? html`<span class="muted">Treated by</span> <b>${p.treatment.name}</b> <span class="loc-chip">${nodeLabel(p.treatment)}</span>
+                        <button class="link" onClick=${() => setProduct(i, { treatment: null })}>change</button>`
+                      : html`<${NodePicker} folder=${folder} project=${draft.project} kind="process"
+                          placeholder=${`Treatment of ${p.name || "this waste"}: search the process, e.g. market for waste…`}
+                          onPick=${(node) => setProduct(i, { treatment: node })} />`}
+                  </td></tr>`}`)}
             </table>
             <datalist id="bw-units">${BW_UNITS.map((u) => html`<option value=${u} />`)}</datalist>
-            <button class="link" onClick=${() => set({ products: [...draft.products,
-              { name: "", amount: "1", unit: draft.products[0].unit, allocation: "0", comment: "" }] })}>+ Co-product</button>
+            ${consequential ? html`
+              <${NodePicker} folder=${folder} project=${draft.project} kind="process"
+                placeholder=${draft.project ? "+ Co-product: search the market it substitutes (its marginal supply), e.g. market for sodium hydroxide" : "Choose a project first"}
+                onPick=${(node) => set({ exchanges: [...draft.exchanges, { section: "avoided", node, amount: "", comment: "", sd2: "" }] })} />
+              <p class="muted small">As in ecoinvent's consequential model: the dataset makes its determining product; each co-product is an avoided product, credited with the marginal supply it replaces (listed under Avoided products).</p>`
+            : html`<button class="link" onClick=${() => set({ products: [...draft.products, emptyProduct(draft.products[0].unit)] })}>+ Co-product</button>`}
           </section>
           ${DATASET_SECTIONS.map(([section, title, kind, placeholder]) => {
             const rows = draft.exchanges.map((e, i) => [e, i]).filter(([e]) => e.section === section);
             return html`
               <section key=${section}>
-                <h3>${title} ${rows.length > 0 && html`<span class="muted">${rows.length}</span>`}</h3>
+                <h3>${section === "avoided" && consequential ? "Avoided products · co-products, and what else the process replaces" : title}
+                  ${rows.length > 0 && html`<span class="muted">${rows.length}</span>`}</h3>
                 ${rows.length > 0 && html`
                   <table class="dataset-table">
                     <tr><th>${kind === "process" ? "Process" : "Flow"}</th><th class="num">Amount</th><th>Unit</th>

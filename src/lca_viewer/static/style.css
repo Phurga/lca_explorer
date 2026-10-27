@@ -582,6 +582,7 @@ table.dataset-table th { text-align: left; font-weight: 400; color: var(--muted)
 table.dataset-table td { padding: 2px 4px; border-bottom: 1px solid var(--border); }
 table.dataset-table th.num, table.dataset-table td.num { text-align: right; width: 90px; }
 table.dataset-table td input { width: 100%; min-width: 0; }
+table.dataset-table tr.treatment-row td { padding-left: 24px; }
 table.dataset-table td.node { max-width: 380px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 input.num { text-align: right; font-family: var(--mono); }
 input.short { width: 70px; }
