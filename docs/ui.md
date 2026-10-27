@@ -148,6 +148,19 @@ API in `src/lca_viewer/server.py`.
   out. ± handle or double-click to expand, Ctrl/⌘-click to select, drag to
   pan, wheel to zoom, "Fit" for the whole tree. See below for the layout
   choice.
+  **Cycles** (toggle in the graph controls) draws the supply chain as a
+  graph rather than a tree: a process used in several places is one node
+  with an edge from each place (edges between the same two nodes are
+  combined), and a loop — a process reached again inside its own supply
+  chain, such as an electricity market through the ENTSO-E market group — is a
+  dashed edge back to the node already shown. Direct emissions, flows,
+  groups and others hang under their process's node. A node shown in
+  several places reads "×N": its amount is the sum of its places, its
+  impact counts a place inside another one's supply chain only once (the
+  outer place's cumulative impact already includes it), and its share is of
+  the total unless it has a single parent. ± expands it at its first place
+  and collapses it everywhere; click, right-click and the row actions act on
+  its first place.
 - **View bar** (under the toolbar): *Group by product* and *Full / Short /
   Custom* names, applied
   to the list, the tree view, the others panel and the chart; see
@@ -252,8 +265,16 @@ readable 60 % centred on the root rather than fitting a large tree into an
 unreadable thumbnail; "Fit" shows everything. The view does not re-fit on
 each expansion, so the user keeps their place.
 
-Display choice (list / tree) and orientation are per-browser preferences
-(`localStorage`).
+In cycles mode the same tidy layout is applied to a breadth-first spanning
+tree of the graph (each node at its shortest distance from the root, under
+the first node reaching it); the other edges are drawn on top, those going
+to a node at the same depth or nearer the root (loops) curving round from
+the far side of the source box to the near side of the target. Decision:
+no force-directed or layered (Sugiyama) layout, so that switching the mode
+keeps the familiar left-to-right reading of the tree.
+
+Display choice (list / tree), orientation and cycles mode are per-browser
+preferences (`localStorage`).
 
 ## State
 
