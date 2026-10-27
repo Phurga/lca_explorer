@@ -2549,11 +2549,25 @@ function GroupPanel({ info, rules, setRules, selectedRow }) {
     const { [key]: on, ...rest } = r;
     return on ? rest : { ...rest, [key]: true };
   }));
-  const move = (i, d) => {
-    const next = [...rules];
-    [next[i], next[i + d]] = [next[i + d], next[i]];
-    setRules(next);
-  };
+  // Drag and drop reordering: the rule dragged and where it would land (before rule `at`)
+  const [dragging, setDragging] = useState(null);
+  const [dropAt, setDropAt] = useState(null);
+  function onDragOver(e, i) {
+    if (dragging === null) return;
+    e.preventDefault();
+    const box = e.currentTarget.getBoundingClientRect();
+    setDropAt(e.clientY < box.top + box.height / 2 ? i : i + 1);
+  }
+  function onDrop(e) {
+    e.preventDefault();
+    if (dragging !== null && dropAt !== null && dropAt !== dragging && dropAt !== dragging + 1) {
+      const next = rules.filter((_, j) => j !== dragging);
+      next.splice(dropAt > dragging ? dropAt - 1 : dropAt, 0, rules[dragging]);
+      setRules(next);
+    }
+    setDragging(null);
+    setDropAt(null);
+  }
 
   return html`
     <div class="panel">
@@ -2562,7 +2576,13 @@ function GroupPanel({ info, rules, setRules, selectedRow }) {
       ${rules.length === 0 ? html`<p class="note">No grouping. Select several sibling rows in the tree (Ctrl/⌘-click) and use "Group selected", or add a rule below.</p>` : html`
         <ul class="rules">
           ${rules.map((r, i) => html`
-            <li class=${r.disabled ? "disabled" : ""}>
+            <li class=${[r.disabled && "disabled", dragging === i && "dragging",
+                dropAt === i && "drop-before", dropAt === i + 1 && i === rules.length - 1 && "drop-after"].filter(Boolean).join(" ")}
+              draggable=${rules.length > 1}
+              onDragStart=${(e) => { e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", String(i)); setDragging(i); }}
+              onDragOver=${(e) => onDragOver(e, i)} onDrop=${onDrop}
+              onDragEnd=${() => { setDragging(null); setDropAt(null); }}>
+              ${rules.length > 1 && html`<span class="grip" title="Drag to reorder (rules apply in list order)" aria-hidden="true">⠿</span>`}
               <span class="desc">
                 ${r.target === "flows" && "flows: "}${r.by ? html`<b>group by ${r.by === "name" && r.target === "flows" ? "substance" : r.by}</b>` : html`<b>${r.name}</b> <small>← ${describePredicate(r.predicate)}</small>`}
                 <br /><small>${r.scope === "*" ? "everywhere in the tree" : `under ${r.scope}`}${r.merge ? " · merged" : ""}${r.disabled ? " · disabled" : ""}</small>
@@ -2572,8 +2592,6 @@ function GroupPanel({ info, rules, setRules, selectedRow }) {
                   title=${r.merge ? "Show this rule's groups as groups again" : "Turn each group of this rule into one merged process (inventories added, common inputs summed)"}>merge</button>`}
               <button onClick=${() => toggle(i, "disabled")}
                 title=${r.disabled ? "Apply this rule again" : "Stop applying this rule, keeping it in the list"}>${r.disabled ? "enable" : "disable"}</button>
-              <button disabled=${i === 0} onClick=${() => move(i, -1)} aria-label="Move up">↑</button>
-              <button disabled=${i === rules.length - 1} onClick=${() => move(i, 1)} aria-label="Move down">↓</button>
               <button onClick=${() => setRules(rules.filter((_, j) => j !== i))} aria-label="Remove rule">×</button>
             </li>`)}
         </ul>`}
