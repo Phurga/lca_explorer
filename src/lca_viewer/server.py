@@ -6,6 +6,7 @@ sends it with each request; the server only holds the model.
 
 from __future__ import annotations
 
+import mimetypes
 import os
 from pathlib import Path
 
@@ -24,6 +25,14 @@ from .tree import Tree
 from .view import View
 
 STATIC = Path(__file__).parent / "static"
+
+# Static files get their Content-Type from ``mimetypes``, which on Windows reads the
+# registry: some machines map .js to text/plain and do not know .mjs, and browsers
+# then refuse to run the UI's ES modules. Set the types the UI needs explicitly.
+for _type, _extensions in {"text/javascript": [".js", ".mjs"], "text/css": [".css"],
+                           "application/json": [".json"], "image/svg+xml": [".svg"]}.items():
+    for _extension in _extensions:
+        mimetypes.add_type(_type, _extension)
 
 QUERY_FIELDS = [
     "name", "reference_product", "location", "unit", "activity_type",
