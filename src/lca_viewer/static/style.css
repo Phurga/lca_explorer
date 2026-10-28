@@ -557,6 +557,11 @@ button.danger:not(.link) { background: var(--bar-negative); border-color: var(--
 .project-form fieldset { border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; margin: 0; }
 .project-form legend { color: var(--muted); font-size: 12px; padding: 0 4px; }
 .project-form input:not([type]), .project-form select { color: var(--text); font-size: 13px; }
+.project-form .source-form { display: contents; }
+.source-choice { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 6px; }
+.source-choice button { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 6px 10px;
+  text-align: left; white-space: normal; }
+.source-choice button.selected { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
 .form-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .form-actions .spacer { flex: 1; }
 .path-input { display: flex; gap: 6px; }

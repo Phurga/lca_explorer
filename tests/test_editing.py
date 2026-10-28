@@ -180,3 +180,42 @@ def test_through_the_api(project, tmp_path):
                                                       "path": str(tmp_path / "nothing.csv"), "database": "x"}).status_code == 404
     adapters = client.get("/api/adapters", params={"link_to": ["ecoinvent-3.9.1-cutoff"]}).json()
     assert adapters["default"] == ["simapro-ecoinvent-3.9.1-cutoff"]
+
+
+def test_import_without_the_default_biosphere(tmp_path, monkeypatch):
+    """Unticked in the page, biosphere3 and the methods are not installed (``--no-setup``)."""
+    import subprocess
+    import time
+
+    from fastapi.testclient import TestClient
+
+    from lca_viewer.server import create_library
+
+    seen = []
+
+    class Done:
+        stdout = iter(["imported\n"])
+
+        def __init__(self, command, **kwargs):
+            seen.append(command)
+
+        def wait(self):
+            return 0
+
+    monkeypatch.setattr(subprocess, "Popen", Done)
+    monkeypatch.setattr(sources, "brightway_projects", lambda folder: [{"name": "p", "databases": []}])
+    client = TestClient(create_library(tmp_path / "data"))
+    export = tmp_path / "export.csv"
+    export.write_text("{CSV}")
+    for defaults in (True, False):
+        Done.stdout = iter(["imported\n"])
+        job = client.post("/api/brightway/import", json={"folder": str(tmp_path / "bw"), "project": "p", "format": "simapro-csv",
+                                                          "path": str(export), "database": f"x{defaults}",
+                                                          "biosphere": "biosphere3", "defaults": defaults}).json()
+        for _ in range(100):
+            if job["status"] != "running":
+                break
+            time.sleep(0.05)
+            job = client.get(f"/api/jobs/{job['id']}").json()
+        assert job["status"] == "done", job
+    assert "--no-setup" not in seen[0] and "--no-setup" in seen[1]

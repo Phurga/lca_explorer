@@ -11,9 +11,10 @@
   `bw_simapro_csv 0.5`, `pypardiso`, `pytest`, `httpx`
   (`pip install -e ".[brightway,fast]" fastapi uvicorn pytest httpx`). The
   `analyses` env (Python 3.14) has no Brightway and only serves.
-- Brightway data: `export BRIGHTWAY2_DIR=$PWD/data/brightway` (kept inside the
-  repo folder, gitignored, so this project does not touch other Brightway
-  projects on the machine).
+- Brightway data: `BRIGHTWAY2_DIR`, else Brightway's default folder, as for
+  Brightway and Activity Browser. To keep a development copy apart from the
+  projects of the machine, point `BRIGHTWAY2_DIR` at a folder of your own
+  (e.g. `data/brightway`, gitignored).
 - Model cache: `data/cache/ei391_cutoff_all/` (all 762 methods, used by the
   app) and `data/cache/ei391_cutoff/` (26 methods, used by the validation
   script). Delete to rebuild.

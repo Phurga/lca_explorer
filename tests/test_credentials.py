@@ -5,7 +5,7 @@ import pytest
 keyring = pytest.importorskip("keyring")
 from keyring.backend import KeyringBackend  # noqa: E402
 
-from lca_viewer import credentials  # noqa: E402
+from lca_viewer import credentials, sources  # noqa: E402
 
 
 class MemoryKeyring(KeyringBackend):
@@ -118,12 +118,24 @@ def test_import_passes_credentials_in_the_environment(store, tmp_path, monkeypat
             return 0
 
     monkeypatch.setattr(subprocess, "Popen", Done)
+    monkeypatch.setattr(sources, "brightway_projects", lambda folder: [{"name": "ei", "databases": []}])
     client = TestClient(create_library(tmp_path / "data"))
-    job = client.post("/api/ecoinvent/import", json={"folder": str(tmp_path / "bw"), "project": "ei", "version": "3.11"}).json()
-    for _ in range(100):
-        job = client.get(f"/api/jobs/{job['id']}").json()
-        if job["status"] != "running":
-            break
+    folder = str(tmp_path / "bw")
+    assert client.post("/api/ecoinvent/import", json={"folder": folder, "project": "new", "version": "3.11"}).status_code == 404
+
+    def run(body):
+        job = client.post("/api/ecoinvent/import", json={"folder": folder, "project": "ei", "version": "3.11", **body}).json()
+        for _ in range(100):
+            job = client.get(f"/api/jobs/{job['id']}").json()
+            if job["status"] != "running":
+                break
+        return job
+
+    job = run({})
     assert job["status"] == "done", job
     assert "s3cret" not in " ".join(seen["command"]) and "s3cret" not in str(job)
     assert seen["env"]["EI_USERNAME"] == "me" and seen["env"]["EI_PASSWORD"] == "s3cret"
+    assert "--biosphere" not in seen["command"]  # the release's own biosphere and methods
+    Done.stdout = iter(["imported\n"])
+    assert run({"biosphere": "biosphere3"})["status"] == "done"
+    assert seen["command"][-2:] == ["--biosphere", "biosphere3"]

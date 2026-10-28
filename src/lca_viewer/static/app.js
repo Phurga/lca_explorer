@@ -423,10 +423,11 @@ const ECOSPOLD_NAME = (path) => {
   return version ? `ecoinvent-${version}${model ? `-${model}` : ""}` : name.replace(/\.(7z|csv)$/i, "");
 };
 
-// A new project with an ecoinvent release downloaded with the user's account. The password goes
+// An ecoinvent release downloaded with the user's account, into the project. The password goes
 // to the server once (checked with ecoinvent, then kept in the system's credential store, or in
-// the server's memory only); the page only ever gets the user name back.
-function EcoinventForm({ folder, onJob, onCancel, busy, actions }) {
+// the server's memory only); the page only ever gets the user name back. ``biosphere``: a
+// database of the project to link to, or null for the release's own biosphere and methods.
+function EcoinventForm({ folder, project, existing, biosphere, linked, onJob, busy, actions }) {
   const [status, setStatus] = useState(null);
   const [error, setError] = useState(null);
   const [username, setUsername] = useState("");
@@ -437,8 +438,6 @@ function EcoinventForm({ folder, onJob, onCancel, busy, actions }) {
   const [version, setVersion] = useState("");
   const [models, setModels] = useState(null);
   const [model, setModel] = useState("cutoff");
-  const [name, setName] = useState("");
-  const [named, setNamed] = useState(false);  // the user typed a project name
   useEffect(() => { serverRequest("/api/ecoinvent").then(setStatus).catch((e) => setError(e.message)); }, []);
   useEffect(() => {
     if (!status?.username || versions) return;
@@ -452,7 +451,6 @@ function EcoinventForm({ folder, onJob, onCancel, busy, actions }) {
       .then((r) => { setModels(r.system_models); if (!r.system_models.includes(model)) setModel(r.system_models[0]); })
       .catch((e) => setError(e.message));
   }, [version]);
-  useEffect(() => { if (!named && version) setName(`ecoinvent-${version}-${model}`); }, [version, model]);
 
   function login(e) {
     e.preventDefault();
@@ -468,17 +466,14 @@ function EcoinventForm({ folder, onJob, onCancel, busy, actions }) {
   const logout = () => serverRequest("/api/ecoinvent/logout", {}).then((s) => { setStatus(s); setVersions(null); setVersion(""); })
     .catch((e) => setError(e.message));
 
-  if (!status) return html`<form class="project-form"><h4>New project from ecoinvent</h4>
-    ${error ? html`<div class="error">${error}</div>` : html`<p class="muted">…</p>`}</form>`;
-  if (!status.installed) return html`<form class="project-form" onSubmit=${(e) => e.preventDefault()}>
-    <h4>New project from ecoinvent</h4>
+  if (!status) return error ? html`<div class="error">${error}</div>` : html`<p class="muted">…</p>`;
+  if (!status.installed) return html`
     <p>The download needs <code>ecoinvent_interface</code> and <code>keyring</code> in the Python environment running
       lca_viewer: run <code>pip install ecoinvent_interface keyring</code> in it, then restart the app.</p>
-    <div class="form-actions"><button type="button" onClick=${onCancel}>Cancel</button></div></form>`;
+    ${actions(null)}`;
   if (!status.username) return html`
-    <form class="project-form" onSubmit=${login}>
-      <h4>New project from ecoinvent: your ecoinvent account</h4>
-      <p class="muted small">The account of ecoquery.ecoinvent.org, with a licence for the releases you download.</p>
+    <form class="source-form" onSubmit=${login}>
+      <p class="muted small">Your account of ecoquery.ecoinvent.org, with a licence for the releases you download.</p>
       <label>User name <input value=${username} onInput=${(e) => setUsername(e.target.value)} autocomplete="username" autofocus /></label>
       <label>Password <input type="password" value=${password} onInput=${(e) => setPassword(e.target.value)} autocomplete="current-password" /></label>
       <label class="check"><input type="checkbox" checked=${remember} disabled=${!status.store} onChange=${(e) => setRemember(e.target.checked)} />
@@ -486,9 +481,10 @@ function EcoinventForm({ folder, onJob, onCancel, busy, actions }) {
       ${error && html`<div class="error">${error}</div>`}
       ${actions(checking ? "Checking with ecoinvent…" : "Log in", checking || !username.trim() || !password)}
     </form>`;
+  const database = `ecoinvent-${version}-${model}`;
+  const taken = version && existing.includes(database);
   return html`
-    <form class="project-form" onSubmit=${(e) => { e.preventDefault(); onJob("/api/ecoinvent/import", { folder, project: name.trim(), version, system_model: model }); }}>
-      <h4>New project from ecoinvent</h4>
+    <form class="source-form" onSubmit=${(e) => { e.preventDefault(); onJob("/api/ecoinvent/import", { folder, project, version, system_model: model, biosphere }); }}>
       <p class="muted small">Account <b>${status.username}</b> ${status.remembered ? `(remembered in ${status.store})` : "(until the app stops)"} ·
         <button type="button" class="link" onClick=${logout}>${status.remembered ? "Forget it" : "Log out"}</button></p>
       <label>Version
@@ -500,23 +496,31 @@ function EcoinventForm({ folder, onJob, onCancel, busy, actions }) {
         <select value=${model} onChange=${(e) => setModel(e.target.value)} disabled=${!models}>
           ${(models || [model]).map((m) => html`<option value=${m}>${m}</option>`)}
         </select></label>
-      <label>Project name <input value=${name} onInput=${(e) => { setName(e.target.value); setNamed(true); }} /></label>
+      ${taken && html`<div class="error">${project} already has ${database}.</div>`}
       ${error && html`<div class="error">${error}</div>`}
-      <p class="muted small">Downloads the release (about 1 GB, kept in ecoinvent_interface's cache for next time), imports it
-        with its own biosphere and its impact methods (10 to 20 minutes), into a new project of this folder.</p>
-      ${actions("Download and import", busy || !version || !models || !name.trim())}
+      <p class="muted small">Downloads the release (about 1 GB, kept in ecoinvent_interface's cache for next time) and imports
+        it as <b>${version ? database : "ecoinvent-<version>-<model>"}</b> (10 to 20 minutes).</p>
+      ${actions("Download and import", busy || !version || !models || taken || !linked)}
     </form>`;
 }
 
-// The forms of the Brightway projects section: a new project, one from a backup (BAFU on
-// files.brightway.dev), one from ecoinvent, an ecoSpold2 or SimaPro CSV import, a deletion.
+const DATABASE_SOURCES = [
+  { kind: "ecospold2", label: "ecoSpold2", hint: "an ecoinvent release (.7z) or its unpacked folder" },
+  { kind: "simapro", label: "SimaPro CSV", hint: "a process export, e.g. Agribalyse" },
+  { kind: "ecoinvent", label: "ecoinvent", hint: "downloaded with your ecoinvent account" },
+];
+
+// The forms of the Brightway projects section: a new project (empty, or from a backup such as
+// BAFU on files.brightway.dev), a database added to a project (ecoSpold2, SimaPro CSV, ecoinvent
+// with the user's account, with or without the default biosphere and methods), a deletion.
 // Each starts a job.
-function ProjectForm({ form, folder, projects, onJob, onCancel, busy }) {
+function ProjectForm({ form, folder, projects, onJob, onCancel, onForm, busy }) {
   const project = projects?.projects.find((p) => p.name === form.project);
   const flowDbs = (project?.databases || []).filter((d) => !d.processes).map((d) => d.name);
   const processDbs = (project?.databases || []).filter((d) => d.processes).map((d) => d.name);
   const [name, setName] = useState("");
-  const [setup, setSetup] = useState(true);
+  const [origin, setOrigin] = useState("empty");  // of a new project: "empty", "remote" or "file" (a backup)
+  const [defaults, setDefaults] = useState(!flowDbs.length);  // the default biosphere and impact methods
   const [path, setPath] = useState("");
   const [database, setDatabase] = useState("");
   const [biosphere, setBiosphere] = useState(flowDbs.includes("biosphere3") || !flowDbs.length ? "biosphere3" : flowDbs[0]);
@@ -524,102 +528,132 @@ function ProjectForm({ form, folder, projects, onJob, onCancel, busy }) {
   const [adapters, setAdapters] = useState(null);
   const [chosen, setChosen] = useState(null);  // null: the defaults for linkTo
   const [remote, setRemote] = useState(null);
-  const [source, setSource] = useState("remote");
   const [remoteName, setRemoteName] = useState("BAFU-2025-v2");
   const [confirm, setConfirm] = useState("");
+  const source = form.kind === "add" ? form.source : null;
   useEffect(() => { if (path && !database) setDatabase(ECOSPOLD_NAME(path)); }, [path]);
   useEffect(() => {
-    if (form.kind === "simapro") {
+    if (source === "simapro") {
       serverRequest(`/api/adapters?${linkTo.map((d) => `link_to=${encodeURIComponent(d)}`).join("&")}`).then(setAdapters).catch(() => setAdapters({ adapters: [], default: [] }));
     }
-  }, [form.kind, linkTo.join("|")]);
-  useEffect(() => { if (form.kind === "restore") serverRequest("/api/brightway/remote").then(setRemote).catch(() => setRemote([])); }, [form.kind]);
+  }, [source, linkTo.join("|")]);
+  useEffect(() => { if (origin === "remote" && !remote) serverRequest("/api/brightway/remote").then(setRemote).catch(() => setRemote([])); }, [origin]);
   const migrations = chosen ?? adapters?.default ?? [];
   const toggle = (list, item) => (list.includes(item) ? list.filter((x) => x !== item) : [...list, item]);
   const submit = (url, body) => (e) => { e.preventDefault(); onJob(url, body); };
   const actions = (label, disabled, danger) => html`
     <div class="form-actions">
-      <button type="submit" class=${danger ? "danger" : "primary"} disabled=${disabled || busy}>${label}</button>
+      ${label && html`<button type="submit" class=${danger ? "danger" : "primary"} disabled=${disabled || busy}>${label}</button>`}
       <button type="button" onClick=${onCancel}>Cancel</button>
     </div>`;
-  const biosphereSelect = html`
-    <label>Elementary flows from
-      <select value=${biosphere} onChange=${(e) => setBiosphere(e.target.value)}>
-        ${flowDbs.map((d) => html`<option value=${d}>${d}</option>`)}
-        ${!flowDbs.includes("biosphere3") && html`<option value="biosphere3">biosphere3 (installed now, with the ecoinvent 3.9 impact methods)</option>`}
-      </select>
-    </label>`;
 
   if (form.kind === "new") return html`
-    <form class="project-form" onSubmit=${submit("/api/brightway/projects", { folder, name, setup })}>
+    <form class="project-form" onSubmit=${origin === "empty" ? submit("/api/brightway/projects", { folder, name: name.trim() })
+      : submit("/api/brightway/restore", origin === "remote" ? { folder, remote: remoteName, name: name.trim() || null }
+        : { folder, file: path, name: name.trim() || null })}>
       <h4>New Brightway project</h4>
-      <label>Name <input value=${name} onInput=${(e) => setName(e.target.value)} placeholder="e.g. my study" autofocus /></label>
-      <label class="check"><input type="checkbox" checked=${setup} onChange=${(e) => setSetup(e.target.checked)} />
-        Install the biosphere and impact methods that come with Brightway (those of ecoinvent 3.9, a few minutes):
-        needed to import an ecoSpold2 or SimaPro CSV database into it</label>
-      ${actions("Create project", !name.trim())}
-    </form>`;
-  if (form.kind === "ecoinvent") return html`<${EcoinventForm} folder=${folder} onJob=${onJob} onCancel=${onCancel} busy=${busy} actions=${actions} />`;
-  if (form.kind === "restore") return html`
-    <form class="project-form" onSubmit=${submit("/api/brightway/restore", source === "remote"
-      ? { folder, remote: remoteName, name: name || null } : { folder, file: path, name: name || null })}>
-      <h4>Add a project from a Brightway backup</h4>
-      <label class="check"><input type="radio" checked=${source === "remote"} onChange=${() => setSource("remote")} />
-        Download from files.brightway.dev</label>
-      ${source === "remote" && html`
-        <select value=${remoteName} onChange=${(e) => setRemoteName(e.target.value)} aria-label="Project to download">
-          ${(remote || [{ name: "BAFU-2025-v2" }]).map((r) => html`<option value=${r.name}>${r.name}${r.name.startsWith("BAFU") ? " — Swiss LCI database (BAFU/UVEK)" : ""}</option>`)}
-        </select>`}
-      <label class="check"><input type="radio" checked=${source === "file"} onChange=${() => setSource("file")} />
-        From a backup file (.tar.gz) you downloaded, e.g. BAFU from files.brightway.dev</label>
-      ${source === "file" && html`<${PathInput} value=${path} onChange=${setPath} accept=".gz,.tar.gz" placeholder="Path of the .tar.gz file" />`}
-      <label>Project name <input value=${name} onInput=${(e) => setName(e.target.value)} placeholder="default: the name in the archive" /></label>
-      ${actions(source === "remote" ? "Download and add" : "Add project", source === "file" && !path)}
-    </form>`;
-  if (form.kind === "ecospold2") return html`
-    <form class="project-form" onSubmit=${submit("/api/brightway/import", { folder, project: form.project, format: "ecospold2", path, database, biosphere })}>
-      <h4>Add an ecoSpold2 database to ${form.project}</h4>
-      <label>ecoSpold2 release: the .7z archive, or the folder it was unpacked to
-        <${PathInput} value=${path} onChange=${setPath} accept=".7z" placeholder="e.g. C:\\Downloads\\ecoinvent 3.9.1_cutoff_ecoSpold02.7z" /></label>
-      <label>Database name <input value=${database} onInput=${(e) => setDatabase(e.target.value)} placeholder="e.g. ecoinvent-3.9.1-cutoff" /></label>
-      ${biosphereSelect}
-      ${biosphere === "biosphere3" && database && !/3\.9/.test(database) && html`
-        <p class="note">biosphere3 and the impact methods that come with Brightway are those of ecoinvent 3.9: with another
-          version, some elementary flows may not link and some factors may not match.</p>`}
-      <p class="muted small">About 10 minutes for ecoinvent; an archive is unpacked first (2.6 GB, deleted afterwards).</p>
-      ${actions("Import", !path || !database.trim())}
-    </form>`;
-  if (form.kind === "simapro") return html`
-    <form class="project-form" onSubmit=${submit("/api/brightway/import", {
-      folder, project: form.project, format: "simapro-csv", path, database, biosphere, link_to: linkTo, migrations,
-      unlinked: form.unlinked || "fail" })}>
-      <h4>Add a SimaPro CSV database to ${form.project}</h4>
-      <label>SimaPro CSV export (processes)
-        <${PathInput} value=${path} onChange=${setPath} accept=".csv,.CSV" placeholder="e.g. C:\\Downloads\\AGB32_final.CSV" /></label>
-      <label>Database name <input value=${database} onInput=${(e) => setDatabase(e.target.value)} placeholder="e.g. agribalyse-3.2" /></label>
+      <label>Name <input value=${name} onInput=${(e) => setName(e.target.value)} autofocus
+        placeholder=${origin === "empty" ? "e.g. my study" : "default: the name in the backup"} /></label>
       <fieldset>
-        <legend>Background databases its inputs link to</legend>
-        ${processDbs.length ? processDbs.map((d) => html`
-          <label class="check"><input type="checkbox" checked=${linkTo.includes(d)} onChange=${() => { setLinkTo(toggle(linkTo, d)); setChosen(null); }} /> ${d}</label>`)
-          : html`<p class="muted small">None in this project: inputs from ecoinvent or another database will not link.</p>`}
+        <legend>Start from</legend>
+        <label class="check"><input type="radio" checked=${origin === "empty"} onChange=${() => setOrigin("empty")} />
+          An empty project, to add databases to: ecoSpold2, SimaPro CSV, or ecoinvent with your account</label>
+        <label class="check"><input type="radio" checked=${origin === "remote"} onChange=${() => setOrigin("remote")} />
+          A Brightway backup from files.brightway.dev</label>
+        ${origin === "remote" && html`
+          <select value=${remoteName} onChange=${(e) => setRemoteName(e.target.value)} aria-label="Project to download">
+            ${(remote || [{ name: "BAFU-2025-v2" }]).map((r) => html`<option value=${r.name}>${r.name}${r.name.startsWith("BAFU") ? " — Swiss LCI database (BAFU/UVEK)" : ""}</option>`)}
+          </select>`}
+        <label class="check"><input type="radio" checked=${origin === "file"} onChange=${() => setOrigin("file")} />
+          A Brightway backup file (.tar.gz) you downloaded or made</label>
+        ${origin === "file" && html`<${PathInput} value=${path} onChange=${setPath} accept=".gz,.tar.gz" placeholder="Path of the .tar.gz file" />`}
       </fieldset>
-      ${biosphereSelect}
-      <details class="adapters" open=${migrations.length > 0}>
-        <summary>Adapters: ${migrations.length ? migrations.join(", ") : "none"}</summary>
-        <p class="muted small">Correspondence files from Départ de Sentier's randonneur_data (with PRé's SimaPro ↔ ecoinvent
-          names): they rename the SimaPro inputs and flows to those of the background database before linking. Those for
-          the background databases chosen above are ticked.</p>
-        <div class="adapter-list">
-          ${(adapters?.adapters || []).map((a) => html`
-            <label class="check" title=${a.description}><input type="checkbox" checked=${migrations.includes(a.name)}
-              onChange=${() => setChosen(toggle(migrations, a.name))} /> ${a.name}
-              <span class="muted small">${a.source} → ${a.target}</span></label>`)}
-        </div>
-      </details>
-      <p class="muted small">A few minutes; needs internet access (unit definitions). If some inputs or flows can't be linked,
-        nothing is written and they are listed, to fix the links or import without them.</p>
-      ${actions(form.unlinked === "drop" ? "Import without the unlinked exchanges" : "Import", !path || !database.trim())}
+      ${actions(origin === "remote" ? "Download and create" : "Create project", origin === "empty" ? !name.trim() : origin === "file" && !path)}
     </form>`;
+
+  if (form.kind === "add") {
+    const installed = flowDbs.includes("biosphere3") && project?.methods > 0;
+    const linked = defaults || flowDbs.length > 0;  // a biosphere for the elementary flows to link to
+    const bio = defaults ? "biosphere3" : biosphere;
+    const head = html`
+      <h4>Add a database to ${form.project}</h4>
+      <div class="source-choice" role="radiogroup" aria-label="Source of the database">
+        ${DATABASE_SOURCES.map((s) => html`
+          <button type="button" role="radio" aria-checked=${source === s.kind} class=${source === s.kind ? "selected" : ""}
+            onClick=${() => onForm({ kind: "add", project: form.project, source: s.kind })}>
+            <b>${s.label}</b><span class="muted small">${s.hint}</span></button>`)}
+      </div>
+      ${source && html`
+        <label class="check"><input type="checkbox" checked=${defaults} onChange=${(e) => setDefaults(e.target.checked)} />
+          <span>Add the default biosphere and impact methods <span class="muted small">${source === "ecoinvent"
+            ? "— those of the release: its elementary flows and LCIA methods"
+            : installed ? "— biosphere3 and the ecoinvent 3.9 methods of Brightway, already in this project"
+              : "— biosphere3 and the ecoinvent 3.9 impact methods that come with Brightway (a few minutes, once per project)"}</span></span></label>
+        ${!defaults && (flowDbs.length ? html`
+          <label>Elementary flows from
+            <select value=${biosphere} onChange=${(e) => setBiosphere(e.target.value)}>
+              ${flowDbs.map((d) => html`<option value=${d}>${d}</option>`)}
+            </select></label>`
+          : html`<p class="note">This project has no biosphere database yet: tick the box above to add one.</p>`)}`}`;
+    if (!source) return html`<div class="project-form">${head}${actions(null)}</div>`;
+    if (source === "ecoinvent") return html`
+      <div class="project-form">${head}
+        <${EcoinventForm} folder=${folder} project=${form.project} existing=${processDbs} biosphere=${defaults ? null : biosphere}
+          linked=${linked} onJob=${onJob} busy=${busy} actions=${actions} />
+      </div>`;
+    if (source === "ecospold2") return html`
+      <div class="project-form">${head}
+        <form class="source-form" onSubmit=${submit("/api/brightway/import", { folder, project: form.project, format: "ecospold2", path, database,
+          biosphere: bio, defaults })}>
+          <label>ecoSpold2 release: the .7z archive, or the folder it was unpacked to
+            <${PathInput} value=${path} onChange=${setPath} accept=".7z" placeholder="e.g. C:\\Downloads\\ecoinvent 3.9.1_cutoff_ecoSpold02.7z" /></label>
+          <label>Database name <input value=${database} onInput=${(e) => setDatabase(e.target.value)} placeholder="e.g. ecoinvent-3.9.1-cutoff" /></label>
+          ${bio === "biosphere3" && database && !/3\.9/.test(database) && html`
+            <p class="note">biosphere3 and the impact methods that come with Brightway are those of ecoinvent 3.9: with another
+              version, some elementary flows may not link and some factors may not match.</p>`}
+          <p class="muted small">About 10 minutes for ecoinvent; an archive is unpacked first (2.6 GB, deleted afterwards).</p>
+          ${actions("Import", !path || !database.trim() || !linked)}
+        </form>
+      </div>`;
+    return html`
+      <div class="project-form">${head}
+        <form class="source-form" onSubmit=${submit("/api/brightway/import", {
+          folder, project: form.project, format: "simapro-csv", path, database, biosphere: bio, defaults, link_to: linkTo, migrations,
+          unlinked: form.unlinked || "fail" })}>
+          <label>SimaPro CSV export (processes)
+            <${PathInput} value=${path} onChange=${setPath} accept=".csv,.CSV" placeholder="e.g. C:\\Downloads\\AGB32_final.CSV" /></label>
+          <label>Database name <input value=${database} onInput=${(e) => setDatabase(e.target.value)} placeholder="e.g. agribalyse-3.2" /></label>
+          <fieldset>
+            <legend>Background databases its inputs link to</legend>
+            ${processDbs.length ? processDbs.map((d) => html`
+              <label class="check"><input type="checkbox" checked=${linkTo.includes(d)} onChange=${() => { setLinkTo(toggle(linkTo, d)); setChosen(null); }} /> ${d}</label>`)
+              : html`<p class="muted small">None in this project: inputs from ecoinvent or another database will not link.</p>`}
+          </fieldset>
+          <details class="adapters" open=${migrations.length > 0}>
+            <summary>Adapters: ${migrations.length ? migrations.join(", ") : "none"}</summary>
+            <p class="muted small">Correspondence files from Départ de Sentier's randonneur_data (with PRé's SimaPro ↔ ecoinvent
+              names): they rename the SimaPro inputs and flows to those of the background database before linking. Those for
+              the background databases chosen above are ticked.</p>
+            <div class="adapter-list">
+              ${(adapters?.adapters || []).map((a) => html`
+                <label class="check" title=${a.description}><input type="checkbox" checked=${migrations.includes(a.name)}
+                  onChange=${() => setChosen(toggle(migrations, a.name))} /> ${a.name}
+                  <span class="muted small">${a.source} → ${a.target}</span></label>`)}
+            </div>
+          </details>
+          <fieldset>
+            <legend>If some inputs or flows can't be linked</legend>
+            <label class="check"><input type="radio" checked=${form.unlinked !== "drop"} onChange=${() => onForm({ ...form, unlinked: "fail" })} />
+              Stop and list them: nothing is written, to fix the links first</label>
+            <label class="check"><input type="radio" checked=${form.unlinked === "drop"} onChange=${() => onForm({ ...form, unlinked: "drop" })} />
+              Import without them, and list them</label>
+          </fieldset>
+          <p class="muted small">Needs internet access (unit definitions). A large export takes a while: about 15 minutes for
+            Agribalyse with its ecoinvent background.</p>
+          ${actions(form.unlinked === "drop" ? "Import without the unlinked exchanges" : "Import", !path || !database.trim() || !linked)}
+        </form>
+      </div>`;
+  }
   if (form.kind === "delete") return html`
     <form class="project-form danger" onSubmit=${submit("/api/brightway/projects/delete", { folder, project: form.project, confirm })}>
       <h4>Delete the project ${form.project}</h4>
@@ -678,7 +712,10 @@ function LoadDatabase({ onClose, missing, onDatabases }) {
     const timer = setTimeout(() => serverRequest(`/api/jobs/${job.id}`).then((j) => {
       setJob(j);
       if (j.status === "done" && j.key) openDatabase(j.key);
-      else if (j.status === "done") { setForm(null); listProjects(folder); }
+      else if (j.status === "done") {  // a new empty project: add its first database
+        setForm(j.project ? { kind: "add", project: j.project } : null);
+        listProjects(folder);
+      }
     }).catch((e) => setJob({ ...job, status: "failed", error: e.message })), 700);
     return () => clearTimeout(timer);
   }, [job]);
@@ -726,9 +763,10 @@ function LoadDatabase({ onClose, missing, onDatabases }) {
         ${showLog && html`<pre class="load-log">${job.log.slice(-40).join("\n")}</pre>`}
         ${job.report && html`
           <div class="unlinked">
-            <p>${job.report.length} distinct inputs or flows could not be linked (listed in <code>${job.report_path}</code>).
-              Link them with other background databases or adapters, or import without them.</p>
-            ${form?.kind === "simapro" && html`<button onClick=${() => { setForm({ ...form, unlinked: "drop" }); setJob(null); }}>Import without them…</button>`}
+            <p>${job.report.length}${job.report.length === 300 ? "+" : ""} distinct inputs or flows could not be linked
+              ${job.status === "done" ? "and were left out" : ""} (listed in <code>${job.report_path}</code>).
+              ${job.status === "done" ? "" : "Link them with other background databases or adapters, or import without them."}</p>
+            ${job.status !== "done" && form?.source === "simapro" && html`<button onClick=${() => { setForm({ ...form, unlinked: "drop" }); setJob(null); }}>Import without them…</button>`}
             <div class="unlinked-list"><table class="load-table">
               <tr><th>Type</th><th>Name</th><th>Compartment</th><th>Unit</th><th class="num">Exchanges</th></tr>
               ${job.report.slice(0, 100).map((r) => html`<tr><td>${r.type}</td><td>${r.name}</td><td>${r.categories}</td>
@@ -779,21 +817,18 @@ function LoadDatabase({ onClose, missing, onDatabases }) {
           </select>
           ${!isKnown && html`
             <form class="load-other" onSubmit=${(e) => { e.preventDefault(); setFolder(typed.trim().replace(/^["']|["']$/g, "")); }}>
-              <input value=${typed} placeholder="Brightway data folder (with projects.db), e.g. the BRIGHTWAY2_DIR of your projects"
+              <input value=${typed} placeholder="Another Brightway data folder (the one with projects.db)"
                 onInput=${(e) => setTyped(e.target.value)} />
               <button type="submit">List projects</button>
             </form>`}
         </div>
         ${folder && html`
           <div class="project-tools">
-            <button class="link" onClick=${() => setForm({ kind: "new" })}>+ New project</button>
-            <button class="link" onClick=${() => setForm({ kind: "restore" })}
-              title="A Brightway backup archive (.tar.gz): a file, or a project of files.brightway.dev such as BAFU">+ Add a project from a backup (BAFU, …)</button>
-            <button class="link" onClick=${() => setForm({ kind: "ecoinvent" })}
-              title="Download an ecoinvent release with your ecoinvent account, into a new project">+ New project from ecoinvent</button>
+            <button class="link" onClick=${() => setForm({ kind: "new" })}
+              title="An empty project, to add databases to, or one from a Brightway backup (BAFU, …)">+ New project</button>
           </div>`}
         ${form && html`<${ProjectForm} key=${`${form.kind}:${form.project || ""}`} form=${form} folder=${folder} projects=${projects}
-          busy=${busy} onJob=${startJob} onCancel=${() => setForm(null)} />`}
+          busy=${busy} onJob=${startJob} onCancel=${() => setForm(null)} onForm=${setForm} />`}
         ${projectsError && html`<div class="error">${projectsError}</div>`}
         ${folder && !projects && !projectsError && html`<div class="empty">Reading the projects…</div>`}
         ${projects && html`
@@ -805,10 +840,8 @@ function LoadDatabase({ onClose, missing, onDatabases }) {
                     : p.databases.length ? `${count(p.methods)} impact methods` : "empty"}</span></td>
                 <td class="actions project-actions">
                   ${p.twofive && html`
-                    <button class="link" onClick=${() => setForm({ kind: "ecospold2", project: p.name })}
-                      title="Import an ecoSpold2 release (e.g. ecoinvent: the .7z archive or its unpacked folder) into this project">+ ecoSpold2</button>
-                    <button class="link" onClick=${() => setForm({ kind: "simapro", project: p.name })}
-                      title="Import a SimaPro CSV export (e.g. Agribalyse) into this project, linked to its background databases">+ SimaPro CSV</button>`}
+                    <button class="link" onClick=${() => setForm({ kind: "add", project: p.name })}
+                      title="Import a database into this project: an ecoSpold2 release, a SimaPro CSV export, or ecoinvent with your account">+ Add database</button>`}
                   <button class="link danger" onClick=${() => setForm({ kind: "delete", project: p.name })} title="Delete this project">Delete</button>
                 </td>
               </tr>
@@ -820,10 +853,9 @@ function LoadDatabase({ onClose, missing, onDatabases }) {
                 </tr>`)}`)}
           </table>
           ${!projects.projects.length && html`<p class="muted">No project in this folder yet: create one with <i>New project</i>.</p>`}`}
-        ${!folder && !known.length && html`<p class="muted">No Brightway data folder found on this computer: give one with <i>Other folder…</i>.</p>`}
       </section>
-      <p class="muted small">ecoSpold2 releases and SimaPro CSV exports are imported into a project first (<i>+ ecoSpold2</i>,
-        <i>+ SimaPro CSV</i>), then opened from it like any Brightway database. Your own datasets: <i>Create dataset</i> in the top bar.</p>`}`;
+      <p class="muted small">ecoSpold2 releases, SimaPro CSV exports and ecoinvent releases are imported into a project first
+        (<i>+ New project</i>, then <i>+ Add database</i>), then opened from it like any Brightway database. Your own datasets: <i>Create dataset</i> in the top bar.</p>`}`;
 
   if (!onClose) return html`<div class="load-page"><h2>Load a database</h2>${content}</div>`;
   return html`

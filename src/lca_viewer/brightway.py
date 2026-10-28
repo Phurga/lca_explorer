@@ -87,9 +87,11 @@ def _product_rows(lca, activity_ids: np.ndarray) -> np.ndarray:
     """Technosphere row of the reference product of each activity (column).
 
     A process is usually its own product (ecoinvent imports); SimaPro imports can instead
-    give each process a separate product node, linked by its production exchange.
+    give each process a separate product node, linked by its functional exchange: a production
+    one, or a technosphere one for a waste treatment. Other production exchanges are not its
+    product: bw_simapro_csv writes SimaPro's "waste to treatment" as non-functional production
+    exchanges to the waste's product.
     """
-    import bw2data as bd
     from bw2data.backends import ActivityDataset as AD
     from bw2data.backends import ExchangeDataset as ED
 
@@ -98,14 +100,24 @@ def _product_rows(lca, activity_ids: np.ndarray) -> np.ndarray:
     if not missing:
         return rows
     key_of = {i: (db, code) for i, db, code in AD.select(AD.id, AD.database, AD.code).where(AD.id.in_(missing)).tuples()}
-    product_key = {}
+    product_key, rank = {}, {}
     for db in {db for db, _ in key_of.values()}:
         codes = [code for d, code in key_of.values() if d == db]
-        query = ED.select(ED.output_code, ED.input_database, ED.input_code).where(
-            ED.type.in_(bd.labels.technosphere_positive_edge_types), ED.output_database == db, ED.output_code.in_(codes)
+        query = ED.select(ED.output_code, ED.input_database, ED.input_code, ED.type, ED.data).where(
+            ED.type.in_(["production", "substitution", "technosphere"]), ED.output_database == db,
+            ED.output_code.in_(codes),
         )
-        for output_code, input_db, input_code in query.tuples():
-            product_key.setdefault((db, output_code), (input_db, input_code))
+        for output_code, input_db, input_code, kind, data in query.tuples():
+            # Best candidate first: functional, then a production exchange with an amount
+            if data.get("functional"):
+                r = 0
+            elif kind == "production" and data.get("functional") is None and data.get("amount"):
+                r = 1
+            else:
+                continue
+            key = (db, output_code)
+            if r < rank.get(key, 2):
+                product_key[key], rank[key] = (input_db, input_code), r
     id_of = {
         (db, code): i
         for db in {db for db, _ in product_key.values()}
@@ -119,7 +131,11 @@ def _product_rows(lca, activity_ids: np.ndarray) -> np.ndarray:
             raise ValueError(f"Activity {key_of[activity_ids[j]]} has no reference product in the technosphere")
         rows[j] = lca.dicts.product[id_of[key]]
     if len(set(rows.tolist())) != len(rows):
-        raise ValueError("Several activities produce the same product: the technosphere is not square")
+        counts = np.bincount(rows)
+        shared = [activity_ids[j] for j in range(len(rows)) if counts[rows[j]] > 1][:4]
+        names = {i: n for i, n in AD.select(AD.id, AD.name).where(AD.id.in_([int(i) for i in shared])).tuples()}
+        raise ValueError("Several activities produce the same product, so the technosphere is not square, e.g. "
+                         + "; ".join(names.get(int(i), str(i)) for i in shared))
     return rows
 
 

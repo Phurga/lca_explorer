@@ -6,7 +6,7 @@ Checks, against bw2calc:
 3. at every expanded node, children + direct = parent.
 Prints timings and the first levels of the tree for climate change.
 
-Run with BRIGHTWAY2_DIR pointing to data/brightway.
+Run with BRIGHTWAY2_DIR pointing to the folder with project lca_viewer_ei391 (or unset: Brightway's default folder).
 """
 
 import random

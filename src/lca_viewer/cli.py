@@ -33,11 +33,34 @@ def _per_model(values, n: int, name: str) -> list:
     return values
 
 
+def init_brightway() -> None:
+    """Brightway's data folder, created with a ``default`` project the first time the app runs (as
+    Brightway itself would), in a separate process: the server never imports bw2data."""
+    import importlib.util
+    import subprocess
+    import sys
+
+    from .sources import brightway_dir
+
+    folder = brightway_dir()
+    if (folder / "projects.db").is_file() or importlib.util.find_spec("bw2data") is None:
+        return
+    print(f"Creating the Brightway data folder {folder}, with a default project")
+    folder.mkdir(parents=True, exist_ok=True)  # bw2data refuses a BRIGHTWAY2_DIR that does not exist
+    done = subprocess.run([sys.executable, "-m", "lca_viewer.cli", "project", "init"], capture_output=True,
+                          text=True, encoding="utf-8", errors="replace")
+    if done.returncode:
+        lines = (done.stdout + done.stderr).strip().splitlines()
+        print(f"warning: it could not be created: {lines[-1] if lines else 'no output'}")
+
+
 def serve(args) -> None:
     import json
     import os
 
     import uvicorn
+
+    init_brightway()
 
     if args.model:
         n = len(args.model)
@@ -87,16 +110,15 @@ def setup(args) -> None:
 
 
 def import_(args) -> None:
-    import os
-
-    if not os.environ.get("BRIGHTWAY2_DIR"):
-        print("warning: BRIGHTWAY2_DIR is not set, using Brightway's default data directory")
     import shutil
 
     from .importing import import_ecospold2, import_simapro_csv, setup_project
+    from .sources import brightway_dir
+
+    print(f"Brightway data folder: {brightway_dir()}", flush=True)
 
     t = time.perf_counter()
-    if args.biosphere == "biosphere3":
+    if args.biosphere == "biosphere3" and not args.no_setup:
         setup_project(args.project)  # biosphere and LCIA methods, first time only
     if args.format == "ecospold2":
         from .quickstart import find_datasets, unpack
@@ -131,7 +153,9 @@ def project(args) -> None:
     """Brightway projects of BRIGHTWAY2_DIR: create, delete, restore from a backup archive."""
     from . import editing
 
-    if args.action == "create":
+    if args.action == "init":
+        editing.init_folder()
+    elif args.action == "create":
         editing.create_project(args.name, setup=args.setup)
     elif args.action == "delete":
         editing.delete_project(args.name)
@@ -163,7 +187,8 @@ def ecoinvent(args) -> None:
         if found is None:
             raise SystemExit("No ecoinvent credentials: run lca-viewer ecoinvent login first")
         t = time.perf_counter()
-        database = import_ecoinvent_release(args.project, args.version, args.system_model, *found)
+        database = import_ecoinvent_release(args.project, args.version, args.system_model, *found,
+                                            biosphere=args.biosphere)
         print(f"imported {database} into project {args.project} ({time.perf_counter() - t:.0f}s)")
 
 
@@ -209,23 +234,28 @@ def main(argv=None) -> None:
     p.add_argument("--biosphere", default="biosphere3",
                    help="Biosphere database of the project that emissions link to (default: biosphere3, installed "
                         "with the ecoinvent 3.9 impact methods if missing)")
+    p.add_argument("--no-setup", action="store_true",
+                   help="With --biosphere biosphere3: do not install it nor the impact methods (it must exist)")
     p.add_argument("--data", default="data", help="Folder where a .7z archive is unpacked during the import (default: data)")
     p.set_defaults(func=import_)
 
-    p = sub.add_parser("project", help="Create, delete or restore a Brightway project (in BRIGHTWAY2_DIR)")
-    p.add_argument("action", choices=["create", "delete", "restore"])
+    p = sub.add_parser("project", help="Create, delete or restore a Brightway project (in BRIGHTWAY2_DIR); "
+                                       "init: create the data folder with a default project, as Brightway does")
+    p.add_argument("action", choices=["init", "create", "delete", "restore"])
     p.add_argument("name", nargs="?", help="Project name (for restore: default, the name in the archive)")
     p.add_argument("--file", help="Backup archive (.tar.gz) to restore, e.g. BAFU from files.brightway.dev")
     p.add_argument("--setup", action="store_true",
                    help="With create: install the biosphere and impact methods bundled with Brightway (ecoinvent 3.9)")
     p.set_defaults(func=project)
 
-    p = sub.add_parser("ecoinvent", help="Download an ecoinvent release into a new project (in BRIGHTWAY2_DIR) "
+    p = sub.add_parser("ecoinvent", help="Download an ecoinvent release into a project (in BRIGHTWAY2_DIR) "
                                          "with your ecoinvent account")
     p.add_argument("action", choices=["login", "logout", "import"],
                    help="login: save your account in the system's credential store (Windows Credential Manager, "
                         "macOS Keychain, Secret Service); logout: remove it; import: download and import a release")
-    p.add_argument("--project", help="With import: the new project")
+    p.add_argument("--project", help="With import: the project (created if needed)")
+    p.add_argument("--biosphere", help="With import: a biosphere database of the project to link to, without "
+                                       "impact methods (default: the release's own biosphere and methods)")
     p.add_argument("--version", help="With import: e.g. 3.10.1")
     p.add_argument("--system-model", default="cutoff", choices=["cutoff", "apos", "consequential", "EN15804"])
     p.set_defaults(func=ecoinvent)
@@ -237,7 +267,8 @@ def main(argv=None) -> None:
 
     p = sub.add_parser("setup", help="First-time setup; optionally unpacks, imports and builds an ecoinvent ecoSpold2 release")
     p.add_argument("source", nargs="?", help="ecoSpold2 archive (.7z) or the folder it was unpacked to; asked when omitted (Enter skips ecoinvent)")
-    p.add_argument("--data", default="data", help="Folder for the Brightway project, the models and models.json (default: data)")
+    p.add_argument("--data", default="data", help="Folder for the models and models.json (default: data); "
+                                                  "ecoinvent goes into a project of BRIGHTWAY2_DIR")
     p.add_argument("--yes", action="store_true", help="Take the default answer to every question (without a source: no ecoinvent)")
     p.set_defaults(func=setup)
 
@@ -246,8 +277,8 @@ def main(argv=None) -> None:
                    help="Model directory loaded at start; repeat to load several (default: none, "
                         "choose them in the page with Load database)")
     p.add_argument("--data", default="data",
-                   help="Folder of the built models (models.json, cache/) and of lca_viewer's Brightway "
-                        "projects (brightway/), offered by Load database (default: data)")
+                   help="Folder of the built models (models.json, cache/), offered by Load database "
+                        "with the projects of BRIGHTWAY2_DIR (default: data)")
     p.add_argument("--title", action="append",
                    help="Title shown in the UI; repeat for each --model, in the same order (default: directory name)")
     p.add_argument("--default-root", action="append",

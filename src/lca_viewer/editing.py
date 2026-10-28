@@ -42,6 +42,14 @@ SECTIONS = {
 }
 
 
+def init_folder() -> None:
+    """The Brightway data folder, made as Brightway makes it the first time it runs:
+    ``projects.db`` and an empty ``default`` project."""
+    import bw2data as bd
+
+    print(f"Brightway projects: {', '.join(sorted(p.name for p in bd.projects))}", flush=True)
+
+
 def create_project(name: str, setup: bool = False) -> None:
     """A new Brightway 2.5 project; with ``setup``, the biosphere and impact methods bundled with
     bw2io (ecoinvent 3.9), needed to import ecoSpold2 or SimaPro CSV databases into it."""
@@ -101,8 +109,13 @@ def _lognormal(amount: float, sd2) -> dict:
 
 def _supplier(node):
     """The node a technosphere exchange links to: a process's product node when it has a separate
-    one (SimaPro imports, allocated processes), else the process itself."""
-    produced = [e.input for e in node.production()]
+    one (SimaPro imports, allocated processes), else the process itself. The product is the
+    functional exchange's (a waste treatment's is a technosphere exchange); SimaPro's "waste to
+    treatment" are production exchanges too, but not functional."""
+    functional = [e.input for e in node.exchanges() if e.get("functional")]
+    if len(functional) == 1:
+        return functional[0]
+    produced = [e.input for e in node.production() if e.get("functional") is None and e.get("amount")]
     if len(produced) == 1 and produced[0].key != node.key:
         return produced[0]
     return node

@@ -1,4 +1,4 @@
-"""ecoinvent 3.9.1 cut-off into project lca_viewer_ei391 (set BRIGHTWAY2_DIR=data/brightway first).
+"""ecoinvent 3.9.1 cut-off into project lca_viewer_ei391 (of BRIGHTWAY2_DIR, else Brightway's default folder).
 
 Same as: lca-viewer import ecospold2 data/ei391_cutoff/datasets --project lca_viewer_ei391 --database ecoinvent-3.9.1-cutoff
 """

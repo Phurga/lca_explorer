@@ -2,9 +2,9 @@
 
 ecoinvent is optional: without it, the app starts with no database and loads those of the
 user's Brightway projects (*Load database*). Given an ecoSpold2 release (the archive, or the
-folder it was unpacked to), it unpacks it, imports it into a Brightway project in
-``data/brightway`` and builds the model, skipping the steps already done, so it can simply
-be run again after an interruption. Built models are listed in ``data/models.json``, which
+folder it was unpacked to), it unpacks it, imports it into a Brightway project of
+``BRIGHTWAY2_DIR`` (else Brightway's default folder) and builds the model, skipping the steps
+already done, so it can simply be run again after an interruption. Built models are listed in ``data/models.json``, which
 the app offers in its *Load database* dialog.
 """
 
@@ -17,7 +17,7 @@ import sys
 import time
 from pathlib import Path
 
-from .sources import brightway_projects, database_state, register
+from . import sources
 
 SYSTEM_MODELS = {"cutoff": "cut-off", "apos": "APOS", "consequential": "consequential", "en15804": "EN15804"}
 DEFAULT_ROOT = "market for wheat grain, feed|GLO"
@@ -162,12 +162,9 @@ def setup_ecoinvent(p: Prompt, data: Path, archive: Path | None, datasets: Path 
         print(f"  Using {datasets}")
 
     print(f"\n[2/3] Import into Brightway (project {project}, database {database})")
-    brightway_dir = data / "brightway"
-    brightway_dir.mkdir(exist_ok=True)
-    previous = os.environ.get("BRIGHTWAY2_DIR")
-    if previous and Path(previous).resolve() != brightway_dir:
-        print(f"  Using {brightway_dir}, not BRIGHTWAY2_DIR={previous}")
-    os.environ["BRIGHTWAY2_DIR"] = str(brightway_dir)  # before bw2data is imported
+    brightway_dir = sources.brightway_dir()
+    print(f"  Brightway data folder: {brightway_dir}")
+    brightway_dir.mkdir(parents=True, exist_ok=True)  # bw2data refuses a BRIGHTWAY2_DIR that does not exist
     import bw2data as bd
 
     from .importing import import_ecospold2, setup_project
@@ -195,10 +192,10 @@ def setup_ecoinvent(p: Prompt, data: Path, archive: Path | None, datasets: Path 
         built.save(partial)
         partial.rename(output)
         print(f"  {built.size} activities, {len(built.methods)} methods ({time.perf_counter() - t:.0f} s)")
-    listed = next(p for p in brightway_projects(brightway_dir) if p["name"] == project)
-    source = {"brightway": str(brightway_dir.resolve()), "project": project, "database": database,
-              **database_state(listed, database)}
-    register(data, output, title, DEFAULT_ROOT, source)
+    listed = next(p for p in sources.brightway_projects(brightway_dir) if p["name"] == project)
+    source = {"brightway": str(brightway_dir), "project": project, "database": database,
+              **sources.database_state(listed, database)}
+    sources.register(data, output, title, DEFAULT_ROOT, source)
 
     if archive and unpacked.exists() and p.confirm(f"\nDelete the unpacked files in {unpacked}? "
                                                    f"They are not needed any more", default=True):

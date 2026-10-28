@@ -342,24 +342,30 @@ their memory. Things to know:
 The Brightway projects section also changes projects. These are the same
 projects Brightway and Activity Browser use, so changes show there too:
 
-- **+ New project** in the folder; tick *Install the biosphere and impact
-  methods* (those of ecoinvent 3.9 that come with Brightway, a few minutes)
-  to import ecoSpold2 or SimaPro CSV databases into it.
-- **+ Add a project from a backup (BAFU, …)**: download a ready Brightway
-  project from [files.brightway.dev](https://files.brightway.dev): **BAFU
-  2025** (the Swiss LCI database of BAFU/UVEK, 60 MB, with the Ecological
-  Scarcity 2021 methods), USEEIO, forwast, or the ecoinvent biospheres. Or
-  give a backup file (`.tar.gz`) you downloaded or made with
-  `bw2io.backup_project_directory`.
-- **+ ecoSpold2** on a project: import an ecoSpold2 release (the ecoinvent
-  `.7z` archive or the folder it was unpacked to; about 10 minutes for
-  ecoinvent).
-- **+ SimaPro CSV** on a project: import a SimaPro CSV export (e.g.
-  Agribalyse), linked to the background databases you tick (e.g. ecoinvent)
-  through the *adapters* of Départ de Sentier's randonneur_data: PRé's
-  SimaPro ↔ ecoinvent name correspondences and flow mappings. Those for the
-  ticked databases are chosen for you. If some inputs or flows can't be
-  linked, nothing is written and they are listed; then *Import without them*.
+- **+ New project** in the folder: an empty project (its *Add database* then
+  opens), or one from a Brightway backup: a ready project from
+  [files.brightway.dev](https://files.brightway.dev) (**BAFU 2025**, the
+  Swiss LCI database of BAFU/UVEK, 60 MB, with the Ecological Scarcity 2021
+  methods; USEEIO, forwast, the ecoinvent biospheres), or a backup file
+  (`.tar.gz`) you downloaded or made with `bw2io.backup_project_directory`.
+- **+ Add database** on a project, from one of three sources:
+  - **ecoSpold2**: an ecoSpold2 release (the ecoinvent `.7z` archive or the
+    folder it was unpacked to; about 10 minutes for ecoinvent).
+  - **SimaPro CSV**: a SimaPro CSV export (e.g. Agribalyse), linked to the
+    background databases you tick (e.g. ecoinvent) through the *adapters* of
+    Départ de Sentier's randonneur_data: PRé's SimaPro ↔ ecoinvent name
+    correspondences and flow mappings. Those for the ticked databases are
+    chosen for you. If some inputs or flows can't be linked, nothing is
+    written and they are listed, unless you chose *Import without them*.
+  - **ecoinvent**: a release downloaded with your ecoinvent account (log in
+    once; kept in the system's credential store if you tick *Remember*).
+
+  As in Activity Browser, tick **Add the default biosphere and impact
+  methods** for a project without them: for ecoSpold2 and SimaPro CSV,
+  `biosphere3` and the ecoinvent 3.9 methods that come with Brightway (a few
+  minutes, once per project); for ecoinvent, the release's own biosphere and
+  methods. Unticked, the elementary flows link to a biosphere database the
+  project already has, and no methods are added.
 - **Delete** a project and its folder (type its name to confirm). Models
   already built from it stay in the app.
 
@@ -418,7 +424,22 @@ lca-viewer import simapro-csv data/agribalyse/AGB32_final.CSV --project lca_view
 
 When some inputs or emissions can't be linked, nothing is written and they
 are listed in `data/import-agribalyse-3.2-unlinked.csv`. Check the list, then
-re-run with `--unlinked drop` to import without them.
+re-run with `--unlinked drop` to import without them. In the app, choose this
+before importing (*Import without them, and list them*), so that the export
+is read only once.
+
+The SimaPro export of Agribalyse carries the ecoinvent processes it uses as
+aggregated copies (`…| Cut-off, S - Copied from Ecoinvent`, about 1,800 of
+them, with 96 % of the file's elementary flows). With ecoinvent ticked as a
+background database, they are replaced by links to the real ecoinvent
+processes of the project, so the tree shows ecoinvent's supply chains.
+Elementary flows are linked with Flowmapper's and ecoinvent's
+correspondences; with Agribalyse 3.1 and ecoinvent 3.8, about 1,500 flows
+that ecoinvent 3.8 lacks remain (pesticides in forest soil, "Biological pest
+controls", "Water, green water", 9 % of Agribalyse's own emission exchanges):
+the project's impact methods could not characterise them, as they only cover
+flows of its biosphere. Details:
+[docs/data-import.md](docs/data-import.md).
 
 **3. Open it** in the app: **Load database**, folder *lca_viewer*, project
 `lca_viewer_ei391`, then **Build and open** next to `agribalyse-3.2`. The

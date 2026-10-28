@@ -45,6 +45,9 @@ Emissions to air
 Carbon dioxide, fossil;;kg;0.2;Undefined;0;0;0;
 Dinitrogen monoxide;low. pop.;kg;0.001;Undefined;0;0;0;
 
+Waste to treatment
+Manure, treatment {FR} U;kg;0.5;Undefined;0;0;0;
+
 End
 
 Process

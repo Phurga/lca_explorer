@@ -26,8 +26,8 @@ API in `src/lca_viewer/server.py`.
 - **Load database** (top bar): the app starts with no database and shows
   this dialog as its start page. Three lists: databases loaded (*Switch to*,
   *Close* to free memory), built models (`data/models.json`, *Open*), and
-  the projects of a Brightway data folder (picked from the folders found, or
-  typed), each database with its process count and *Build and open* / *Open*
+  the projects of the Brightway data folder (`BRIGHTWAY2_DIR`, else
+  Brightway's default folder; *Other folder…* types another), each database with its process count and *Build and open* / *Open*
   / *Rebuild and open*. A load runs on the server: the dialog shows its steps
   (*Details* for the build's output) and opens the database when it is
   ready; it can be closed meanwhile and finds the load again when reopened.
@@ -35,14 +35,20 @@ API in `src/lca_viewer/server.py`.
   next to the title, rather than databases mixed in one workspace: tabs,
   saved views and node ids are per model. An address of a database that is
   not loaded (after a restart) shows the start page with a note.
-  The Brightway section also changes projects: *+ New project*, *+ Add a
-  project from a backup* (files.brightway.dev, e.g. BAFU, or a `.tar.gz`),
-  and on each project *+ ecoSpold2*, *+ SimaPro CSV* and *Delete* (typing
-  the name to confirm). Each opens a small form above the list
-  (`ProjectForm`); file fields take a path or *Choose file…* (uploaded). A
-  SimaPro import that leaves exchanges unlinked shows them, with *Import
-  without them…*. Decision: these forms sit in the Load database dialog,
-  next to the projects they change, rather than in a separate manager.
+  The Brightway section also changes projects: *+ New project* (empty, or
+  from a backup: files.brightway.dev, e.g. BAFU, or a `.tar.gz`), and on
+  each project *+ Add database* and *Delete* (typing the name to confirm).
+  *Add database* asks for the source (ecoSpold2, SimaPro CSV, ecoinvent with
+  the user's account), with a box *Add the default biosphere and impact
+  methods*, ticked when the project has no biosphere database; it opens by
+  itself on a project just created empty. Each opens a small form above the
+  list (`ProjectForm`); file fields take a path or *Choose file…*
+  (uploaded). A SimaPro import that leaves exchanges unlinked shows them,
+  with *Import without them…*. Decision: as in Activity Browser, projects
+  are created first and databases added to them, so there is one way in for
+  each source (ecoinvent no longer makes its own project). These forms sit
+  in the Load database dialog, next to the projects they change, rather than
+  in a separate manager.
 - **Create dataset** (top bar, next to Load database): a wide dialog to enter
   a process as in SimaPro: target (folder, project, database or new one),
   process and documentation, products (co-products with allocation %, their

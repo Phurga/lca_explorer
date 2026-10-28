@@ -6,7 +6,7 @@
 |---|---|
 | Brightway 2.5 project (bw2data 4) | done: `lca_viewer.brightway.from_brightway`; from the app with *Load database* (`lca_viewer.sources`) |
 | ecoinvent ecoSpold2 release (`.7z`) | done via Brightway import (`lca-viewer import ecospold2`, or `scripts/import_ecoinvent.py`) |
-| ecoinvent release downloaded with the user's account | done: a new project per release (`lca-viewer ecoinvent import`, *New project from ecoinvent*) |
+| ecoinvent release downloaded with the user's account | done: into a project (`lca-viewer ecoinvent import`, *Add database* → *ecoinvent*) |
 | SimaPro CSV process export (Agribalyse 3.2) | done via Brightway import (`lca-viewer import simapro-csv`), tested on toy data only |
 | direct ecoSpold2 → `LCAModel` (no Brightway) | later, only if a non-Brightway deployment needs it |
 | openLCA JSON-LD | later |
@@ -75,9 +75,9 @@ panel change projects. Each change runs as `lca-viewer project …`,
 `BRIGHTWAY2_DIR` set to the chosen folder (`server.create_library.cli`), as
 builds do: the server itself never imports bw2data.
 
-- **Projects** (`lca_viewer.editing`): `create_project` (optionally with
-  `importing.setup_project`: biosphere3 and the ecoinvent 3.9 methods bundled
-  with bw2io), `delete_project` (with its folder; bw2data refuses to delete
+- **Projects** (`lca_viewer.editing`): `create_project` (the page makes them
+  empty; `--setup` adds `importing.setup_project`: biosphere3 and the
+  ecoinvent 3.9 methods bundled with bw2io), `delete_project` (with its folder; bw2data refuses to delete
   the last project of a folder), `restore_project` (`bw2io.restore_project_directory`).
   bw2data adds a `default` project to a folder that has none when it is
   imported, so a new folder gets one.
@@ -91,21 +91,29 @@ builds do: the server itself never imports bw2data.
   dataset written into it.
 - **Imports**: `lca-viewer import ecospold2` now takes the `.7z` archive too
   (unpacked into `data/unpacked`, deleted after the import) and `--biosphere`
-  (default `biosphere3`, installed with the methods if missing; with another
-  biosphere database, nothing is installed). The SimaPro CSV import is
+  (default `biosphere3`, installed with the methods if missing, unless
+  `--no-setup`; with another biosphere database, nothing is installed). The
+  page's *Add the default biosphere and impact methods* is `--biosphere
+  biosphere3`; unticked, it sends the chosen biosphere database and
+  `--no-setup`. The SimaPro CSV import is
   unchanged; the page lists randonneur_data's transformations (`/api/adapters`,
   with those `default_migrations` picks for the ticked background databases)
   and, when exchanges stay unlinked, the rows of the report CSV, then offers
   `--unlinked drop`.
-- **ecoinvent with the user's account** (*New project from ecoinvent*, or
+- **ecoinvent with the user's account** (*Add database* → *ecoinvent*, or
   `lca-viewer ecoinvent login` then `lca-viewer ecoinvent import --project P
   --version 3.10.1 --system-model cutoff`): `importing.import_ecoinvent_release`
   downloads the release with `ecoinvent_interface` (kept in its own cache,
   `%LOCALAPPDATA%\pylca\EcoinventInterface\cache` on Windows, so a second
   project of the same release downloads nothing) and runs bw2io's
-  `import_ecoinvent_release` into a new project: its own biosphere
-  (`ecoinvent-<version>-biosphere`) and LCIA methods (`("ecoinvent-<version>",
-  …)`), no `bw2setup`. A project created for it is deleted if the import fails.
+  `import_ecoinvent_release` into the project. With the default biosphere and
+  methods: the release's own biosphere (`ecoinvent-<version>-biosphere`,
+  patched with the flows it lacks if already there) and LCIA methods
+  (`("ecoinvent-<version>", …)`, skipped when the project has them; the
+  namespace keeps them apart from `bw2setup`'s). Without (`--biosphere B`):
+  linked to a biosphere database of the project (bw2io adds the release's
+  flows it lacks), no methods. A project created by the CLI for it is deleted
+  if the import fails.
 - **Credentials** (`lca_viewer.credentials`): kept with `keyring` in the
   system's credential store (Windows Credential Manager, macOS Keychain,
   Secret Service), never in a file of the repository or of `data/`;
@@ -122,6 +130,14 @@ builds do: the server itself never imports bw2data.
   import or restore used it.
 - `/api/brightway` lists a folder without `projects.db` as empty (New project
   creates it), and 404 only for a folder that does not exist.
+- **One Brightway data folder**: lca_viewer works in the folder bw2data
+  picks, `BRIGHTWAY2_DIR`, else Brightway's default folder
+  (`sources.brightway_dir`), the one Activity Browser and the user's own
+  scripts use. It no longer keeps projects of its own in `data/brightway`:
+  that made a second copy of ecoinvent next to the user's. `lca-viewer
+  serve` creates the folder the first time, as Brightway would
+  (`lca-viewer project init`: `projects.db` and an empty `default`
+  project), in a separate process; *Other folder…* still opens any other.
 
 ## Datasets created in the app
 
@@ -167,8 +183,8 @@ added later.
 
 - Archive: `ecoinvent 3.9.1_cutoff_ecoSpold02.7z` (21,239 datasets + MasterData),
   extracted with `py7zr` to `data/ei391_cutoff/` (2.6 GB). No 7z binary needed.
-- Brightway data directory: `data/brightway/` (set `BRIGHTWAY2_DIR`; the
-  folder must exist), project `lca_viewer_ei391`, database
+- Brightway data directory: `BRIGHTWAY2_DIR` (the folder must exist), else
+  Brightway's default folder; project `lca_viewer_ei391`, database
   `ecoinvent-3.9.1-cutoff`.
 - `bw2io.bw2setup()` fails with bw2data 4.7 + bw2io 0.9.17: the bundled LCIA
   data uses lists as flow keys and `Method.write` now requires tuples.
@@ -224,29 +240,56 @@ added later.
    process. Multi-output processes are allocated with SimaPro's allocation
    factors into read-only processes (library `multifunctional`, database
    backend `multifunctional`).
-2. **Internal links** by product name and unit (SimaPro product names are
-   unique). bw2io's own internal matching also compares the location, which
-   products take from their process's `Geography` while inputs have none, so
-   it misses them.
-3. **Links to ecoinvent** (`--link-to ecoinvent-3.9.1-cutoff`). Unlinked
+2. **Aggregated ecoinvent copies** (when linking to ecoinvent): exports such
+   as Agribalyse carry the ecoinvent processes they use as *system*
+   (aggregated) copies, products named `…| Cut-off, S - Copied from Ecoinvent`,
+   without technosphere inputs and with thousands of elementary flows each.
+   A copy is removed (with its product and allocated parts) when the
+   ecoinvent process it copies is in a `--link-to` database (found through
+   Pré's correspondence below); the inputs that used it get their SimaPro
+   ecoinvent name back (`…| Cut-off, U`) and link to that process
+   (`importing.replace_aggregated_copies`). A process with inputs is never
+   removed (it may be an ecoinvent dataset the authors changed), nor a copy
+   with no match. randonneur_data's `agribalyse-3.1.1-delete-aggregated-ecoinvent`
+   does the same by *process identifiers*, which change with every SimaPro
+   export (a re-exported Agribalyse 3.1 matched none), and by name it would
+   remove 7 Agribalyse processes named like ecoinvent ones.
+3. **Internal links** by product name and unit, on SimaPro's own names,
+   before any renaming: they are unique, while bw2io's
+   `split_simapro_name_geo` later turns `Yeast, at plant/FR U` and `Yeast, at
+   plant/RER U` into the same name (location FR and RER). Linking after it
+   made processes use themselves (zero on the matrix diagonal). bw2io's own
+   internal matching also compares the location, which products take from
+   their process's `Geography` while inputs have none, so it misses them.
+4. **Links to ecoinvent** (`--link-to ecoinvent-3.9.1-cutoff`). Unlinked
    inputs named the SimaPro way (`Diesel {Europe without Switzerland}| market
    for diesel | Cut-off, U`) are renamed to ecoinvent's (name, reference
    product, location) with Pré's correspondence file
    `simapro-ecoinvent-3.9.1-cutoff` from `randonneur_data` (picked from the
    ecoinvent version in the database name; override with `--migration`), then
-   linked on those three fields. Agribalyse processes that copy and modify an
-   ecoinvent dataset are linked internally first, so the modified version is
-   used, as in SimaPro.
-4. **Emissions and resources**: the SimaPro compartment becomes
-   `categories`. Then bw2io's classic SimaPro → ecoinvent normalisation runs
-   (compartments, flow names such as `Methane, biogenic` → `Methane,
-   non-fossil`, units, regionalised water), and flows are linked to
-   `biosphere3` on name, categories and unit.
-5. **Unlinked exchanges** are listed in `data/import-<database>-unlinked.csv`
+   linked on those three fields. Waste to treatment (written by
+   bw_simapro_csv as non-functional production exchanges) is linked the same
+   way.
+5. **Emissions and resources**, in this order, each for the flows still
+   unlinked: SimaPro's final waste flows, non material emissions, social and
+   economic issues are left out (not elementary flows in ecoinvent);
+   Flowmapper's SimaPro → ecoinvent correspondences (3.9, 3.8, 3.10) link a
+   flow directly when the target's ecoinvent UUID is in the project's
+   biosphere (most UUIDs are the same across versions, so the 3.9 list
+   covers a 3.8 biosphere); manual renames (`agribalyse-3.1.1-ecoinvent-3.10-biosphere-manual-matches`,
+   `simapro-2024-biosphere-ecoinvent-3.10-biosphere`, e.g. Agribalyse's EF
+   names `COD (Chemical Oxygen Demand)`); bw2io's classic SimaPro → ecoinvent
+   normalisation (compartments, names, units, regionalised water); ecoinvent's
+   EF 3.1 correspondences read backwards for EF names (`Phosphorus, total` →
+   `Phosphorus` in the same compartment, when a single ecoinvent flow maps
+   there); then a link on name, compartment and unit, whatever the case.
+6. **Unlinked exchanges** are listed in `data/import-<database>-unlinked.csv`
    (type, name, compartment, unit, count, an example process). By default
    nothing is written: a matrix with dangling inputs would silently miss part
-   of the supply chain. `--unlinked drop` writes the database without them.
-6. **Names**: the `{FR} U` suffix of Agribalyse names moves into `location`
+   of the supply chain. `--unlinked drop` writes the database without them
+   (and lists them); the app asks which one before importing, so that a large
+   export is not read twice.
+7. **Names**: the `{FR} U` suffix of Agribalyse names moves into `location`
    (`Soft wheat grain, at farm gate {FR} U` → name without suffix, location
    `FR`). The original name is kept as `simapro name`.
 
@@ -254,8 +297,12 @@ added later.
 database. Brightway adds every database it depends on (ecoinvent,
 biosphere), so the model is square and complete. Processes whose product is
 a separate node are mapped to their product's row
-(`brightway._product_rows`). The build only loads the matrices, without
-solving.
+(`brightway._product_rows`): the input of their *functional* exchange (a
+production one, or a technosphere one for a waste treatment), not any
+production exchange. SimaPro's waste to treatment are production exchanges
+too, so taking the first one made processes "produce" the waste they send
+("Several activities produce the same product"). The build only loads the
+matrices, without solving.
 
 ### Not checked yet (no Agribalyse file here)
 

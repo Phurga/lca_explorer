@@ -73,23 +73,17 @@ def cache_dir(data, folder, project: str, database: str) -> Path:
 
 # ---------------------------------------------------------------- Brightway
 
-def brightway_dirs(data=None) -> list[dict]:
-    """Brightway data folders found on this computer: lca_viewer's own (``data/brightway``),
-    ``BRIGHTWAY2_DIR`` and Brightway's default folder (also Activity Browser's)."""
-    candidates = []
-    if data is not None:
-        candidates.append(("lca_viewer", Path(data) / "brightway"))
-    if os.environ.get("BRIGHTWAY2_DIR"):
-        candidates.append(("BRIGHTWAY2_DIR", Path(os.environ["BRIGHTWAY2_DIR"])))
-    candidates.append(("Brightway default folder", default_brightway_dir()))
-    out, seen = [], set()
-    for label, path in candidates:
-        path = path.expanduser().resolve()
-        if path in seen or not (path / "projects.db").is_file():
-            continue
-        seen.add(path)
-        out.append({"label": label, "path": str(path)})
-    return out
+def brightway_dir() -> Path:
+    """The Brightway data folder lca_viewer works in, as bw2data picks it: ``BRIGHTWAY2_DIR``,
+    else Brightway's default folder (also Activity Browser's)."""
+    folder = os.environ.get("BRIGHTWAY2_DIR")
+    return (Path(folder) if folder else default_brightway_dir()).expanduser().resolve()
+
+
+def brightway_dirs() -> list[dict]:
+    """The Brightway data folder offered by *Load database* (other folders can be typed in)."""
+    label = "BRIGHTWAY2_DIR" if os.environ.get("BRIGHTWAY2_DIR") else "Brightway default folder"
+    return [{"label": label, "path": str(brightway_dir())}]
 
 
 def default_brightway_dir() -> Path:

@@ -584,6 +584,8 @@ class ImportRequest(BaseModel):
     path: str
     database: str
     biosphere: str = "biosphere3"
+    defaults: bool = True
+    """With ``biosphere3``: install it and the impact methods bundled with Brightway if missing."""
     link_to: list[str] = []
     migrations: list[str] | None = None
     """randonneur_data transformations (SimaPro CSV); default: chosen from ``link_to``."""
@@ -600,9 +602,11 @@ class EcoinventLogin(BaseModel):
 class EcoinventImport(BaseModel):
     folder: str
     project: str
-    """A new project."""
     version: str
     system_model: str = "cutoff"
+    biosphere: str | None = None
+    """A biosphere database of the project to link to, without impact methods; default: the
+    release's own biosphere and its impact methods."""
 
 
 class DatasetRequest(BaseModel):
@@ -623,7 +627,7 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
     """The app: databases are loaded while it runs, each served under ``/db/<key>/`` with the
     API of :func:`create_app`.
 
-    ``data``: lca_viewer's data folder (``models.json``, ``cache/``, ``brightway/``); ``preload``:
+    ``data``: lca_viewer's data folder (``models.json``, ``cache/``, ``uploads/``); ``preload``:
     ``{"path", "title", "default_root"}`` models loaded before the server starts. ``/`` opens
     the first loaded database, or the page that asks which one to load.
     """
@@ -833,7 +837,7 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
             "data": str(data),
             "loaded": listing(),
             "models": models,
-            "brightway": sources.brightway_dirs(data),
+            "brightway": sources.brightway_dirs(),
             "jobs": [public(j) for j in jobs.values() if j["status"] == "running"],
         }
 
@@ -919,7 +923,8 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
 
         def work(job):
             cli(job, folder, ["project", "create", name, *(["--setup"] if req.setup else [])], ours)
-            return {"message": f"Project {name} is ready" + (" (with biosphere and impact methods)" if req.setup else "")}
+            return {"message": f"Project {name} is ready" + (" (with biosphere and impact methods)" if req.setup else ""),
+                    "project": name}
 
         return start(f"project {name}", ("create", folder, name), work)
 
@@ -1023,7 +1028,7 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
             import csv
 
             args = ["import", req.format, str(path), "--project", req.project, "--database", database,
-                    "--biosphere", req.biosphere, "--data", str(data)]
+                    "--biosphere", req.biosphere, "--data", str(data), *([] if req.defaults else ["--no-setup"])]
             if req.format == "simapro-csv":
                 args += ["--unlinked", req.unlinked, "--report", str(report)]
                 if req.link_to:
@@ -1031,14 +1036,20 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
                 if req.migrations is not None:
                     args += ["--migration", *req.migrations]
             report.unlink(missing_ok=True)
-            try:
-                lines = cli(job, folder, args, lambda line: line if not line.startswith((" ", "\t", "[")) else None)
-            except ValueError as e:
-                if report.exists():  # unlinked exchanges: the page lists them and offers to drop them
+
+            def unlinked_rows():
+                # Exchanges left unlinked: the page lists them (and, after a stop, offers to drop them)
+                if report.exists():
                     with open(report, encoding="utf-8") as f:
                         job["report"] = list(csv.DictReader(f))[:300]
                     job["report_path"] = str(report)
+
+            try:
+                lines = cli(job, folder, args, lambda line: line if not line.startswith((" ", "\t", "[")) else None)
+            except ValueError as e:
+                unlinked_rows()
                 raise ValueError(str(e)) from None
+            unlinked_rows()  # dropped ones, with --unlinked drop
             uploaded(path)
             return {"message": lines[-1] if lines else f"{database} imported", "database": database}
 
@@ -1129,16 +1140,14 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
 
     @app.post("/api/ecoinvent/import")
     def ecoinvent_import(req: EcoinventImport, request: Request):
-        """Download a release and import it into a new project (``lca-viewer ecoinvent import``)."""
+        """Download a release and import it into a project (``lca-viewer ecoinvent import``)."""
         from . import credentials
 
         local_only(request)
         folder = folder_of(req.folder)
-        project = req.project.strip()
-        if not project:
-            raise HTTPException(400, "Give the project a name")
-        if project in project_names(folder):
-            raise HTTPException(400, f"Project {project!r} already exists in {folder}")
+        project = req.project
+        if project not in project_names(folder):
+            raise HTTPException(404, f"No project {project!r} in {folder}")
         found = account()
         if not found:
             raise HTTPException(401, "Log in to ecoinvent first")
@@ -1146,7 +1155,8 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
 
         def work(job):
             lines = cli(job, folder, ["ecoinvent", "import", "--project", project, "--version", req.version,
-                                      "--system-model", req.system_model],
+                                      "--system-model", req.system_model,
+                                      *(["--biosphere", req.biosphere] if req.biosphere else [])],
                         lambda line: line if line.startswith(("Logging in", "Downloading", "Importing")) else None,
                         env=secrets)
             return {"message": lines[-1] if lines else f"ecoinvent {req.version} imported into {project}"}
