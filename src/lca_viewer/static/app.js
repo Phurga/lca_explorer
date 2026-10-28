@@ -3401,12 +3401,13 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
   }
   // Saved views store names (method, functional unit) as well as positions: node ids are
   // positions in the model, valid only for the model the view was saved from.
+  // Version 2: ``cutoff`` is a fraction, as in the API (the page shows a percentage; version 1 stored it)
   function viewFile() {
     return {
-      format: "lca_viewer view", version: 1,
+      format: "lca_viewer view", version: 2,
       model: { title: info.title, activities: info.activities },
       root, amount, method: info.methods[method].name, chartMethods: chartMethods.map((k) => info.methods[k].name),
-      cutoff, cutoffBasis, expanded: [...expanded], rules, pinned: [...pinned], others: [...others], merges, labels,
+      cutoff: +(cutoff / 100).toFixed(8), cutoffBasis, expanded: [...expanded], rules, pinned: [...pinned], others: [...others], merges, labels,
       display: { naming: view.naming, recipe: view.recipe, groupProducts: view.groupProducts },
     };
   }
@@ -3435,7 +3436,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
       const m = methodIndex(saved.method);
       if (m >= 0) setMethod(m);
       setChartMethods((saved.chartMethods || []).map(methodIndex).filter((k) => k >= 0));
-      setCutoff(saved.cutoff ?? 1);
+      setCutoff(saved.cutoff === undefined ? 1 : saved.version >= 2 ? +(saved.cutoff * 100).toFixed(6) : saved.cutoff);
       setCutoffBasis(saved.cutoffBasis || "parent");
       setRules(sameModel ? saved.rules || [] : (saved.rules || []).filter((r) => r.scope === "*"));
       setExpanded(new Set(sameModel ? saved.expanded : [String(target.index)]));

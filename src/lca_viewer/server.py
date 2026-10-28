@@ -53,9 +53,13 @@ class ViewState(BaseModel):
     pinned: list[str] = []
     others: list[str] = []
     merges: list[dict] = []
+    ungrouped: list[str] = []
     group_products: bool = False
     methods: list[int] = []
     """Methods whose impacts are returned, in this order (default: ``method`` only)."""
+    labels: dict[str, str] = {}
+    """Custom names, as in saved views: ``p:<activity>``, ``f:<flow>``, ``r:<row id>``; the rows
+    they apply to carry the name as ``custom``. The page applies them itself and does not send them."""
 
 
 class SearchRequest(BaseModel):
@@ -112,6 +116,18 @@ class LocateRequest(ViewState):
 
 def _floats(values: np.ndarray) -> list[float]:
     return [float(v) for v in values]
+
+
+def label_key(row, serialised: dict) -> str | None:
+    """Key of a row's custom name (``labelKey`` of the page): a process or a flow is renamed
+    wherever it appears, a merged or group row where it is; None: cannot be renamed."""
+    if row.kind == "process" and "meta" in serialised:
+        return f"p:{serialised['meta']['index']}"
+    if row.kind == "flow":
+        return f"f:{serialised['flow']['index']}"
+    if row.kind in ("merged", "group"):
+        return f"r:{row.id}"
+    return None
 
 
 def _find(activities, name: str, location: str) -> int | None:
@@ -208,6 +224,22 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
             raise HTTPException(400, f"Invalid filter: {e}")
         return {"total": int(len(found)), "results": [describe(i) for i in found[: req.limit]]}
 
+    @app.get("/api/lookup")
+    def lookup(name: str, location: str | None = None, limit: int = 25):
+        """Whether an activity exists by name and location, and what is near it: the activities
+        of that name elsewhere (``same_name``), or, when no activity has the name, the closest
+        by words (``similar``). Without ``location``, every activity of that name matches."""
+        same = np.flatnonzero((activities["name"] == name).to_numpy())
+        matches = [i for i in same if location is None or activities["location"].iat[i] == location]
+        out = {
+            "matches": [describe(int(i)) for i in matches[:limit]],
+            "same_name": [describe(int(i)) for i in same if i not in matches][:limit],
+            "similar": [],
+        }
+        if not len(same):
+            out["similar"] = [describe(int(i)) for i in search(activities, name)[:limit]]
+        return out
+
     @app.get("/api/values/{field}")
     def values(field: str, q: str = "", limit: int = 100):
         if field not in QUERY_FIELDS:
@@ -262,6 +294,7 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
                 out["by_rule"] = r.by_rule
             elif r.kind == "group":
                 out["parts"] = [part(m) for m in r.node_members]
+                out["by_product"] = r.by_product
                 if r.sources is None:
                     out["products"] = [int(m.product) for m in r.node_members]  # a group of processes can be merged
             elif r.kind == "flow":
@@ -272,6 +305,9 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
                 out["emitters"] = [meta(j) for j, _ in r.sources]  # processes whose direct emissions these are
             if r.members is not None:
                 out["members"] = [serialise(m) for m in r.members]
+            custom = state.labels.get(label_key(r, out))
+            if custom:
+                out["custom"] = custom
             return out
 
         rows = [serialise(r) for r in rendered]

@@ -340,6 +340,46 @@ class TestSearchAPIEndpoints:
         # Impacts length should equal number of methods (1 method)
         assert len(data["rows"][0]["impacts"]) == len(data["methods"])
 
+    def test_lookup_exact_match_and_same_name_elsewhere(self, client):
+        """GET /api/lookup finds name + location, and lists the same name in other places."""
+        data = client.get("/api/lookup", params={"name": "wheat production", "location": "FR"}).json()
+        assert [m["index"] for m in data["matches"]] == [1]
+        assert sorted(m["location"] for m in data["same_name"]) == ["US"]
+        assert data["similar"] == []
+
+    def test_lookup_missing_location_suggests_the_others(self, client):
+        """A name that exists, but not there: no match, the real locations in same_name."""
+        data = client.get("/api/lookup", params={"name": "wheat production", "location": "GLO"}).json()
+        assert data["matches"] == []
+        assert sorted(m["location"] for m in data["same_name"]) == ["FR", "US"]
+
+    def test_lookup_without_location_matches_every_location(self, client):
+        data = client.get("/api/lookup", params={"name": "wheat production"}).json()
+        assert sorted(m["location"] for m in data["matches"]) == ["FR", "US"]
+        assert data["same_name"] == []
+
+    def test_lookup_unknown_name_gives_similar(self, client):
+        data = client.get("/api/lookup", params={"name": "diesel", "location": "RoW"}).json()
+        assert data["matches"] == [] and data["same_name"] == []
+        assert {m["name"] for m in data["similar"]} == {"market for diesel", "diesel production"}
+
+    def test_rows_carry_the_custom_names_of_labels(self, client):
+        """Labels of a saved view (p: process, f: flow, r: row id) come back as ``custom``."""
+        base = {"root": [0], "expanded": ["0", "0/-1"], "methods": []}
+        rows = client.post("/api/rows", json=base).json()["rows"]
+        assert not any("custom" in r for r in rows)
+        assert any(r["kind"] == "flow" for r in rows) and any(r["kind"] == "process" and r["meta"]["index"] == 1 for r in rows)
+        labelled = client.post("/api/rows", json={
+            **base, "labels": {"p:1": "French wheat", "f:0": "carbon", "p:99": "nowhere"}}).json()["rows"]
+        custom = {(r["kind"], r.get("meta", {}).get("index")): r["custom"] for r in labelled if "custom" in r}
+        assert custom == {("process", 1): "French wheat", ("flow", None): "carbon"}
+
+    def test_rows_custom_name_of_a_group_by_row_id(self, client):
+        state = {"root": [0], "expanded": ["0"], "group_products": True}
+        group = next(r for r in client.post("/api/rows", json=state).json()["rows"] if r["kind"] == "group")
+        labelled = client.post("/api/rows", json={**state, "labels": {f"r:{group['id']}": "wheat sources"}}).json()["rows"]
+        assert [r["custom"] for r in labelled if "custom" in r] == ["wheat sources"]
+
     def test_global_endpoint_returns_impacts(self, client):
         """POST /api/global with empty groups returns root's impacts."""
         info_response = client.get("/api/info")

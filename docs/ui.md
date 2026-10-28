@@ -334,7 +334,13 @@ opens as the first tab. A tab moved to another pane is rebuilt from its
 saved state (selection and undo are not kept).
 
 **Save ▾** downloads the view as JSON; the arrow menu offers *Load view…*
-and *Copy view as JSON*. Saved files record the model (title, size), the
+and *Copy view as JSON*. Files are `version` 2: `cutoff` is a fraction, as in
+`/api/rows` (0.05 for the 5 % shown in the page); version 1 files stored the
+percentage and still load. The `labels` of a file (`p:<activity>`, `f:<flow>`,
+`r:<row id>`) can be sent to `/api/rows` too: the rows they name come back with
+the name as `custom`. `GET /api/lookup?name=&location=` says whether an
+activity exists, and lists the same name in other places or the closest names
+(`matches`, `same_name`, `similar`). Saved files record the model (title, size), the
 functional unit's name and location, method names and the naming settings,
 besides positions. Node ids are positions in the model, so on load, if the
 functional unit is not at the same position (view saved from another model
