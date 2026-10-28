@@ -112,13 +112,15 @@ def setup(args) -> None:
 def import_(args) -> None:
     import shutil
 
-    from .importing import import_ecospold2, import_simapro_csv, setup_project
+    from .importing import import_ecospold2, import_simapro_csv, install_defaults, setup_project
     from .sources import brightway_dir
 
     print(f"Brightway data folder: {brightway_dir()}", flush=True)
 
     t = time.perf_counter()
-    if args.biosphere == "biosphere3" and not args.no_setup:
+    if args.defaults:
+        args.biosphere = install_defaults(args.project, args.defaults, Path(args.data) / "downloads")
+    elif args.biosphere == "biosphere3" and not args.no_setup:
         setup_project(args.project)  # biosphere and LCIA methods, first time only
     if args.format == "ecospold2":
         from .quickstart import find_datasets, unpack
@@ -236,6 +238,10 @@ def main(argv=None) -> None:
                         "with the ecoinvent 3.9 impact methods if missing)")
     p.add_argument("--no-setup", action="store_true",
                    help="With --biosphere biosphere3: do not install it nor the impact methods (it must exist)")
+    p.add_argument("--defaults", metavar="VERSION",
+                   help="First install the default biosphere and impact methods of this ecoinvent version, from "
+                        "files.brightway.dev (e.g. 3.10; 'bundled': biosphere3 and the ecoinvent 3.9 methods that "
+                        "come with Brightway), and link to that biosphere instead of --biosphere")
     p.add_argument("--data", default="data", help="Folder where a .7z archive is unpacked during the import (default: data)")
     p.set_defaults(func=import_)
 

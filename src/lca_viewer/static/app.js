@@ -504,6 +504,18 @@ function EcoinventForm({ folder, project, existing, biosphere, linked, onJob, bu
     </form>`;
 }
 
+// The default biosphere and methods for an ecoinvent version named in a file or database name
+// ("ecoinvent 3.10.1_cutoff…" -> "3.10"): the same version, else the same major.minor; with 3.9,
+// biosphere3 when the project has it already (bundled with Brightway, nothing to download)
+function defaultsFor(text, versions, hasBundled) {
+  const found = (text || "").match(/\d+\.\d+(\.\d+)?/)?.[0];
+  if (!found) return null;
+  const minor = (v) => v.split(".").slice(0, 2).join(".");
+  if (minor(found) === "3.9" && hasBundled) return "bundled";
+  return versions.find((v) => v === found) || versions.find((v) => minor(v) === minor(found)) || null;
+}
+const defaultsLabel = (v) => (v === "bundled" ? "ecoinvent 3.9, bundled with Brightway (biosphere3, no download)" : `ecoinvent ${v}`);
+
 const DATABASE_SOURCES = [
   { kind: "ecospold2", label: "ecoSpold2", hint: "an ecoinvent release (.7z) or its unpacked folder" },
   { kind: "simapro", label: "SimaPro CSV", hint: "a process export, e.g. Agribalyse" },
@@ -530,7 +542,12 @@ function ProjectForm({ form, folder, projects, onJob, onCancel, onForm, busy }) 
   const [remote, setRemote] = useState(null);
   const [remoteName, setRemoteName] = useState("BAFU-2025-v2");
   const [confirm, setConfirm] = useState("");
+  const [versions, setVersions] = useState(["3.12", "3.11", "3.10", "3.9.1", "3.8"]);  // until the server answers
+  const [version, setVersion] = useState(null);  // of the default biosphere and methods; null: the detected one
   const source = form.kind === "add" ? form.source : null;
+  useEffect(() => {
+    if (source === "ecospold2" || source === "simapro") serverRequest("/api/brightway/defaults").then((r) => setVersions(r.versions)).catch(() => {});
+  }, [source]);
   useEffect(() => { if (path && !database) setDatabase(ECOSPOLD_NAME(path)); }, [path]);
   useEffect(() => {
     if (source === "simapro") {
@@ -572,9 +589,13 @@ function ProjectForm({ form, folder, projects, onJob, onCancel, onForm, busy }) 
     </form>`;
 
   if (form.kind === "add") {
-    const installed = flowDbs.includes("biosphere3") && project?.methods > 0;
-    const linked = defaults || flowDbs.length > 0;  // a biosphere for the elementary flows to link to
-    const bio = defaults ? "biosphere3" : biosphere;
+    const hasBundled = flowDbs.includes("biosphere3") && project?.methods > 0;
+    const detectedFrom = source === "ecospold2" ? database || path : linkTo.find((d) => defaultsFor(d, versions, hasBundled));
+    const detected = defaultsFor(detectedFrom, versions, hasBundled);
+    const chosenVersion = version ?? detected ?? "";
+    const already = chosenVersion === "bundled" ? hasBundled : flowDbs.includes(`ecoinvent-${chosenVersion}-biosphere`);
+    const linked = defaults ? !!chosenVersion : flowDbs.length > 0;  // a biosphere for the elementary flows to link to
+    const minor = (v) => (v === "bundled" ? "3.9" : v.split(".").slice(0, 2).join("."));
     const head = html`
       <h4>Add a database to ${form.project}</h4>
       <div class="source-choice" role="radiogroup" aria-label="Source of the database">
@@ -585,10 +606,23 @@ function ProjectForm({ form, folder, projects, onJob, onCancel, onForm, busy }) 
       </div>
       ${source && html`
         <label class="check"><input type="checkbox" checked=${defaults} onChange=${(e) => setDefaults(e.target.checked)} />
-          <span>Add the default biosphere and impact methods <span class="muted small">${source === "ecoinvent"
-            ? "— those of the release: its elementary flows and LCIA methods"
-            : installed ? "— biosphere3 and the ecoinvent 3.9 methods of Brightway, already in this project"
-              : "— biosphere3 and the ecoinvent 3.9 impact methods that come with Brightway (a few minutes, once per project)"}</span></span></label>
+          <span>Add the default biosphere and impact methods ${source === "ecoinvent"
+            && html`<span class="muted small">— those of the release: its elementary flows and LCIA methods</span>`}</span></label>
+        ${defaults && source !== "ecoinvent" && html`
+          <label class="defaults-version">Of
+            <select value=${chosenVersion} onChange=${(e) => setVersion(e.target.value)}>
+              ${!chosenVersion && html`<option value="">Choose the ecoinvent version…</option>`}
+              ${versions.map((v) => html`<option value=${v}>${defaultsLabel(v)}${v === detected ? " (detected)" : ""}</option>`)}
+              <option value="bundled">${defaultsLabel("bundled")}${detected === "bundled" ? " (detected)" : ""}</option>
+            </select>
+            <span class="muted small">${!chosenVersion
+              ? (source === "ecospold2" ? "Not found in the file name: choose the version of the release."
+                : "No ecoinvent background ticked below: choose the ecoinvent version the export was made with.")
+              : already ? "Already in this project: nothing to add."
+                : chosenVersion === "bundled" ? "A few minutes, once per project."
+                  : `ecoinvent's elementary flows and impact methods of ${chosenVersion}, from files.brightway.dev (about 20 MB, 3 minutes), once per project.`}
+              ${version === null && detected && ` Detected from ${source === "ecospold2" ? "the file name" : detectedFrom}.`}</span>
+          </label>`}
         ${!defaults && (flowDbs.length ? html`
           <label>Elementary flows from
             <select value=${biosphere} onChange=${(e) => setBiosphere(e.target.value)}>
@@ -604,13 +638,13 @@ function ProjectForm({ form, folder, projects, onJob, onCancel, onForm, busy }) 
     if (source === "ecospold2") return html`
       <div class="project-form">${head}
         <form class="source-form" onSubmit=${submit("/api/brightway/import", { folder, project: form.project, format: "ecospold2", path, database,
-          biosphere: bio, defaults })}>
+          biosphere, defaults: defaults ? chosenVersion : null })}>
           <label>ecoSpold2 release: the .7z archive, or the folder it was unpacked to
             <${PathInput} value=${path} onChange=${setPath} accept=".7z" placeholder="e.g. C:\\Downloads\\ecoinvent 3.9.1_cutoff_ecoSpold02.7z" /></label>
           <label>Database name <input value=${database} onInput=${(e) => setDatabase(e.target.value)} placeholder="e.g. ecoinvent-3.9.1-cutoff" /></label>
-          ${bio === "biosphere3" && database && !/3\.9/.test(database) && html`
-            <p class="note">biosphere3 and the impact methods that come with Brightway are those of ecoinvent 3.9: with another
-              version, some elementary flows may not link and some factors may not match.</p>`}
+          ${defaults && chosenVersion && (database.match(/\d+\.\d+/)?.[0] ?? minor(chosenVersion)) !== minor(chosenVersion) && html`
+            <p class="note">The release is not ecoinvent ${minor(chosenVersion)}: with that biosphere, some elementary flows may
+              not link and some impact factors may not match.</p>`}
           <p class="muted small">About 10 minutes for ecoinvent; an archive is unpacked first (2.6 GB, deleted afterwards).</p>
           ${actions("Import", !path || !database.trim() || !linked)}
         </form>
@@ -618,7 +652,8 @@ function ProjectForm({ form, folder, projects, onJob, onCancel, onForm, busy }) 
     return html`
       <div class="project-form">${head}
         <form class="source-form" onSubmit=${submit("/api/brightway/import", {
-          folder, project: form.project, format: "simapro-csv", path, database, biosphere: bio, defaults, link_to: linkTo, migrations,
+          folder, project: form.project, format: "simapro-csv", path, database, biosphere, defaults: defaults ? chosenVersion : null,
+          link_to: linkTo, migrations,
           unlinked: form.unlinked || "fail" })}>
           <label>SimaPro CSV export (processes)
             <${PathInput} value=${path} onChange=${setPath} accept=".csv,.CSV" placeholder="e.g. C:\\Downloads\\AGB32_final.CSV" /></label>
@@ -679,6 +714,7 @@ function LoadDatabase({ onClose, missing, onDatabases }) {
   const [projectsError, setProjectsError] = useState(null);
   const [showLog, setShowLog] = useState(false);
   const [form, setForm] = useState(null);  // { kind, project }: a ProjectForm open
+  const [jobAt, setJobAt] = useState(null);  // the project a job was started from: its progress shows there
   const box = useRef(null);
 
   const refresh = () => serverRequest("/api/sources").then((s) => {
@@ -720,11 +756,12 @@ function LoadDatabase({ onClose, missing, onDatabases }) {
     return () => clearTimeout(timer);
   }, [job]);
 
-  const startJob = (url, body) => {
+  const startJob = (url, body, at = form?.project) => {
     setShowLog(false);
+    setJobAt(at || null);
     serverRequest(url, body).then(setJob).catch((e) => setJob({ status: "failed", error: e.message, log: [] }));
   };
-  const start = (body) => startJob("/api/load", body);
+  const start = (body) => startJob("/api/load", body, body.project);
   const busy = job?.status === "running" || (job?.status === "done" && !!job.key);
   const unload = (key) => serverRequest("/api/unload", { key }).then((list) => {
     if (key === DATABASE) { location.href = "/"; return; }
@@ -749,10 +786,7 @@ function LoadDatabase({ onClose, missing, onDatabases }) {
         ${d.model ? "Rebuild and open" : "Build and open"}</button>`;
   };
 
-  const content = html`
-    ${missing && html`<p class="load-missing">The database <b>${missing}</b> is not loaded (the server was restarted, or it was closed). Load it again below.</p>`}
-    ${error && html`<div class="error">${error}</div>`}
-    ${job && html`
+  const jobBox = job && html`
       <div class=${`load-job ${job.status}`}>
         <div class="load-job-head">
           ${job.status === "running" && html`<span class="spinner" aria-hidden="true"></span>`}
@@ -773,7 +807,16 @@ function LoadDatabase({ onClose, missing, onDatabases }) {
                 <td>${r.unit}</td><td class="num">${r.exchanges}</td></tr>`)}
             </table></div>
           </div>`}
-      </div>`}
+      </div>`;
+  // Forms on a project, and the jobs started from a project, open under its row (where it was clicked)
+  const listed = (name) => !!name && !!projects?.projects.some((p) => p.name === name);
+  const projectForm = form && html`<${ProjectForm} key=${`${form.kind}:${form.project || ""}`} form=${form} folder=${folder}
+    projects=${projects} busy=${busy} onJob=${startJob} onCancel=${() => setForm(null)} onForm=${setForm} />`;
+
+  const content = html`
+    ${missing && html`<p class="load-missing">The database <b>${missing}</b> is not loaded (the server was restarted, or it was closed). Load it again below.</p>`}
+    ${error && html`<div class="error">${error}</div>`}
+    ${!listed(jobAt) && jobBox}
     ${!sources ? (!error && html`<div class="empty">Looking for databases…</div>`) : html`
       ${sources.loaded.length > 0 && html`
         <section>
@@ -827,8 +870,7 @@ function LoadDatabase({ onClose, missing, onDatabases }) {
             <button class="link" onClick=${() => setForm({ kind: "new" })}
               title="An empty project, to add databases to, or one from a Brightway backup (BAFU, …)">+ New project</button>
           </div>`}
-        ${form && html`<${ProjectForm} key=${`${form.kind}:${form.project || ""}`} form=${form} folder=${folder} projects=${projects}
-          busy=${busy} onJob=${startJob} onCancel=${() => setForm(null)} onForm=${setForm} />`}
+        ${!listed(form?.project) && projectForm}
         ${projectsError && html`<div class="error">${projectsError}</div>`}
         ${folder && !projects && !projectsError && html`<div class="empty">Reading the projects…</div>`}
         ${projects && html`
@@ -845,6 +887,8 @@ function LoadDatabase({ onClose, missing, onDatabases }) {
                   <button class="link danger" onClick=${() => setForm({ kind: "delete", project: p.name })} title="Delete this project">Delete</button>
                 </td>
               </tr>
+              ${jobAt === p.name && jobBox && html`<tr class="form-row" key=${`j:${p.name}`}><td colspan="3">${jobBox}</td></tr>`}
+              ${form?.project === p.name && html`<tr class="form-row" key=${`f:${p.name}`}><td colspan="3">${projectForm}</td></tr>`}
               ${p.databases.map((d) => html`
                 <tr key=${`d:${p.name}/${d.name}`} class=${p.twofive && d.processes ? "" : "muted"}>
                   <td class="indent">${d.name}${d.model?.outdated && html`<div class="muted small">${d.model.outdated}${d.model.key ? ": close it to rebuild it" : ""}</div>`}</td>

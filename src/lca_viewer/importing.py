@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import csv
 import json
+import math
+import pickle
 import re
 import zipfile
 from pathlib import Path
@@ -55,6 +57,105 @@ def setup_project(project: str) -> None:
         bi.create_core_migrations()
 
 
+def default_versions() -> list[str]:
+    """ecoinvent versions whose biosphere and impact methods files.brightway.dev publishes (as the
+    projects ``ecoinvent-<version>-biosphere``), newest first."""
+    from .sources import remote_projects
+
+    found = [m.group(1) for k in remote_projects() if (m := re.fullmatch(r"ecoinvent-([\d.]+)-biosphere", k))]
+    return sorted(found, key=lambda v: [int(x) for x in v.split(".")], reverse=True)
+
+
+class _PlainUnpickler(pickle.Unpickler):
+    """The archive's pickles are flows (dicts) and characterisation factors: no class to build."""
+
+    def find_class(self, module, name):
+        raise pickle.UnpicklingError(f"{module}.{name} not allowed")
+
+
+def read_biosphere_archive(path) -> tuple[str, dict, list]:
+    """The biosphere database and impact methods of a Brightway project archive (``.tar.gz``),
+    read without restoring the project: ``(database, {(database, code): flow}, [(name, metadata,
+    [((database, code), factor), …]), …])``."""
+    import io
+    import sqlite3
+    import tarfile
+    import tempfile
+    from contextlib import closing
+
+    with tarfile.open(path) as tar, tempfile.TemporaryDirectory() as tmp:
+        root = tar.getnames()[0].split("/")[0]
+        database, = json.load(tar.extractfile(f"{root}/databases.json"))
+        db_file = Path(tmp) / "databases.db"
+        db_file.write_bytes(tar.extractfile(f"{root}/lci/databases.db").read())
+        with closing(sqlite3.connect(db_file)) as con:
+            rows = con.execute("SELECT id, database, code, data FROM activitydataset").fetchall()
+        key_of = {i: (db, code) for i, db, code, _ in rows}
+        flows = {(db, code): _PlainUnpickler(io.BytesIO(data)).load() for _, db, code, data in rows if db == database}
+        methods = []
+        for name, meta in json.load(tar.extractfile(f"{root}/methods.json")):
+            blob = tar.extractfile(f"{root}/intermediate/{meta['abbreviation']}.pickle").read()
+            cfs = [(key_of[key] if isinstance(key, int) else tuple(key), *rest)
+                   for key, *rest in _PlainUnpickler(io.BytesIO(blob)).load()]
+            methods.append((tuple(name), meta, cfs))
+    return database, flows, methods
+
+
+def install_defaults(project: str, version: str, downloads) -> str:
+    """The default biosphere and impact methods of ecoinvent ``version`` in ``project``, as
+    Activity Browser's default data; returns the biosphere database's name.
+
+    ``"bundled"``: biosphere3 and the ecoinvent 3.9 methods that come with bw2io (offline).
+    Otherwise files.brightway.dev's project ``ecoinvent-<version>-biosphere`` (ecoinvent's
+    elementary flows and LCIA implementation of that version), downloaded once into ``downloads``
+    and read without restoring it: its biosphere database, and its methods named
+    ``("ecoinvent-<version>", …)`` as bw2io's ``import_ecoinvent_release`` names them, so that they
+    never replace methods of another version. What the project has already is kept.
+    """
+    import urllib.request
+
+    import bw2data as bd
+
+    from .sources import REMOTE, remote_projects
+
+    if version == "bundled":
+        print("Installing the biosphere and the impact methods of Brightway (ecoinvent 3.9, a few minutes)", flush=True)
+        setup_project(project)
+        return "biosphere3"
+    bd.projects.set_current(project)
+    database, prefix = f"ecoinvent-{version}-biosphere", f"ecoinvent-{version}"
+    has_methods = any(m[0] == prefix for m in bd.methods)
+    if database in bd.databases and has_methods:
+        print(f"{database} and its impact methods are already in {project}", flush=True)
+        return database
+    archive = remote_projects().get(database)
+    if not archive:
+        raise SystemExit(f"files.brightway.dev has no biosphere for ecoinvent {version}")
+    path = Path(downloads) / archive
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        part = path.with_name(path.name + ".part")
+        print(f"Downloading the biosphere and impact methods of ecoinvent {version} from files.brightway.dev", flush=True)
+        with urllib.request.urlopen(REMOTE + archive, timeout=60) as response, open(part, "wb") as out:
+            while chunk := response.read(1 << 20):
+                out.write(chunk)
+        part.replace(path)
+    name, flows, methods = read_biosphere_archive(path)
+    if name != database:
+        raise SystemExit(f"{archive} holds {name}, not {database}")
+    if database not in bd.databases:
+        print(f"Writing {database} ({len(flows)} elementary flows)", flush=True)
+        bd.Database(database).write(flows)
+    if not has_methods:
+        print(f"Installing {len(methods)} impact methods of ecoinvent {version} (about 3 minutes)", flush=True)
+        for name, meta, cfs in methods:
+            method = bd.Method((prefix, *name))
+            method.register(**{k: v for k, v in meta.items() if k not in ("abbreviation", "num_cfs", "geocollections", "filepath")})
+            method.write(cfs)
+        print(f"{len(methods)} impact methods installed", flush=True)
+    return database
+
+
 def _check_new(database: str) -> None:
     import bw2data as bd
 
@@ -89,7 +190,8 @@ def default_migrations(link_to) -> list[str]:
 COPIED_FROM_ECOINVENT = re.compile(r", S - Copied from Ecoinvent(?: U)?$", re.I)
 # SimaPro compartments that are not elementary flows in ecoinvent's biosphere
 NOT_ELEMENTARY = {"final waste flows", "non material emissions", "social issues", "economic issues"}
-# randonneur_data (Flowmapper) correspondences SimaPro -> ecoinvent elementary flows, tried in this
+# randonneur_data correspondences SimaPro -> ecoinvent elementary flows (the first two made with
+# Flowmapper by its authors, the third by hand), tried in this
 # order; a flow is linked only to a flow of the project's biosphere with the same ecoinvent UUID, so
 # a list made for another ecoinvent version can still link the many flows whose UUID didn't change
 BIOSPHERE_CORRESPONDENCES = [
@@ -200,6 +302,9 @@ def link_biosphere_by_correspondence(data: list[dict], biosphere: str, labels=BI
         for verb in ("update", "replace"):
             for t in transformations.get(verb, []):
                 s, target = t["source"], t.get("target", {})
+                factor = t.get("conversion_factor", 1.0)
+                if not isinstance(factor, (int, float)) or not math.isfinite(factor) or factor <= 0:
+                    continue  # units that don't convert: a wrong match (Manganese, kg -> a flow in kBq)
                 if target.get("identifier") in codes:
                     key = ((s.get("name") or "").lower(), tuple(s.get("context") or ()), (s.get("unit") or "").lower())
                     table.setdefault(key, t)
@@ -516,6 +621,12 @@ def link_simapro(importer, link_to, migrations, biosphere: str, log=None) -> Non
         rename_ef_flows,
         functools.partial(link_biosphere_ignoring_case, biosphere=biosphere),
     ])
+    # bw2data refuses to write an amount that isn't a number, after the whole import: report such
+    # exchanges with the unlinked ones instead
+    for ds in importer.data:
+        for e in ds.get("exchanges", []):
+            if not isinstance(e.get("amount"), (int, float)) or not math.isfinite(e["amount"]):
+                e.pop("input", None)
 
 
 def import_ecoinvent_release(project: str, version: str, system_model: str, username: str, password: str,

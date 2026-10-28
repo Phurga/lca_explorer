@@ -243,3 +243,64 @@ def test_ecoinvent_release_into_an_existing_project(toy_project, monkeypatch):
         importing.import_ecoinvent_release(toy_project, "3.10", "cutoff", "me", "pw", biosphere="nothing")
     with pytest.raises(SystemExit, match="already exists"):
         importing.import_ecoinvent_release(toy_project, "3.9.1", "cutoff", "me", "pw")
+
+
+def biosphere_archive(path, version="3.10"):
+    """A Brightway project archive shaped like files.brightway.dev's ecoinvent-<version>-biosphere:
+    one biosphere database and one method, its factors keyed by node id as bw2data 4 writes them."""
+    import io
+    import json
+    import pickle
+    import sqlite3
+    import tarfile
+
+    database, root = f"ecoinvent-{version}-biosphere", "ecoinvent-biosphere.0123abcd"
+    db_file = path.parent / "databases.db"
+    con = sqlite3.connect(db_file)
+    con.execute("CREATE TABLE activitydataset (id INTEGER PRIMARY KEY, data BLOB, code TEXT, database TEXT)")
+    for i, (code, name) in enumerate([("co2", "Carbon dioxide, fossil"), ("ch4", "Methane, fossil")], start=7):
+        flow = {"name": name, "categories": ("air",), "unit": "kilogram", "type": "emission", "code": code, "database": database}
+        con.execute("INSERT INTO activitydataset VALUES (?, ?, ?, ?)", (i, pickle.dumps(flow), code, database))
+    con.commit()
+    con.close()
+    files = {
+        "databases.json": json.dumps({database: {"backend": "sqlite", "number": 2}}).encode(),
+        "methods.json": json.dumps([[["EF v3.1", "climate change", "GWP100"], {"unit": "kg CO2-Eq", "abbreviation": "ef31cc.1",
+                                                                              "num_cfs": 2, "filepath": "/elsewhere"}]]).encode(),
+        "intermediate/ef31cc.1.pickle": pickle.dumps([(7, 1.0), (8, 29.7)]),
+        "lci/databases.db": db_file.read_bytes(),
+    }
+    with tarfile.open(path, "w:gz") as tar:
+        for name, data in files.items():
+            info = tarfile.TarInfo(f"{root}/{name}")
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+    return path
+
+
+def test_default_biosphere_of_a_version(toy_project, tmp_path, monkeypatch, capsys):
+    """files.brightway.dev's biosphere and methods of a version, read from the archive (already
+    downloaded here) into a project that has another biosphere; methods named after the version."""
+    import bw2data as bd
+
+    from lca_viewer import sources
+
+    downloads = tmp_path / "downloads"
+    downloads.mkdir()
+    biosphere_archive(downloads / "ecoinvent-3.10-biosphere.tar.gz")
+    monkeypatch.setattr(sources, "remote_projects", lambda: {"ecoinvent-3.10-biosphere": "ecoinvent-3.10-biosphere.tar.gz",
+                                                             "ecoinvent-3.9.1-biosphere": "x", "BAFU-2025-v2": "y"})
+    assert importing.default_versions() == ["3.10", "3.9.1"]
+
+    assert importing.install_defaults(toy_project, "3.10", downloads) == "ecoinvent-3.10-biosphere"
+    assert {f["code"] for f in bd.Database("ecoinvent-3.10-biosphere")} == {"co2", "ch4"}
+    name = ("ecoinvent-3.10", "EF v3.1", "climate change", "GWP100")
+    assert bd.methods[name]["unit"] == "kg CO2-Eq" and "filepath" not in bd.methods[name]
+    ch4 = bd.get_node(database="ecoinvent-3.10-biosphere", code="ch4").id
+    assert dict(bd.Method(name).load())[ch4] == 29.7
+    assert METHOD in bd.methods and "biosphere3" in bd.databases  # what the project had stays
+    capsys.readouterr()
+    importing.install_defaults(toy_project, "3.10", downloads)  # already there: nothing written
+    assert "already in" in capsys.readouterr().out
+    with pytest.raises(SystemExit, match="no biosphere for ecoinvent 3.7"):
+        importing.install_defaults(toy_project, "3.7", downloads)

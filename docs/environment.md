@@ -22,7 +22,7 @@
 
 ```bash
 conda activate lca_viewer
-export BRIGHTWAY2_DIR=$PWD/data/brightway
+export BRIGHTWAY2_DIR=$PWD/data/brightway   # optional: a development copy, apart from your projects
 python scripts/import_ecoinvent.py      # once
 python scripts/validate_wheat.py        # phase 0 checks
 python -m pytest tests -q               # unit tests on toy systems

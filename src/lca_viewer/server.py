@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import mimetypes
 import os
+import re
 from pathlib import Path
 
 import numpy as np
@@ -584,8 +585,10 @@ class ImportRequest(BaseModel):
     path: str
     database: str
     biosphere: str = "biosphere3"
-    defaults: bool = True
-    """With ``biosphere3``: install it and the impact methods bundled with Brightway if missing."""
+    defaults: str | None = None
+    """Default biosphere and impact methods installed first and linked to (``biosphere`` is then
+    ignored): an ecoinvent version of files.brightway.dev, or "bundled" (biosphere3 and the
+    ecoinvent 3.9 methods of bw2io). None: link to ``biosphere``, installing nothing."""
     link_to: list[str] = []
     migrations: list[str] | None = None
     """randonneur_data transformations (SimaPro CSV); default: chosen from ``link_to``."""
@@ -1008,6 +1011,13 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
 
         return {"adapters": sources.adapters(), "default": default_migrations(link_to)}
 
+    @app.get("/api/brightway/defaults")
+    def defaults():
+        """ecoinvent versions whose default biosphere and impact methods can be installed in a project."""
+        from .importing import default_versions
+
+        return {"versions": default_versions()}
+
     @app.post("/api/brightway/import")
     def import_database(req: ImportRequest):
         """Import an ecoSpold2 release or a SimaPro CSV into a project (``lca-viewer import``)."""
@@ -1016,6 +1026,8 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
         database = req.database.strip()
         if req.format not in ("ecospold2", "simapro-csv"):
             raise HTTPException(400, f"Unknown format {req.format!r}")
+        if req.defaults and not re.fullmatch(r"bundled|\d+(\.\d+)+", req.defaults):
+            raise HTTPException(400, f"Unknown default biosphere {req.defaults!r}")
         if not path.exists():
             raise HTTPException(404, f"Nothing at {path}")
         if not database:
@@ -1028,7 +1040,8 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
             import csv
 
             args = ["import", req.format, str(path), "--project", req.project, "--database", database,
-                    "--biosphere", req.biosphere, "--data", str(data), *([] if req.defaults else ["--no-setup"])]
+                    "--biosphere", req.biosphere, "--data", str(data),
+                    *(["--defaults", req.defaults] if req.defaults else ["--no-setup"])]
             if req.format == "simapro-csv":
                 args += ["--unlinked", req.unlinked, "--report", str(report)]
                 if req.link_to:

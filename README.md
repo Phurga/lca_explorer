@@ -191,11 +191,13 @@ python -m py7zr x "C:/Users/you/Downloads/ecoinvent 3.9.1_cutoff_ecoSpold02.7z" 
 7-Zip or another unpacking tool works too. Check that you now have a
 `data/ei391_cutoff/datasets/` folder full of `.spold` files.
 
-### 4. Tell Brightway where to keep its data
+### 4. Choose where Brightway keeps its data (optional)
 
-The import goes into a Brightway folder inside the project, so it doesn't
-mix with any other Brightway projects on your computer. Do this in **every
-new terminal** before `lca-viewer import` or `lca-viewer build`.
+The import goes into Brightway's data folder, the one Brightway and Activity
+Browser use: `BRIGHTWAY2_DIR` if you set it, otherwise Brightway's default
+folder. Skip this step to use the default folder. To keep these projects
+apart, e.g. in a `data\brightway` folder, set `BRIGHTWAY2_DIR` in **every new
+terminal** before `lca-viewer import`, `build` or `serve`.
 
 In PowerShell:
 
@@ -255,15 +257,16 @@ The app opens in your browser after a few seconds, at
 
 **Next time**, only this step is needed: open a terminal in the
 `lca_viewer` folder, run `conda activate lca_viewer`, then the
-`lca-viewer serve …` command above. `BRIGHTWAY2_DIR` is not needed to serve.
+`lca-viewer serve …` command above (after step 4, if you set
+`BRIGHTWAY2_DIR`: the app lists the projects of that folder).
 
 ### If something goes wrong
 
 - **`lca-viewer` is not recognised**: the environment isn't active. Run
   `conda activate lca_viewer` (step 2).
-- **`warning: BRIGHTWAY2_DIR is not set`** during the import: step 4 was not
-  done in this terminal, so the import went to Brightway's default folder.
-  Stop it with Ctrl+C, do step 4, and import again.
+- **The import went to the wrong Brightway folder**: its first line,
+  `Brightway data folder: …`, says where. If that isn't the one you wanted,
+  stop it with Ctrl+C, do step 4, and import again.
 - **`Database 'ecoinvent-3.9.1-cutoff' already exists`**: it is already
   imported. Go on to step 6. The message shows how to delete it if you want
   to import it again.
@@ -315,11 +318,12 @@ The app starts with no database loaded. **Load database** (top bar) lists:
 
 - **Built models**, ready in a few seconds: ecoinvent from the setup, and
   every database loaded from Brightway before.
-- **Brightway projects**: the projects of lca_viewer's own Brightway folder
-  (`data/brightway`), of Brightway's default folder (where Brightway 2.5 and
-  Activity Browser keep them unless told otherwise) and of `BRIGHTWAY2_DIR`.
-  *Other folder…* takes any other Brightway data folder (the one with a
-  `projects.db` file). Pick a database and click **Build and open**: the app
+- **Brightway projects**: the projects of Brightway's data folder, the one
+  Brightway 2.5 and Activity Browser use: `BRIGHTWAY2_DIR` if it is set,
+  otherwise Brightway's default folder. The first time the app starts, it
+  creates this folder with an empty `default` project if Brightway has never
+  run on this computer, as Brightway itself would. *Other folder…* takes any
+  other Brightway data folder (the one with a `projects.db` file). Pick a database and click **Build and open**: the app
   builds the matrices it reads from the database and every database it uses
   (one or two minutes for ecoinvent), keeps them in `data/cache/` and adds
   them to *Built models*. A database changed in Brightway since then (or a
@@ -360,12 +364,19 @@ projects Brightway and Activity Browser use, so changes show there too:
   - **ecoinvent**: a release downloaded with your ecoinvent account (log in
     once; kept in the system's credential store if you tick *Remember*).
 
-  As in Activity Browser, tick **Add the default biosphere and impact
-  methods** for a project without them: for ecoSpold2 and SimaPro CSV,
-  `biosphere3` and the ecoinvent 3.9 methods that come with Brightway (a few
-  minutes, once per project); for ecoinvent, the release's own biosphere and
-  methods. Unticked, the elementary flows link to a biosphere database the
-  project already has, and no methods are added.
+  The form opens under the project's row. As in Activity Browser, tick
+  **Add the default biosphere and impact methods** for a project without
+  them, and pick their ecoinvent version: for ecoSpold2 it is read from the
+  file name (`ecoinvent 3.10.1_cutoff…` → 3.10), for SimaPro CSV from the
+  ecoinvent database ticked as background; otherwise choose it. Versions 3.8
+  to 3.12 come from [files.brightway.dev](https://files.brightway.dev)
+  (ecoinvent's elementary flows and impact methods of that version, about
+  20 MB and 3 minutes, once per project; the methods are named
+  `ecoinvent-<version>, …`); *ecoinvent 3.9, bundled with Brightway* is
+  `biosphere3` and the 3.9 methods that come with bw2io, without download.
+  For ecoinvent, they are the release's own biosphere and methods.
+  Unticked, the elementary flows link to a biosphere database the project
+  already has, and no methods are added.
 - **Delete** a project and its folder (type its name to confirm). Models
   already built from it stay in the app.
 
@@ -414,7 +425,7 @@ download. Fill in the form on the
 e.g. `data/agribalyse/AGB32_final.CSV`.
 
 **2. Import it**, linked to ecoinvent. Run this in the `lca_viewer`
-environment, with `BRIGHTWAY2_DIR` set (manual setup, steps 2 and 4). It
+environment (manual setup, step 2, and step 4 if you set `BRIGHTWAY2_DIR`). It
 takes a few minutes and needs internet access (unit definitions are fetched
 online).
 
@@ -509,8 +520,9 @@ own licences (MIT, Apache-2.0).
 
 ecoinvent and Agribalyse are licensed. Only people covered by an ecoinvent
 licence may use the explorer on them, and results must not be shared beyond
-what that licence allows. Keep the archives, the Brightway project and the
-built models in `data/`, which git ignores: never commit or publish them.
+what that licence allows. Keep the archives and the built models in `data/`,
+which git ignores, and never commit or publish them or the Brightway projects
+they come from.
 
 ## Development
 

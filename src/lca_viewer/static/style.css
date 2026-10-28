@@ -558,6 +558,8 @@ button.danger:not(.link) { background: var(--bar-negative); border-color: var(--
 .project-form legend { color: var(--muted); font-size: 12px; padding: 0 4px; }
 .project-form input:not([type]), .project-form select { color: var(--text); font-size: 13px; }
 .project-form .source-form { display: contents; }
+.project-form label.defaults-version { margin-left: 22px; }
+tr.form-row > td { padding: 0 0 4px; }
 .source-choice { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 6px; }
 .source-choice button { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 6px 10px;
   text-align: left; white-space: normal; }

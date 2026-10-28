@@ -40,8 +40,11 @@ API in `src/lca_viewer/server.py`.
   each project *+ Add database* and *Delete* (typing the name to confirm).
   *Add database* asks for the source (ecoSpold2, SimaPro CSV, ecoinvent with
   the user's account), with a box *Add the default biosphere and impact
-  methods*, ticked when the project has no biosphere database; it opens by
-  itself on a project just created empty. Each opens a small form above the
+  methods* and their ecoinvent version (detected from the file name or the
+  SimaPro background, else chosen), ticked when the project has no biosphere
+  database; it opens by itself on a project just created empty. Forms on a
+  project, and the jobs started from it, open under its row, where it was
+  clicked. Each opens a small form above the
   list (`ProjectForm`); file fields take a path or *Choose file…*
   (uploaded). A SimaPro import that leaves exchanges unlinked shows them,
   with *Import without them…*. Decision: as in Activity Browser, projects

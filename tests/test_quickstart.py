@@ -54,3 +54,30 @@ def test_ecoinvent_is_optional(tmp_path, monkeypatch):
     assert (tmp_path / "data" / "python.txt").exists()
     assert not (tmp_path / "data" / "models.json").exists()
     assert started == [["serve", "--data", str((tmp_path / "data").resolve()), "--open"]]
+
+
+def test_one_brightway_folder(tmp_path, monkeypatch):
+    from lca_viewer.sources import brightway_dir, brightway_dirs, default_brightway_dir
+
+    monkeypatch.setenv("BRIGHTWAY2_DIR", str(tmp_path / "bw"))
+    assert brightway_dir() == (tmp_path / "bw").resolve()
+    assert brightway_dirs() == [{"label": "BRIGHTWAY2_DIR", "path": str((tmp_path / "bw").resolve())}]
+    monkeypatch.delenv("BRIGHTWAY2_DIR")
+    assert brightway_dir() == default_brightway_dir().expanduser().resolve()  # as bw2data picks it
+    assert brightway_dirs()[0]["label"] == "Brightway default folder"
+
+
+def test_first_launch_creates_the_brightway_folder(tmp_path, monkeypatch):
+    import pytest
+
+    pytest.importorskip("bw2data")
+    from lca_viewer.cli import init_brightway
+    from lca_viewer.sources import brightway_projects
+
+    folder = tmp_path / "new" / "bw"  # does not exist yet: bw2data would refuse it
+    monkeypatch.setenv("BRIGHTWAY2_DIR", str(folder))
+    init_brightway()
+    assert [(p["name"], p["twofive"]) for p in brightway_projects(folder)] == [("default", True)]
+    stamp = (folder / "projects.db").stat().st_mtime_ns
+    init_brightway()  # done once
+    assert (folder / "projects.db").stat().st_mtime_ns == stamp

@@ -92,10 +92,26 @@ builds do: the server itself never imports bw2data.
 - **Imports**: `lca-viewer import ecospold2` now takes the `.7z` archive too
   (unpacked into `data/unpacked`, deleted after the import) and `--biosphere`
   (default `biosphere3`, installed with the methods if missing, unless
-  `--no-setup`; with another biosphere database, nothing is installed). The
-  page's *Add the default biosphere and impact methods* is `--biosphere
-  biosphere3`; unticked, it sends the chosen biosphere database and
-  `--no-setup`. The SimaPro CSV import is
+  `--no-setup`; with another biosphere database, nothing is installed), and
+  `--defaults VERSION`: the page's *Add the default biosphere and impact
+  methods* (unticked: the chosen biosphere database and `--no-setup`).
+  `importing.install_defaults` installs, once per project, files.brightway.dev's
+  project `ecoinvent-<version>-biosphere` (3.8 to 3.12, about 20 MB, kept in
+  `data/downloads`): ecoinvent's elementary flows and LCIA implementation of
+  that version (3.10: 4,362 flows, 668 methods). It is read from the archive
+  without restoring the project (`read_biosphere_archive`: `databases.json`,
+  the flows from `lci/databases.db`, the methods from `methods.json` and
+  `intermediate/<abbreviation>.pickle`, with factors keyed by node id mapped
+  back to (database, code); pickles read with an unpickler that builds no
+  class): restoring took 86 s, then bw2data reprocessed every method again.
+  Writing the 668 methods takes about 3 minutes. The methods are named
+  `("ecoinvent-<version>", …)` as bw2io's `import_ecoinvent_release` names
+  them, so they never replace another version's; a project that has the
+  database and methods of that version keeps them. `bundled` is
+  `setup_project` (biosphere3 and bw2io's 3.9 methods, offline). The page
+  picks the version from the ecoSpold2 file name or the SimaPro background
+  database (same version, else same major.minor; 3.9 with biosphere3 already
+  in the project: `bundled`), else asks. The SimaPro CSV import is
   unchanged; the page lists randonneur_data's transformations (`/api/adapters`,
   with those `default_migrations` picks for the ticked background databases)
   and, when exchanges stay unlinked, the rows of the report CSV, then offers
@@ -273,7 +289,10 @@ added later.
 5. **Emissions and resources**, in this order, each for the flows still
    unlinked: SimaPro's final waste flows, non material emissions, social and
    economic issues are left out (not elementary flows in ecoinvent);
-   Flowmapper's SimaPro → ecoinvent correspondences (3.9, 3.8, 3.10) link a
+   randonneur_data's SimaPro → ecoinvent correspondences (`SimaPro-9-ecoinvent-3.9-biosphere`
+   and `-3.8-`, made with Flowmapper by its authors and shipped as data:
+   Flowmapper itself is not installed nor run; and the manual
+   `simapro-2024-biosphere-ecoinvent-3.10-biosphere`) link a
    flow directly when the target's ecoinvent UUID is in the project's
    biosphere (most UUIDs are the same across versions, so the 3.9 list
    covers a 3.8 biosphere); manual renames (`agribalyse-3.1.1-ecoinvent-3.10-biosphere-manual-matches`,

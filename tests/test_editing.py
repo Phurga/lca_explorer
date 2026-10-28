@@ -183,7 +183,8 @@ def test_through_the_api(project, tmp_path):
 
 
 def test_import_without_the_default_biosphere(tmp_path, monkeypatch):
-    """Unticked in the page, biosphere3 and the methods are not installed (``--no-setup``)."""
+    """Ticked in the page, the default biosphere and methods of a version are installed first
+    (``--defaults``); unticked, nothing is installed (``--no-setup``)."""
     import subprocess
     import time
 
@@ -207,10 +208,10 @@ def test_import_without_the_default_biosphere(tmp_path, monkeypatch):
     client = TestClient(create_library(tmp_path / "data"))
     export = tmp_path / "export.csv"
     export.write_text("{CSV}")
-    for defaults in (True, False):
+    for i, defaults in enumerate(("3.10", None)):
         Done.stdout = iter(["imported\n"])
         job = client.post("/api/brightway/import", json={"folder": str(tmp_path / "bw"), "project": "p", "format": "simapro-csv",
-                                                          "path": str(export), "database": f"x{defaults}",
+                                                          "path": str(export), "database": f"x{i}",
                                                           "biosphere": "biosphere3", "defaults": defaults}).json()
         for _ in range(100):
             if job["status"] != "running":
@@ -218,4 +219,8 @@ def test_import_without_the_default_biosphere(tmp_path, monkeypatch):
             time.sleep(0.05)
             job = client.get(f"/api/jobs/{job['id']}").json()
         assert job["status"] == "done", job
-    assert "--no-setup" not in seen[0] and "--no-setup" in seen[1]
+    assert seen[0][seen[0].index("--defaults") + 1] == "3.10" and "--no-setup" not in seen[0]
+    assert "--no-setup" in seen[1] and "--defaults" not in seen[1]
+    bad = client.post("/api/brightway/import", json={"folder": str(tmp_path / "bw"), "project": "p", "format": "simapro-csv",
+                                                     "path": str(export), "database": "y", "defaults": "--unlinked"})
+    assert bad.status_code == 400
