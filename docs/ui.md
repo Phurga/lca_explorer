@@ -123,9 +123,11 @@ API in `src/lca_viewer/server.py`.
   turning "Group by product" on again regroups all of them), has a "merge" chip — or select it and click Merge — to turn it into a
   merged process), **Merge** (combine their inventories into one
   process, "merged ×" chip to undo — see [grouping.md](grouping.md)) and
-  **To others**. The status bar under the tree sums the selected processes:
-  amounts per unit (units are not added together) and impact; a process inside
-  another selected process is not counted again, its impact is in that one's.
+  **To others**. The status bar under the tree sums the selected processes,
+  merged processes and groups of processes (a group or merged row counts its
+  member processes): amounts per unit (units are not added together) and
+  impact; a row inside another selected row is not counted again, its impact
+  is in that one's.
   Every row has a **×** (on hover: at the right end of the name in the list,
   after the other row actions; at the box corner in the tree view) that moves
   it to its parent's **others** row; "To others" does the same for a
