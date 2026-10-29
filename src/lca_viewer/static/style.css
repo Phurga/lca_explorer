@@ -373,17 +373,17 @@ button.link { border: none; background: none; padding: 0 4px; color: var(--accen
 .info-body table.flows th { color: var(--muted); font-weight: 400; border-bottom: 1px solid var(--border); }
 .info-body .num { text-align: right; font-family: var(--mono); font-size: 12px; white-space: nowrap; }
 .info-actions { display: flex; gap: 6px; padding: 8px 14px; border-top: 1px solid var(--border); }
-/* Exchanges in the info pop-up: rows with a comment or uncertainty open on click */
-.info-body tr.exchange.has-meta { cursor: pointer; }
-.info-body tr.exchange.has-meta:hover, .info-body tr.exchange.open { background: var(--hover); }
-.info-body tr.exchange .caret { display: inline-block; width: 12px; color: var(--muted); }
+/* Rows of a pop-up panel that ↑/↓ move through (Space, c act on the focused one) */
+.info-popup:focus { outline: none; }
+.info-body tr[data-nav] { cursor: pointer; }
+.info-body tr[data-nav]:hover { background: var(--hover); }
+.info-body tr[data-nav]:focus { outline: none; background: var(--hover); box-shadow: inset 3px 0 0 var(--accent); }
 .info-body a { color: var(--accent); }
 .info-body table.exchanges { table-layout: fixed; }
 .info-body table.exchanges tr.exchange > td:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .info-body table.exchanges th:nth-child(2) { width: 96px; }
 .info-body table.exchanges th:nth-child(3) { width: 64px; }
 .info-body table.exchanges th:nth-child(4) { width: 48px; }
-.info-body tr.exchange-detail > td { padding: 2px 0 8px 12px; }
 .exchange-meta { margin: 4px 0 2px; padding-left: 8px; border-left: 2px solid var(--border); }
 .exchange-meta .text { font-size: 12px; margin-bottom: 4px; }
 .exchange-meta table.kv th { width: 90px; }
@@ -500,7 +500,7 @@ table.results tr.muted td { color: var(--muted); }
 .info-btn:hover { background: var(--accent); color: var(--panel); }
 .tree .row-actions { align-items: center; }
 .info-body tr.exchange .info-btn { visibility: hidden; margin-right: 4px; vertical-align: middle; }
-.info-body tr.exchange:hover .info-btn, .info-body tr.exchange .info-btn:focus-visible { visibility: visible; }
+.info-body tr.exchange:hover .info-btn, .info-body tr.exchange:focus .info-btn, .info-body tr.exchange .info-btn:focus-visible { visibility: visible; }
 /* Pop-up header: pin, back (after following a link) and close. The header moves the pop-up. */
 .info-head { cursor: move; user-select: none; }
 .info-head button, .info-head a { cursor: pointer; }

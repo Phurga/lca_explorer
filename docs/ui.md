@@ -152,8 +152,9 @@ API in `src/lca_viewer/server.py`.
   (a process into its inputs, direct emissions into flows, a group into its
   members, a merged process into the union of its inputs, others into the
   rows it bundles — which then also replace it in the chart); click selects;
-  right-click — or the **(i)** shown on the hovered row, or Space — opens its
-  **pop-up**, whatever the kind: the info pop-up below for a process or direct
+  right-click or Space opens its **pop-up** — the **(i)** shown on the hovered
+  row, or **c**, opens the pop-up of its *exchange* (comment and uncertainty)
+  — whatever the kind: the activity pop-up below for a process or direct
   emissions, the flow pop-up for an elementary flow, and a **members pop-up**
   for a bundle (others, group, merged; nothing opens on hover or on a plain
   click, which only selects). Members pop-ups follow the view's naming choice;
@@ -181,6 +182,7 @@ API in `src/lca_viewer/server.py`.
   | → | expand; if already expanded, go to the first child |
   | ← | collapse; if already collapsed, go to the parent |
   | Space | open (or close) the row's pop-up (members pop-up for a bundle) |
+  | c | open (or close) the pop-up of the row's exchange: comment and uncertainty |
   | o | move the selection to others (inside an expanded others row: pin it out) |
   | m | merge the selection, or unmerge a selected merged row |
   | g | one group: ungroup it (a "group by product" becomes an exception, put back by its regroup chip or by g on one of its processes); one process: put back its ungrouped product group, else group its same-named siblings under the product name, else nothing; several rows: group them (named after the product when they all deliver one, else "group N") |
@@ -230,9 +232,16 @@ API in `src/lca_viewer/server.py`.
   [charts.md](charts.md).
 
   ![View settings](img/view-settings.png)
-- **Right-click a process** (list or tree view): pop-up with its place in
-  this tree (amount, impact, path from the root), per-unit cumulative and
-  direct impacts, the main direct emissions for the current method,
+- **Right-click a process** (list or tree view) or **Space**: the activity
+  pop-up, with panels *Exchanges*, *Used by*, *Alternatives*, *Description*
+  and *Metadata*. **c**, or the **(i)** of a row, opens instead the **exchange
+  pop-up**: only the amount and impact in this tree, the path from the root,
+  and the comment, uncertainty and pedigree of the parent's input of this
+  product. Once open, a pop-up has the keyboard: ←/→ switch panel, ↑/↓ move
+  between the rows of the panel (like the tree: a row is not a link), Space
+  on a row opens its activity pop-up, **c** its exchange pop-up (Enter
+  expands a *Used by* row), Space with no row selected closes it; Backspace
+  goes back.
   **Used by** (the activities consuming its product — or, for a waste
   treatment, generating the waste — with the amount per unit of their
   product and, largest first, the amount each takes in this functional
@@ -248,24 +257,20 @@ API in `src/lca_viewer/server.py`.
   *Inputs from nature* (natural resources), *Outputs to treatment* (waste:
   technosphere exchanges with a negative amount, shown as positive) and
   *Emissions*, each with amount, impact per unit of product and share of the
-  cumulative impact, largest first. The **(i)** shown on the hovered item
-  opens its own pop-up (the supplying activity, or the elementary flow with
-  this process's exchange); click a row (▸) for its comment, uncertainty
+  cumulative impact, largest first. The rows move like the tree's: Space opens
+  the supplying activity's pop-up (the elementary flow's for an emission), **c**
+  or the **(i)** of the row the exchange pop-up — comment, uncertainty
   (distribution, σ with and without pedigree), pedigree scores, formula and
-  variable name. For a tree row, *In this tree* also shows the parent's
-  input of this product with its comment and uncertainty. *Reference product
+  variable name. *Reference product
   exchange* gives the production volume and product properties (price,
   carbon and water content, dry mass, …). Exchanges are stored in the cached
   model (`exchanges.sqlite`, 105 MB for ecoinvent 3.9.1, read one activity
   at a time); a model built before this has none — rebuild it to see them.
-  The pop-up is split into tabs — *Exchange* (the parent's input of this
-  product: amount, comment, uncertainty, pedigree; "In this tree" for the root
-  or a direct emissions row), *Results*, *Exchanges*, *Used by*,
-  *Description* (with the reference product exchange) and *Metadata* — so the
-  target is one click away. A right-click on a tree row opens *Exchange*, on a
-  direct emissions row *Exchanges* (emissions first); following a link inside the pop-up keeps the
-  current tab. Empty tabs are not shown. Links followed inside a pop-up (a
-  supplier, a user, an exchange's (i), a flow's emitter) are kept in a
+  The activity pop-up opens on *Exchanges* (emissions first for a direct
+  emissions row); *Description* (with the reference product exchange) and
+  *Metadata* follow; empty panels are not shown. The exchange pop-up has no
+  panels or actions. Rows followed inside a pop-up (a supplier, a user, an
+  exchange, a flow's emitter) replace it and are kept in a
   history: **←** next to × (or **Backspace**) goes back; opening a pop-up
   from outside, or closing it, starts a new history.
 - **Pop-up windows** (all kinds). Drag the header to move a pop-up and any
