@@ -140,10 +140,37 @@ const groupKey = (id) => {
   const name = id.slice(id.lastIndexOf("/g:") + 3);
   return /^\w+: /.test(name) ? name.slice(0, name.indexOf(":")) : name;
 };
+// Colour mode "type" (``view.colorBy``): a row is coloured by the kind of exchange it stands for
+const FLOW_TYPES = {
+  product: { label: "Product", hint: "The process itself: its reference product, an output", color: "hsl(270 45% 58%)" },
+  technosphere: { label: "Technosphere input", hint: "Input from another process", color: "hsl(212 65% 52%)" },
+  waste: { label: "Waste", hint: "Output to treatment: the waste of the process above, treated by this one", color: "hsl(32 85% 50%)" },
+  resource: { label: "Resource", hint: "Input from nature (biosphere)", color: "hsl(135 45% 42%)" },
+  emission: { label: "Emission", hint: "Output to nature (biosphere)", color: "hsl(2 65% 52%)" },
+  direct: { label: "Direct", hint: "Direct emissions row: the exchanges with nature of the process above", color: "hsl(178 50% 38%)" },
+};
+const fromNature = (compartment) => /resource/i.test(compartment || "");
+// The type of a row (a key of FLOW_TYPES); none for an others row. A group or merged row takes the type of its first member.
+function flowTypeOf(r) {
+  if (r.kind === "rest") return null;
+  if (r.kind === "direct") return "direct";
+  if (r.kind === "flow") return fromNature(r.flow.compartment) ? "resource" : "emission";
+  if (r.depth === 0) return "product";
+  const part = r.parts?.[0];
+  if (part?.flow !== undefined) return fromNature(part.location) ? "resource" : "emission";
+  return (r.kind === "process" ? r.waste : part?.waste) ? "waste" : "technosphere";
+}
 // Empty when group colours are switched off (``view.groupColors``)
 function groupColors(rows, view) {
   const colors = new Map();
   if (!view.groupColors) return colors;
+  if (view.colorBy === "type") {
+    for (const r of rows) {
+      const type = flowTypeOf(r);
+      if (type) colors.set(r.id, FLOW_TYPES[type].color);
+    }
+    return colors;
+  }
   for (const r of rows) {
     if (r.kind === "group") colors.set(r.id, colorOf(groupKey(r.id), view.ruleColors));
     else if (colors.has(r.parent)) colors.set(r.id, colors.get(r.parent));
@@ -1552,7 +1579,7 @@ function MethodSelect({ methods, value, onChange }) {
 // ---------------------------------------------------------------- tree
 function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onUngroup, onRegroup, ungroupable, onMergeGroup, onUnpin, onPin, onMoveToOthers, onInfo, onUnmerge, onRevert, view, focus, renaming, onStartRename, onRename, nameEdit, onNameEdit }) {
   const byId = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
-  const colors = useMemo(() => groupColors(rows, view), [rows, view.groupColors, view.ruleColors]);
+  const colors = useMemo(() => groupColors(rows, view), [rows, view.groupColors, view.colorBy, view.ruleColors]);
   const ctx = useContext(EditorContext);
   const editing = ctx.editing;
   const links = {};  // row id -> the exchange its amount stands for, fetched when the amount is edited
@@ -1897,7 +1924,7 @@ function TreeGraph({ rows, rootImpact, shareBasis, selection, onToggle, onSelect
   const orientation = sankey ? "horizontal" : chosenOrientation;
   const cycles = chosenCycles && !sankey;
   const byId = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
-  const colors = useMemo(() => groupColors(rows, view), [rows, view.groupColors, view.ruleColors]);
+  const colors = useMemo(() => groupColors(rows, view), [rows, view.groupColors, view.colorBy, view.ruleColors]);
   const container = useRef(null);
   const drag = useRef(null);
   const [transform, setTransform] = useState({ k: 1, x: 16, y: 16 });
@@ -2199,7 +2226,18 @@ function ViewBar({ view, setView, example }) {
           ${[["full", "Full names"], ["short", "Short names"], ["custom", "Custom name"]].map(([id, label]) => html`
             <button class=${view.naming === id ? "primary" : ""} onClick=${() => set({ naming: id })}>${label}</button>`)}
         </span>
+        <span class="segmented" role="group" aria-label="Colours">
+          ${[["group", "Group colours", "Colour the rows of each group with its rule's colour"],
+            ["type", "Flow type colours", "Colour the rows by the kind of exchange: product, technosphere input, waste, resource, emission"]].map(([id, label, hint]) => html`
+            <button class=${view.groupColors && (view.colorBy || "group") === id ? "primary" : ""} title=${hint}
+              onClick=${() => set({ colorBy: id, groupColors: true })}>${label}</button>`)}
+        </span>
       </div>
+      ${view.groupColors && view.colorBy === "type" && html`
+        <div class="color-legend" aria-label="Flow type colours">
+          ${Object.entries(FLOW_TYPES).map(([key, t]) => html`
+            <span key=${key} title=${t.hint}><i style=${{ background: t.color }}></i>${t.label}</span>`)}
+        </div>`}
       ${view.naming === "custom" && html`<${RecipeEditor} recipe=${view.recipe} setRecipe=${(recipe) => set({ recipe })} example=${example} />`}
     </div>`;
 }
@@ -2240,50 +2278,6 @@ function ExchangeMeta({ e }) {
         ${e["variable name"] && html`<tr><th>Variable</th><td class="mono">${e["variable name"]}</td></tr>`}
       </table>
     </div>`;
-}
-
-// Inputs or elementary flows of an activity as in its dataset, moved through like the main view:
-// ↑/↓ select a row (click too), Space opens its activity (or flow) pop-up, c or its (i) the
-// pop-up of the exchange (comment, uncertainty). ``onActivity(index)`` / ``onExchange(item)``:
-// items are products (technosphere); ``onFlow(index)``: items are elementary flows, whose
-// pop-up has both.
-// ``onAmount(item, text)``: double-click an amount to stage a change (Edit mode).
-// ``panel`` (products): the rows are processes, as in ``ProcessRow``, hanging from ``base``.
-function ExchangeTable({ title, items, cumulative, unitPer, panel, base, onFlow, onAmount, locked, limit = 10 }) {
-  const [all, setAll] = useState(false);
-  const shown = all ? items : items.slice(0, limit);
-  return html`
-    <section>
-      <h4>${title} · ${items.length}</h4>
-      <table class=${`flows exchanges ${panel ? "plist" : ""}`}>
-        <thead><tr>
-          <th>${panel ? "Product" : "Flow"}</th>
-          <th class="num" title="Amount in the dataset">amount</th><th class="num" title=${unitPer}>impact</th><th class="num">share</th>
-        </tr></thead>
-        <tbody>${shown.map((e, i) => {
-          if (panel) return html`<${ProcessRow} key=${`${e.index}-${i}`} item=${e} above=${base} depth=${0} ancestors=${[base.index]} panel=${panel} />`;
-          const keys = (ev) => {
-            if (ev.ctrlKey || ev.metaKey || ev.altKey || (ev.key !== " " && ev.key !== "c")) return;
-            ev.preventDefault();
-            ev.stopPropagation();
-            onFlow(e.index);
-          };
-          return html`
-            <tr key=${i} class="exchange" data-nav tabindex="-1" onKeyDown=${keys}>
-              <td><button class="info-btn" title="Comment and uncertainty" aria-label="Comment and uncertainty"
-                  onClick=${(ev) => { ev.stopPropagation(); onFlow(e.index); }}>i</button>
-                <span title=${`${e.name} | ${e.categories.join(" / ")}`}>${e.name} <span class="muted">${e.categories.join(" / ")}</span></span></td>
-              <td class="num"><${Editable} value=${Math.abs(e.amount)} format=${fmtAmount} disabled=${locked || !onAmount || !e.input}
-                  title=${locked ? undefined : !e.input ? "Build this database again once, to edit amounts here" : "Double-click to change this amount in the dataset"}
-                  onCommit=${(text) => onAmount(e, text)} /> ${unit(e.unit)}</td>
-              <td class="num impact">${e.impact ? fmt(e.impact) : "–"}</td>
-              <td class="num impact">${e.impact && cumulative ? pct(e.impact / cumulative) : ""}</td>
-            </tr>`;
-        })}
-        </tbody>
-      </table>
-      ${items.length > shown.length && html`<button class="link" onClick=${() => setAll(true)}>Show all ${items.length}</button>`}
-    </section>`;
 }
 
 // A process in a panel of a pop-up (exchanges, used by, alternatives): a row like those of the main list.
@@ -2494,13 +2488,14 @@ function PopupWindow({ target, win, label, className = "", head, width = 560, on
 // its own Space, c, Enter and ←/→ — see ``ProcessRow`` — and ←/→ reach here only when a row
 // does not use them), or scroll a panel without rows; ↑ on the first row goes back to the
 // panels' tabs; Space or c with no row closes it.
-function popupKeys({ tabs, shown, setTab, body, onClose, exchange }) {
+function popupKeys({ tabs, shown, setTab, body, onClose, exchange, explorerKeys }) {
   return (e) => {
     const box = e.currentTarget;
     if (e.ctrlKey || e.metaKey || e.altKey || e.target.closest("input, textarea, select, [contenteditable]")) return;
     // A button clicked last (a panel) would also react to Space
     if (e.target !== box && e.target.matches("button")) box.focus();
     const used = () => { e.preventDefault(); e.stopPropagation(); };
+    if (explorerKeys?.current?.(e)) { used(); return; }
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       const down = e.key === "ArrowDown";
       const rows = [...box.querySelectorAll(".info-body [data-nav]")];
@@ -2634,8 +2629,9 @@ function suppliedTo(row, rowsById) {
 // Two pop-ups of a process: the activity's (Space, right-click: its exchanges, users, alternatives,
 // description, metadata) and the exchange's (c, (i): the amount in this tree and the comment and
 // uncertainty of the input, ``target.exchange``). ``onFollow(target)`` opens another in place.
-function InfoPopup({ target, win, method, methodInfo, rootImpact, rowsById, onClose, onUseAsRoot, onOpenTab, root, amount, onFollow, onGoTo, onBack }) {
+function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsById, onClose, onUseAsRoot, onOpenTab, root, amount, onFollow, onGoTo, onBack }) {
   const exchange = !!target.exchange;
+  const explorerKeys = useRef(null);  // set by the explorer of the Exchanges tab: asked first for the keys
   const [info, setInfo] = useState(null);
   const [error, setError] = useState(null);
   const [users, setUsers] = useState(null);
@@ -2704,7 +2700,6 @@ function InfoPopup({ target, win, method, methodInfo, rootImpact, rowsById, onCl
   const path = [];
   for (let r = row; r; r = rowsById.get(r.parent)) if (r.meta && r.kind === "process") path.unshift(r.meta.name);
   const d = info?.details || {};
-  const unitPer = info ? `${methodInfo.unit} / ${unit(info.unit)}` : "";
   const production = exchanges?.production;
   const asMeta = (a) => ({ index: a.index, name: a.name, location: a.location });
   // Following a row replaces the panel, and the row that had the focus: the pop-up takes it, to keep the keys
@@ -2730,21 +2725,6 @@ function InfoPopup({ target, win, method, methodInfo, rootImpact, rowsById, onCl
       const items = found.users.filter((c) => !root || Math.abs(c.flow) > 1e-12);
       return { items, more: root ? (found.users.length >= 15 ? Math.max(0, found.in_supply_chain - items.length) : 0) : found.count - found.users.length };
     });
-  const exchangesPanel = {
-    span: 4, load: inputsOf, empty: "No input from the technosphere.", label: (e) => e.reference_product ?? e.name,
-    onOpen: (e) => openActivity(e.index), onExchange: (e, above) => openExchange(e.index, above), onUse: useAsRoot,
-    cells: (e, above, depth) => {
-      const closed = depth === 0 ? locked : ctx.locked.includes(above.database);
-      const cumulative = e.of ?? info.cumulative_per_unit;
-      return html`
-        <td class="num"><${Editable} value=${Math.abs(e.amount)} format=${fmtAmount} disabled=${closed || !e.input}
-            title=${closed ? undefined : !e.input ? "Build this database again once, to edit amounts here" : "Double-click to change this amount in the dataset"}
-            onCommit=${(text) => (e.own ? own((dr) => { productOfProcess(dr, info.code).amount = text; })
-              : quickEdit(ctx, above.database, above.code, patchExchange(e.input, e.amount, text)))} /> ${unit(e.unit)}</td>
-        <td class="num impact">${e.impact ? fmt(e.impact) : "–"}</td>
-        <td class="num impact">${e.impact && cumulative ? pct(e.impact / cumulative) : ""}</td>`;
-    },
-  };
   const usersPanel = {
     span: root ? 5 : 2, load: usersOf, empty: `No activity uses it${root ? " in this supply chain" : ""}.`, label: (u) => u.name,
     onOpen: (u) => openActivity(u.index), onExchange: (u, above) => openExchange(above.index, u), onUse: useAsRoot,
@@ -2777,33 +2757,11 @@ function InfoPopup({ target, win, method, methodInfo, rootImpact, rowsById, onCl
     { id: "metadata", label: "Metadata" },
   ].filter(Boolean) : [];
   const shown = exchange ? "tree" : tabs.some((t) => t.id === tab) ? tab : tabs[0]?.id;
-  // Exchanges by direction, as in the dataset: products, inputs (from the technosphere,
-  // from nature), outputs (waste to treatment, emissions)
-  const sections = useMemo(() => {
-    if (!exchanges?.available || !info) return [];
-    const isProduct = (e) => ["production", "substitution", "generic production"].includes(e.type);
-    const resource = (f) => (f.categories[0] || "").toLowerCase().includes("resource");
-    const technosphere = exchanges.inputs.filter((e) => !isProduct(e));
-    const products = [
-      ...(production ? [{ ...production, own: true, index: target.index, name: info.name, reference_product: info.reference_product,
-        location: info.location, unit: production.unit || info.unit, impact: 0 }] : []),
-      ...exchanges.inputs.filter(isProduct),
-    ];
-    const list = [
-      ["products", "Products", products, true],
-      ["inputs", "Inputs from technosphere", technosphere.filter((e) => e.amount >= 0), true],
-      ["resources", "Inputs from nature", exchanges.flows.filter(resource), false],
-      ["waste", "Outputs to treatment (waste)", technosphere.filter((e) => e.amount < 0), true],
-      ["emissions", "Emissions", exchanges.flows.filter((f) => !resource(f)), false],
-    ].filter(([, , items]) => items.length);
-    // A direct emissions row is about the emissions: those first
-    return target.direct ? [...list.filter(([k]) => k === "emissions"), ...list.filter(([k]) => k !== "emissions")] : list;
-  }, [exchanges, info, target.direct]);
   useEffect(() => { body.current?.scrollTo(0, 0); }, [shown]);
   return html`
     <${PopupWindow} target=${target} win=${win} label=${exchange ? "Exchange information" : "Activity information"} onClose=${onClose} onBack=${onBack}
       onDock=${info && !exchange ? (place) => { onOpenTab(info, place); onClose(); } : null}
-      onKeyDown=${popupKeys({ tabs, shown, setTab, body, onClose, exchange })}
+      onKeyDown=${popupKeys({ tabs, shown, setTab, body, onClose, exchange, explorerKeys })}
       head=${html`
         <div class="info-title">${target.direct ? "Direct emissions of " : ""}${(target.direct ? rowsById.get(row?.parent)?.custom : row?.custom)
           || (info ? (exchange ? info.name : html`<${Editable} value=${info.name} disabled=${locked} onCommit=${(t) => own((dr) => { dr.process.name = t; })} />`) : "…")}${" "}
@@ -2844,12 +2802,10 @@ function InfoPopup({ target, win, method, methodInfo, rootImpact, rowsById, onCl
               ${link && !link.some((l) => l.inputs.some(hasExchangeMeta)) && html`
                 <p class="text muted">No comment or uncertainty recorded for this exchange.</p>`}
             </section>`}
-          ${shown === "exchanges" && sections.map(([key, title, items, products]) => html`
-            <${ExchangeTable} key=${`${key}-${target.index}`} title=${title} items=${items}
-              cumulative=${info.cumulative_per_unit} unitPer=${unitPer}
-              panel=${products ? exchangesPanel : null} base=${base}
-              onFlow=${products ? null : (flow) => follow({ flow, activities: [target.index] })}
-              locked=${locked} onAmount=${(e, text) => own(patchExchange(e.input, e.amount, text))} />`)}
+          ${exchanges?.available && html`
+            <${FUView} key=${target.index} id=${`exchanges-${target.index}`} info=${model} visible=${shown === "exchanges"}
+              initial=${{ root: base, inherit: { method, chartMethods: [], cutoff: 500, cutoffBasis: "top", rules: [] } }}
+              embedded=${{ onInfo: follow, onUse: useAsRoot, keys: explorerKeys }} onSave=${() => {}} onTitle=${() => {}} />`}
           ${shown === "users" && users && html`
             <section>
               <h4>${users.waste ? "Treats the waste of" : "Used by"} · ${users.count} ${users.count === 1 ? "activity" : "activities"}${root ? `, ${users.in_supply_chain} in this supply chain` : ""}</h4>
@@ -3147,7 +3103,7 @@ function ChartPanel({ data, info, method, chartMethods, setChartMethods, view })
   const unit = info.methods[method].unit;
   const total = parts.reduce((s, p) => s + p.impacts[0], 0);
   // Bars of rows in a group (or of the group) take the colour of its rule
-  const colors = useMemo(() => groupColors(data.rows, view), [data, view.groupColors, view.ruleColors]);
+  const colors = useMemo(() => groupColors(data.rows, view), [data, view.groupColors, view.colorBy, view.ruleColors]);
 
   const singleOption = useMemo(() => {
     const o = baseOption();
@@ -3793,7 +3749,10 @@ function Portal({ slot, children }) {
 let keyboardOwner = null;
 // ``initial``: { state } a saved view, { inherit, root? } settings taken from another tab,
 // or { defaultRoot: true } (first start: the model's default functional unit)
-function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onCollapseSide }) {
+// ``embedded``: the left panel alone (header, list and bars, without the side panel), inside the Exchanges tab of a
+// process pop-up, rooted at that process and with a state of its own: { onInfo(target): a process or flow opened from
+// a row replaces the content of the pop-up, onUse(meta): Enter on a process, keys: ref the pop-up asks first for its keys }
+function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onCollapseSide, embedded }) {
   // Edit mode: merges, custom names and replaced suppliers only change how the view looks, not the data: they are
   // left out (and kept in the tab, for the view mode); pins, cut-off and groups stay
   const editing = useContext(EditorContext).editing;
@@ -3820,7 +3779,15 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
   const [popups, setPopups] = useState([]);
   const infoTarget = popups.find((p) => !p.pinned)?.target;
   const updatePopup = (key, change) => setPopups((ps) => ps.map((p) => (p.key === key ? { ...p, ...change(p) } : p)));
-  const openInfo = (target) => setPopups((ps) => [...ps.filter((p) => p.pinned), { key: newId("i"), target, history: [], pinned: false, rect: null }]);
+  // An embedded explorer hands processes and flows to the pop-up it is in; only bundles (others, merged, group) open here
+  const openInfo = (target) => (embedded && !target.bundle ? handOver(target)
+    : setPopups((ps) => [...ps.filter((p) => p.pinned), { key: newId("i"), target, history: [], pinned: false, rect: null }]));
+  // The pop-up of a row of this tree has no row of its own in the pop-up's view: what it needs of it (the process
+  // it is an input of) goes along
+  function handOver(target) {
+    const { row, x, y, ...rest } = target;
+    embedded.onInfo({ ...rest, row: null, ...(row?.kind === "process" ? { parents: suppliedTo(row, rowsById) } : {}) });
+  }
   // Without a key: the pop-up that is not pinned
   const closeInfo = (key) => setPopups((ps) => ps.filter((p) => (key ? p.key !== key : p.pinned)));
   const pinInfo = (key) => setPopups((ps) => (ps.find((p) => p.key === key)?.pinned
@@ -3845,13 +3812,16 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
       flowMain: loadPreference("recipeFlowMain", DEFAULT_RECIPE.flowMain), flowSecondary: loadPreference("recipeFlowSecondary", DEFAULT_RECIPE.flowSecondary),
     },
     groupProducts: loadPreference("groupProducts", "0") === "1",
-    comments: loadPreference("comments", "1") === "1",
+    comments: !embedded && loadPreference("comments", "1") === "1",  // the pop-up is narrow
     groupColors: loadPreference("groupColors", "1") === "1",
+    colorBy: loadPreference("colorBy", "group"),  // "group" or "type" (flow type)
     // colours picked for rules, by rule name (or field, for a group-by rule)
     ruleColors: (() => { try { return JSON.parse(loadPreference("ruleColors", "{}")) || {}; } catch { return {}; } })(),
   }));
+  const [viewOptions, setViewOptions] = useState(false);  // embedded: the view bar is folded away
   const [nameEdit, setNameEdit] = useState(null);  // { id }: the row whose process name is being edited (Enter, in edit mode)
   useEffect(() => {
+    if (embedded) return;  // the preferences are the main view's
     savePreference("naming", view.naming);
     savePreference("recipeMain", view.recipe.main);
     savePreference("recipeSecondary", view.recipe.secondary);
@@ -3860,6 +3830,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
     savePreference("groupProducts", view.groupProducts ? "1" : "0");
     savePreference("comments", view.comments ? "1" : "0");
     savePreference("groupColors", view.groupColors ? "1" : "0");
+    savePreference("colorBy", view.colorBy);
     savePreference("ruleColors", JSON.stringify(view.ruleColors));
   }, [view]);
   const [rules, setRules] = useState([]);
@@ -3874,12 +3845,12 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
   const [error, setError] = useState(null);
   const [tab, setTab] = useState("chart");
   const [groupName, setGroupName] = useState("");
-  const [display, setDisplay] = useState(() => loadPreference("display", "list"));
+  const [display, setDisplay] = useState(() => (embedded ? "list" : loadPreference("display", "list")));
   const [orientation, setOrientation] = useState(() => loadPreference("orientation", "horizontal"));
-  useEffect(() => savePreference("display", display), [display]);
-  useEffect(() => savePreference("orientation", orientation), [orientation]);
+  useEffect(() => { if (!embedded) savePreference("display", display); }, [display]);
+  useEffect(() => { if (!embedded) savePreference("orientation", orientation); }, [orientation]);
   const [cycles, setCycles] = useState(() => loadPreference("cycles", "off") === "on");
-  useEffect(() => savePreference("cycles", cycles ? "on" : "off"), [cycles]);
+  useEffect(() => { if (!embedded) savePreference("cycles", cycles ? "on" : "off"); }, [cycles]);
 
   useEffect(() => {
     if (initial?.state?.root) restoreTab(initial.state);
@@ -4234,7 +4205,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
       model: { title: info.title, activities: info.activities },
       root, amount, method: info.methods[method].name, chartMethods: chartMethods.map((k) => info.methods[k].name),
       cutoff: +cutoffValue(cutoff, cutoffBasis).toFixed(8), cutoffBasis, expanded: [...expanded], rules, pinned: [...pinned], others: [...others], merges, ungrouped: [...ungrouped], substitutions, labels,
-      display: { naming: view.naming, recipe: view.recipe, groupProducts: view.groupProducts, comments: view.comments, groupColors: view.groupColors, ruleColors: view.ruleColors },
+      display: { naming: view.naming, recipe: view.recipe, groupProducts: view.groupProducts, comments: view.comments, groupColors: view.groupColors, colorBy: view.colorBy, ruleColors: view.ruleColors },
     };
   }
   function exportView() {
@@ -4365,6 +4336,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
         // (as a double-click on its name does)
         if (selectedRows.length !== 1 || row.kind !== "process" || !row.meta) return false;
         if (editing) setNameEdit({ id: row.id });
+        else if (embedded) embedded.onUse(row.meta);
         else if (row.meta.index !== root?.index) { closeInfo(); selectRoot(row.meta); }
         return true;
       case "g":
@@ -4386,7 +4358,10 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
   }
   const treeKey = useRef(onTreeKey);
   treeKey.current = onTreeKey;
+  // Embedded: the pop-up asks this panel first for its keys; ←/→ with no row selected switch the pop-up's panel
+  if (embedded) embedded.keys.current = (e) => ((e.key === "ArrowLeft" || e.key === "ArrowRight") && !selection.size ? false : treeKey.current(e));
   useEffect(() => {
+    if (embedded) return;
     const onKey = (e) => {
       // A pop-up that has the focus has its own keys
       if (keyboardOwner !== id || e.target.closest?.("input, textarea, select, [contenteditable], .info-popup")) return;
@@ -4417,7 +4392,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
     const t = p.target;
     const bundle = t.bundle ? findRow(t.bundle) : null;
     const win = { rect: p.rect, pinned: p.pinned, onPin: () => pinInfo(p.key), onRect: (rect) => updatePopup(p.key, () => ({ rect })) };
-    const follow = (next) => followInfo(p.key, next);
+    const follow = (next) => (embedded ? handOver(next) : followInfo(p.key, next));
     const common = { key: p.key, target: t, win, onClose: () => closeInfo(p.key), onBack: backInfo(p) };
     if (bundle?.kind === "rest") return html`<${OthersPopup} ...${common} rest=${bundle} rows=${data.rows} rootImpact=${rootImpact}
         cutoff=${cutoff} cutoffBasis=${cutoffBasis} pinned=${pinned} setPinned=${setPinned} others=${others} setOthers=${setOthers} view=${view}
@@ -4434,14 +4409,14 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
     if (t.flow !== undefined) return html`<${FlowInfoPopup} ...${common} method=${method} methods=${info.methods}
         onOpen=${(index) => follow({ index, row: null })} />`;
     if (t.bundle) return null;
-    return html`<${InfoPopup} ...${common} method=${method} methodInfo=${methodInfo} rootImpact=${rootImpact} rowsById=${rowsById}
+    return html`<${InfoPopup} ...${common} model=${info} method=${method} methodInfo=${methodInfo} rootImpact=${rootImpact} rowsById=${rowsById}
         onUseAsRoot=${selectRoot} onOpenTab=${(r, place) => onOpenTab(id, r, place)} root=${root} amount=${amount}
         onFollow=${follow} onGoTo=${(index) => goTo(index)} />`;
   }
   return html`
-    <div class="fu-view" ref=${box} style=${{ display: visible ? "" : "none" }}>
+    <div class=${`fu-view ${embedded ? "embedded" : ""}`} ref=${box} style=${{ display: visible ? "" : "none" }}>
       <header class="fu-header">
-        <${FunctionalUnit} root=${root} onSelect=${selectRoot} fields=${info.query_fields} />
+        ${!embedded && html`<${FunctionalUnit} root=${root} onSelect=${selectRoot} fields=${info.query_fields} />`}
         <label>Amount <${NumberInput} class="amount" value=${amount} min=${1e-12} step="any"
           onValue=${setAmount} aria-label="Amount" />${root ? root.unit : ""}</label>
         <${MethodSelect} methods=${info.methods} value=${method} onChange=${setMethod} />
@@ -4453,21 +4428,23 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
           ${Object.entries(CUTOFF_MODES).map(([key, mode]) => html`<option value=${key} title=${mode.hint}>${mode.label}</option>`)}
         </select>
       </header>
-        <section class="tree-section" ref=${treeSection} onMouseDown=${() => { keyboardOwner = id; }}>
+        <section class="tree-section" ref=${treeSection} onMouseDown=${() => { if (!embedded) keyboardOwner = id; }}>
           <div class="toolbar">
-            <div class="segmented" role="group" aria-label="Display">
+            ${!embedded && html`<div class="segmented" role="group" aria-label="Display">
               <button class=${display === "list" ? "primary" : ""} onClick=${() => setDisplay("list")}>List</button>
               <button class=${display === "graph" ? "primary" : ""} onClick=${() => setDisplay("graph")}>Tree</button>
               <button class=${display === "sankey" ? "primary" : ""} onClick=${() => setDisplay("sankey")}
                 title="The tree as a flowchart: bands as thick as the impact flowing from each supplier to its user">Sankey</button>
-            </div>
+            </div>`}
             <button onClick=${() => setExpanded(new Set(root ? [String(root.index)] : []))} title="Collapse everything below the root">Collapse</button>
             <button onClick=${resetView} disabled=${!root} title="Collapse the tree, clear pinned rows and rows moved to others, and remove all groups, merges and custom names (undoable)">Reset view</button>
+            ${embedded && html`<button class=${viewOptions ? "primary" : ""} onClick=${() => setViewOptions(!viewOptions)}
+              title="Names, comments, grouping by product and colours">View options</button>`}
             <span class="spacer"></span>
-            <${SaveMenu} disabled=${!root} onSave=${exportView} onLoad=${loadView} onCopy=${copyView} />
+            ${!embedded && html`<${SaveMenu} disabled=${!root} onSave=${exportView} onLoad=${loadView} onCopy=${copyView} />`}
           </div>
-          <${ViewBar} view=${view} setView=${setDisplayView}
-            example=${(() => { const r = data.rows.find((x) => x.kind === "process" && x.depth > 0); return r ? rowNames(r, rowsById, view) : null; })()} />
+          ${(!embedded || viewOptions) && html`<${ViewBar} view=${view} setView=${setDisplayView}
+            example=${(() => { const r = data.rows.find((x) => x.kind === "process" && x.depth > 0); return r ? rowNames(r, rowsById, view) : null; })()} />`}
           ${undo && html`
             <div class="notice" role="status">
               <span>${undo.message}</span>
@@ -4507,7 +4484,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
               </span>`}
           </div>
         </section>
-      <${Portal} slot=${`side-${id}`}>
+      ${!embedded && html`<${Portal} slot=${`side-${id}`}>
         <section class="side">
           <div class="tabs" role="tablist">
             ${[["chart", "Process contribution"], ["flows", "Flow contribution"], ["groups", `Group rules${activeRules ? ` (${activeRules})` : ""}`], ["global", "Group contributions"]].map(([key, label]) => html`
@@ -4529,7 +4506,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
           ${tab === "global" && html`<${GlobalPanel} info=${info} root=${root} amount=${amount} method=${method} rules=${rules} view=${view}
               onLocate=${goTo} onInfo=${(index, x, y) => openInfo({ index, row: null, x, y })} />`}
         </section>
-      <//>
+      <//>`}
     </div>`;
 }
 

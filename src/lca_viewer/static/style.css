@@ -426,6 +426,14 @@ header { gap: 10px; }
 /* View bar: names and product grouping, for the tree and the chart */
 .view-bar { padding: 4px 12px; border-bottom: 1px solid var(--border); background: var(--panel); }
 .view-bar .row { margin: 2px 0; }
+/* The explorer of a pop-up's Exchanges tab: the main view's left panel, as tall as its rows (the pop-up scrolls) */
+.fu-view.embedded { flex: none; margin: 0 -14px; }
+.fu-view.embedded .tree { overflow: visible; }
+.fu-view.embedded .tree table { min-width: 460px; }
+.info-body .tree td, .info-body .tree th { padding: 3px 8px; vertical-align: middle; }
+.view-bar .color-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 2px 0 4px; font-size: 11px; color: var(--muted); }
+.view-bar .color-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.view-bar .color-legend i { width: 3px; height: 12px; border-radius: 1px; }
 
 /* Save split button */
 .split { position: relative; display: inline-flex; }

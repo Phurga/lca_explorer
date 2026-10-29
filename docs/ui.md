@@ -271,8 +271,8 @@ API in `src/lca_viewer/server.py`.
   pop-up**: only the amount and impact in this tree, the path from the root,
   and the comment, uncertainty and pedigree of the parent's input of this
   product. Once open, a pop-up has the keyboard: ←/→ switch panel, ↓ enters
-  the panel. The panels of processes — *Exchanges* (the products and inputs from the
-  technosphere), *Used by* and *Alternatives* — are lists like the main one
+  the panel. *Exchanges* is the main view's left panel itself (see below); the
+  panels of processes *Used by* and *Alternatives* are lists like the main one
   (`ProcessRow`): ↑/↓ move between the rows (↑ on the first goes back to the panels),
   → expands a row (or goes to its first child), ← collapses it (or goes to the row it
   hangs from; where a row does not use ←/→ they switch panel), Space opens the
@@ -291,22 +291,23 @@ API in `src/lca_viewer/server.py`.
   below an expanded one, its inputs with their impact and share of it).
   Descriptions are stored in the cached model (`details.pkl`, 77 MB for
   ecoinvent, loaded on first use).
-  **Exchanges** as recorded in the dataset, by direction: *Products* (the
-  reference product, and co-products if any), *Inputs from technosphere*,
-  *Inputs from nature* (natural resources), *Outputs to treatment* (waste:
-  technosphere exchanges with a negative amount, shown as positive) and
-  *Emissions*, each with amount, impact per unit of product and share of the
-  cumulative impact, largest first. The rows of products are the process lists
-  described above; for an emission, Space opens the elementary flow's pop-up, **c**
-  or the **(i)** of the row the exchange pop-up — comment, uncertainty
-  (distribution, σ with and without pedigree), pedigree scores, formula and
-  variable name. *Reference product
-  exchange* gives the production volume and product properties (price,
-  carbon and water content, dry mass, …). Exchanges are stored in the cached
+  **Exchanges** is an instance of the main view's left panel (header, list, bars
+  and the keys of the list), rooted at the pop-up's process (amount 1, its
+  inputs, direct emissions and waste below it, as in the tree) and with a state of
+  its own: expanding, selection, cut-off (starting at the 500 largest rows, so that
+  every input is listed), method, groups, merges, pins and names are not shared with
+  the tab, nor with another pop-up, and are kept while the pop-up stays on the
+  process. *View options* unfolds the view bar. Space, **c** and the **(i)** of a
+  process or flow row replace the pop-up with that process's, that exchange's or
+  that flow's pop-up (←/Backspace comes back, the explorer then starts afresh);
+  **Enter** makes the process the functional unit of the tab. In Edit mode amounts and names
+  are edited as in the tree. *Reference product exchange* (production
+  volume, price, carbon and water content, dry mass, …) is in *Description*; comments,
+  uncertainty (distribution, σ with and without pedigree), pedigree scores, formula
+  and variable name of an exchange are in its exchange pop-up. Exchanges are stored in the cached
   model (`exchanges.sqlite`, 105 MB for ecoinvent 3.9.1, read one activity
   at a time); a model built before this has none — rebuild it to see them.
-  The activity pop-up opens on *Exchanges* (emissions first for a direct
-  emissions row); *Description* (with the reference product exchange) and
+  The activity pop-up opens on *Exchanges*; *Description* (with the reference product exchange) and
   *Metadata* follow; empty panels are not shown. The exchange pop-up has no
   panels or actions. Rows followed inside a pop-up (a supplier, a user, an
   exchange, a flow's emitter) replace it and are kept in a
@@ -369,7 +370,11 @@ API in `src/lca_viewer/server.py`.
     the tree, graph and Sankey, and the bars of the *Process contribution*,
     *Flow contribution* (a substance in a named flow group) and *Group
     contributions* charts; the round button at the right of the side panel's
-    tabs switches all group colours off and on.
+    tabs switches all group colours off and on. The view bar's *Flow type
+    colours* colour the rows (list and charts) by the kind of exchange instead:
+    product (the root), technosphere input, waste (output to treatment),
+    resource (input from nature), emission (output to nature) and direct
+    emissions rows; *Group colours* goes back to the colours of groups.
   - *Group contributions*: global grouping with the named groups, direct
     (the default) or first-match attribution (see [grouping.md](grouping.md)),
     groups sorted by decreasing impact with *other* last.
