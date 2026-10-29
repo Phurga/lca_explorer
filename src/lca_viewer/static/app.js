@@ -1603,10 +1603,10 @@ function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onU
                         </span>`}
                     <span class=${`row-actions ${renaming === r.id ? "renaming" : ""}`}>
                       ${hasDetails(r) && html`
-                        <button class="info-btn" title="Comment and uncertainty of the exchange (c); the activity: right-click or Space" aria-label="Details"
+                        <button class="info-btn" title="Comment and uncertainty of the exchange; the activity: right-click" aria-label="Details"
                           onClick=${(e) => { e.stopPropagation(); onInfo(r, e, true); }}>i</button>`}
                       ${labelKey(r) && !editing && html`
-                        <button class="rename-btn" title="Rename in this view (r) — the database is not changed" aria-label="Rename"
+                        <button class="rename-btn" title="Rename in this view — the database is not changed" aria-label="Rename"
                           onClick=${(e) => { e.stopPropagation(); onStartRename(r); }}>✎</button>`}
                       ${r.kind === "group" && ungroupable(r) && html`
                         <button class="chip" onClick=${(e) => { e.stopPropagation(); onUngroup(r); }}>ungroup</button>`}
@@ -2257,7 +2257,7 @@ function ExchangeTable({ title, items, cumulative, unitPer, panel, base, onFlow,
       <h4>${title} · ${items.length}</h4>
       <table class=${`flows exchanges ${panel ? "plist" : ""}`}>
         <thead><tr>
-          <th title=${panel ? PROCESS_KEYS : undefined}>${panel ? "Product" : "Flow"} <span class="muted">· ${panel ? "Space c Enter → ←" : "Space: details, c: comment and uncertainty"}</span></th>
+          <th>${panel ? "Product" : "Flow"}</th>
           <th class="num" title="Amount in the dataset">amount</th><th class="num" title=${unitPer}>impact</th><th class="num">share</th>
         </tr></thead>
         <tbody>${shown.map((e, i) => {
@@ -2270,7 +2270,7 @@ function ExchangeTable({ title, items, cumulative, unitPer, panel, base, onFlow,
           };
           return html`
             <tr key=${i} class="exchange" data-nav tabindex="-1" onKeyDown=${keys}>
-              <td><button class="info-btn" title="Comment and uncertainty (c)" aria-label="Comment and uncertainty"
+              <td><button class="info-btn" title="Comment and uncertainty" aria-label="Comment and uncertainty"
                   onClick=${(ev) => { ev.stopPropagation(); onFlow(e.index); }}>i</button>
                 <span title=${`${e.name} | ${e.categories.join(" / ")}`}>${e.name} <span class="muted">${e.categories.join(" / ")}</span></span></td>
               <td class="num"><${Editable} value=${Math.abs(e.amount)} format=${fmtAmount} disabled=${locked || !onAmount || !e.input}
@@ -2286,7 +2286,6 @@ function ExchangeTable({ title, items, cumulative, unitPer, panel, base, onFlow,
     </section>`;
 }
 
-const PROCESS_KEYS = "↑ ↓: move · → ←: expand, collapse · Space: details · c: its exchange (comment, uncertainty) · Enter: use as functional unit";
 // A process in a panel of a pop-up (exchanges, used by, alternatives): a row like those of the main list.
 // ↑/↓ move between the rows (``popupKeys``), → expands it (or goes to its first child), ← collapses it (or goes to
 // the row above it), Space opens its pop-up, c the exchange it stands for, Enter makes it the functional unit.
@@ -2337,7 +2336,7 @@ function ProcessRow({ item, above, depth, ancestors, panel }) {
             : expandable
               ? html`<button class="toggle" aria-label=${open ? "Collapse" : "Expand"} onClick=${() => setOpen(!open)}>${open ? "▾" : "▸"}</button>`
               : html`<span class="toggle"></span>`}
-          ${exchange && html`<button class="info-btn" title="Comment and uncertainty of the exchange (c)" aria-label="Comment and uncertainty"
+          ${exchange && html`<button class="info-btn" title="Comment and uncertainty of the exchange" aria-label="Comment and uncertainty"
             onClick=${(e) => { e.stopPropagation(); panel.onExchange(item, above); }}>i</button>`}
           <span class="name-text">${panel.label(item)}</span>
           <span class="loc-chip">${item.location}</span></span></td>
@@ -2382,7 +2381,7 @@ function usePopupKeys(box, onClose, onBack, pinned = false) {
   }, []);
 }
 const BackButton = ({ onBack }) => onBack && html`
-  <button class="back" onClick=${onBack} title="Back (Backspace)" aria-label="Back">←</button>`;
+  <button class="back" onClick=${onBack} title="Back" aria-label="Back">←</button>`;
 const PinIcon = () => html`<svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true" fill="currentColor">
   <path d="M10 1.5L14.5 6l-1.3.6-2.6 2.6.3 3-1.1 1.1-2.9-2.9L3 14.5l-1-1 4.2-4.2-2.9-2.9 1.1-1.1 3 .3 2.6-2.6z" /></svg>`;
 
@@ -2857,7 +2856,7 @@ function InfoPopup({ target, win, method, methodInfo, rootImpact, rowsById, onCl
               ${users.count === 0 ? html`<p class="text muted">No activity in the database uses this product.</p>` : html`
                 <table class="flows users plist">
                   <thead><tr>
-                    <th title=${PROCESS_KEYS}>Activity <span class="muted">· Space c Enter → ←</span></th>
+                    <th>Activity</th>
                     <th class="num" title=${`${unit(info.unit)} ${users.waste ? "of waste" : ""} per unit of the activity's product`}>per unit</th>
                     ${root && html`<th class="num" title="Amount going to this activity in the supply chain of the functional unit">in this tree</th><th class="num">share</th><th></th>`}
                   </tr></thead>
@@ -2876,7 +2875,7 @@ function InfoPopup({ target, win, method, methodInfo, rootImpact, rowsById, onCl
             </p>
             <table class="flows alternatives plist">
               <thead><tr>
-                <th title=${PROCESS_KEYS}>Activity <span class="muted">· Space c Enter → ←</span></th>
+                <th>Activity</th>
                 <th class="num" title=${`${methodInfo.unit} per ${unit(alternatives.unit)} of ${alternatives.product}`}>${methodInfo.unit} per ${unit(alternatives.unit)}</th>
                 <th class="num">vs. current</th>
               </tr></thead>
@@ -4698,12 +4697,71 @@ function LayoutView({ node, renderPane, onResize }) {
     </div>`;
 }
 
+// Keys of the lists and pop-ups, for the Shortcuts dialog of the top bar: [keys, what they do]
+const SHORTCUTS = [
+  ["Lists and trees (the one clicked last)", [
+    ["↓ ↑", "Select the row below / above"],
+    ["Shift + ↓ ↑", "Extend the selection over siblings (what Group and Merge act on)"],
+    ["→", "Expand the row; if already expanded, go to its first child"],
+    ["←", "Collapse the row; if already collapsed, go to its parent"],
+    ["Space", "Open (or close) the pop-up of the process"],
+    ["c", "Open (or close) the pop-up of its exchange: comment and uncertainty"],
+    ["Enter", "Use the process as the functional unit of the tab (in Edit mode: rename it in the database)"],
+    ["r", "Rename the row in this view (the database is not changed)"],
+    ["g", "Group the selected rows, or ungroup a group"],
+    ["m", "Merge the selected rows, or unmerge a merged row"],
+    ["o", "Move the selection to others (inside an expanded others row: pin it out)"],
+    ["Ctrl/⌘ + Z", "Undo the last change to the tree"],
+    ["Esc", "Clear the selection"],
+  ]],
+  ["Pop-ups", [
+    ["← →", "Switch panel"],
+    ["↓", "Enter the panel; then ↓ ↑ move between its rows, ↑ on the first goes back to the panels"],
+    ["→ ←", "On a row of a list: expand, collapse (or go to the first child, the parent)"],
+    ["Space  c  Enter", "On a row of a list: as in the main list"],
+    ["Backspace", "Back to the previous pop-up"],
+    ["Esc", "Close the pop-up (a pinned one only while the pointer is on it)"],
+  ]],
+  ["Search fields", [
+    ["↓ ↑  Enter", "Move through the results, choose one"],
+    ["Esc", "Close the results"],
+  ]],
+];
+
+function ShortcutsDialog({ onClose }) {
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
+  return html`
+    <div class="modal-backdrop" onMouseDown=${(e) => e.target === e.currentTarget && onClose()}>
+      <div class="load-dialog shortcuts-dialog" role="dialog" aria-label="Keyboard shortcuts">
+        <div class="info-head">
+          <div class="info-title">Keyboard shortcuts</div>
+          <button onClick=${onClose} aria-label="Close">×</button>
+        </div>
+        <div class="load-body">
+          ${SHORTCUTS.map(([title, keys]) => html`
+            <section key=${title}>
+              <h3>${title}</h3>
+              <table class="shortcuts">
+                ${keys.map(([k, what]) => html`<tr key=${k + what}><td class="keys">${k}</td><td>${what}</td></tr>`)}
+              </table>
+            </section>`)}
+          <p class="muted small">Keys do nothing while you type in a field.</p>
+        </div>
+      </div>
+    </div>`;
+}
+
 function App() {
   const [info, setInfo] = useState(null);
   const [error, setError] = useState(null);
   // Databases loaded in the server; null: a server without Load database (one model, plain URLs)
   const [databases, setDatabases] = useState(undefined);
   const [loadOpen, setLoadOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   // The process form: null (closed), or what to open it on: {} (a new process), { edit } (a dataset written
   // by the app), { copyFrom } (a process to start from), { initial } (a change staged before)
   const [datasetOpen, setDatasetOpen] = useState(null);
@@ -4872,9 +4930,11 @@ function App() {
         ${rebuilding?.status === "running" ? "Rebuilding…" : "Rebuild required"}</button>`}
       ${rebuilding?.status === "failed" && html`<span class="error-inline" title=${rebuilding.error}>Rebuild failed</span>`}
       <span class="spacer"></span>
+      <button onClick=${() => setShortcutsOpen(true)} title="Keyboard navigation of the lists and pop-ups">Shortcuts</button>
       ${sidePanel}
     </header>
-    ${loadOpen && html`<${LoadDatabase} onClose=${() => setLoadOpen(false)} onDatabases=${setDatabases} onLocks=${refreshEditor} />`}
+    ${shortcutsOpen && html`<${ShortcutsDialog} onClose=${() => setShortcutsOpen(false)} />`}
+    ${loadOpen &&html`<${LoadDatabase} onClose=${() => setLoadOpen(false)} onDatabases=${setDatabases} onLocks=${refreshEditor} />`}
     ${datasetOpen && origin && html`<${DatasetForm} current=${origin} edit=${datasetOpen.edit} initial=${datasetOpen.initial}
       copyFrom=${datasetOpen.copyFrom} deleted=${new Set(pending.filter((c) => c.kind === "delete").map((c) => `${c.database}/${c.code}`))}
       staged=${pending} locked=${pendingView.locked} onStage=${stage} onClose=${() => setDatasetOpen(null)} />`}`;

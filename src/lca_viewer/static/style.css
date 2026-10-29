@@ -555,6 +555,10 @@ table.results tr.muted td { color: var(--muted); }
   background: var(--panel); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 12px 40px rgba(0,0,0,.22);
 }
 .load-body { overflow: auto; padding: 4px 16px 12px; }
+.load-dialog.shortcuts-dialog { width: min(640px, 100%); }
+table.shortcuts { border-collapse: collapse; width: 100%; }
+table.shortcuts td { padding: 3px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
+table.shortcuts td.keys { white-space: nowrap; font-family: var(--mono); font-size: 12px; width: 120px; padding-right: 16px; }
 .welcome { overflow: auto; }
 .load-page { max-width: 820px; margin: 24px auto; padding: 4px 20px 16px; background: var(--panel);
   border: 1px solid var(--border); border-radius: 10px; }

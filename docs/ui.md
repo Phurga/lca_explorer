@@ -194,7 +194,10 @@ API in `src/lca_viewer/server.py`.
   rows, no groups (every grouping rule, quick groups included, and *Group by
   product*), no merges and no custom names. Changing the cut-off clears pins and moved rows.
   Both show a notice saying what they removed; Ctrl/⌘+Z brings it back.
-- **Keyboard** (the tree clicked last; not while typing in a field):
+- **Keyboard** (the tree clicked last; not while typing in a field). The
+  **Shortcuts** button of the top bar lists these keys, those of the pop-ups
+  and those of the search fields (`SHORTCUTS` in `app.js`); the panels
+  themselves carry no key hints:
 
   | Key | Action |
   |---|---|
