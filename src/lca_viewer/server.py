@@ -54,6 +54,7 @@ class ViewState(BaseModel):
     others: list[str] = []
     merges: list[dict] = []
     ungrouped: list[str] = []
+    substitutions: dict[str, int] = {}
     group_products: bool = False
     methods: list[int] = []
     """Methods whose impacts are returned, in this order (default: ``method`` only)."""
@@ -181,6 +182,8 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
 
     META_FIELDS = ["name", "reference_product", "location", "unit", "activity_type", "isic", "cpc", "database", "code"]
     rows_by_product = model.A.tocsr()  # row j: the activities using product j
+    products = activities["reference_product"].astype(str).to_numpy()
+    units = activities["unit"].astype(str).to_numpy()
     supplies: dict[tuple[int, float], np.ndarray] = {}
 
     def supply(product: int, amount: float) -> np.ndarray:
@@ -285,6 +288,7 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
             }
             if r.kind == "process":
                 out["meta"] = meta(r.node.product)
+                out["replaced"] = r.replaced
             elif r.kind == "direct" and len(r.node.path) > 1 and isinstance(r.node.path[-2], int):
                 out["meta"] = meta(r.node.path[-2])  # the process emitting
             elif r.kind == "merged":
@@ -460,6 +464,29 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
                  "flow": float(flow[i]), "share": float(flow[i] / produced) if produced else 0.0,
                  "impact": float(flow[i] * model.G[index, k])}
                 for i in shown
+            ],
+        }
+
+    @app.get("/api/activity/{index}/alternatives")
+    def activity_alternatives(index: int, method: int | None = None, limit: int = 50):
+        """Other activities producing the same product in the same unit ("alternative
+        suppliers"), with their cumulative impact per unit of product, lowest first."""
+        if not 0 <= index < model.size:
+            raise HTTPException(404, f"No activity {index}")
+        k = default_method if method is None else method
+        same = np.flatnonzero((products == products[index]) & (units == units[index]) & (model.diagonal > 0))
+        same = same[same != index]
+        per_unit = model.G[same, k]
+        current = float(model.G[index, k])
+        shown = same[np.argsort(per_unit)][:limit]
+        return {
+            "product": products[index], "unit": units[index],
+            "current": {**meta(index), "per_unit": current},
+            "count": int(len(same)),
+            "alternatives": [
+                {**meta(int(j)), "per_unit": float(model.G[j, k]),
+                 "relative": float(model.G[j, k] / current - 1) if current else None}
+                for j in shown
             ],
         }
 

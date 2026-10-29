@@ -84,6 +84,9 @@ class Row:
     sources: list[tuple[int, float]] | None = None
     """For direct rows and every row below them (flows, groups of flows, others):
     the (activity, operation level) pairs whose own emissions they are part of."""
+    replaced: str | None = None
+    """Process row whose input the user replaced by another supplier: the row id the input
+    has without the substitution (``View.substitutions``)."""
 
 
 @dataclass
@@ -95,7 +98,10 @@ class View:
     """Under each parent, the smallest children that together weigh at most ``cutoff`` of
     the reference (see ``cutoff_basis``), for ``method``, are bundled in "others"."""
     cutoff_basis: str = "parent"
-    """"parent": the reference is the sum of the siblings' |impact|; "total": the root score."""
+    """How ``cutoff`` is read: "parent" (a share of the siblings' |impact| sum), "total" (a
+    share of the root score), "cumulative" (the largest siblings are kept until they reach
+    that share of the sum: the rest is below) or "top" (``cutoff`` is a count: the largest
+    siblings are kept, the rest is below; below 1, no limit)."""
     method: int = 0
     pinned: set[str] = field(default_factory=set)
     """Row ids shown even when below the cut-off (exceptions chosen by the user)."""
@@ -109,11 +115,16 @@ class View:
     process whose inventory is the union of theirs (common inputs summed)."""
     ungrouped: set[str] = field(default_factory=set)
     """Ids of "group by product" rows the user ungrouped: their members stay separate rows."""
+    substitutions: dict[str, int] = field(default_factory=dict)
+    """``{row id of an input: activity index}``: the input is supplied by that activity
+    instead (same unit, same amount), with its own supply chain. The key is the input's
+    row id as it is without the substitution."""
 
     def __post_init__(self):
         self._activities = derived_activities(self.tree.model)
         self._flows = derived_flows(self.tree.model)
         self._masks: dict[int, np.ndarray] = {}
+        self._replaced: dict[str, str] = {}  # row id of a substituted input -> its original id
 
     # --- state -----------------------------------------------------------
     def expand(self, row_id: str) -> None:
@@ -138,6 +149,7 @@ class View:
             "others": sorted(self.others),
             "merges": self.merges,
             "ungrouped": sorted(self.ungrouped),
+            "substitutions": self.substitutions,
             "group_products": self.group_products,
         }
 
@@ -155,6 +167,7 @@ class View:
             others=set(data.get("others", [])),
             merges=list(data.get("merges", [])),
             ungrouped=set(data.get("ungrouped", [])),
+            substitutions={k: int(v) for k, v in data.get("substitutions", {}).items()},
             group_products=bool(data.get("group_products", False)),
         )
 
@@ -190,6 +203,7 @@ class View:
     def rows(self) -> list[Row]:
         """All visible rows, depth first, children sorted by impact."""
         out: list[Row] = []
+        self._replaced = {}  # filled as the children of the expanded rows are built
         self._render(self._process_row(self.tree.root, None), out)
         return out
 
@@ -239,9 +253,9 @@ class View:
         if row.kind == "direct":
             children = self.tree.flows(row.node, row.sources)
         elif row.kind == "merged":
-            children = self._merged_children(row)
+            children = self._substituted(self._merged_children(row))
         else:
-            children = self.tree.children(row.node)
+            children = self._substituted(self.tree.children(row.node))
         rows = self._group(children, row)
         return self._apply_cutoff(rows, row)
 
@@ -329,6 +343,25 @@ class View:
                 rows.append(direct)
         return rows
 
+    def _substituted(self, children: list[Node]) -> list[Node]:
+        """Inputs the user replaced (``substitutions``) take the supply chain of their new
+        activity, with the same amount. A replacement in another unit, or by a product the
+        parent already has as an input (a row id would then be taken twice), is ignored."""
+        if not self.substitutions:
+            return children
+        units = self._activities["unit"]
+        present = {c.product for c in children if not c.is_direct}
+        out = []
+        for c in children:
+            new = None if c.is_direct else self.substitutions.get(c.id)
+            if new is None or new in present or units.iat[new] != units.iat[c.product]:
+                out.append(c)
+                continue
+            node = Node(c.path[:-1] + (new,), c.amount, c.amount * self.tree.model.G[new])
+            self._replaced[node.id] = c.id
+            out.append(node)
+        return out
+
     def _apply_cutoff(self, rows: list[Row], parent: Row) -> list[Row]:
         """Sort siblings and bundle into "others" those below the cut-off or moved there."""
         rows.sort(key=lambda r: -abs(r.impacts[self.method]))
@@ -370,14 +403,24 @@ class View:
         cumulative |impact| stays within ``cutoff`` of the siblings' total or of the root."""
         below = [False] * len(rows)
         magnitudes = [float(abs(r.impacts[self.method])) for r in rows]
+        if self.cutoff_basis == "top":
+            keep = round(self.cutoff)
+            return [i >= keep for i in range(len(rows))] if keep >= 1 else below
         if self.cutoff_basis == "total":
             reference = float(abs(self.tree.root.impacts[self.method]))
-        elif self.cutoff_basis == "parent":
+        elif self.cutoff_basis in ("parent", "cumulative"):
             reference = sum(magnitudes)
         else:
             raise ValueError(f"Unknown cut-off basis {self.cutoff_basis!r}")
         budget = self.cutoff * reference
         if budget <= 0:
+            return below
+        if self.cutoff_basis == "cumulative":
+            # The largest rows are kept until together they reach the budget
+            cumulated = 0.0
+            for i, magnitude in enumerate(magnitudes):
+                below[i] = cumulated >= budget
+                cumulated += magnitude
             return below
         cumulated = 0.0
         for i in reversed(range(len(rows))):
@@ -405,7 +448,7 @@ class View:
         a = self._activities.iloc[node.product]
         label = f"{a['reference_product']} | {a['name']} | {a['location']}"
         return Row(node.id, parent, depth, "process", label, node.amount, a["unit"],
-                   node.impacts, True, node.id in self.expanded, node)
+                   node.impacts, True, node.id in self.expanded, node, replaced=self._replaced.get(node.id))
 
     def _merged_row(self, members: list[Node], parent: Row, depth: int) -> Row:
         products = sorted(m.product for m in members)

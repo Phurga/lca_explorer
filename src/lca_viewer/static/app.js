@@ -96,6 +96,35 @@ function shareOf(r, byId, rootImpact, basis) {
   const reference = basis === "parent" && r.parent != null ? byId.get(r.parent)?.impacts[0] : rootImpact;
   return reference ? r.impacts[0] / reference : 0;
 }
+// Cut-off modes (the menu next to the cut-off number). The number is a share in percent,
+// except for "top" where it is a count of rows. Shares are shown of the total only for "total".
+const CUTOFF_MODES = {
+  total: { label: "of total", unit: "%", hint: "Under each parent, the smallest children together weighing at most this share of the total go to others" },
+  parent: { label: "of parent", unit: "%", hint: "Under each parent, the smallest children together weighing at most this share of that parent go to others" },
+  cumulative: { label: "cumulative", unit: "%", hint: "Under each parent, the largest children are kept until together they reach this share of that parent; the rest go to others" },
+  top: { label: "largest", unit: "rows", hint: "Under each parent, only this many of the largest children are kept; the rest go to others" },
+};
+const CUTOFF_DEFAULTS = { total: 1, parent: 1, cumulative: 90, top: 5 };
+const cutoffValue = (value, basis) => (basis === "top" ? value : value / 100);
+const shareBasisOf = (basis) => (basis === "total" ? "total" : "parent");
+// The reason in the others pop-up, after "N" (N rows are in others because of the cut-off)
+const cutoffReason = (value, basis) => ({
+  total: `in the bottom ${value} % of the total`,
+  parent: `in the bottom ${value} % of their parent`,
+  cumulative: `after the largest rows reaching ${value} % of their parent`,
+  top: `beyond the ${value} largest`,
+})[basis];
+// Colour per group: a group row and the rows below it (the nearest group wins) share one
+// hue, derived from the row id so that a group keeps its colour when others change
+const groupHue = (id) => [...id].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 0);
+function groupColors(rows) {
+  const colors = new Map();
+  for (const r of rows) {
+    if (r.kind === "group") colors.set(r.id, `hsl(${groupHue(r.id)} 55% 52%)`);
+    else if (colors.has(r.parent)) colors.set(r.id, colors.get(r.parent));
+  }
+  return colors;
+}
 // Amount column of a row: product supplied, waste treated, or elementary flow emitted
 function rowAmount(r) {
   if (r.kind === "merged" || r.kind === "group" || r.kind === "flow") return r.unit ? `${fmt(r.amount)} ${unit(r.unit)}` : "";
@@ -1382,8 +1411,9 @@ function MethodSelect({ methods, value, onChange }) {
 }
 
 // ---------------------------------------------------------------- tree
-function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onUngroup, onRegroup, ungroupable, onMergeGroup, onUnpin, onPin, onMoveToOthers, onInfo, onUnmerge, view, focus, renaming, onStartRename, onRename }) {
+function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onUngroup, onRegroup, ungroupable, onMergeGroup, onUnpin, onPin, onMoveToOthers, onInfo, onUnmerge, onRevert, view, focus, renaming, onStartRename, onRename }) {
   const byId = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
+  const colors = useMemo(() => groupColors(rows), [rows]);
   const box = useRef(null);
   const scrolledTo = useRef(null);
   // Scroll once to a row found from elsewhere ("Go to in tree"), when it has been rendered
@@ -1404,7 +1434,8 @@ function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onU
             const amount = rowAmount(r);
             const [product, name, location] = r.kind === "process" ? r.label.split(" | ") : [r.label];
             return html`
-              <tr key=${r.id} data-id=${r.id} class="${r.kind} ${selection.has(r.id) ? "selected" : ""} ${focus === r.id ? "focus" : ""}"
+              <tr key=${r.id} data-id=${r.id} class="${r.kind} ${selection.has(r.id) ? "selected" : ""} ${focus === r.id ? "focus" : ""} ${colors.has(r.id) ? "in-group" : ""}"
+                  style=${colors.has(r.id) ? { "--group-color": colors.get(r.id) } : null}
                   onClick=${(e) => onSelect(r, e.ctrlKey || e.metaKey || e.shiftKey)}
                   onContextMenu=${(e) => onInfo(r, e)}>
                 <td style=${{ "--depth": r.depth }}>
@@ -1440,6 +1471,9 @@ function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onU
                       ${r.pinned && html`
                         <button class="chip pin" title="Shown despite the cut-off — click to hide again"
                           onClick=${(e) => { e.stopPropagation(); onUnpin(r); }}>pinned ×</button>`}
+                      ${r.replaced && html`
+                        <button class="chip merge" title="Supplied by another activity (Alternative suppliers, in the pop-up) — back to the original"
+                          onClick=${(e) => { e.stopPropagation(); onRevert(r); }}>replaced ×</button>`}
                       ${movable(r) && (inOthers(r)
                         ? html`<button class="chip pin" title="Pin: take it out of others, shown in the tree and the chart despite the cut-off"
                             onClick=${(e) => { e.stopPropagation(); onPin([r.id]); }}>pin</button>`
@@ -1872,7 +1906,7 @@ function OthersPopup({ target, rest, rows, rootImpact, cutoff, cutoffBasis, pinn
     setPinned(nextPinned);
     setOthers(nextOthers);
   }
-  const reasons = [nCut && `${nCut} in the bottom ${cutoff} % of ${cutoffBasis === "total" ? "the total" : "their parent"}`,
+  const reasons = [nCut && `${nCut} ${cutoffReason(cutoff, cutoffBasis)}`,
     nZero && `${nZero} without impact for this method`, nMoved && `${nMoved} moved here by you`].filter(Boolean).join(", ");
   const things = rest.label.includes("flow") ? "flow" : "process";
   return html`
@@ -2226,11 +2260,58 @@ function suppliedTo(row, rowsById) {
 
 // ``target.parents``: for a process opened from a bundle pop-up (no row of its own), the
 // processes it is an input of, for its exchange tab
-function InfoPopup({ target, method, methodInfo, rootImpact, rowsById, onClose, onUseAsRoot, onOpenTab, onMoveToOthers, root, amount, onOpen, onGoTo, onFlow, onBack }) {
+// One activity of a "Used by" table. Expanding it lists the activities using its product (in the
+// functional unit's supply chain, else in the database), so that the users can be followed up
+// as a reverse tree. A user already above it on the path is a loop: shown, not expanded.
+function UserRow({ user: u, inputUnit, root, amount, method, ancestors, depth, onOpen, onGoTo }) {
+  const [open, setOpen] = useState(false);
+  const [users, setUsers] = useState(null);
+  const loop = ancestors.includes(u.index);
+  // Below a functional unit, only the users in its supply chain (flows above solver noise)
+  const children = users ? users.users.filter((c) => !root || Math.abs(c.flow) > 1e-12) : [];
+  // Users are listed largest flow first, so the ones beyond the limit are the rest of the chain
+  const more = !users ? 0 : root ? (users.users.length >= 15 ? Math.max(0, users.in_supply_chain - children.length) : 0)
+    : users.count - users.users.length;
+  useEffect(() => {
+    if (!open || users || loop) return;
+    const fu = root ? `&root=${root.index}&amount=${amount}` : "";
+    request(`/api/activity/${u.index}/users?method=${method}&limit=15${fu}`)
+      .then(setUsers).catch(() => setUsers({ users: [], count: 0 }));
+  }, [open]);
+  const span = root ? 5 : 2;
+  return html`<${Fragment}>
+    <tr>
+      <td class="user" title=${`${u.reference_product} | ${u.name} | ${u.location}`}>
+        <span class="user-cell" style=${{ paddingLeft: `${depth * 16}px` }}>
+          ${loop
+            ? html`<span class="toggle muted" title="Already above this activity: a loop">↺</span>`
+            : html`<button class="toggle" aria-label=${open ? "Collapse" : "Expand"} onClick=${() => setOpen(!open)}>${open ? "▾" : "▸"}</button>`}
+          <a href="#" onClick=${(e) => { e.preventDefault(); onOpen(u.index); }}>${u.name}</a>
+          <span class="loc-chip">${u.location}</span></span></td>
+      <td class="num">${fmt(Math.abs(u.per_unit))} ${inputUnit}/${unit(u.unit)}</td>
+      ${root && html`
+        <td class="num">${u.flow ? `${fmt(Math.abs(u.flow))} ${inputUnit}` : "–"}</td>
+        <td class="num">${u.flow ? pct(u.share) : ""}</td>
+        <td>${u.flow !== 0 && html`<button class="chip" title="Open the tree at this activity (largest supply path)"
+              onClick=${() => onGoTo(u.index)}>go to</button>`}</td>`}
+    </tr>
+    ${open && !users && html`<tr><td colspan=${span} class="muted">…</td></tr>`}
+    ${open && users && children.length === 0 && html`<tr><td colspan=${span} class="muted">No activity uses it${root ? " in this supply chain" : ""}.</td></tr>`}
+    ${open && users && children.map((c) => html`
+      <${UserRow} key=${c.index} user=${c} inputUnit=${unit(u.unit)} root=${root} amount=${amount} method=${method}
+        ancestors=${[...ancestors, u.index]} depth=${depth + 1} onOpen=${onOpen} onGoTo=${onGoTo} />`)}
+    ${open && users && more > 0 && html`
+      <tr class="more"><td colspan=${span} class="muted">+ ${more} more</td></tr>`}
+  <//>`;
+}
+
+function InfoPopup({ target, method, methodInfo, rootImpact, rowsById, onClose, onUseAsRoot, onOpenTab, onMoveToOthers, onReplace, root, amount, onOpen, onGoTo, onFlow, onBack }) {
   const [info, setInfo] = useState(null);
   const [error, setError] = useState(null);
   const [users, setUsers] = useState(null);
   const [allUsers, setAllUsers] = useState(false);
+  // Alternative suppliers: the other activities producing the same product, per unit
+  const [alternatives, setAlternatives] = useState(null);
   // Open tab, back to the default on each right-click (following a link inside keeps it)
   const [tab, setTab] = useState(null);
   const box = useRef(null);
@@ -2267,6 +2348,12 @@ function InfoPopup({ target, method, methodInfo, rootImpact, rowsById, onClose, 
     request(`/api/activity/${target.index}/users?method=${method}&limit=${allUsers ? 1000 : 15}${fu}`)
       .then(setUsers).catch((e) => setError(e.message));
   }, [target.index, method, root, amount, allUsers]);
+  useEffect(() => {
+    setAlternatives(null);
+    if (target.direct) return;
+    request(`/api/activity/${target.index}/alternatives?method=${method}`)
+      .then(setAlternatives).catch(() => setAlternatives(null));
+  }, [target.index, method]);
   usePopupKeys(box, onClose, onBack);
 
   const width = Math.min(560, window.innerWidth - 24);
@@ -2282,6 +2369,13 @@ function InfoPopup({ target, method, methodInfo, rootImpact, rowsById, onClose, 
   // Tabs: for a tree row, the exchange (the parent's input of this process: comment,
   // uncertainty) comes first and is opened; a direct emissions row opens on its flows
   const inTree = (row && (row.kind === "process" || row.kind === "direct")) || parentMetas.length > 0;
+  // An input of a tree can be replaced by another supplier: the node it is an input of is the
+  // nearest row above that is not a group or others row. A candidate that the node already has
+  // as an input is not offered (its row would be taken twice).
+  const replaceable = !!(onReplace && row && row.kind === "process" && row.depth > 0);
+  let node = replaceable ? rowsById.get(row.parent) : null;
+  while (node && (node.kind === "group" || node.kind === "rest")) node = rowsById.get(node.parent);
+  const takenBy = (index) => !!node && rowsById.has(`${node.id}/${index}`);
   const hasDescription = DETAIL_SECTIONS.some(([k]) => d[k])
     || (production && (production.comment || production.properties || production["production volume"]));
   const tabs = info ? [
@@ -2289,6 +2383,7 @@ function InfoPopup({ target, method, methodInfo, rootImpact, rowsById, onClose, 
     { id: "results", label: "Results" },
     exchanges?.available && { id: "exchanges", label: `Exchanges · ${(production ? 1 : 0) + exchanges.inputs.length + exchanges.flows.length}` },
     { id: "users", label: `${users?.waste ? "Treats" : "Used by"}${users ? ` · ${users.count}` : ""}` },
+    alternatives && !target.direct && { id: "alternatives", label: `Alternatives · ${alternatives.count}` },
     hasDescription && { id: "description", label: "Description" },
     { id: "metadata", label: "Metadata" },
   ].filter(Boolean) : [];
@@ -2379,27 +2474,54 @@ function InfoPopup({ target, method, methodInfo, rootImpact, rowsById, onClose, 
               ${users.count === 0 ? html`<p class="text muted">No activity in the database uses this product.</p>` : html`
                 <table class="flows users">
                   <thead><tr>
-                    <th>Activity <span class="muted">· click for its details</span></th>
+                    <th>Activity <span class="muted">· ▸ for the activities using it, click for its details</span></th>
                     <th class="num" title=${`${unit(info.unit)} ${users.waste ? "of waste" : ""} per unit of the activity's product`}>per unit</th>
                     ${root && html`<th class="num" title="Amount going to this activity in the supply chain of the functional unit">in this tree</th><th class="num">share</th><th></th>`}
                   </tr></thead>
                   <tbody>${users.users.map((u) => html`
-                    <tr key=${u.index}>
-                      <td class="user" title=${`${u.reference_product} | ${u.name} | ${u.location}`}>
-                        <span class="user-cell"><a href="#" onClick=${(e) => { e.preventDefault(); onOpen(u.index); }}>${u.name}</a>
-                        <span class="loc-chip">${u.location}</span></span></td>
-                      <td class="num">${fmt(Math.abs(u.per_unit))} ${unit(info.unit)}/${unit(u.unit)}</td>
-                      ${root && html`
-                        <td class="num">${u.flow ? `${fmt(Math.abs(u.flow))} ${unit(info.unit)}` : "–"}</td>
-                        <td class="num">${u.flow ? pct(u.share) : ""}</td>
-                        <td>${u.flow !== 0 && html`<button class="chip" title="Open the tree at this activity (largest supply path)"
-                              onClick=${() => { onGoTo(u.index); onClose(); }}>go to</button>`}</td>`}
-                    </tr>`)}
+                    <${UserRow} key=${u.index} user=${u} inputUnit=${unit(info.unit)} root=${root} amount=${amount} method=${method}
+                      ancestors=${[target.index]} depth=${0} onOpen=${onOpen} onGoTo=${(index) => { onGoTo(index); onClose(); }} />`)}
                   </tbody>
                 </table>
                 ${users.count > users.users.length && html`
                   <button class="link" onClick=${() => setAllUsers(true)}>Show all ${users.count}</button>`}`}
             </section>`}
+          ${shown === "alternatives" && alternatives && html`
+          <section>
+            <h4>Alternative suppliers · ${alternatives.count} ${alternatives.count === 1 ? "activity" : "activities"} making ${alternatives.product}</h4>
+            <p class="note">
+              Cumulative impact per ${unit(alternatives.unit)} of ${alternatives.product}, lowest first.
+              ${replaceable ? "Use instead puts that activity in place of this input (same amount, its own supply chain) in the tree."
+                : "Open the pop-up of an input in the tree to use one of them in its place."}
+            </p>
+            <table class="flows alternatives">
+              <thead><tr>
+                <th>Activity <span class="muted">· click for its details</span></th>
+                <th class="num" title=${`${methodInfo.unit} per ${unit(alternatives.unit)} of ${alternatives.product}`}>${methodInfo.unit} per ${unit(alternatives.unit)}</th>
+                <th class="num">vs. current</th>
+                ${replaceable && html`<th></th>`}
+              </tr></thead>
+              <tbody>
+                <tr class="current">
+                  <td class="user">${alternatives.current.name} <span class="loc-chip">${alternatives.current.location}</span> <span class="muted">current</span></td>
+                  <td class="num">${fmt(alternatives.current.per_unit)}</td><td class="num"></td>
+                  ${replaceable && html`<td></td>`}
+                </tr>
+                ${alternatives.alternatives.map((a) => html`
+                  <tr key=${a.index}>
+                    <td class="user"><a href="#" onClick=${(e) => { e.preventDefault(); onOpen(a.index); }}>${a.name}</a>
+                      <span class="loc-chip">${a.location}</span></td>
+                    <td class="num">${fmt(a.per_unit)}</td>
+                    <td class="num">${a.relative === null ? "" : `${a.relative > 0 ? "+" : ""}${pct(a.relative)}`}</td>
+                    ${replaceable && html`<td><button class="chip" disabled=${takenBy(a.index)}
+                      title=${takenBy(a.index) ? "Already an input of this activity" : "Put this activity in place of this input"}
+                      onClick=${() => { onReplace(row, a.index); onClose(); }}>use instead</button></td>`}
+                  </tr>`)}
+              </tbody>
+            </table>
+            ${alternatives.count > alternatives.alternatives.length && html`
+              <p class="muted">+ ${alternatives.count - alternatives.alternatives.length} more, not listed</p>`}
+          </section>`}
           ${shown === "description" && html`
           ${DETAIL_SECTIONS.filter(([k]) => d[k]).map(([k, title]) => html`
             <section><h4>${title}</h4><p class="text">${String(d[k]).split("\n").filter((line) => line.trim() !== "None").join("\n").trim()}</p></section>`)}
@@ -2431,6 +2553,8 @@ function InfoPopup({ target, method, methodInfo, rootImpact, rowsById, onClose, 
         <div class="info-actions">
           <button onClick=${() => { onUseAsRoot(info); onClose(); }}>Use as functional unit</button>
           <button onClick=${() => { onOpenTab(info); onClose(); }} title="Open this activity as the functional unit of a new tab">Open in new tab</button>
+          ${alternatives && !target.direct && html`<button onClick=${() => setTab("alternatives")}
+            title="Other activities producing the same product, with their impact per unit: use one in place of this input in the tree">Alternative suppliers</button>`}
           ${row && movable(row) && html`<button onClick=${() => { onMoveToOthers([row.id]); onClose(); }}>Move to others</button>`}
         </div>`}
     </div>`;
@@ -2729,7 +2853,21 @@ function ChartPanel({ data, info, method, chartMethods, setChartMethods, view })
         Expand, collapse or group rows to change the breakdown. ${parts.length} segments.
       </p>
       ${mode === "single"
-        ? html`<${Chart} option=${singleOption} height=${Math.max(260, parts.length * 26 + 60)} />`
+        ? html`
+          <${Chart} option=${singleOption} height=${Math.max(260, parts.length * 26 + 60)} />
+          <table class="results chart-results">
+            <thead><tr><th>Segment <span class="muted">· as in the chart, largest first</span></th>
+              <th class="num">${unit}</th><th class="num">Share</th></tr></thead>
+            <tbody>${parts.map((p) => html`
+              <tr key=${p.rows[0]?.id ?? p.label} title=${p.label}>
+                <td>${p.main}${p.qual && html` <span class="muted">${p.qual}</span>`}${p.rows.length > 1 && html` <span class="muted">· ${p.rows.length} rows merged</span>`}</td>
+                <td class="num">${fmt(p.impacts[0])}</td>
+                <td class="num">${pct(total ? p.impacts[0] / total : 0)}</td>
+              </tr>`)}
+            </tbody>
+            <tfoot><tr><th>Total · ${parts.length} ${parts.length === 1 ? "segment" : "segments"}</th>
+              <th class="num">${fmt(total)}</th><th class="num">100%</th></tr></tfoot>
+          </table>`
         : html`
           <div class="row">
             <select value=${family} onChange=${(e) => setFamily(e.target.value)} aria-label="Method family">
@@ -3278,6 +3416,8 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
   const [merges, setMerges] = useState([]);
   const [ungrouped, setUngrouped] = useState(new Set());  // "group by product" rows the user ungrouped
   const [undoSteps, setUndoSteps] = useState([]);  // states before the changes, the last one undone first
+  // Inputs replaced by another supplier: {row id of the input: activity index}
+  const [substitutions, setSubstitutions] = useState({});
   const [view, setView] = useState(() => ({
     naming: loadPreference("naming", "full"),
     recipe: {
@@ -3358,6 +3498,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
     setOthers(new Set(same ? saved.others || [] : []));
     setMerges(same ? saved.merges || [] : []);
     setUngrouped(new Set(same ? saved.ungrouped || [] : []));
+    setSubstitutions(same ? saved.substitutions || {} : {});
     setLabels(same ? saved.labels || {} : {});
     if (!same) setUndo({ message: "This database was rebuilt since the tab was saved: expansions, pins, moved rows, merges and names were not restored." });
   }
@@ -3389,6 +3530,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
     setOthers(new Set());
     setMerges([]);
     setUngrouped(new Set());
+    setSubstitutions({});
     setRules((current) => current.filter((rule) => rule.scope === "*"));
     setSelection(new Set());
     setUndo(null);
@@ -3407,11 +3549,19 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
     setCutoff(next);
     setCutoffBasis(basis);
   }
+  // Switching the mode keeps the number between the two shares (total, parent); else the
+  // default of the new mode (a count of rows for "top")
+  function changeCutoffMode(mode) {
+    const shares = ["total", "parent"];
+    const keep = shares.includes(mode) && shares.includes(cutoffBasis);
+    changeCutoff(keep ? cutoff : CUTOFF_DEFAULTS[mode], mode);
+  }
   // Back to the plain tree: collapsed, no pins or moved rows, no groups (rules, quick
   // groups, group by product), no merges and no custom names; the notice can undo it all
   function resetView() {
     const removed = [describeCustom(pinned, others), rules.length && plural(rules.length, "grouping rule"),
       merges.length && plural(merges.length, "merge"), view.groupProducts && "group by product",
+      Object.keys(substitutions).length && plural(Object.keys(substitutions).length, "replaced input"),
       Object.keys(labels).length && plural(Object.keys(labels).length, "custom name")].filter(Boolean).join(", ");
     setUndo({ message: `View reset${removed ? ` (${removed} removed)` : ""}.` });
     setExpanded(new Set([String(root.index)]));
@@ -3420,6 +3570,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
     setRules([]);
     setMerges([]);
     setUngrouped(new Set());
+    setSubstitutions({});
     setLabels({});
     if (view.groupProducts) setView({ ...view, groupProducts: false });
     setSelection(new Set());
@@ -3429,7 +3580,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
   // collapsing are no steps of their own: they are kept with the step they fall in. A functional
   // unit's first change has nothing to go back to (no step), so a new tab starts without steps.
   const edits = { root, amount, method, cutoff, cutoffBasis, chartMethods, rules, pinned: [...pinned], others: [...others],
-    merges, labels, ungrouped: [...ungrouped], view };
+    merges, substitutions, labels, ungrouped: [...ungrouped], view };
   const editKey = JSON.stringify(edits);
   const expandedKey = JSON.stringify([...expanded]);
   const undoBase = useRef(null);  // the state seen last: { key, edits, expanded }
@@ -3447,14 +3598,14 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
     const e = step.edits;
     setRoot(e.root); setAmount(e.amount); setMethod(e.method); setChartMethods(e.chartMethods);
     setCutoff(e.cutoff); setCutoffBasis(e.cutoffBasis); setRules(e.rules); setView(e.view);
-    setPinned(new Set(e.pinned)); setOthers(new Set(e.others)); setMerges(e.merges); setLabels(e.labels);
+    setPinned(new Set(e.pinned)); setOthers(new Set(e.others)); setMerges(e.merges); setSubstitutions(e.substitutions); setLabels(e.labels);
     setUngrouped(new Set(e.ungrouped)); setExpanded(new Set(step.expanded)); setSelection(new Set());
     return true;
   }
 
   const viewState = (exp = expanded) => ({
-    root: [root.index], amount, expanded: [...exp], rules, cutoff: cutoff / 100, cutoff_basis: cutoffBasis, method, methods: chartMethods,
-    pinned: [...pinned], others: [...others], merges, ungrouped: [...ungrouped], group_products: view.groupProducts,
+    root: [root.index], amount, expanded: [...exp], rules, cutoff: cutoffValue(cutoff, cutoffBasis), cutoff_basis: cutoffBasis, method, methods: chartMethods,
+    pinned: [...pinned], others: [...others], merges, ungrouped: [...ungrouped], substitutions, group_products: view.groupProducts,
   });
 
   useEffect(() => {
@@ -3464,13 +3615,13 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
       .then((d) => { if (!cancelled) { setData(d); setError(null); } })
       .catch((e) => !cancelled && setError(e.message));
     return () => { cancelled = true; };
-  }, [root, amount, method, cutoff, cutoffBasis, expanded, rules, chartMethods, pinned, others, merges, ungrouped, view.groupProducts, info]);
+  }, [root, amount, method, cutoff, cutoffBasis, expanded, rules, chartMethods, pinned, others, merges, ungrouped, substitutions, view.groupProducts, info]);
   // The tab's state is kept for the next visit (renaming does not reload the rows)
   useEffect(() => {
     if (!root || !info) return;
-    onSave(id, { root, amount, method, cutoff, cutoffBasis, expanded: [...expanded], rules, chartMethods, pinned: [...pinned], others: [...others], merges, ungrouped: [...ungrouped], labels,
+    onSave(id, { root, amount, method, cutoff, cutoffBasis, expanded: [...expanded], rules, chartMethods, pinned: [...pinned], others: [...others], merges, ungrouped: [...ungrouped], substitutions, labels,
       layout: info.layout, methodName: info.methods[method]?.name, chartMethodNames: chartMethods.map((k) => info.methods[k]?.name) });
-  }, [root, amount, method, cutoff, cutoffBasis, expanded, rules, chartMethods, pinned, others, merges, ungrouped, labels, info]);
+  }, [root, amount, method, cutoff, cutoffBasis, expanded, rules, chartMethods, pinned, others, merges, ungrouped, substitutions, labels, info]);
   function startRename(row) {
     if (!labelKey(row)) return;
     // The tree and Sankey views have no inline editor: ask
@@ -3524,6 +3675,18 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
   function unmerge(row) {
     setMerges(merges.filter((m) => !(m.scope === ownerOf(row) && m.products.length === row.products.length
       && m.products.every((p) => row.products.includes(p)))));
+  }
+  // An input supplied by another activity (Alternative suppliers, in the pop-up). Keyed by the
+  // input's row id without the replacement, so that a second replacement replaces the first.
+  function replaceInput(row, index) {
+    setUndo({ message: `Supplier of ${rowNames(row, rowsById, view).main} replaced.` });
+    setSubstitutions({ ...substitutions, [row.replaced || row.id]: index });
+  }
+  function revertInput(row) {
+    const rest = { ...substitutions };
+    delete rest[row.replaced];
+    setUndo({ message: `Supplier of ${rowNames(row, rowsById, view).main} back to the original.` });
+    setSubstitutions(rest);
   }
 
   function toggle(rows) {
@@ -3642,7 +3805,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
       format: "lca_viewer view", version: 2,
       model: { title: info.title, activities: info.activities },
       root, amount, method: info.methods[method].name, chartMethods: chartMethods.map((k) => info.methods[k].name),
-      cutoff: +(cutoff / 100).toFixed(8), cutoffBasis, expanded: [...expanded], rules, pinned: [...pinned], others: [...others], merges, ungrouped: [...ungrouped], labels,
+      cutoff: +cutoffValue(cutoff, cutoffBasis).toFixed(8), cutoffBasis, expanded: [...expanded], rules, pinned: [...pinned], others: [...others], merges, ungrouped: [...ungrouped], substitutions, labels,
       display: { naming: view.naming, recipe: view.recipe, groupProducts: view.groupProducts },
     };
   }
@@ -3670,7 +3833,8 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
       const m = methodIndex(saved.method);
       if (m >= 0) setMethod(m);
       setChartMethods((saved.chartMethods || []).map(methodIndex).filter((k) => k >= 0));
-      setCutoff(saved.cutoff === undefined ? 1 : saved.version >= 2 ? +(saved.cutoff * 100).toFixed(6) : saved.cutoff);
+      // A share is saved as a fraction (version 2), "top n" as its count
+      setCutoff(saved.cutoff === undefined ? 1 : saved.cutoffBasis === "top" || saved.version < 2 ? saved.cutoff : +(saved.cutoff * 100).toFixed(6));
       setCutoffBasis(saved.cutoffBasis || "parent");
       setRules(sameModel ? saved.rules || [] : (saved.rules || []).filter((r) => r.scope === "*"));
       setExpanded(new Set(sameModel ? saved.expanded : [String(target.index)]));
@@ -3678,6 +3842,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
       setOthers(new Set(sameModel ? saved.others || [] : []));
       setMerges(sameModel ? saved.merges || [] : []);
       setUngrouped(new Set(sameModel ? saved.ungrouped || [] : []));
+      setSubstitutions(sameModel ? saved.substitutions || {} : {});
       setLabels(sameModel ? saved.labels || {} : {});
       if (saved.display) setView({ ...view, ...saved.display });
       setSelection(new Set());
@@ -3815,14 +3980,13 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
         <label>Amount <${NumberInput} class="amount" value=${amount} min=${1e-12} step="any"
           onValue=${setAmount} aria-label="Amount" />${root ? root.unit : ""}</label>
         <${MethodSelect} methods=${info.methods} value=${method} onChange=${setMethod} />
-        <label>Cut-off <${NumberInput} class="cutoff" value=${cutoff} min=${0} max=${100} step="0.5"
-          onValue=${(v) => changeCutoff(v)} aria-label="Cut-off" title="Changing the cut-off resets pinned rows and rows moved to others" />% of</label>
-        <span class="segmented basis" role="group" aria-label="Cut-off basis">
-          <button class=${cutoffBasis === "total" ? "primary" : ""} onClick=${() => cutoffBasis !== "total" && changeCutoff(cutoff, "total")}
-            title="Under each parent, the smallest children together weighing at most the cut-off of the total go to others">total</button>
-          <button class=${cutoffBasis === "parent" ? "primary" : ""} onClick=${() => cutoffBasis !== "parent" && changeCutoff(cutoff, "parent")}
-            title="Under each parent, the smallest children together weighing at most the cut-off of that parent go to others">parent</button>
-        </span>
+        <label>Cut-off <${NumberInput} class="cutoff" value=${cutoff} min=${cutoffBasis === "top" ? 1 : 0} max=${cutoffBasis === "top" ? undefined : 100}
+          step=${cutoffBasis === "top" ? 1 : 0.5} onValue=${(v) => changeCutoff(v)} aria-label="Cut-off"
+          title="Changing the cut-off resets pinned rows and rows moved to others" /> ${CUTOFF_MODES[cutoffBasis].unit}</label>
+        <select class="cutoff-mode" aria-label="Cut-off mode" value=${cutoffBasis} title=${CUTOFF_MODES[cutoffBasis].hint}
+          onChange=${(e) => changeCutoffMode(e.target.value)}>
+          ${Object.entries(CUTOFF_MODES).map(([key, mode]) => html`<option value=${key} title=${mode.hint}>${mode.label}</option>`)}
+        </select>
       </header>
         <section class="tree-section" ref=${treeSection} onMouseDown=${() => { keyboardOwner = id; }}>
           <div class="toolbar">
@@ -3861,10 +4025,10 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
             </div>`}
           ${error && html`<div class="error">${error}</div>`}
           ${display === "list"
-            ? html`<${Tree} rows=${data.rows} rootImpact=${rootImpact} shareBasis=${cutoffBasis} selection=${selection} onToggle=${toggle} onSelect=${select}
+            ? html`<${Tree} rows=${data.rows} rootImpact=${rootImpact} shareBasis=${shareBasisOf(cutoffBasis)} selection=${selection} onToggle=${toggle} onSelect=${select}
                 renaming=${renaming} onStartRename=${startRename} onRename=${rename}
-                onUngroup=${ungroup} onRegroup=${regroup} ungroupable=${ungroupable} onMergeGroup=${(r) => mergeRows([r])} onUnpin=${unpin} onPin=${pin} onMoveToOthers=${moveToOthers} onInfo=${showInfo} onUnmerge=${unmerge} view=${view} focus=${focus} />`
-            : html`<${TreeGraph} rows=${data.rows} rootImpact=${rootImpact} shareBasis=${cutoffBasis} selection=${selection} onToggle=${toggle} onSelect=${select}
+                onUngroup=${ungroup} onRegroup=${regroup} ungroupable=${ungroupable} onMergeGroup=${(r) => mergeRows([r])} onUnpin=${unpin} onPin=${pin} onMoveToOthers=${moveToOthers} onInfo=${showInfo} onUnmerge=${unmerge} onRevert=${revertInput} view=${view} focus=${focus} />`
+            : html`<${TreeGraph} rows=${data.rows} rootImpact=${rootImpact} shareBasis=${shareBasisOf(cutoffBasis)} selection=${selection} onToggle=${toggle} onSelect=${select}
                 onUngroup=${ungroup} onRegroup=${regroup} ungroupable=${ungroupable} onMergeGroup=${(r) => mergeRows([r])} onUnpin=${unpin} onPin=${pin} onMoveToOthers=${moveToOthers} onInfo=${showInfo} onUnmerge=${unmerge} view=${view}
                 orientation=${orientation} setOrientation=${setOrientation} cycles=${cycles} setCycles=${setCycles} sankey=${display === "sankey"} focus=${focus} />`}
           ${bundle?.kind === "rest" && html`<${OthersPopup} target=${infoTarget} rest=${bundle} rows=${data.rows} rootImpact=${rootImpact}
@@ -3884,7 +4048,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
           ${infoTarget?.flow !== undefined && html`<${FlowInfoPopup} target=${infoTarget} method=${method} methods=${info.methods}
               onClose=${() => setInfoTarget(null)} onOpen=${(index) => followInfo({ index, row: null })} onBack=${backInfo} />`}
           ${infoTarget && infoTarget.flow === undefined && !infoTarget.bundle && html`<${InfoPopup} target=${infoTarget} method=${method} methodInfo=${methodInfo}
-              rootImpact=${rootImpact} rowsById=${rowsById} onClose=${() => setInfoTarget(null)}
+              rootImpact=${rootImpact} rowsById=${rowsById} onClose=${() => setInfoTarget(null)} onReplace=${replaceInput}
               onUseAsRoot=${selectRoot} onOpenTab=${(r) => onOpenTab(id, r)} onMoveToOthers=${moveToOthers} root=${root} amount=${amount}
               onOpen=${(index) => followInfo({ ...infoTarget, index, row: null, direct: false, parents: null })} onGoTo=${(index) => goTo(index)}
               onFlow=${(flow, activity) => followInfo({ flow, activities: [activity] })} onBack=${backInfo} />`}
