@@ -168,7 +168,7 @@ API in `src/lca_viewer/server.py`.
   | Space | open (or close) the row's pop-up (members pop-up for a bundle) |
   | o | move the selection to others (inside an expanded others row: pin it out) |
   | m | merge the selection, or unmerge a selected merged row |
-  | g | group the selection, or ungroup a selected group |
+  | g | one group: ungroup it (a "group by product" becomes an exception, put back by its regroup chip or by g on one of its processes); one process: put back its ungrouped product group, else group its same-named siblings under the product name, else nothing; several rows: group them (named after the product when they all deliver one, else "group N") |
   | r | rename the selected row (display name only) |
   | Ctrl/⌘ + Z | undo the last change to the tree |
   | Esc | clear the selection |

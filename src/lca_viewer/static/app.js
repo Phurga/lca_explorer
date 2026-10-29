@@ -37,6 +37,8 @@ function fmt(x) {
 const pct = (x) => `${(x * 100).toFixed(1)}%`;
 const methodLabel = (m) => m.name.join(" | ");
 const productOf = (rowId) => Number(rowId.split("/").pop());
+// The reference product of a process row: its label starts with it ("product | name | location")
+const productNameOf = (row) => (row.kind === "process" ? row.label.split(" | ")[0] : "");
 const truncate = (s, n) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
 const UNITS = {
   kilogram: "kg", "kilowatt hour": "kWh", megajoule: "MJ", "cubic meter": "m3", hectare: "ha",
@@ -3445,12 +3447,21 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
       setError(null);
     } catch (e) { setError(e.message); }
   }
-  function groupSelected() {
-    const parent = ownerOf(selectedRows[0]);
-    const name = groupName.trim() || `group ${rules.filter((r) => r.predicate?.products || r.predicate?.flows).length + 1}`;
-    const rule = selectedRows[0].kind === "flow"
-      ? { predicate: { flows: selectedRows.map((r) => r.flow.index) }, target: "flows" }
-      : { predicate: { products: selectedRows.map((r) => productOf(r.id)) } };
+  function groupSelected() { return groupRows(selectedRows); }
+  // A group of sibling rows. Its name: the typed one; else the product name when the processes all
+  // deliver one product; else "group N". A default name already in use gets a number.
+  function groupRows(members) {
+    const parent = ownerOf(members[0]);
+    const sameProduct = members.every((r) => r.kind === "process") && members.every((r) => productNameOf(r) === productNameOf(members[0]));
+    let name = groupName.trim();
+    if (!name) {
+      const base = sameProduct ? productNameOf(members[0]) : `group ${rules.filter((r) => r.predicate?.products || r.predicate?.flows).length + 1}`;
+      name = base;
+      for (let n = 2; rules.some((r) => r.scope === parent && r.name === name); n++) name = `${base} ${n}`;
+    }
+    const rule = members[0].kind === "flow"
+      ? { predicate: { flows: members.map((r) => r.flow.index) }, target: "flows" }
+      : { predicate: { products: members.map((r) => productOf(r.id)) } };
     setRules([...rules, { name, ...rule, scope: parent }]);
     setExpanded(new Set([...expanded, `${parent}/g:${name}`]));
     setSelection(new Set());
@@ -3620,6 +3631,13 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
       case "g":
         followCursor.current = true;
         if (selectedRows.length === 1 && row.kind === "group" && ungroupable(row)) ungroup(row);
+        else if (selectedRows.length === 1 && row.kind === "process") {
+          // One process: its product group back if it was ungrouped; else its same-named siblings grouped
+          const same = rows.filter((r) => r.kind === "process" && r.parent === row.parent && productNameOf(r) === productNameOf(row));
+          if (row.regroup) regroup(row.regroup);
+          else if (same.length > 1) selectNew(groupRows(same));
+          else followCursor.current = false;
+        }
         else if (canGroup) selectNew(groupSelected());
         else followCursor.current = false;
         return true;
