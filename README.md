@@ -284,7 +284,7 @@ The app opens in your browser after a few seconds, at
   view. Expand with ▸ or ±.
 - **Group / Merge**: Ctrl/⌘-click sibling rows, then *Group* (bundle them
   under one row) or *Merge* (one process with their inventories added,
-  common inputs summed); or use the *Grouping* tab (quick groups, group by
+  common inputs summed); or use the *Group rules* tab (quick groups, group by
   location / activity type / ISIC, or your own filter).
 - **Right-click** a process for its description, metadata and main emissions,
   and *Used by*: which activities use its product, and how much each takes
@@ -304,7 +304,7 @@ The app opens in your browser after a few seconds, at
 - *Flow contribution* splits the score by elementary flow (substance, or
   substance and compartment) over the whole supply chain; click one to list
   the processes emitting it.
-- *Whole supply chain* answers "how much electricity / transport / … anywhere
+- *Group contributions* answers "how much electricity / transport / … anywhere
   upstream?" using the named groups, and "how much N2O outside them?" with
   flow groups (*Add as a group* on a substance in *Flow contribution*). Click a group (e.g. *other*) to list
   the processes it is made of; right-click one and *Go to in tree* to open

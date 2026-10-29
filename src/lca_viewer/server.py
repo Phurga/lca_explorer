@@ -21,7 +21,7 @@ from pydantic import BaseModel
 from .analysis import (flow_contribution, flow_contributors, group_contributors, main_path, matched,
                        supply_chain_contribution)
 from .model import LCAModel
-from .query import derived_activities, derived_flows, search, suggest_values
+from .query import derived_activities, derived_flows, evaluate, search, suggest_values
 from .tree import Tree
 from .view import View
 
@@ -40,6 +40,8 @@ QUERY_FIELDS = [
     "isic", "isic_division", "cpc", "cpc_section", "flow_type", "database",
 ]
 GROUP_BY_FIELDS = ["location", "activity_type", "flow_type", "isic_division", "cpc_section", "reference_product", "unit", "database"]
+# Elementary flows (rules with ``target="flows"``)
+FLOW_FIELDS = ["name", "compartment", "subcompartment", "unit"]
 
 
 class ViewState(BaseModel):
@@ -67,6 +69,8 @@ class SearchRequest(BaseModel):
     text: str = ""
     predicate: dict | None = None
     limit: int = 50
+    target: str | None = None
+    """"flows": the predicate matches elementary flows (``text`` is ignored)."""
 
 
 class DirectRequest(ViewState):
@@ -98,6 +102,8 @@ class FlowsRequest(BaseModel):
     by: str = "substance"
     """"substance": compartments summed (one row per name and unit); "flow": one row per flow."""
     limit: int = 25
+    flow_groups: dict[str, dict] = {}
+    """Named groups of flows: each item says which one it falls in (the first, in order)."""
 
 
 class FlowContributorsRequest(BaseModel):
@@ -215,6 +221,7 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
             "methods": [{"name": list(m.name), "unit": m.unit} for m in model.methods],
             "query_fields": QUERY_FIELDS,
             "group_by_fields": GROUP_BY_FIELDS,
+            "flow_query_fields": FLOW_FIELDS,
             "default_root": describe(root) if root is not None else None,
             "default_method": default_method,
         }
@@ -222,6 +229,11 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
     @app.post("/api/search")
     def search_activities(req: SearchRequest):
         try:
+            if req.target == "flows":
+                found = np.flatnonzero(evaluate(req.predicate, flows)) if req.predicate else np.arange(len(flows))
+                return {"total": int(len(found)), "results": [
+                    {"index": int(i), "name": flows["name"].iat[i], "location": flows["compartment"].iat[i]}
+                    for i in found[: req.limit]]}
             found = search(activities, req.text, req.predicate)
         except (KeyError, ValueError) as e:
             raise HTTPException(400, f"Invalid filter: {e}")
@@ -244,10 +256,10 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
         return out
 
     @app.get("/api/values/{field}")
-    def values(field: str, q: str = "", limit: int = 100):
-        if field not in QUERY_FIELDS:
+    def values(field: str, q: str = "", limit: int = 100, target: str | None = None):
+        if field not in (FLOW_FIELDS if target == "flows" else QUERY_FIELDS):
             raise HTTPException(404, f"Unknown field {field}")
-        return suggest_values(activities, field, q, limit)
+        return suggest_values(flows if target == "flows" else activities, field, q, limit)
 
     @app.post("/api/rows")
     def rows(state: ViewState):
@@ -569,6 +581,12 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
                      for i, r in zip(table.index, table.itertuples(index=False))]
         items.sort(key=lambda it: -abs(it["impact"]))
         shown, rest = items[: req.limit], items[req.limit:]
+        try:
+            masks = {name: evaluate(predicate, flows) for name, predicate in req.flow_groups.items()}
+        except (KeyError, ValueError) as e:
+            raise HTTPException(400, f"Invalid flow group: {e}")
+        for it in shown:
+            it["group"] = next((name for name, mask in masks.items() if mask[it["flows"]].any()), None)
         return {
             "total": float(impacts.sum()),
             "count": len(items),

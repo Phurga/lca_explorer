@@ -124,15 +124,28 @@ const cutoffReason = (value, basis) => ({
 // hue, derived from the rule that made the group (its name, or the field of a group-by
 // rule) so that a group keeps its colour when others change, and matches its rule's swatch
 const hueOf = (key) => [...key].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 0);
-const colorOf = (key) => `hsl(${hueOf(key)} 55% 52%)`;
+// A colour picked in the Group rules tab (``picked``: key -> "#rrggbb", part of the view) wins
+const colorOf = (key, picked) => picked?.[key] || `hsl(${hueOf(key)} 55% 52%)`;
+// "#rrggbb" of a colour, for the colour picker
+function colorHex(color) {
+  if (color.startsWith("#")) return color;
+  const [h, s, l] = color.match(/[\d.]+/g).map(Number);
+  const f = (n) => {
+    const k = (n + h / 30) % 12, a = (s / 100) * Math.min(l / 100, 1 - l / 100);
+    return Math.round(255 * (l / 100 - a * Math.max(-1, Math.min(k - 3, 9 - k, 1)))).toString(16).padStart(2, "0");
+  };
+  return `#${f(0)}${f(8)}${f(4)}`;
+}
 const groupKey = (id) => {
   const name = id.slice(id.lastIndexOf("/g:") + 3);
   return /^\w+: /.test(name) ? name.slice(0, name.indexOf(":")) : name;
 };
-function groupColors(rows) {
+// Empty when group colours are switched off (``view.groupColors``)
+function groupColors(rows, view) {
   const colors = new Map();
+  if (!view.groupColors) return colors;
   for (const r of rows) {
-    if (r.kind === "group") colors.set(r.id, colorOf(groupKey(r.id)));
+    if (r.kind === "group") colors.set(r.id, colorOf(groupKey(r.id), view.ruleColors));
     else if (colors.has(r.parent)) colors.set(r.id, colors.get(r.parent));
   }
   return colors;
@@ -285,29 +298,32 @@ const FIELD_LABELS = {
   activity_type: "activity type", isic: "ISIC class", isic_division: "ISIC division",
   cpc: "CPC class", cpc_section: "CPC section", database: "database",
 };
-const fieldLabel = (f) => FIELD_LABELS[f] || f;
+// flow_type: "product" or "waste" (the sign of what the process produces), not a type of elementary flow
+FIELD_LABELS.flow_type = "product / waste";
+const FLOW_FIELD_LABELS = { name: "substance", compartment: "compartment", subcompartment: "subcompartment", unit: "unit" };
+const fieldLabel = (f, flows) => (flows ? FLOW_FIELD_LABELS[f] : FIELD_LABELS[f]) || f;
 let conditionIds = 0;
 
-function useValues(field, text) {
+function useValues(field, text, flows) {
   const [values, setValues] = useState([]);
   useEffect(() => {
     const timer = setTimeout(() => {
-      request(`/api/values/${field}?q=${encodeURIComponent(text)}&limit=100`).then(setValues).catch(() => setValues([]));
+      request(`/api/values/${field}?q=${encodeURIComponent(text)}&limit=100${flows ? "&target=flows" : ""}`).then(setValues).catch(() => setValues([]));
     }, 150);
     return () => clearTimeout(timer);
-  }, [field, text]);
+  }, [field, text, flows]);
   return values;
 }
 
-function Condition({ condition, fields, onChange, onRemove }) {
+function Condition({ condition, fields, flows, onChange, onRemove }) {
   const listId = useMemo(() => `values-${++conditionIds}`, []);
   // For "is one of", suggest values for the item being typed
   const typed = condition.op === "in" ? condition.value.split(",").pop().trim() : condition.value;
-  const values = useValues(condition.field, typed);
+  const values = useValues(condition.field, typed, flows);
   return html`
     <div class="row condition">
       <select value=${condition.field} onChange=${(e) => onChange({ ...condition, field: e.target.value })} aria-label="Field">
-        ${fields.map((f) => html`<option value=${f}>${fieldLabel(f)}</option>`)}
+        ${fields.map((f) => html`<option value=${f}>${fieldLabel(f, flows)}</option>`)}
       </select>
       <select value=${condition.op} onChange=${(e) => onChange({ ...condition, op: e.target.value })} aria-label="Operator">
         ${OPS.map(([op, label]) => html`<option value=${op}>${label}</option>`)}
@@ -321,7 +337,7 @@ function Condition({ condition, fields, onChange, onRemove }) {
     </div>`;
 }
 
-function QueryBuilder({ query, setQuery, fields }) {
+function QueryBuilder({ query, setQuery, fields, flows }) {
   const { conditions, combinator } = query;
   const update = (patch) => setQuery({ ...query, ...patch });
   return html`
@@ -332,10 +348,10 @@ function QueryBuilder({ query, setQuery, fields }) {
             <option value="all">all conditions</option><option value="any">any condition</option>
           </select></div>`}
       ${conditions.map((c, i) => html`
-        <${Condition} key=${c.id} condition=${c} fields=${fields}
+        <${Condition} key=${c.id} condition=${c} fields=${fields} flows=${flows}
           onChange=${(next) => update({ conditions: conditions.map((x, j) => (j === i ? next : x)) })}
           onRemove=${() => update({ conditions: conditions.filter((_, j) => j !== i) })} />`)}
-      <div class="row"><button onClick=${() => update({ conditions: [...conditions, newCondition("location", "eq")] })}>+ condition</button></div>
+      <div class="row"><button onClick=${() => update({ conditions: [...conditions, newCondition(flows ? "compartment" : "location", "eq")] })}>+ condition</button></div>
     </div>`;
 }
 
@@ -1536,7 +1552,7 @@ function MethodSelect({ methods, value, onChange }) {
 // ---------------------------------------------------------------- tree
 function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onUngroup, onRegroup, ungroupable, onMergeGroup, onUnpin, onPin, onMoveToOthers, onInfo, onUnmerge, onRevert, view, focus, renaming, onStartRename, onRename, nameEdit, onNameEdit }) {
   const byId = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
-  const colors = useMemo(() => groupColors(rows), [rows]);
+  const colors = useMemo(() => groupColors(rows, view), [rows, view.groupColors, view.ruleColors]);
   const ctx = useContext(EditorContext);
   const editing = ctx.editing;
   const links = {};  // row id -> the exchange its amount stands for, fetched when the amount is edited
@@ -1846,10 +1862,13 @@ function nodeTitle(r, s, places) {
   return `${r.label}\n${fmt(r.impacts[0])} (${pct(s)})${places.length > 1 ? `\nIn ${places.length} places in the tree: amounts summed, loops counted once` : ""}`;
 }
 
-function sankeyMarks({ graph, byId, view, selection, focus, onSelect, onToggle, onInfo }) {
+// A group's colour overrides --group, which the group marks are drawn with
+const groupStyle = (colors, r) => (r.kind === "group" && colors.has(r.id) ? { "--group": colors.get(r.id) } : null);
+
+function sankeyMarks({ graph, byId, view, colors, selection, focus, onSelect, onToggle, onInfo }) {
   return html`
     ${graph.edges.map((e) => html`
-      <path key=${`b-${e.key}`} class="band ${e.share < 0 ? "neg" : ""} ${e.to.row.kind}" d=${bandPath(e)}>
+      <path key=${`b-${e.key}`} class="band ${e.share < 0 ? "neg" : ""} ${e.to.row.kind}" d=${bandPath(e)} style=${groupStyle(colors, e.to.row)}>
         <title>${rowNames(e.to.row, byId, view).main} → ${rowNames(e.from.row, byId, view).main}\n${fmt(e.to.row.impacts[0])} (${pct(e.share)} of the total)</title>
       </path>`)}
     ${graph.nodes.map(({ key, row: r, share: s, x, y, h }) => {
@@ -1858,6 +1877,7 @@ function sankeyMarks({ graph, byId, view, selection, focus, onSelect, onToggle, 
       const cy = y + h / 2, lx = x + SANKEY.bar + 6;
       return html`
         <g key=${key} data-id=${r.id} class="snode ${r.kind} ${selection.has(r.id) ? "selected" : ""} ${focus === r.id ? "focus" : ""} ${r.impacts[0] < 0 ? "neg" : ""}"
+           style=${groupStyle(colors, r)}
            onClick=${(e) => onSelect(r, e.ctrlKey || e.metaKey || e.shiftKey)}
            onDblClick=${() => r.expandable && onToggle(r)}
            onContextMenu=${(e) => onInfo(r, e)}>
@@ -1877,6 +1897,7 @@ function TreeGraph({ rows, rootImpact, shareBasis, selection, onToggle, onSelect
   const orientation = sankey ? "horizontal" : chosenOrientation;
   const cycles = chosenCycles && !sankey;
   const byId = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
+  const colors = useMemo(() => groupColors(rows, view), [rows, view.groupColors, view.ruleColors]);
   const container = useRef(null);
   const drag = useRef(null);
   const [transform, setTransform] = useState({ k: 1, x: 16, y: 16 });
@@ -1961,7 +1982,7 @@ function TreeGraph({ rows, rootImpact, shareBasis, selection, onToggle, onSelect
       </div>
       <svg width="100%" height="100%">
         <g transform=${`translate(${transform.x},${transform.y}) scale(${transform.k})`}>
-          ${sankey ? sankeyMarks({ graph, byId, view, selection, focus, onSelect, onToggle, onInfo }) : html`
+          ${sankey ? sankeyMarks({ graph, byId, view, colors, selection, focus, onSelect, onToggle, onInfo }) : html`
           ${graph.edges.map((e) => html`
             <path key=${`e-${e.key}`} class="edge ${e.share < 0 ? "neg" : ""} ${e.back ? "back" : ""}"
               d=${edgePath(e.from, e.to, orientation, e.back)} stroke-width=${1 + 14 * Math.min(1, Math.abs(e.share))}>
@@ -1982,6 +2003,7 @@ function TreeGraph({ rows, rootImpact, shareBasis, selection, onToggle, onSelect
             const first = places[0];
             return html`
               <g key=${key} data-id=${first.id} class="node ${r.kind} ${places.some((p) => selection.has(p.id)) ? "selected" : ""} ${places.some((p) => focus === p.id) ? "focus" : ""}"
+                 style=${groupStyle(colors, r)}
                  onClick=${(e) => onSelect(first, e.ctrlKey || e.metaKey || e.shiftKey)}
                  onDblClick=${() => r.expandable && toggle()}
                  onContextMenu=${(e) => onInfo(first, e)}>
@@ -2264,22 +2286,6 @@ function ExchangeTable({ title, items, cumulative, unitPer, panel, base, onFlow,
     </section>`;
 }
 
-// ---------------------------------------------------------------- activity info pop-up (right click)
-const DETAIL_SECTIONS = [
-  ["comment", "Description"], ["product_information", "Product"],
-  ["included_activities_start", "Starts with"], ["included_activities_end", "Ends with"],
-];
-
-// Esc or a click outside closes a pop-up; Backspace (or ←) goes back to the previous one
-// when a link inside it was followed. A pinned pop-up ignores clicks outside, and answers to
-// the keys only while the pointer or the focus is on it (several can be open).
-function usePopupKeys(box, onClose, onBack, pinned = false) {
-  const back = useRef(onBack), pin = useRef(pinned);
-  back.current = onBack;
-  pin.current = pinned;
-  useEffect(() => {
-    const mine = () => !pin.current || box.current?.matches(":hover, :focus-within");
-    const onKey = (e) => {
 const PROCESS_KEYS = "↑ ↓: move · → ←: expand, collapse · Space: details · c: its exchange (comment, uncertainty) · Enter: use as functional unit";
 // A process in a panel of a pop-up (exchanges, used by, alternatives): a row like those of the main list.
 // ↑/↓ move between the rows (``popupKeys``), → expands it (or goes to its first child), ← collapses it (or goes to
@@ -2346,6 +2352,22 @@ function ProcessRow({ item, above, depth, ancestors, panel }) {
   <//>`;
 }
 
+// ---------------------------------------------------------------- activity info pop-up (right click)
+const DETAIL_SECTIONS = [
+  ["comment", "Description"], ["product_information", "Product"],
+  ["included_activities_start", "Starts with"], ["included_activities_end", "Ends with"],
+];
+
+// Esc or a click outside closes a pop-up; Backspace (or ←) goes back to the previous one
+// when a link inside it was followed. A pinned pop-up ignores clicks outside, and answers to
+// the keys only while the pointer or the focus is on it (several can be open).
+function usePopupKeys(box, onClose, onBack, pinned = false) {
+  const back = useRef(onBack), pin = useRef(pinned);
+  back.current = onBack;
+  pin.current = pinned;
+  useEffect(() => {
+    const mine = () => !pin.current || box.current?.matches(":hover, :focus-within");
+    const onKey = (e) => {
       if (!mine()) return;
       if (e.key === "Escape") onClose();
       else if (e.key === "Backspace" && back.current && !e.target.closest?.("input, textarea, select, [contenteditable]")) {
@@ -2486,6 +2508,7 @@ function popupKeys({ tabs, shown, setTab, body, onClose, exchange }) {
       used();
       if (!rows.length) { body.current?.scrollBy(0, down ? 48 : -48); return; }
       const at = rows.indexOf(document.activeElement);
+      if (at === 0 && !down) { box.focus({ preventScroll: true }); body.current?.scrollTo(0, 0); return; }
       const next = rows[at < 0 ? (down ? 0 : rows.length - 1) : at + (down ? 1 : -1)];
       next?.focus({ preventScroll: true });
       next?.scrollIntoView({ block: "nearest" });
@@ -2502,7 +2525,6 @@ function popupKeys({ tabs, shown, setTab, body, onClose, exchange }) {
 
 // Pop-up chrome: header (title, pin, ←, ×), scrolling body, actions
 function PopupFrame({ target, win, label, className = "", title, subtitle, footer, onClose, onBack, children, maxWidth = 620 }) {
-      if (at === 0 && !down) { box.focus({ preventScroll: true }); body.current?.scrollTo(0, 0); return; }
   return html`
     <${PopupWindow} target=${target} win=${win} label=${label} className=${className} width=${maxWidth} onClose=${onClose} onBack=${onBack}
       head=${html`
@@ -2691,22 +2713,6 @@ function InfoPopup({ target, win, method, methodInfo, rootImpact, rowsById, onCl
   const openActivity = (index) => follow({ index, row: null });
   // The exchange of ``index``'s product in the dataset of ``user``
   const openExchange = (index, user) => follow({ index, row: null, parents: [asMeta(user)], exchange: true });
-  // The exchange pop-up is its one panel; the activity's: exchanges first (a direct emissions row
-  // opens on its emissions), then users, alternatives, description, metadata
-  const hasDescription = ctx.editing || DETAIL_SECTIONS.some(([k]) => d[k])
-    || (production && (production.comment || production.properties || production["production volume"]));
-  const tabs = info && !exchange ? [
-    exchanges?.available && { id: "exchanges", label: `Exchanges · ${(production ? 1 : 0) + exchanges.inputs.length + exchanges.flows.length}` },
-    { id: "users", label: `${users?.waste ? "Treats" : "Used by"}${users ? ` · ${users.count}` : ""}` },
-    alternatives && !target.direct && { id: "alternatives", label: `Alternatives · ${alternatives.count}` },
-    hasDescription && { id: "description", label: "Description" },
-    { id: "metadata", label: "Metadata" },
-  ].filter(Boolean) : [];
-  const shown = exchange ? "tree" : tabs.some((t) => t.id === tab) ? tab : tabs[0]?.id;
-  // Exchanges by direction, as in the dataset: products, inputs (from the technosphere,
-  // from nature), outputs (waste to treatment, emissions)
-  const sections = useMemo(() => {
-    if (!exchanges?.available || !info) return [];
   // Enter on a process: it becomes the functional unit of the tab
   const useAsRoot = (item) => request(`/api/activity/${item.index}?method=${method}`).then((found) => { onUseAsRoot(found); onClose(); })
     .catch((e) => setError(e.message));
@@ -2760,6 +2766,22 @@ function InfoPopup({ target, win, method, methodInfo, rootImpact, rowsById, onCl
       <td class="num impact">${a.impact ? fmt(a.impact) : "–"}</td>
       <td class="num impact">${a.impact && a.of ? pct(a.impact / a.of) : ""}</td>`),
   };
+  // The exchange pop-up is its one panel; the activity's: exchanges first (a direct emissions row
+  // opens on its emissions), then users, alternatives, description, metadata
+  const hasDescription = ctx.editing || DETAIL_SECTIONS.some(([k]) => d[k])
+    || (production && (production.comment || production.properties || production["production volume"]));
+  const tabs = info && !exchange ? [
+    exchanges?.available && { id: "exchanges", label: `Exchanges · ${(production ? 1 : 0) + exchanges.inputs.length + exchanges.flows.length}` },
+    { id: "users", label: `${users?.waste ? "Treats" : "Used by"}${users ? ` · ${users.count}` : ""}` },
+    alternatives && !target.direct && { id: "alternatives", label: `Alternatives · ${alternatives.count}` },
+    hasDescription && { id: "description", label: "Description" },
+    { id: "metadata", label: "Metadata" },
+  ].filter(Boolean) : [];
+  const shown = exchange ? "tree" : tabs.some((t) => t.id === tab) ? tab : tabs[0]?.id;
+  // Exchanges by direction, as in the dataset: products, inputs (from the technosphere,
+  // from nature), outputs (waste to treatment, emissions)
+  const sections = useMemo(() => {
+    if (!exchanges?.available || !info) return [];
     const isProduct = (e) => ["production", "substitution", "generic production"].includes(e.type);
     const resource = (f) => (f.categories[0] || "").toLowerCase().includes("resource");
     const technosphere = exchanges.inputs.filter((e) => !isProduct(e));
@@ -3125,6 +3147,8 @@ function ChartPanel({ data, info, method, chartMethods, setChartMethods, view })
   );
   const unit = info.methods[method].unit;
   const total = parts.reduce((s, p) => s + p.impacts[0], 0);
+  // Bars of rows in a group (or of the group) take the colour of its rule
+  const colors = useMemo(() => groupColors(data.rows, view), [data, view.groupColors, view.ruleColors]);
 
   const singleOption = useMemo(() => {
     const o = baseOption();
@@ -3151,12 +3175,12 @@ function ChartPanel({ data, info, method, chartMethods, setChartMethods, view })
     o.series = [{
       type: "bar", data: items.map((p) => ({
         value: p.impacts[0],
-        itemStyle: { color: p.impacts[0] < 0 ? cssVar("--bar-negative") : cssVar("--bar") },
+        itemStyle: { color: colors.get(p.rows[0].id) || (p.impacts[0] < 0 ? cssVar("--bar-negative") : cssVar("--bar")) },
       })),
       label: { show: true, position: "right", formatter: (d) => fmt(d.value), color: cssVar("--muted") },
     }];
     return o;
-  }, [parts, method]);
+  }, [parts, method, colors]);
 
   const multiOption = useMemo(() => {
     const o = baseOption();
@@ -3280,9 +3304,11 @@ const FLOW_PRESETS = [
   { label: "By compartment", rule: { by: "compartment", target: "flows" } },
 ];
 
-function GroupPanel({ info, rules, setRules, selectedRow }) {
+function GroupPanel({ info, rules, setRules, selectedRow, view, setView }) {
   const { editing } = useContext(EditorContext);
   const [kind, setKind] = useState("named");
+  const [target, setTarget] = useState("processes");  // what the new rule groups: processes or elementary flows
+  const flows = target === "flows";
   const [name, setName] = useState("");
   const [by, setBy] = useState("location");
   const [query, setQuery] = useState(() => emptyQuery("name", "contains"));
@@ -3290,23 +3316,36 @@ function GroupPanel({ info, rules, setRules, selectedRow }) {
   const predicate = useMemo(() => toPredicate(query), [query]);
   useEffect(() => {
     if (kind !== "named" || !predicate) { setPreview(null); return; }
-    const timer = setTimeout(() => request("/api/search", { predicate, limit: 5 }).then(setPreview).catch(() => setPreview(null)), 250);
+    const timer = setTimeout(() => request("/api/search", { predicate, limit: 5, target: flows ? "flows" : undefined }).then(setPreview).catch(() => setPreview(null)), 250);
     return () => clearTimeout(timer);
-  }, [predicate, kind]);
+  }, [predicate, kind, flows]);
+  const chooseTarget = (next) => {
+    setTarget(next);
+    setQuery(emptyQuery("name", "contains"));
+    setBy(next === "flows" ? "compartment" : "location");
+    setPreview(null);
+  };
   const [scope, setScope] = useState("*");
 
   const scopeTarget = selectedRow && selectedRow.kind === "process" ? selectedRow : null;
   const add = (rule) => setRules([...rules, { scope: "*", ...rule }]);
   function addCustom() {
-    const ruleScope = scope === "selected" && scopeTarget ? scopeTarget.id : "*";
+    const ruleScope = scope === "selected" && scopeTarget && !flows ? scopeTarget.id : "*";
+    const where = flows ? { target: "flows" } : {};
     if (kind === "named") {
       if (!predicate) return;
-      add({ name: name.trim() || describePredicate(predicate), predicate, scope: ruleScope });
+      add({ name: name.trim() || describePredicate(predicate), predicate, scope: ruleScope, ...where });
     } else {
-      add({ by, scope: ruleScope });
+      add({ by, scope: ruleScope, ...where });
     }
     setName("");
   }
+  // A rule's colour: picked here (kept in the view), or derived from its name
+  const ruleKey = (r) => r.by || r.name;
+  const pickColor = (key, color) => {
+    const { [key]: old, ...rest } = view.ruleColors || {};
+    setView({ ...view, ruleColors: color ? { ...rest, [key]: color } : rest });
+  };
   // Disabling keeps a rule (to switch it back on); merging turns each of its groups into a merged process
   const toggle = (i, key) => setRules(rules.map((r, j) => {
     if (j !== i) return r;
@@ -3347,9 +3386,11 @@ function GroupPanel({ info, rules, setRules, selectedRow }) {
               onDragOver=${(e) => onDragOver(e, i)} onDrop=${onDrop}
               onDragEnd=${() => { setDragging(null); setDropAt(null); }}>
               ${rules.length > 1 && html`<span class="grip" title="Drag to reorder (rules apply in list order)" aria-hidden="true">⠿</span>`}
-              ${!(r.target === "flows" && r.by) && !r.merge && html`
-                <span class="swatch" style=${{ background: colorOf(r.by || r.name) }}
-                  title="Colour of this rule's groups in the tree and in the group contributions"></span>`}
+              ${!(r.target === "flows" && r.by) && !r.merge && view.groupColors && html`
+                <input type="color" class="swatch" value=${colorHex(colorOf(ruleKey(r), view.ruleColors))}
+                  onInput=${(e) => pickColor(ruleKey(r), e.target.value)}
+                  onContextMenu=${(e) => { e.preventDefault(); pickColor(ruleKey(r), null); }}
+                  title="Colour of this rule's groups in the tree and the charts: click to change, right-click to reset" />`}
               <span class="desc">
                 ${r.target === "flows" && "flows: "}${r.by ? html`<b>group by ${r.by === "name" && r.target === "flows" ? "substance" : r.by}</b>` : html`<b>${r.name}</b> <small>← ${describePredicate(r.predicate)}</small>`}
                 <br /><small>${r.scope === "*" ? "everywhere in the tree" : `under ${r.scope}`}${r.merge ? " · merged" : ""}${r.disabled ? " · disabled" : ""}</small>
@@ -3370,24 +3411,35 @@ function GroupPanel({ info, rules, setRules, selectedRow }) {
 
       <h3>New rule</h3>
       <div class="row">
-        <label><input type="radio" checked=${kind === "named"} onChange=${() => setKind("named")} /> Named group from a query</label>
-        <label><input type="radio" checked=${kind === "by"} onChange=${() => setKind("by")} /> Group by a field</label>
+        <span class="segmented" role="group" aria-label="What the rule groups">
+          <button class=${!flows ? "primary" : ""} aria-pressed=${!flows} onClick=${() => chooseTarget("processes")}>Processes</button>
+          <button class=${flows ? "primary" : ""} aria-pressed=${flows} onClick=${() => chooseTarget("flows")}>Elementary flows</button>
+        </span>
+      </div>
+      <div class="row">
+        <span class="segmented" role="group" aria-label="Kind of rule">
+          <button class=${kind === "named" ? "primary" : ""} aria-pressed=${kind === "named"} onClick=${() => setKind("named")}>Named group from a query</button>
+          <button class=${kind === "by" ? "primary" : ""} aria-pressed=${kind === "by"} onClick=${() => setKind("by")}>Group by a field</button>
+        </span>
       </div>
       ${kind === "named" ? html`
         <div class="row"><input placeholder="Group name" value=${name} onInput=${(e) => setName(e.target.value)} aria-label="Group name" /></div>
-        <${QueryBuilder} query=${query} setQuery=${setQuery} fields=${info.query_fields} />
-        ${preview && html`<p class="note">${`Matches ${preview.total} activities in the database, e.g. `
+        <${QueryBuilder} query=${query} setQuery=${setQuery} fields=${flows ? info.flow_query_fields : info.query_fields} flows=${flows} />
+        ${preview && html`<p class="note">${`Matches ${preview.total} ${flows ? "flows" : "activities"} in the database, e.g. `
           + preview.results.slice(0, 3).map((r) => `${r.name} (${r.location})`).join("; ")
           + (preview.total > 3 ? "…" : "")}</p>`}
       ` : html`
         <div class="row"><select value=${by} onChange=${(e) => setBy(e.target.value)} aria-label="Group by field">
-          ${info.group_by_fields.map((f) => html`<option value=${f}>${fieldLabel(f)}</option>`)}
+          ${(flows ? info.flow_query_fields : info.group_by_fields).map((f) => html`<option value=${f}>${fieldLabel(f, flows)}</option>`)}
         </select></div>`}
-      <div class="row">
-        <label><input type="radio" checked=${scope === "*"} onChange=${() => setScope("*")} /> Everywhere</label>
-        <label><input type="radio" checked=${scope === "selected"} disabled=${!scopeTarget} onChange=${() => setScope("selected")} />
-          Only under the selected row${scopeTarget ? `: ${truncate(scopeTarget.label.split(" | ")[1], 40)}` : ""}</label>
-      </div>
+      ${!flows && html`<div class="row">
+        <span class="segmented" role="group" aria-label="Where the rule applies">
+          <button class=${scope === "*" ? "primary" : ""} aria-pressed=${scope === "*"} onClick=${() => setScope("*")}>Everywhere</button>
+          <button class=${scope === "selected" ? "primary" : ""} aria-pressed=${scope === "selected"} disabled=${!scopeTarget} onClick=${() => setScope("selected")}
+            title="Select one process row in the tree first">Only under the selected row</button>
+        </span>
+        ${scopeTarget && html`<span class="muted">${truncate(scopeTarget.label.split(" | ")[1], 40)}</span>`}
+      </div>`}
       <div class="row"><button class="primary" onClick=${addCustom}>Add rule</button></div>
     </div>`;
 }
@@ -3415,7 +3467,7 @@ function useProcessMenu(goTo, onInfo, onExchange) {
   return { open, element };
 }
 
-function GlobalPanel({ info, root, amount, method, rules, onLocate, onInfo }) {
+function GlobalPanel({ info, root, amount, method, rules, view, onLocate, onInfo }) {
   const [rule, setRule] = useState("direct");
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
@@ -3480,20 +3532,21 @@ function GlobalPanel({ info, root, amount, method, rules, onLocate, onInfo }) {
       }).catch((e) => setError(e.message));
   }
   // A group has the colour of its rule in the Group rules tab (and of its rows in the tree)
-  const colorOfGroup = (n) => n === "other" ? cssVar("--muted") : colorOf(n.replace(/ \(flows\)$/, ""));
+  const colorOfGroup = (n) => n === "other" ? cssVar("--muted")
+    : view.groupColors ? colorOf(n.replace(/ \(flows\)$/, ""), view.ruleColors) : undefined;
   const option = useMemo(() => {
     const o = baseOption();
     o.yAxis = { ...o.yAxis, type: "category", data: entries.map(([n]) => n), inverse: true, triggerEvent: true };
     o.xAxis = { ...o.xAxis, type: "value", name: unit };
     o.tooltip.valueFormatter = (v) => `${fmt(v)} ${unit} (${pct(v / total)})`;
-    o.series = [{ type: "bar", cursor: "pointer",
+    o.series = [{ type: "bar", colorBy: "data", cursor: "pointer",
       data: entries.map(([n, v]) => ({
         value: v,
         itemStyle: { color: colorOfGroup(n), opacity: group && n !== group ? 0.35 : 1 },
       })),
       label: { show: true, position: "right", formatter: (d) => pct(d.value / total), color: cssVar("--muted") } }];
     return o;
-  }, [result, k, group]);
+  }, [result, k, group, view.groupColors, view.ruleColors]);
 
   return html`
     <div class="panel">
@@ -3522,7 +3575,7 @@ function GlobalPanel({ info, root, amount, method, rules, onLocate, onInfo }) {
             <th class="num">${unit}</th><th class="num">Share</th></tr></thead>
           <tbody>${entries.map(([n, v]) => html`
             <tr class="clickable ${n === group ? "selected" : ""}" onClick=${() => choose(n)}>
-              <td>${n === group ? "▾" : "▸"} <span class="swatch" style=${{ background: colorOfGroup(n) }}></span>${n}${n in flowGroups && html` <span class="loc-chip">flows</span>`}</td>
+              <td>${n === group ? "▾" : "▸"} ${view.groupColors && html`<span class="swatch" style=${{ background: colorOfGroup(n) }}></span>`}${n}${n in flowGroups && html` <span class="loc-chip">flows</span>`}</td>
               <td class="num">${fmt(v)}</td><td class="num">${pct(v / total)}</td>
             </tr>`)}
           </tbody>
@@ -3571,7 +3624,7 @@ function GlobalPanel({ info, root, amount, method, rules, onLocate, onInfo }) {
 // ---------------------------------------------------------------- elementary flow contribution
 // The whole inventory of the functional unit, characterised: which substances make the
 // score. Clicking a flow lists the processes emitting it.
-function FlowPanel({ info, root, amount, method, onLocate, onInfo, onFlowInfo, rules, setRules }) {
+function FlowPanel({ info, root, amount, method, onLocate, onInfo, onFlowInfo, rules, setRules, view }) {
   const [by, setBy] = useState("substance");
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
@@ -3579,13 +3632,17 @@ function FlowPanel({ info, root, amount, method, onLocate, onInfo, onFlowInfo, r
   const [contributors, setContributors] = useState(null);
   const contributorsBox = useRef(null);
 
+  // Named rules on elementary flows: a substance in one takes its colour
+  const flowGroups = useMemo(() => Object.fromEntries(rules.filter((r) => r.target === "flows" && r.predicate && !r.disabled)
+    .map((r) => [r.name, r.predicate])), [rules]);
+  const colorOfItem = (it) => view.groupColors && it?.group ? colorOf(it.group, view.ruleColors) : null;
   useEffect(() => {
     let cancelled = false;
     setError(null);
-    request("/api/flows", { root: root.index, amount, method, by, limit: 25 })
+    request("/api/flows", { root: root.index, amount, method, by, limit: 25, flow_groups: flowGroups })
       .then((d) => !cancelled && setResult(d)).catch((e) => !cancelled && setError(e.message));
     return () => { cancelled = true; };
-  }, [root, amount, method, by]);
+  }, [root, amount, method, by, flowGroups]);
   useEffect(() => setFlow(null), [root, by]);
   // Processes emitting the chosen flow (all its compartments, by substance)
   useEffect(() => {
@@ -3625,12 +3682,12 @@ function FlowPanel({ info, root, amount, method, onLocate, onInfo, onFlowInfo, r
     o.series = [{ type: "bar", cursor: "pointer",
       data: entries.map(([, v, it]) => ({
         value: v,
-        itemStyle: { color: cssVar(!it ? "--muted" : v < 0 ? "--bar-negative" : "--bar"),
+        itemStyle: { color: colorOfItem(it) || cssVar(!it ? "--muted" : v < 0 ? "--bar-negative" : "--bar"),
           opacity: flow && !(it && isChosen(it)) ? 0.35 : 1 },
       })),
       label: { show: true, position: "right", formatter: (d) => ofTotal(d.value), color: cssVar("--muted") } }];
     return o;
-  }, [result, flow]);
+  }, [result, flow, view.groupColors, view.ruleColors]);
 
   return html`
     <div class="panel">
@@ -3658,7 +3715,7 @@ function FlowPanel({ info, root, amount, method, onLocate, onInfo, onFlowInfo, r
           <tbody>${result.items.map((it) => html`
             <tr key=${keyOf(it)} class="clickable ${isChosen(it) ? "selected" : ""}" onClick=${() => choose(it)}
                 onContextMenu=${(e) => onFlowInfo(flowTarget(it), e)} title="Click for the processes emitting it, right-click for its details">
-              <td>${isChosen(it) ? "▾" : "▸"} ${it.name} <span class="muted">${it.compartment}</span></td>
+              <td>${isChosen(it) ? "▾" : "▸"} ${colorOfItem(it) && html`<span class="swatch" style=${{ background: colorOfItem(it) }} title=${`In the group ${it.group}`}></span>`}${it.name} <span class="muted">${it.compartment}</span></td>
               <td class="num">${fmtAmount(it.amount)} ${unit(it.unit)}</td><td class="num">${fmt(it.impact)}</td><td class="num">${ofTotal(it.impact)}</td>
             </tr>`)}
             ${result.others.count > 0 && html`
@@ -3790,6 +3847,9 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
     },
     groupProducts: loadPreference("groupProducts", "0") === "1",
     comments: loadPreference("comments", "1") === "1",
+    groupColors: loadPreference("groupColors", "1") === "1",
+    // colours picked for rules, by rule name (or field, for a group-by rule)
+    ruleColors: (() => { try { return JSON.parse(loadPreference("ruleColors", "{}")) || {}; } catch { return {}; } })(),
   }));
   const [nameEdit, setNameEdit] = useState(null);  // { id }: the row whose process name is being edited (Enter, in edit mode)
   useEffect(() => {
@@ -3800,6 +3860,8 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
     savePreference("recipeFlowSecondary", view.recipe.flowSecondary ?? DEFAULT_RECIPE.flowSecondary);
     savePreference("groupProducts", view.groupProducts ? "1" : "0");
     savePreference("comments", view.comments ? "1" : "0");
+    savePreference("groupColors", view.groupColors ? "1" : "0");
+    savePreference("ruleColors", JSON.stringify(view.ruleColors));
   }, [view]);
   const [rules, setRules] = useState([]);
   const [chartMethods, setChartMethods] = useState([]);
@@ -4173,7 +4235,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
       model: { title: info.title, activities: info.activities },
       root, amount, method: info.methods[method].name, chartMethods: chartMethods.map((k) => info.methods[k].name),
       cutoff: +cutoffValue(cutoff, cutoffBasis).toFixed(8), cutoffBasis, expanded: [...expanded], rules, pinned: [...pinned], others: [...others], merges, ungrouped: [...ungrouped], substitutions, labels,
-      display: { naming: view.naming, recipe: view.recipe, groupProducts: view.groupProducts, comments: view.comments },
+      display: { naming: view.naming, recipe: view.recipe, groupProducts: view.groupProducts, comments: view.comments, groupColors: view.groupColors, ruleColors: view.ruleColors },
     };
   }
   function exportView() {
@@ -4452,16 +4514,20 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
             ${[["chart", "Process contribution"], ["flows", "Flow contribution"], ["groups", `Group rules${activeRules ? ` (${activeRules})` : ""}`], ["global", "Group contributions"]].map(([key, label]) => html`
               <button role="tab" class=${tab === key ? "active" : ""} onClick=${() => setTab(key)}>${label}</button>`)}
             <span class="spacer"></span>
+            <button class=${`color-toggle ${view.groupColors ? "on" : ""}`} aria-pressed=${view.groupColors}
+              onClick=${() => setView({ ...view, groupColors: !view.groupColors })}
+              title=${view.groupColors ? "Hide the group colours (tree, charts, rules)" : "Show the group colours (tree, charts, rules)"}
+              aria-label="Group colours"></button>
             <button class="collapse-side" onClick=${onCollapseSide} title="Hide the side panel" aria-label="Hide the side panel">»</button>
           </div>
           ${tab === "chart" && data.rows.length > 0 && html`<${ChartPanel} data=${data} info=${info} method=${method}
               chartMethods=${chartMethods} setChartMethods=${setChartMethods} view=${view} />`}
           ${tab === "flows" && root && html`<${FlowPanel} info=${info} root=${root} amount=${amount} method=${method}
               onLocate=${goTo} onInfo=${(index, x, y) => openInfo({ index, row: null, x, y })} onFlowInfo=${showFlowInfo}
-              rules=${rules} setRules=${setRules} />`}
-          ${tab === "groups" && html`<${GroupPanel} info=${info} rules=${rules} setRules=${setRules}
+              rules=${rules} setRules=${setRules} view=${view} />`}
+          ${tab === "groups" && html`<${GroupPanel} info=${info} rules=${rules} setRules=${setRules} view=${view} setView=${setView}
               selectedRow=${selectedRows.length === 1 ? selectedRows[0] : null} />`}
-          ${tab === "global" && html`<${GlobalPanel} info=${info} root=${root} amount=${amount} method=${method} rules=${rules}
+          ${tab === "global" && html`<${GlobalPanel} info=${info} root=${root} amount=${amount} method=${method} rules=${rules} view=${view}
               onLocate=${goTo} onInfo=${(index, x, y) => openInfo({ index, row: null, x, y })} />`}
         </section>
       <//>

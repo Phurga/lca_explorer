@@ -357,7 +357,16 @@ API in `src/lca_viewer/server.py`.
     location / activity type / ISIC), and the shared query builder — the same component as the search
     filters, so a filter reads and behaves the same in both places — with a
     live "matches N activities, e.g. …" preview; scope everywhere or under
-    the selected row.
+    the selected row. *Group elementary flows* makes the same kinds of rules
+    on flows (substance, compartment, subcompartment, unit), which group the
+    flows under direct emissions and split what the process groups leave in
+    *Group contributions*; "product / waste" (`flow_type`) is a field of
+    processes, not of flows. Each rule has a colour swatch: click it to pick
+    another colour (right-click resets it). The groups of a rule carry it in
+    the tree, graph and Sankey, and the bars of the *Process contribution*,
+    *Flow contribution* (a substance in a named flow group) and *Group
+    contributions* charts; the round button at the right of the side panel's
+    tabs switches all group colours off and on.
   - *Group contributions*: global grouping with the named groups, direct
     (the default) or first-match attribution (see [grouping.md](grouping.md)),
     groups sorted by decreasing impact with *other* last.

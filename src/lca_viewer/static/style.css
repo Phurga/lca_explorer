@@ -237,7 +237,13 @@ section { display: flex; flex-direction: column; min-height: 0; border-right: 1p
 .rules li[draggable="true"] { cursor: grab; }
 .rules li .grip { color: var(--muted); user-select: none; }
 .swatch { display: inline-block; flex: none; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: baseline; }
-.rules li .swatch { margin-right: 0; }
+.rules li input.swatch { -webkit-appearance: none; appearance: none; width: 16px; height: 16px; padding: 0; border: none; border-radius: 4px; background: none; cursor: pointer; }
+.rules li input.swatch::-webkit-color-swatch-wrapper { padding: 0; }
+.rules li input.swatch::-webkit-color-swatch { border: none; border-radius: 4px; }
+.rules li input.swatch::-moz-color-swatch { border: none; border-radius: 4px; }
+/* Discreet switch of the group colours, in the side panel's tab bar */
+.tabs button.color-toggle { width: 14px; height: 14px; min-width: 0; padding: 0; margin: 0 4px; align-self: center; border-radius: 50%; border: 1px solid var(--muted); background: transparent; cursor: pointer; flex: none; }
+.tabs button.color-toggle.on { border-color: transparent; background: conic-gradient(#d9534f, #e8a33d, #5cb85c, #3d8fe8, #8c5ce0, #d9534f); }
 .rules li.dragging { opacity: 0.4; }
 .rules li.drop-before { box-shadow: 0 -3px 0 var(--accent); }
 .rules li.drop-after { box-shadow: 0 3px 0 var(--accent); }
