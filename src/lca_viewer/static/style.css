@@ -178,6 +178,7 @@ section { display: flex; flex-direction: column; min-height: 0; border-right: 1p
   background-size: calc(var(--depth, 0) * 16px) 100%;
 }
 .tree .num { text-align: right; font-family: var(--mono); font-size: 12px; }
+.tree td.comment { color: var(--muted); font-size: 12px; }
 .tree .name { display: flex; align-items: center; gap: 4px; }
 .tree .toggle {
   width: 18px; height: 18px; border: none; padding: 0; background: none; color: var(--muted);
@@ -235,6 +236,8 @@ section { display: flex; flex-direction: column; min-height: 0; border-right: 1p
 .rules li.disabled .desc { opacity: 0.5; }
 .rules li[draggable="true"] { cursor: grab; }
 .rules li .grip { color: var(--muted); user-select: none; }
+.swatch { display: inline-block; flex: none; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: baseline; }
+.rules li .swatch { margin-right: 0; }
 .rules li.dragging { opacity: 0.4; }
 .rules li.drop-before { box-shadow: 0 -3px 0 var(--accent); }
 .rules li.drop-after { box-shadow: 0 3px 0 var(--accent); }
@@ -404,7 +407,7 @@ header { gap: 10px; }
 /* Selection actions and merged rows */
 .selection-bar {
   display: flex; gap: 6px; align-items: center; padding: 6px 12px;
-  background: var(--selected); border-bottom: 1px solid var(--border);
+  background: var(--selected); border-top: 1px solid var(--border);
 }
 .selection-bar span { flex: 1; }
 .selection-bar input { width: 120px; }
@@ -442,7 +445,7 @@ table.results tr.selected td { background: var(--selected); }
 .contributors-list th { color: var(--muted); font-weight: 400; }
 .contributors-list .num { width: 90px; text-align: right; font-family: var(--mono); font-size: 12px; }
 .contributors-list .pct { width: 66px; text-align: right; font-family: var(--mono); font-size: 12px; }
-.contributors-list tbody tr { cursor: context-menu; }
+.contributors-list tbody tr { cursor: pointer; }
 .contributors-list tbody tr:hover td { background: var(--hover); }
 .contributors-list tr.more td { color: var(--muted); cursor: default; }
 .contributors-list .loc { color: var(--muted); margin-left: 6px; }

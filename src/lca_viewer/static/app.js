@@ -34,6 +34,12 @@ function fmt(x) {
   const a = Math.abs(x);
   return a >= 1e4 || a < 1e-3 ? x.toExponential(2) : x.toPrecision(3);
 }
+// An amount: three digits at most, so scientific notation below 0.1 and from 1000
+function fmtAmount(x) {
+  if (x === 0) return "0";
+  const a = Math.abs(x);
+  return a >= 1e3 || a < 0.1 ? x.toExponential(2) : x.toPrecision(3);
+}
 const pct = (x) => `${(x * 100).toFixed(1)}%`;
 const methodLabel = (m) => m.name.join(" | ");
 const productOf = (rowId) => Number(rowId.split("/").pop());
@@ -115,21 +121,27 @@ const cutoffReason = (value, basis) => ({
   top: `beyond the ${value} largest`,
 })[basis];
 // Colour per group: a group row and the rows below it (the nearest group wins) share one
-// hue, derived from the row id so that a group keeps its colour when others change
-const groupHue = (id) => [...id].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 0);
+// hue, derived from the rule that made the group (its name, or the field of a group-by
+// rule) so that a group keeps its colour when others change, and matches its rule's swatch
+const hueOf = (key) => [...key].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 0);
+const colorOf = (key) => `hsl(${hueOf(key)} 55% 52%)`;
+const groupKey = (id) => {
+  const name = id.slice(id.lastIndexOf("/g:") + 3);
+  return /^\w+: /.test(name) ? name.slice(0, name.indexOf(":")) : name;
+};
 function groupColors(rows) {
   const colors = new Map();
   for (const r of rows) {
-    if (r.kind === "group") colors.set(r.id, `hsl(${groupHue(r.id)} 55% 52%)`);
+    if (r.kind === "group") colors.set(r.id, colorOf(groupKey(r.id)));
     else if (colors.has(r.parent)) colors.set(r.id, colors.get(r.parent));
   }
   return colors;
 }
 // Amount column of a row: product supplied, waste treated, or elementary flow emitted
 function rowAmount(r) {
-  if (r.kind === "merged" || r.kind === "group" || r.kind === "flow") return r.unit ? `${fmt(r.amount)} ${unit(r.unit)}` : "";
+  if (r.kind === "merged" || r.kind === "group" || r.kind === "flow") return r.unit ? `${fmtAmount(r.amount)} ${unit(r.unit)}` : "";
   if (r.kind !== "process") return "";
-  return r.waste ? `${fmt(-r.amount)} ${unit(r.unit)} treated` : `${fmt(r.amount)} ${unit(r.unit)}`;
+  return r.waste ? `${fmtAmount(-r.amount)} ${unit(r.unit)} treated` : `${fmtAmount(r.amount)} ${unit(r.unit)}`;
 }
 // Rows made of processes: a process, a merged process, a group of processes (not of flows)
 const ofProcesses = (r) => r.kind === "process" || r.kind === "merged" || (r.kind === "group" && !!r.products);
@@ -155,7 +167,7 @@ function selectedProcessTotals(byId, selection) {
   }
   return {
     count,
-    amounts: [...amounts].map(([u, n]) => `${fmt(n)} ${u}`).join(" + "),
+    amounts: [...amounts].map(([u, n]) => `${fmtAmount(n)} ${u}`).join(" + "),
     impact: counted.reduce((sum, r) => sum + r.impacts[0], 0),
   };
 }
@@ -1140,22 +1152,30 @@ function patchExchange(input, shown, text) {
 const productOfProcess = (draft, code) => draft.products.find((p) => p.processCode === code || p.code === code) || draft.products[0];
 
 // A value that can be changed by double-clicking it in edit mode: ``onCommit(text)`` returns a promise.
-// ``edit``: what the input starts with when that differs from what is shown; ``load``: the same, fetched when needed.
-function Editable({ value, display, edit, multiline, load, onCommit, disabled, title, className = "" }) {
+// ``edit``: what the input starts with when that differs from what is shown; ``load``: the same, fetched when needed;
+// ``format``: how the value is shown (the input has it in full). ``start``: a token (any new object) that opens the
+// input without a double-click, ``onStarted`` is then called, whether or not it could open.
+function Editable({ value, display, edit, multiline, load, onCommit, disabled, title, format, start, onStarted, className = "" }) {
   const ctx = useContext(EditorContext);
   const [text, setText] = useState(null);  // null: not being edited
   const [shown, setShown] = useState(null);  // what was just staged, until the model is built again
   const input = useRef(null);
   const closing = useRef(false);
-  useEffect(() => setShown(null), [value]);
-  useEffect(() => { if (text !== null) input.current?.focus(); }, [text === null]);
-  if (!ctx.editing) return html`<span class=${className}>${display ?? value}</span>`;
-  if (disabled) return html`<span class=${`${className} locked`} title=${title || "Locked: unlock its database in Load database to change it"}>${display ?? value}</span>`;
   const begin = async (e) => {
-    e.stopPropagation();
+    e?.stopPropagation();
     closing.current = false;
     try { setText(load ? await load() : edit ?? String(value ?? "")); } catch (err) { window.alert(err.message); }
   };
+  useEffect(() => setShown(null), [value]);
+  useEffect(() => { if (text !== null) input.current?.focus(); }, [text === null]);
+  useEffect(() => {
+    if (!start) return;
+    if (ctx.editing && !disabled) begin();
+    onStarted?.();
+  }, [start]);
+  const looks = (v) => (format && Number.isFinite(Number(v)) ? format(Number(v)) : v);
+  if (!ctx.editing) return html`<span class=${className}>${display ?? looks(value)}</span>`;
+  if (disabled) return html`<span class=${`${className} locked`} title=${title || "Locked: unlock its database in Load database to change it"}>${display ?? looks(value)}</span>`;
   const finish = (commit) => {
     if (closing.current) return;  // Enter or Escape came first: the blur that follows is not a second answer
     closing.current = true;
@@ -1177,7 +1197,7 @@ function Editable({ value, display, edit, multiline, load, onCommit, disabled, t
       : html`<input class="editing" size=${Math.max(4, Math.min(40, text.length + 2))} ...${props} />`;
   }
   return html`<span class=${`${className} editable ${shown !== null ? "staged" : ""}`} title=${title || "Double-click to change it"}
-    onClick=${(e) => e.detail > 1 && e.stopPropagation()} onDblClick=${begin}>${shown !== null ? shown : (display ?? value)}</span>`;
+    onClick=${(e) => e.detail > 1 && e.stopPropagation()} onDblClick=${begin}>${shown !== null ? looks(shown) : (display ?? looks(value))}</span>`;
 }
 
 // ---------------------------------------------------------------- the process form (staged, not written)
@@ -1514,7 +1534,7 @@ function MethodSelect({ methods, value, onChange }) {
 }
 
 // ---------------------------------------------------------------- tree
-function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onUngroup, onRegroup, ungroupable, onMergeGroup, onUnpin, onPin, onMoveToOthers, onInfo, onUnmerge, onRevert, view, focus, renaming, onStartRename, onRename }) {
+function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onUngroup, onRegroup, ungroupable, onMergeGroup, onUnpin, onPin, onMoveToOthers, onInfo, onUnmerge, onRevert, view, focus, renaming, onStartRename, onRename, nameEdit, onNameEdit }) {
   const byId = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
   const colors = useMemo(() => groupColors(rows), [rows]);
   const ctx = useContext(EditorContext);
@@ -1530,10 +1550,11 @@ function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onU
   if (!rows.length) return html`<div class="empty">Choose a functional unit to start.</div>`;
   return html`
     <div class="tree" ref=${box}>
-      <table>
-        <colgroup><col /><col style="width:130px" /><col style="width:90px" /><col style="width:150px" /></colgroup>
+      <table style=${view.comments ? { minWidth: "860px" } : null}>
+        <colgroup><col /><col style="width:130px" /><col style="width:90px" /><col style="width:150px" />${view.comments && html`<col style="width:260px" />`}</colgroup>
         <thead><tr><th>Process</th><th class="num">Amount</th><th class="num">Impact</th>
-          <th title="Switched with the cut-off basis (total | parent)">Share of ${shareBasis === "parent" ? "parent" : "total"}</th></tr></thead>
+          <th title="Switched with the cut-off basis (total | parent)">Share of ${shareBasis === "parent" ? "parent" : "total"}</th>
+          ${view.comments && html`<th title="Comment on the exchange supplying the process, in the dataset of the process above it (c: all of it)">Comments</th>`}</tr></thead>
         <tbody>
           ${rows.map((r) => {
             const share = shareOf(r, byId, rootImpact, shareBasis);
@@ -1558,6 +1579,7 @@ function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onU
                             const main = editing && r.kind === "process" && r.meta
                               ? html`<${Editable} value=${r.meta.name} display=${n.main} title=${`Double-click to rename the process in the project (${r.meta.name})`}
                                   disabled=${ctx.locked.includes(r.meta.database)}
+                                  start=${nameEdit?.id === r.id ? nameEdit : null} onStarted=${onNameEdit}
                                   onCommit=${(text) => quickEdit(ctx, r.meta.database, r.meta.code, (d) => { d.process.name = text; })} />`
                               : n.main;
                             return html`${main}${n.qual && html` <span class="loc">${n.qual}</span>`}`;
@@ -1579,7 +1601,7 @@ function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onU
                         <button class="chip merge" title="Merge into one process whose inventory is the union of the members'"
                           onClick=${(e) => { e.stopPropagation(); onMergeGroup(r); }}>merge</button>`}
                       ${r.kind === "merged" && !editing && (r.by_rule
-                        ? html`<span class="chip merge" title="Merged by a grouping rule (see the Grouping tab)">merged</span>`
+                        ? html`<span class="chip merge" title="Merged by a grouping rule (see the Group rules tab)">merged</span>`
                         : html`<button class="chip merge" title="Split back into the original processes"
                             onClick=${(e) => { e.stopPropagation(); onUnmerge(r); }}>merged ×</button>`)}
                       ${r.pinned && html`
@@ -1619,6 +1641,7 @@ function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onU
                     <span>${pct(share)}</span>
                   </div>
                 </td>
+                ${view.comments && html`<td class="comment" title=${r.comment || ""}>${r.comment}</td>`}
               </tr>`;
           })}
         </tbody>
@@ -2078,7 +2101,7 @@ function BundlePopup({ target, win, row, methodInfo, rootImpact, actions, onPart
   // Amounts only add up (and have a share) when every member delivers the same product
   const sameUnit = !!row.unit;
   const total = row.impacts[0];
-  const amountOf = (p) => `${fmt(Math.abs(p.amount))} ${unit(p.unit)}${p.waste ? " treated" : ""}`;
+  const amountOf = (p) => `${fmtAmount(Math.abs(p.amount))} ${unit(p.unit)}${p.waste ? " treated" : ""}`;
   const things = parts.some((p) => p.index === undefined) ? "flows" : "processes";
   const kind = row.kind === "merged" ? "Merged" : "Group";
   return html`
@@ -2148,6 +2171,8 @@ function ViewBar({ view, setView, example }) {
       <div class="row">
         <button class=${view.groupProducts ? "primary" : ""} onClick=${() => set({ groupProducts: !view.groupProducts })}
           title="Bundle sibling inputs of the same product (other regions or routes) under one row">Group by product</button>
+        <button class=${view.comments ? "primary" : ""} onClick=${() => set({ comments: !view.comments })}
+          title="Show the comments column of the list: the comment on the exchange supplying each process">Comments</button>
         <span class="segmented" role="group" aria-label="Row names">
           ${[["full", "Full names"], ["short", "Short names"], ["custom", "Custom name"]].map(([id, label]) => html`
             <button class=${view.naming === id ? "primary" : ""} onClick=${() => set({ naming: id })}>${label}</button>`)}
@@ -2229,7 +2254,7 @@ function ExchangeTable({ title, items, cumulative, unitPer, onActivity, onExchan
                 ${onActivity
                   ? html`<span title=${`${e.name} | ${e.location}`}>${e.reference_product}</span> <span class="loc-chip">${e.location}</span>`
                   : html`<span title=${`${e.name} | ${e.categories.join(" / ")}`}>${e.name} <span class="muted">${e.categories.join(" / ")}</span></span>`}</td>
-              <td class="num"><${Editable} value=${Math.abs(e.amount)} format=${fmt} disabled=${locked || !onAmount || !e.input}
+              <td class="num"><${Editable} value=${Math.abs(e.amount)} format=${fmtAmount} disabled=${locked || !onAmount || !e.input}
                   title=${locked ? undefined : !e.input ? "Build this database again once, to edit amounts here" : "Double-click to change this amount in the dataset"}
                   onCommit=${(text) => onAmount(e, text)} /> ${unit(e.unit)}</td>
               <td class="num impact">${e.impact ? fmt(e.impact) : "–"}</td>
@@ -2474,7 +2499,7 @@ function FlowInfoPopup({ target, win, method, methods, onClose, onOpen, onBack }
                 ? "No exchange of this flow recorded in the dataset."
                 : "This model has no exchange metadata — rebuild it to see comments and uncertainty."}</p>`}
               ${exchanges.map((e) => html`
-                <table class="kv"><tr><th>Amount</th><td>${fmt(e.amount)} ${unit(e.unit || info.unit)} <span class="muted">as recorded in the dataset</span></td></tr></table>
+                <table class="kv"><tr><th>Amount</th><td>${fmtAmount(e.amount)} ${unit(e.unit || info.unit)} <span class="muted">as recorded in the dataset</span></td></tr></table>
                 ${hasExchangeMeta(e) ? html`<${ExchangeMeta} e=${e} />` : html`<p class="text muted">No comment or uncertainty recorded for this exchange.</p>`}`)}
             </section>`)}
           ${shown === "factors" && html`
@@ -2556,9 +2581,9 @@ function UserRow({ user: u, inputUnit, root, amount, method, ancestors, depth, o
             : html`<button class="toggle" aria-label=${open ? "Collapse" : "Expand"} onClick=${() => setOpen(!open)}>${open ? "▾" : "▸"}</button>`}
           <a href="#" onClick=${(e) => { e.preventDefault(); onOpen(u.index); }}>${u.name}</a>
           <span class="loc-chip">${u.location}</span></span></td>
-      <td class="num">${fmt(Math.abs(u.per_unit))} ${inputUnit}/${unit(u.unit)}</td>
+      <td class="num">${fmtAmount(Math.abs(u.per_unit))} ${inputUnit}/${unit(u.unit)}</td>
       ${root && html`
-        <td class="num">${u.flow ? `${fmt(Math.abs(u.flow))} ${inputUnit}` : "–"}</td>
+        <td class="num">${u.flow ? `${fmtAmount(Math.abs(u.flow))} ${inputUnit}` : "–"}</td>
         <td class="num">${u.flow ? pct(u.share) : ""}</td>
         <td>${u.flow !== 0 && html`<button class="chip" title="Open the tree at this activity (largest supply path)"
               onClick=${() => onGoTo(u.index)}>go to</button>`}</td>`}
@@ -2718,11 +2743,11 @@ function InfoPopup({ target, win, method, methodInfo, rootImpact, rowsById, onCl
             <section>
               <h4>${row ? "In this tree" : "Exchange"}</h4>
               <table class="kv">
-                ${row?.kind === "process" && html`<tr><th>Amount</th><td>${row.waste ? `${fmt(-row.amount)} ${unit(row.unit)} treated` : `${fmt(row.amount)} ${unit(row.unit)}`}</td></tr>`}
+                ${row?.kind === "process" && html`<tr><th>Amount</th><td>${rowAmount(row)}</td></tr>`}
                 ${row && html`<tr><th>Impact</th><td>${fmt(row.impacts[0])} ${methodInfo.unit} (${pct(rootImpact ? row.impacts[0] / rootImpact : 0)} of the total)</td></tr>`}
                 ${row && html`<tr><th>Path</th><td>${path.join(" → ")}</td></tr>`}
                 ${link?.map(({ meta, inputs }) => inputs.map((e) => html`
-                  <tr><th>Input</th><td><${Editable} value=${Math.abs(e.amount)} format=${fmt} disabled=${inDataset(meta).locked || !e.input}
+                  <tr><th>Input</th><td><${Editable} value=${Math.abs(e.amount)} format=${fmtAmount} disabled=${inDataset(meta).locked || !e.input}
                     title=${e.input ? undefined : "Build this database again once, to edit amounts here"}
                     onCommit=${(t) => inDataset(meta).change(patchExchange(e.input, e.amount, t))} /> ${unit(e.unit)} in the dataset of ${meta.name}
                     <span class="loc-chip">${meta.location}</span>${e.type !== "technosphere" ? html` <span class="muted">(${e.type})</span>` : ""}</td></tr>`))}
@@ -2777,8 +2802,7 @@ function InfoPopup({ target, win, method, methodInfo, rootImpact, rowsById, onCl
                 ${alternatives.alternatives.map((a) => html`
                   <tr key=${a.index} data-nav tabindex="-1"
                       onKeyDown=${(e) => { if (e.key === " " && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); e.stopPropagation(); openActivity(a.index); } }}>
-                    <td class="user"><a href="#" onClick=${(e) => { e.preventDefault(); openActivity(a.index); }}>${a.name}</a>
-                      <span class="loc-chip">${a.location}</span></td>
+                    <td class="user">${a.name} <span class="loc-chip">${a.location}</span></td>
                     <td class="num">${fmt(a.per_unit)}</td>
                     <td class="num">${a.relative === null ? "" : `${a.relative > 0 ? "+" : ""}${pct(a.relative)}`}</td>
                   </tr>`)}
@@ -2798,10 +2822,10 @@ function InfoPopup({ target, win, method, methodInfo, rootImpact, rowsById, onCl
               <h4>Reference product exchange</h4>
               <table class="kv">
                 ${production["production volume"] !== undefined && html`
-                  <tr><th>Production volume</th><td>${fmt(production["production volume"])} ${unit(production.unit)} per year</td></tr>`}
+                  <tr><th>Production volume</th><td>${fmtAmount(production["production volume"])} ${unit(production.unit)} per year</td></tr>`}
                 ${production.comment && html`<tr><th>Comment</th><td>${production.comment}</td></tr>`}
                 ${Object.entries(production.properties || {}).map(([name, p]) => html`
-                  <tr><th>${name}</th><td title=${p.comment || ""}>${typeof p.amount === "number" ? fmt(p.amount) : p.amount} ${p.unit ?? ""}
+                  <tr><th>${name}</th><td title=${p.comment || ""}>${typeof p.amount === "number" ? fmtAmount(p.amount) : p.amount} ${p.unit ?? ""}
                     ${p.comment && html`<span class="muted">· ${truncate(p.comment, 80)}</span>`}</td></tr>`)}
               </table>
             </section>`}`}
@@ -3264,6 +3288,9 @@ function GroupPanel({ info, rules, setRules, selectedRow }) {
               onDragOver=${(e) => onDragOver(e, i)} onDrop=${onDrop}
               onDragEnd=${() => { setDragging(null); setDropAt(null); }}>
               ${rules.length > 1 && html`<span class="grip" title="Drag to reorder (rules apply in list order)" aria-hidden="true">⠿</span>`}
+              ${!(r.target === "flows" && r.by) && !r.merge && html`
+                <span class="swatch" style=${{ background: colorOf(r.by || r.name) }}
+                  title="Colour of this rule's groups in the tree and in the group contributions"></span>`}
               <span class="desc">
                 ${r.target === "flows" && "flows: "}${r.by ? html`<b>group by ${r.by === "name" && r.target === "flows" ? "substance" : r.by}</b>` : html`<b>${r.name}</b> <small>← ${describePredicate(r.predicate)}</small>`}
                 <br /><small>${r.scope === "*" ? "everywhere in the tree" : `under ${r.scope}`}${r.merge ? " · merged" : ""}${r.disabled ? " · disabled" : ""}</small>
@@ -3376,7 +3403,7 @@ function GlobalPanel({ info, root, amount, method, rules, onLocate, onInfo }) {
   const ofGroup = (v) => pct(contributors?.total ? v / contributors.total : 0);
   const quote = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
   const methodName = `${methodLabel(info.methods[k])} [${unit}]`;
-  const fileName = (what) => `whole-supply-chain-${what}-${(root?.name || "").replace(/[^A-Za-z0-9]+/g, "-").slice(0, 40)}.csv`;
+  const fileName = (what) => `group-contributions-${what}-${(root?.name || "").replace(/[^A-Za-z0-9]+/g, "-").slice(0, 40)}.csv`;
   function exportGroups() {
     const lines = entries.map(([n, v]) => [quote(n), n in flowGroups ? "flow group" : n === "other" ? "other" : "process group",
       v, total ? v / total : 0].join(","));
@@ -3393,15 +3420,17 @@ function GlobalPanel({ info, root, amount, method, rules, onLocate, onInfo }) {
         download(fileName(`group-${group.replace(/[^A-Za-z0-9]+/g, "-")}`), [header, ...lines].join("\n"), "text/csv");
       }).catch((e) => setError(e.message));
   }
+  // A group has the colour of its rule in the Group rules tab (and of its rows in the tree)
+  const colorOfGroup = (n) => n === "other" ? cssVar("--muted") : colorOf(n.replace(/ \(flows\)$/, ""));
   const option = useMemo(() => {
     const o = baseOption();
     o.yAxis = { ...o.yAxis, type: "category", data: entries.map(([n]) => n), inverse: true, triggerEvent: true };
     o.xAxis = { ...o.xAxis, type: "value", name: unit };
     o.tooltip.valueFormatter = (v) => `${fmt(v)} ${unit} (${pct(v / total)})`;
-    o.series = [{ type: "bar", colorBy: "data", cursor: "pointer",
+    o.series = [{ type: "bar", cursor: "pointer",
       data: entries.map(([n, v]) => ({
         value: v,
-        itemStyle: { ...(n === "other" ? { color: cssVar("--muted") } : {}), opacity: group && n !== group ? 0.35 : 1 },
+        itemStyle: { color: colorOfGroup(n), opacity: group && n !== group ? 0.35 : 1 },
       })),
       label: { show: true, position: "right", formatter: (d) => pct(d.value / total), color: cssVar("--muted") } }];
     return o;
@@ -3410,7 +3439,7 @@ function GlobalPanel({ info, root, amount, method, rules, onLocate, onInfo }) {
   return html`
     <div class="panel">
       <p class="note">
-        Whole supply chain, using the named groups defined in the Grouping tab (${Object.keys(groups).length} groups of
+        Group contributions over the whole supply chain, using the named groups defined in the Group rules tab (${Object.keys(groups).length} groups of
         processes${Object.keys(flowGroups).length ? `, ${Object.keys(flowGroups).length} of elementary flows` : ""}).
         Process groups come first: a group keeps every flow it reaches first. Flow groups (e.g. a substance, added from
         the Flow contribution tab) then take their flows from what is left, the emissions of processes outside the groups.
@@ -3434,7 +3463,7 @@ function GlobalPanel({ info, root, amount, method, rules, onLocate, onInfo }) {
             <th class="num">${unit}</th><th class="num">Share</th></tr></thead>
           <tbody>${entries.map(([n, v]) => html`
             <tr class="clickable ${n === group ? "selected" : ""}" onClick=${() => choose(n)}>
-              <td>${n === group ? "▾" : "▸"} ${n}${n in flowGroups && html` <span class="loc-chip">flows</span>`}</td>
+              <td>${n === group ? "▾" : "▸"} <span class="swatch" style=${{ background: colorOfGroup(n) }}></span>${n}${n in flowGroups && html` <span class="loc-chip">flows</span>`}</td>
               <td class="num">${fmt(v)}</td><td class="num">${pct(v / total)}</td>
             </tr>`)}
           </tbody>
@@ -3453,13 +3482,14 @@ function GlobalPanel({ info, root, amount, method, rules, onLocate, onInfo }) {
               ? `Processes emitting these flows outside the process groups${rule === "first_match" ? " and their supply chains" : ""} (their own emissions).`
               : contributors.cumulative
               ? "Each process with its supply chain (the first process of the group on each supply path)."
-              : `Each process's own emissions${group === "other" && Object.keys(flowGroups).length ? ", without the flows of the flow groups" : ""}.`} Right-click a process (or double-click) to go to it in the tree, along its largest supply path.</p>
+              : `Each process's own emissions${group === "other" && Object.keys(flowGroups).length ? ", without the flows of the flow groups" : ""}.`} Click a process for its pop-up; right-click it (or double-click) to go to it in the tree, along its largest supply path.</p>
             <div class="contributors-list">
               <table>
                 <thead><tr><th>Process</th><th class="num">${unit}</th><th class="pct">of group</th><th class="pct">of total</th></tr></thead>
                 <tbody>
                   ${contributors.contributors.map((c) => html`
                     <tr key=${c.index} title=${`${c.reference_product} | ${c.name} | ${c.location}`}
+                        onClick=${(e) => e.detail < 2 && onInfo(c.index, e.clientX, e.clientY)}
                         onContextMenu=${(e) => menu.open(e, c)}
                         onDblClick=${() => goTo(c)}>
                       <td>${c.name}<span class="loc">${c.location}</span></td>
@@ -3570,7 +3600,7 @@ function FlowPanel({ info, root, amount, method, onLocate, onInfo, onFlowInfo, r
             <tr key=${keyOf(it)} class="clickable ${isChosen(it) ? "selected" : ""}" onClick=${() => choose(it)}
                 onContextMenu=${(e) => onFlowInfo(flowTarget(it), e)} title="Click for the processes emitting it, right-click for its details">
               <td>${isChosen(it) ? "▾" : "▸"} ${it.name} <span class="muted">${it.compartment}</span></td>
-              <td class="num">${fmt(it.amount)} ${unit(it.unit)}</td><td class="num">${fmt(it.impact)}</td><td class="num">${ofTotal(it.impact)}</td>
+              <td class="num">${fmtAmount(it.amount)} ${unit(it.unit)}</td><td class="num">${fmt(it.impact)}</td><td class="num">${ofTotal(it.impact)}</td>
             </tr>`)}
             ${result.others.count > 0 && html`
               <tr class="muted">
@@ -3596,7 +3626,7 @@ function FlowPanel({ info, root, amount, method, onLocate, onInfo, onFlowInfo, r
                 : { name: `${flow.name} (${flow.compartment})`, predicate: { flows: flow.flows }, target: "flows", scope: "*" };
               const exists = rules.some((r) => r.name === rule.name && r.target === "flows");
               return html`<button disabled=${exists} onClick=${() => setRules([...rules, rule])}
-                title="A flow group: in the Whole supply chain tab it takes these flows from what the process groups leave; in the tree it bundles them under direct emissions">
+                title="A flow group: in the Group contributions tab it takes these flows from what the process groups leave; in the tree it bundles them under direct emissions">
                 ${exists ? "In groups" : "Add as a group"}</button>`;
             })()}
             <button onClick=${() => setFlow(null)} aria-label="Close">×</button>
@@ -3611,7 +3641,7 @@ function FlowPanel({ info, root, amount, method, onLocate, onInfo, onFlowInfo, r
                     <tr key=${c.index} title=${`${c.reference_product} | ${c.name} | ${c.location}`}
                         onContextMenu=${(e) => menu.open(e, c)} onDblClick=${() => goTo(c)}>
                       <td>${c.name}<span class="loc">${c.location}</span></td>
-                      <td class="num">${fmt(c.amount)}</td><td class="num">${fmt(c.impact)}</td>
+                      <td class="num">${fmtAmount(c.amount)}</td><td class="num">${fmt(c.impact)}</td>
                       <td class="pct">${ofFlow(c.impact)}</td><td class="pct">${ofTotal(c.impact)}</td>
                     </tr>`)}
                   ${contributors.others.count > 0 && html`
@@ -3700,7 +3730,9 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
       flowMain: loadPreference("recipeFlowMain", DEFAULT_RECIPE.flowMain), flowSecondary: loadPreference("recipeFlowSecondary", DEFAULT_RECIPE.flowSecondary),
     },
     groupProducts: loadPreference("groupProducts", "0") === "1",
+    comments: loadPreference("comments", "1") === "1",
   }));
+  const [nameEdit, setNameEdit] = useState(null);  // { id }: the row whose process name is being edited (Enter, in edit mode)
   useEffect(() => {
     savePreference("naming", view.naming);
     savePreference("recipeMain", view.recipe.main);
@@ -3708,6 +3740,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
     savePreference("recipeFlowMain", view.recipe.flowMain ?? DEFAULT_RECIPE.flowMain);
     savePreference("recipeFlowSecondary", view.recipe.flowSecondary ?? DEFAULT_RECIPE.flowSecondary);
     savePreference("groupProducts", view.groupProducts ? "1" : "0");
+    savePreference("comments", view.comments ? "1" : "0");
   }, [view]);
   const [rules, setRules] = useState([]);
   const [chartMethods, setChartMethods] = useState([]);
@@ -4081,7 +4114,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
       model: { title: info.title, activities: info.activities },
       root, amount, method: info.methods[method].name, chartMethods: chartMethods.map((k) => info.methods[k].name),
       cutoff: +cutoffValue(cutoff, cutoffBasis).toFixed(8), cutoffBasis, expanded: [...expanded], rules, pinned: [...pinned], others: [...others], merges, ungrouped: [...ungrouped], substitutions, labels,
-      display: { naming: view.naming, recipe: view.recipe, groupProducts: view.groupProducts },
+      display: { naming: view.naming, recipe: view.recipe, groupProducts: view.groupProducts, comments: view.comments },
     };
   }
   function exportView() {
@@ -4207,6 +4240,11 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
       case "r":
         if (!editing && selectedRows.length === 1) startRename(row);
         return true;
+      case "Enter":
+        // Edit mode: rename the process in the database (as a double-click on its name does)
+        if (!editing || selectedRows.length !== 1 || row.kind !== "process" || !row.meta) return false;
+        setNameEdit({ id: row.id });
+        return true;
       case "g":
         followCursor.current = true;
         if (selectedRows.length === 1 && row.kind === "group" && ungroupable(row)) ungroup(row);
@@ -4308,6 +4346,20 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
           </div>
           <${ViewBar} view=${view} setView=${setDisplayView}
             example=${(() => { const r = data.rows.find((x) => x.kind === "process" && x.depth > 0); return r ? rowNames(r, rowsById, view) : null; })()} />
+          ${undo && html`
+            <div class="notice" role="status">
+              <span>${undo.message}</span>
+              <button onClick=${() => setUndo(null)} aria-label="Dismiss">×</button>
+            </div>`}
+          ${error && html`<div class="error">${error}</div>`}
+          ${display === "list"
+            ? html`<${Tree} rows=${data.rows} rootImpact=${rootImpact} shareBasis=${shareBasisOf(cutoffBasis)} selection=${selection} onToggle=${toggle} onSelect=${select}
+                renaming=${renaming} onStartRename=${startRename} onRename=${rename} nameEdit=${nameEdit} onNameEdit=${() => setNameEdit(null)}
+                onUngroup=${ungroup} onRegroup=${regroup} ungroupable=${ungroupable} onMergeGroup=${(r) => mergeRows([r])} onUnpin=${unpin} onPin=${pin} onMoveToOthers=${moveToOthers} onInfo=${showInfo} onUnmerge=${unmerge} onRevert=${revertInput} view=${view} focus=${focus} />`
+            : html`<${TreeGraph} rows=${data.rows} rootImpact=${rootImpact} shareBasis=${shareBasisOf(cutoffBasis)} selection=${selection} onToggle=${toggle} onSelect=${select}
+                onUngroup=${ungroup} onRegroup=${regroup} ungroupable=${ungroupable} onMergeGroup=${(r) => mergeRows([r])} onUnpin=${unpin} onPin=${pin} onMoveToOthers=${moveToOthers} onInfo=${showInfo} onUnmerge=${unmerge} view=${view}
+                orientation=${orientation} setOrientation=${setOrientation} cycles=${cycles} setCycles=${setCycles} sankey=${display === "sankey"} focus=${focus} />`}
+          ${popups.map(renderPopup)}
           ${selection.size > 0 && html`
             <div class="selection-bar">
               <span>${selection.size} selected${selection.size === 1 ? " · Ctrl/⌘-click to add siblings" : ""}</span>
@@ -4323,20 +4375,6 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
                     title="Move the selected rows to their parent's others row">To others</button>`}
               <button onClick=${() => setSelection(new Set())} aria-label="Clear selection">×</button>
             </div>`}
-          ${undo && html`
-            <div class="notice" role="status">
-              <span>${undo.message}</span>
-              <button onClick=${() => setUndo(null)} aria-label="Dismiss">×</button>
-            </div>`}
-          ${error && html`<div class="error">${error}</div>`}
-          ${display === "list"
-            ? html`<${Tree} rows=${data.rows} rootImpact=${rootImpact} shareBasis=${shareBasisOf(cutoffBasis)} selection=${selection} onToggle=${toggle} onSelect=${select}
-                renaming=${renaming} onStartRename=${startRename} onRename=${rename}
-                onUngroup=${ungroup} onRegroup=${regroup} ungroupable=${ungroupable} onMergeGroup=${(r) => mergeRows([r])} onUnpin=${unpin} onPin=${pin} onMoveToOthers=${moveToOthers} onInfo=${showInfo} onUnmerge=${unmerge} onRevert=${revertInput} view=${view} focus=${focus} />`
-            : html`<${TreeGraph} rows=${data.rows} rootImpact=${rootImpact} shareBasis=${shareBasisOf(cutoffBasis)} selection=${selection} onToggle=${toggle} onSelect=${select}
-                onUngroup=${ungroup} onRegroup=${regroup} ungroupable=${ungroupable} onMergeGroup=${(r) => mergeRows([r])} onUnpin=${unpin} onPin=${pin} onMoveToOthers=${moveToOthers} onInfo=${showInfo} onUnmerge=${unmerge} view=${view}
-                orientation=${orientation} setOrientation=${setOrientation} cycles=${cycles} setCycles=${setCycles} sankey=${display === "sankey"} focus=${focus} />`}
-          ${popups.map(renderPopup)}
           <div class="toolbar"><span class="hint">
             ${root ? `Total: ${fmt(rootImpact)} ${methodInfo.unit} — ${methodLabel(methodInfo)}` : ""}
           </span>
@@ -4350,7 +4388,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
       <${Portal} slot=${`side-${id}`}>
         <section class="side">
           <div class="tabs" role="tablist">
-            ${[["chart", "Process contribution"], ["flows", "Flow contribution"], ["groups", `Grouping${activeRules ? ` (${activeRules})` : ""}`], ["global", "Whole supply chain"]].map(([key, label]) => html`
+            ${[["chart", "Process contribution"], ["flows", "Flow contribution"], ["groups", `Group rules${activeRules ? ` (${activeRules})` : ""}`], ["global", "Group contributions"]].map(([key, label]) => html`
               <button role="tab" class=${tab === key ? "active" : ""} onClick=${() => setTab(key)}>${label}</button>`)}
             <span class="spacer"></span>
             <button class="collapse-side" onClick=${onCollapseSide} title="Hide the side panel" aria-label="Hide the side panel">»</button>

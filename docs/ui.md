@@ -88,7 +88,10 @@ API in `src/lca_viewer/server.py`.
   alternative supplier *use instead* act on the tree, not the data, so they are off too; pins,
   cut-off and groups stay but act on impacts that may be stale (greyed: `.app.stale .impact`).
   `Editable` is a value that turns into an input on double-click (Enter or blur stages, Escape
-  cancels); `quickEdit` patches the form of the dataset (its staged form if there is one) and stages
+  cancels); its `start` prop (a new object each time) opens it without a double-click, which is
+  how Enter on the selected process of the tree renames it in the database; its `format` prop
+  (`fmtAmount` for amounts) is how the value reads when not edited, the input has it in full;
+  `quickEdit` patches the form of the dataset (its staged form if there is one) and stages
   it again; exchanges are found by what they link to (`input`, recorded by the build, so models
   built before need one rebuild for amounts to be editable), and an allocated process's share of
   an exchange is scaled back to the dataset's.
@@ -109,7 +112,7 @@ API in `src/lca_viewer/server.py`.
   functional unit under two methods. *Open in new tab* in the right-click
   pop-up opens a process as the functional unit of a new tab.
   Decision: one shared **side panel** on the right (process and flow
-  contribution, grouping, whole supply chain), showing the active tab of the pane clicked
+  contribution, group rules, group contributions), showing the active tab of the pane clicked
   last, as in Obsidian's sidebars, rather than one per pane: panes stay wide
   enough for the tree. It is collapsed with » (or *Side panel* in the top
   bar), reopened with «, and resized by dragging its left edge. Each tab
@@ -133,7 +136,8 @@ API in `src/lca_viewer/server.py`.
   expands into its elementary flows (substance, compartment, amount
   emitted), groupable by substance or compartment — see
   [grouping.md](grouping.md). Ctrl/⌘-click selects sibling
-  rows; a selection bar then offers **Group** (bundle them under one row,
+  rows; a selection bar at the bottom of the tree (so the rows
+  do not move) then offers **Group** (bundle them under one row,
   "ungroup" chip to undo; a group of processes, from any rule or "Group by
   product" (whose "ungroup" chip splits just that group back into its
   members, each of which then has a "regroup" chip that bundles them again;
@@ -204,6 +208,7 @@ API in `src/lca_viewer/server.py`.
   | m | merge the selection, or unmerge a selected merged row |
   | g | one group: ungroup it (a "group by product" becomes an exception, put back by its regroup chip or by g on one of its processes); one process: put back its ungrouped product group, else group its same-named siblings under the product name, else nothing; several rows: group them (named after the product when they all deliver one, else "group N") |
   | r | rename the selected row (display name only) |
+  | Enter | Edit mode: rename the selected process in the database (as a double-click on its name; Enter stages, Esc cancels) |
   | Ctrl/⌘ + Z | undo the last change to the tree |
   | Esc | clear the selection |
   | Backspace | in a pop-up: back to the previous one |
@@ -243,10 +248,18 @@ API in `src/lca_viewer/server.py`.
   Ctrl/⌘-click select, right-click opens the pop-up, drag pans, wheel zooms;
   row actions are in the selection bar and the pop-ups. Always a tree drawn
   left to right: the Cycles and orientation controls are hidden here.
-- **View bar** (under the toolbar): *Group by product* and *Full / Short /
+- **View bar** (under the toolbar): *Group by product*, *Comments* and *Full / Short /
   Custom* names, applied
   to the list, the tree view, the others panel and the chart; see
-  [charts.md](charts.md).
+  [charts.md](charts.md). *Comments* (on by default, remembered, saved with the view) shows
+  the list's last column: the comment recorded on the exchange that supplies each process,
+  in the dataset of the process above it (several datasets for a merged one; the whole text
+  in the tooltip or with **c**). `/api/rows` sends it as the row's `comment`.
+
+  **Amounts** never show more than three digits, in the list, tree view, pop-ups and chart
+  tables: from 0.1 to 1000 as `0.101`, `1.00`, `123`; below and above in scientific notation
+  (`5.29e-3`, `1.23e+3`), `fmtAmount` in `app.js`. Impacts keep `fmt`. The input of an edited
+  amount always has the full value.
 
   ![View settings](img/view-settings.png)
 - **Right-click a process** (list or tree view) or **Space**: the activity
@@ -266,7 +279,8 @@ API in `src/lca_viewer/server.py`.
   to open the tree at it), the ecoinvent description, included activities, time period, classifications,
   authors and file; actions "Use as functional unit" and "Open in new tab".
   **Alternatives** lists the other activities producing the same product
-  with their cumulative impact per unit, lowest first.
+  with their cumulative impact per unit, lowest first (plain rows, like the
+  others: Space opens one's pop-up).
   Descriptions are stored in the cached model (`details.pkl`, 77 MB for
   ecoinvent, loaded on first use).
   **Exchanges** as recorded in the dataset, by direction: *Products* (the
@@ -326,7 +340,7 @@ API in `src/lca_viewer/server.py`.
     Right-click a substance or flow for its pop-up (below). API:
     `/api/flows`, `/api/flows/contributors` (`analysis.flow_contribution`,
     `flow_contributors`).
-  - *Grouping*: active rules (reorder / remove; **merge** turns every group
+  - *Group rules*: active rules (reorder / remove; **merge** turns every group
     of a process rule into a merged process, **disable** / **enable**
     switches a rule off and on without losing it), quick groups (transport,
     electricity, heat & fuels, infrastructure, waste treatment, pesticides
@@ -339,7 +353,7 @@ API in `src/lca_viewer/server.py`.
     filters, so a filter reads and behaves the same in both places — with a
     live "matches N activities, e.g. …" preview; scope everywhere or under
     the selected row.
-  - *Whole supply chain*: global grouping with the named groups, direct
+  - *Group contributions*: global grouping with the named groups, direct
     (the default) or first-match attribution (see [grouping.md](grouping.md)),
     groups sorted by decreasing impact with *other* last.
     Named rules on elementary flows are **flow groups** ("flows" chip): process
@@ -347,8 +361,11 @@ API in `src/lca_viewer/server.py`.
     the rest (emissions of processes outside the groups);
     add one with *Add as a group* on a substance (or a flow) in the *Flow
     contribution* tab. Clicking a group
-    lists the processes it is made of; right-click one for *Go to in tree*
-    (opens and highlights it along its largest supply path) or *Details*.
+    lists the processes it is made of; click one for its pop-up, right-click
+    it (or double-click) for *Go to in tree* (opens and highlights it along its
+    largest supply path) or *Details*. Each group has the colour of its rule
+    in *Group rules* (a swatch next to the rule), and its rows carry the same
+    colour in the tree.
 
 ## Tree graph layout
 

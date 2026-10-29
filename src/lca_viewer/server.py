@@ -269,6 +269,27 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
             return {**meta(node.product), "unit": activities["unit"].iat[node.product],
                     "waste": bool(model.diagonal[node.product] < 0), **common}
 
+        rendered_by_id = {r.id: r for r in rendered}
+        datasets: dict[int, list[dict]] = {}  # exchanges of the processes read for the comments
+
+        def comment_of(r) -> str | None:
+            """The comment(s) on the exchange supplying a process row, in the dataset(s) of the process
+            above it (past group and others rows); None when there is none."""
+            above = rendered_by_id.get(r.parent)
+            while above is not None and above.kind in ("group", "rest"):
+                above = rendered_by_id.get(above.parent)
+            if above is None or above.kind not in ("process", "merged"):
+                return None
+            found: list[str] = []
+            for j in [above.node.product] if above.kind == "process" else [m.product for m in above.merged]:
+                if j not in datasets:
+                    datasets[j] = model.exchange_details(int(j))
+                for e in datasets[j]:
+                    text = (e.get("comment") or "").strip()
+                    if text and e["type"] != "biosphere" and e["row"] == r.node.product and text not in found:
+                        found.append(text)
+            return "\n".join(found) or None
+
         def serialise(r) -> dict:
             out = {
                 "id": r.id,
@@ -289,6 +310,9 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
             if r.kind == "process":
                 out["meta"] = meta(r.node.product)
                 out["replaced"] = r.replaced
+                comment = comment_of(r)
+                if comment:
+                    out["comment"] = comment
             elif r.kind == "direct" and len(r.node.path) > 1 and isinstance(r.node.path[-2], int):
                 out["meta"] = meta(r.node.path[-2])  # the process emitting
             elif r.kind == "merged":
