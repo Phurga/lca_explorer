@@ -2226,34 +2226,31 @@ function ExchangeMeta({ e }) {
 // items are products (technosphere); ``onFlow(index)``: items are elementary flows, whose
 // pop-up has both.
 // ``onAmount(item, text)``: double-click an amount to stage a change (Edit mode).
-function ExchangeTable({ title, items, cumulative, unitPer, onActivity, onExchange, onFlow, onAmount, locked, limit = 10 }) {
+// ``panel`` (products): the rows are processes, as in ``ProcessRow``, hanging from ``base``.
+function ExchangeTable({ title, items, cumulative, unitPer, panel, base, onFlow, onAmount, locked, limit = 10 }) {
   const [all, setAll] = useState(false);
   const shown = all ? items : items.slice(0, limit);
   return html`
     <section>
       <h4>${title} · ${items.length}</h4>
-      <table class="flows exchanges">
+      <table class=${`flows exchanges ${panel ? "plist" : ""}`}>
         <thead><tr>
-          <th>${onActivity ? "Product" : "Flow"} <span class="muted">· Space: details, c: comment and uncertainty</span></th>
+          <th title=${panel ? PROCESS_KEYS : undefined}>${panel ? "Product" : "Flow"} <span class="muted">· ${panel ? "Space c Enter → ←" : "Space: details, c: comment and uncertainty"}</span></th>
           <th class="num" title="Amount in the dataset">amount</th><th class="num" title=${unitPer}>impact</th><th class="num">share</th>
         </tr></thead>
         <tbody>${shown.map((e, i) => {
-          const exchange = () => (onActivity ? onExchange(e) : onFlow(e.index));
+          if (panel) return html`<${ProcessRow} key=${`${e.index}-${i}`} item=${e} above=${base} depth=${0} ancestors=${[base.index]} panel=${panel} />`;
           const keys = (ev) => {
             if (ev.ctrlKey || ev.metaKey || ev.altKey || (ev.key !== " " && ev.key !== "c")) return;
             ev.preventDefault();
             ev.stopPropagation();
-            if (ev.key === "c") exchange();
-            else if (onActivity) onActivity(e.index);
-            else onFlow(e.index);
+            onFlow(e.index);
           };
           return html`
             <tr key=${i} class="exchange" data-nav tabindex="-1" onKeyDown=${keys}>
               <td><button class="info-btn" title="Comment and uncertainty (c)" aria-label="Comment and uncertainty"
-                  onClick=${(ev) => { ev.stopPropagation(); exchange(); }}>i</button>
-                ${onActivity
-                  ? html`<span title=${`${e.name} | ${e.location}`}>${e.reference_product}</span> <span class="loc-chip">${e.location}</span>`
-                  : html`<span title=${`${e.name} | ${e.categories.join(" / ")}`}>${e.name} <span class="muted">${e.categories.join(" / ")}</span></span>`}</td>
+                  onClick=${(ev) => { ev.stopPropagation(); onFlow(e.index); }}>i</button>
+                <span title=${`${e.name} | ${e.categories.join(" / ")}`}>${e.name} <span class="muted">${e.categories.join(" / ")}</span></span></td>
               <td class="num"><${Editable} value=${Math.abs(e.amount)} format=${fmtAmount} disabled=${locked || !onAmount || !e.input}
                   title=${locked ? undefined : !e.input ? "Build this database again once, to edit amounts here" : "Double-click to change this amount in the dataset"}
                   onCommit=${(text) => onAmount(e, text)} /> ${unit(e.unit)}</td>
@@ -2283,6 +2280,72 @@ function usePopupKeys(box, onClose, onBack, pinned = false) {
   useEffect(() => {
     const mine = () => !pin.current || box.current?.matches(":hover, :focus-within");
     const onKey = (e) => {
+const PROCESS_KEYS = "↑ ↓: move · → ←: expand, collapse · Space: details · c: its exchange (comment, uncertainty) · Enter: use as functional unit";
+// A process in a panel of a pop-up (exchanges, used by, alternatives): a row like those of the main list.
+// ↑/↓ move between the rows (``popupKeys``), → expands it (or goes to its first child), ← collapses it (or goes to
+// the row above it), Space opens its pop-up, c the exchange it stands for, Enter makes it the functional unit.
+// ``item``: { index, name, reference_product, location, … }; ``above``: the item it hangs from (the pop-up's process
+// for a top row); ``ancestors``: indexes above it (a process already there is a loop: shown, not expanded).
+// ``panel``: { span: columns, label(item), cells(item, above, depth): the <td>s after the name, load(item, above):
+// Promise of { items, more } (its children, none: it does not expand), onOpen(item), onExchange(item, above): the exchange it
+// stands for (none: no c), onUse(item) }
+function ProcessRow({ item, above, depth, ancestors, panel }) {
+  const [open, setOpen] = useState(false);
+  const [kids, setKids] = useState(null);
+  const loop = ancestors.includes(item.index);
+  const expandable = !loop && !!panel.load;
+  useEffect(() => {
+    if (!open || kids || !expandable) return;
+    panel.load(item, above).then(setKids).catch(() => setKids({ items: [], more: 0 }));
+  }, [open]);
+  const exchange = panel.onExchange && !(depth === 0 && !above);
+  const keys = (e) => {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const row = e.currentTarget;
+    const used = () => { e.preventDefault(); e.stopPropagation(); };
+    const rows = () => [...row.closest(".info-body").querySelectorAll("[data-nav]")];
+    const go = (to) => { to?.focus({ preventScroll: true }); to?.scrollIntoView({ block: "nearest" }); };
+    if (e.key === " ") { used(); panel.onOpen(item); }
+    else if (e.key === "c") { used(); if (exchange) panel.onExchange(item, above); }
+    else if (e.key === "Enter") { used(); panel.onUse(item); }
+    else if (e.key === "ArrowRight" && expandable) {
+      if (!open) { used(); setOpen(true); return; }
+      const all = rows();
+      const next = all[all.indexOf(row) + 1];
+      if (next && Number(next.dataset.depth) > depth) { used(); go(next); }
+    } else if (e.key === "ArrowLeft") {
+      if (open) { used(); setOpen(false); }
+      else if (depth > 0) {
+        used();
+        const all = rows();
+        go(all.slice(0, all.indexOf(row)).reverse().find((r) => Number(r.dataset.depth) === depth - 1));
+      }
+    }
+  };
+  return html`<${Fragment}>
+    <tr class="exchange" data-nav data-depth=${depth} tabindex="-1" onKeyDown=${keys} onDblClick=${() => expandable && setOpen(!open)}>
+      <td class="user" title=${`${item.reference_product ?? ""} | ${item.name} | ${item.location}`}>
+        <span class="user-cell" style=${{ paddingLeft: `${depth * 16}px` }}>
+          ${loop
+            ? html`<span class="toggle muted" title="Already above this process: a loop">↺</span>`
+            : expandable
+              ? html`<button class="toggle" aria-label=${open ? "Collapse" : "Expand"} onClick=${() => setOpen(!open)}>${open ? "▾" : "▸"}</button>`
+              : html`<span class="toggle"></span>`}
+          ${exchange && html`<button class="info-btn" title="Comment and uncertainty of the exchange (c)" aria-label="Comment and uncertainty"
+            onClick=${(e) => { e.stopPropagation(); panel.onExchange(item, above); }}>i</button>`}
+          <span class="name-text">${panel.label(item)}</span>
+          <span class="loc-chip">${item.location}</span></span></td>
+      ${panel.cells(item, above, depth)}
+    </tr>
+    ${open && !kids && html`<tr><td colspan=${panel.span} class="muted">…</td></tr>`}
+    ${open && kids && kids.items.length === 0 && html`<tr><td colspan=${panel.span} class="muted">${panel.empty || "Nothing below it."}</td></tr>`}
+    ${open && kids && kids.items.map((c, i) => html`
+      <${ProcessRow} key=${`${c.index}-${i}`} item=${c} above=${item} depth=${depth + 1} ancestors=${[...ancestors, item.index]} panel=${panel} />`)}
+    ${open && kids && kids.more > 0 && html`
+      <tr class="more"><td colspan=${panel.span} class="muted">+ ${kids.more} more</td></tr>`}
+  <//>`;
+}
+
       if (!mine()) return;
       if (e.key === "Escape") onClose();
       else if (e.key === "Backspace" && back.current && !e.target.closest?.("input, textarea, select, [contenteditable]")) {
@@ -2407,7 +2470,9 @@ function PopupWindow({ target, win, label, className = "", head, width = 560, on
 
 // Keys inside a pop-up that has the focus (the main view's keys do not reach it): ←/→ switch
 // panel, ↑/↓ move between the rows of the panel (``[data-nav]``, focusable; each row handles
-// its own Space and c), or scroll a panel without rows; Space or c with no row closes it.
+// its own Space, c, Enter and ←/→ — see ``ProcessRow`` — and ←/→ reach here only when a row
+// does not use them), or scroll a panel without rows; ↑ on the first row goes back to the
+// panels' tabs; Space or c with no row closes it.
 function popupKeys({ tabs, shown, setTab, body, onClose, exchange }) {
   return (e) => {
     const box = e.currentTarget;
@@ -2437,6 +2502,7 @@ function popupKeys({ tabs, shown, setTab, body, onClose, exchange }) {
 
 // Pop-up chrome: header (title, pin, ←, ×), scrolling body, actions
 function PopupFrame({ target, win, label, className = "", title, subtitle, footer, onClose, onBack, children, maxWidth = 620 }) {
+      if (at === 0 && !down) { box.focus({ preventScroll: true }); body.current?.scrollTo(0, 0); return; }
   return html`
     <${PopupWindow} target=${target} win=${win} label=${label} className=${className} width=${maxWidth} onClose=${onClose} onBack=${onBack}
       head=${html`
@@ -2543,60 +2609,6 @@ function suppliedTo(row, rowsById) {
 
 // ``target.parents``: for a process opened from a bundle pop-up (no row of its own), the
 // processes it is an input of, for its exchange tab
-// One activity of a "Used by" table. Expanding it lists the activities using its product (in the
-// functional unit's supply chain, else in the database), so that the users can be followed up
-// as a reverse tree. A user already above it on the path is a loop: shown, not expanded.
-// Keys on the row: Space opens the user's pop-up, c the exchange of the product in its dataset,
-// Enter expands it
-function UserRow({ user: u, inputUnit, root, amount, method, ancestors, depth, onOpen, onExchange, onGoTo }) {
-  const [open, setOpen] = useState(false);
-  const [users, setUsers] = useState(null);
-  const loop = ancestors.includes(u.index);
-  // Below a functional unit, only the users in its supply chain (flows above solver noise)
-  const children = users ? users.users.filter((c) => !root || Math.abs(c.flow) > 1e-12) : [];
-  // Users are listed largest flow first, so the ones beyond the limit are the rest of the chain
-  const more = !users ? 0 : root ? (users.users.length >= 15 ? Math.max(0, users.in_supply_chain - children.length) : 0)
-    : users.count - users.users.length;
-  useEffect(() => {
-    if (!open || users || loop) return;
-    const fu = root ? `&root=${root.index}&amount=${amount}` : "";
-    request(`/api/activity/${u.index}/users?method=${method}&limit=15${fu}`)
-      .then(setUsers).catch(() => setUsers({ users: [], count: 0 }));
-  }, [open]);
-  const span = root ? 5 : 2;
-  const keys = (e) => {
-    if (e.ctrlKey || e.metaKey || e.altKey || ![" ", "c", "Enter"].includes(e.key)) return;
-    e.preventDefault();
-    e.stopPropagation();
-    if (e.key === " ") onOpen(u.index);
-    else if (e.key === "c") onExchange(u, ancestors[ancestors.length - 1]);
-    else if (!loop) setOpen(!open);
-  };
-  return html`<${Fragment}>
-    <tr data-nav tabindex="-1" onKeyDown=${keys}>
-      <td class="user" title=${`${u.reference_product} | ${u.name} | ${u.location}`}>
-        <span class="user-cell" style=${{ paddingLeft: `${depth * 16}px` }}>
-          ${loop
-            ? html`<span class="toggle muted" title="Already above this activity: a loop">↺</span>`
-            : html`<button class="toggle" aria-label=${open ? "Collapse" : "Expand"} onClick=${() => setOpen(!open)}>${open ? "▾" : "▸"}</button>`}
-          <a href="#" onClick=${(e) => { e.preventDefault(); onOpen(u.index); }}>${u.name}</a>
-          <span class="loc-chip">${u.location}</span></span></td>
-      <td class="num">${fmtAmount(Math.abs(u.per_unit))} ${inputUnit}/${unit(u.unit)}</td>
-      ${root && html`
-        <td class="num">${u.flow ? `${fmtAmount(Math.abs(u.flow))} ${inputUnit}` : "–"}</td>
-        <td class="num">${u.flow ? pct(u.share) : ""}</td>
-        <td>${u.flow !== 0 && html`<button class="chip" title="Open the tree at this activity (largest supply path)"
-              onClick=${() => onGoTo(u.index)}>go to</button>`}</td>`}
-    </tr>
-    ${open && !users && html`<tr><td colspan=${span} class="muted">…</td></tr>`}
-    ${open && users && children.length === 0 && html`<tr><td colspan=${span} class="muted">No activity uses it${root ? " in this supply chain" : ""}.</td></tr>`}
-    ${open && users && children.map((c) => html`
-      <${UserRow} key=${c.index} user=${c} inputUnit=${unit(u.unit)} root=${root} amount=${amount} method=${method}
-        ancestors=${[...ancestors, u.index]} depth=${depth + 1} onOpen=${onOpen} onExchange=${onExchange} onGoTo=${onGoTo} />`)}
-    ${open && users && more > 0 && html`
-      <tr class="more"><td colspan=${span} class="muted">+ ${more} more</td></tr>`}
-  <//>`;
-}
 
 // Two pop-ups of a process: the activity's (Space, right-click: its exchanges, users, alternatives,
 // description, metadata) and the exchange's (c, (i): the amount in this tree and the comment and
@@ -2695,6 +2707,59 @@ function InfoPopup({ target, win, method, methodInfo, rootImpact, rowsById, onCl
   // from nature), outputs (waste to treatment, emissions)
   const sections = useMemo(() => {
     if (!exchanges?.available || !info) return [];
+  // Enter on a process: it becomes the functional unit of the tab
+  const useAsRoot = (item) => request(`/api/activity/${item.index}?method=${method}`).then((found) => { onUseAsRoot(found); onClose(); })
+    .catch((e) => setError(e.message));
+  // The panels of processes (exchanges, used by, alternatives) are lists like the main one: see ProcessRow
+  const base = info && { index: target.index, name: info.name, location: info.location, unit: info.unit, database: info.database, code: info.code };
+  const inputsOf = (item) => Promise.all([
+    request(`/api/activity/${item.index}/exchanges?method=${method}`), request(`/api/activity/${item.index}?method=${method}`)])
+    .then(([found, of]) => {
+      const inputs = found.inputs.filter((e) => e.amount >= 0 && !["production", "substitution", "generic production"].includes(e.type));
+      return { items: inputs.slice(0, 15).map((e) => ({ ...e, of: of.cumulative_per_unit })), more: Math.max(0, inputs.length - 15) };
+    });
+  const usersOf = (item) => request(`/api/activity/${item.index}/users?method=${method}&limit=15${root ? `&root=${root.index}&amount=${amount}` : ""}`)
+    .then((found) => {
+      // Below a functional unit, only the users in its supply chain (flows above solver noise); the users are
+      // listed largest flow first, so the ones beyond the limit are the rest of the chain
+      const items = found.users.filter((c) => !root || Math.abs(c.flow) > 1e-12);
+      return { items, more: root ? (found.users.length >= 15 ? Math.max(0, found.in_supply_chain - items.length) : 0) : found.count - found.users.length };
+    });
+  const exchangesPanel = {
+    span: 4, load: inputsOf, empty: "No input from the technosphere.", label: (e) => e.reference_product ?? e.name,
+    onOpen: (e) => openActivity(e.index), onExchange: (e, above) => openExchange(e.index, above), onUse: useAsRoot,
+    cells: (e, above, depth) => {
+      const closed = depth === 0 ? locked : ctx.locked.includes(above.database);
+      const cumulative = e.of ?? info.cumulative_per_unit;
+      return html`
+        <td class="num"><${Editable} value=${Math.abs(e.amount)} format=${fmtAmount} disabled=${closed || !e.input}
+            title=${closed ? undefined : !e.input ? "Build this database again once, to edit amounts here" : "Double-click to change this amount in the dataset"}
+            onCommit=${(text) => (e.own ? own((dr) => { productOfProcess(dr, info.code).amount = text; })
+              : quickEdit(ctx, above.database, above.code, patchExchange(e.input, e.amount, text)))} /> ${unit(e.unit)}</td>
+        <td class="num impact">${e.impact ? fmt(e.impact) : "–"}</td>
+        <td class="num impact">${e.impact && cumulative ? pct(e.impact / cumulative) : ""}</td>`;
+    },
+  };
+  const usersPanel = {
+    span: root ? 5 : 2, load: usersOf, empty: `No activity uses it${root ? " in this supply chain" : ""}.`, label: (u) => u.name,
+    onOpen: (u) => openActivity(u.index), onExchange: (u, above) => openExchange(above.index, u), onUse: useAsRoot,
+    cells: (u, above) => html`
+      <td class="num">${fmtAmount(Math.abs(u.per_unit))} ${unit(above.unit)}/${unit(u.unit)}</td>
+      ${root && html`
+        <td class="num">${u.flow ? `${fmtAmount(Math.abs(u.flow))} ${unit(above.unit)}` : "–"}</td>
+        <td class="num">${u.flow ? pct(u.share) : ""}</td>
+        <td>${u.flow !== 0 && html`<button class="chip" title="Open the tree at this activity (largest supply path)"
+              onClick=${(e) => { e.stopPropagation(); onGoTo(u.index); onClose(); }}>go to</button>`}</td>`}`,
+  };
+  const alternativesPanel = {
+    span: 3, load: inputsOf, empty: "No input from the technosphere.", label: (a) => a.name,
+    onOpen: (a) => openActivity(a.index), onExchange: (a, above) => openExchange(a.index, above), onUse: useAsRoot,
+    cells: (a, above, depth) => (depth === 0 ? html`
+      <td class="num">${fmt(a.per_unit)}</td>
+      <td class="num">${a.relative === null ? "" : `${a.relative > 0 ? "+" : ""}${pct(a.relative)}`}</td>` : html`
+      <td class="num impact">${a.impact ? fmt(a.impact) : "–"}</td>
+      <td class="num impact">${a.impact && a.of ? pct(a.impact / a.of) : ""}</td>`),
+  };
     const isProduct = (e) => ["production", "substitution", "generic production"].includes(e.type);
     const resource = (f) => (f.categories[0] || "").toLowerCase().includes("resource");
     const technosphere = exchanges.inputs.filter((e) => !isProduct(e));
@@ -2761,22 +2826,21 @@ function InfoPopup({ target, win, method, methodInfo, rootImpact, rowsById, onCl
           ${shown === "exchanges" && sections.map(([key, title, items, products]) => html`
             <${ExchangeTable} key=${`${key}-${target.index}`} title=${title} items=${items}
               cumulative=${info.cumulative_per_unit} unitPer=${unitPer}
-              onActivity=${products ? openActivity : null} onExchange=${(e) => openExchange(e.index, { index: target.index, name: info.name, location: info.location })}
+              panel=${products ? exchangesPanel : null} base=${base}
               onFlow=${products ? null : (flow) => follow({ flow, activities: [target.index] })}
-              locked=${locked} onAmount=${(e, text) => (e.own ? own((dr) => { productOfProcess(dr, info.code).amount = text; }) : own(patchExchange(e.input, e.amount, text)))} />`)}
+              locked=${locked} onAmount=${(e, text) => own(patchExchange(e.input, e.amount, text))} />`)}
           ${shown === "users" && users && html`
             <section>
               <h4>${users.waste ? "Treats the waste of" : "Used by"} · ${users.count} ${users.count === 1 ? "activity" : "activities"}${root ? `, ${users.in_supply_chain} in this supply chain` : ""}</h4>
               ${users.count === 0 ? html`<p class="text muted">No activity in the database uses this product.</p>` : html`
-                <table class="flows users">
+                <table class="flows users plist">
                   <thead><tr>
-                    <th>Activity <span class="muted">· Space: details, c: its exchange, Enter: ▸ the activities using it</span></th>
+                    <th title=${PROCESS_KEYS}>Activity <span class="muted">· Space c Enter → ←</span></th>
                     <th class="num" title=${`${unit(info.unit)} ${users.waste ? "of waste" : ""} per unit of the activity's product`}>per unit</th>
                     ${root && html`<th class="num" title="Amount going to this activity in the supply chain of the functional unit">in this tree</th><th class="num">share</th><th></th>`}
                   </tr></thead>
                   <tbody>${users.users.map((u) => html`
-                    <${UserRow} key=${u.index} user=${u} inputUnit=${unit(info.unit)} root=${root} amount=${amount} method=${method}
-                      ancestors=${[target.index]} depth=${0} onOpen=${openActivity} onExchange=${openExchange} onGoTo=${(index) => { onGoTo(index); onClose(); }} />`)}
+                    <${ProcessRow} key=${u.index} item=${u} above=${base} depth=${0} ancestors=${[target.index]} panel=${usersPanel} />`)}
                   </tbody>
                 </table>
                 ${users.count > users.users.length && html`
@@ -2788,9 +2852,9 @@ function InfoPopup({ target, win, method, methodInfo, rootImpact, rowsById, onCl
             <p class="note">
               Cumulative impact per ${unit(alternatives.unit)} of ${alternatives.product}, lowest first.
             </p>
-            <table class="flows alternatives">
+            <table class="flows alternatives plist">
               <thead><tr>
-                <th>Activity <span class="muted">· Space: details</span></th>
+                <th title=${PROCESS_KEYS}>Activity <span class="muted">· Space c Enter → ←</span></th>
                 <th class="num" title=${`${methodInfo.unit} per ${unit(alternatives.unit)} of ${alternatives.product}`}>${methodInfo.unit} per ${unit(alternatives.unit)}</th>
                 <th class="num">vs. current</th>
               </tr></thead>
@@ -2800,12 +2864,7 @@ function InfoPopup({ target, win, method, methodInfo, rootImpact, rowsById, onCl
                   <td class="num">${fmt(alternatives.current.per_unit)}</td><td class="num"></td>
                 </tr>
                 ${alternatives.alternatives.map((a) => html`
-                  <tr key=${a.index} data-nav tabindex="-1"
-                      onKeyDown=${(e) => { if (e.key === " " && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); e.stopPropagation(); openActivity(a.index); } }}>
-                    <td class="user">${a.name} <span class="loc-chip">${a.location}</span></td>
-                    <td class="num">${fmt(a.per_unit)}</td>
-                    <td class="num">${a.relative === null ? "" : `${a.relative > 0 ? "+" : ""}${pct(a.relative)}`}</td>
-                  </tr>`)}
+                  <${ProcessRow} key=${a.index} item=${a} above=${null} depth=${0} ancestors=${[target.index]} panel=${alternativesPanel} />`)}
               </tbody>
             </table>
             ${alternatives.count > alternatives.alternatives.length && html`
@@ -4241,9 +4300,11 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
         if (!editing && selectedRows.length === 1) startRename(row);
         return true;
       case "Enter":
-        // Edit mode: rename the process in the database (as a double-click on its name does)
-        if (!editing || selectedRows.length !== 1 || row.kind !== "process" || !row.meta) return false;
-        setNameEdit({ id: row.id });
+        // The process becomes the functional unit of the tab; in Edit mode, it is renamed in the database
+        // (as a double-click on its name does)
+        if (selectedRows.length !== 1 || row.kind !== "process" || !row.meta) return false;
+        if (editing) setNameEdit({ id: row.id });
+        else if (row.meta.index !== root?.index) { closeInfo(); selectRoot(row.meta); }
         return true;
       case "g":
         followCursor.current = true;

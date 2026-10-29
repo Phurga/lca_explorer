@@ -457,20 +457,21 @@ table.results tr.selected td { background: var(--selected); }
 
 /* Info pop-up: "Used by" */
 .info-body table.users { table-layout: fixed; }
-.info-body table.users .user-cell { display: flex; gap: 6px; align-items: center; min-width: 0; }
-.info-body table.users .user-cell a { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.info-body table.users .user-cell .loc-chip { flex: none; }
 .info-body table.users th:nth-child(2), .info-body table.users td:nth-child(2) { width: 120px; }
 .info-body table.users th:nth-child(3), .info-body table.users td:nth-child(3) { width: 96px; }
 .info-body table.users th:nth-child(4), .info-body table.users td:nth-child(4) { width: 52px; }
 .info-body table.users th:nth-child(5), .info-body table.users td:nth-child(5) { width: 52px; text-align: right; }
-.info-body table.users a { color: var(--text); text-decoration: none; }
-.info-body table.users a:hover { color: var(--accent); text-decoration: underline; }
-.info-body table.users .user-cell { gap: 4px; }
-.info-body table.users .toggle { flex: none; width: 14px; padding: 0; border: 0; background: none; color: var(--muted); cursor: pointer; }
-.info-body table.users .toggle.muted { cursor: default; }
-.info-body table.users tr.more td { font-size: 12px; }
-.info-body table.alternatives tr.current td { color: var(--muted); }
+/* The panels of processes (exchanges, used by, alternatives): rows like the main list's */
+.info-body table.plist { table-layout: fixed; }
+.info-body table.plist .user-cell { display: flex; gap: 4px; align-items: center; min-width: 0; }
+.info-body table.plist .name-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.info-body table.plist .user-cell .loc-chip, .info-body table.plist .user-cell .info-btn { flex: none; }
+.info-body table.plist td.user { overflow: hidden; }
+.info-body table.plist .toggle { flex: none; width: 14px; padding: 0; border: 0; background: none; color: var(--muted); cursor: pointer; }
+.info-body table.plist .toggle.muted { cursor: default; }
+.info-body table.plist tr.more td { font-size: 12px; }
+.info-body table.alternatives th:nth-child(2) { width: 120px; }
+.info-body table.alternatives th:nth-child(3) { width: 84px; }
 .info-body table.users .chip { font-size: 11px; padding: 0 6px; border-radius: 9px; }
 /* Merged / group panel: members with their amounts and impacts */
 .bundle-details .details-list td:first-child, .bundle-details .details-list th:first-child { width: auto; }

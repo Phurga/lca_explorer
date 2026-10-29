@@ -208,7 +208,7 @@ API in `src/lca_viewer/server.py`.
   | m | merge the selection, or unmerge a selected merged row |
   | g | one group: ungroup it (a "group by product" becomes an exception, put back by its regroup chip or by g on one of its processes); one process: put back its ungrouped product group, else group its same-named siblings under the product name, else nothing; several rows: group them (named after the product when they all deliver one, else "group N") |
   | r | rename the selected row (display name only) |
-  | Enter | Edit mode: rename the selected process in the database (as a double-click on its name; Enter stages, Esc cancels) |
+  | Enter | make the selected process the functional unit of the tab; in Edit mode, rename it in the database instead (as a double-click on its name; Enter stages, Esc cancels) |
   | Ctrl/⌘ + Z | undo the last change to the tree |
   | Esc | clear the selection |
   | Backspace | in a pop-up: back to the previous one |
@@ -267,20 +267,25 @@ API in `src/lca_viewer/server.py`.
   and *Metadata*. **c**, or the **(i)** of a row, opens instead the **exchange
   pop-up**: only the amount and impact in this tree, the path from the root,
   and the comment, uncertainty and pedigree of the parent's input of this
-  product. Once open, a pop-up has the keyboard: ←/→ switch panel, ↑/↓ move
-  between the rows of the panel (like the tree: a row is not a link), Space
-  on a row opens its activity pop-up, **c** its exchange pop-up (Enter
-  expands a *Used by* row), Space with no row selected closes it; Backspace
-  goes back.
+  product. Once open, a pop-up has the keyboard: ←/→ switch panel, ↓ enters
+  the panel. The panels of processes — *Exchanges* (the products and inputs from the
+  technosphere), *Used by* and *Alternatives* — are lists like the main one
+  (`ProcessRow`): ↑/↓ move between the rows (↑ on the first goes back to the panels),
+  → expands a row (or goes to its first child), ← collapses it (or goes to the row it
+  hangs from; where a row does not use ←/→ they switch panel), Space opens the
+  process's pop-up, **c** the pop-up of the exchange the row stands for, and **Enter**
+  makes it the functional unit of the tab (the pop-up closes). Expanding an
+  exchange or an alternative lists its own inputs; expanding a user, the activities
+  using it. Esc or Space with no row selected closes the pop-up; Backspace goes back.
   **Used by** (the activities consuming its product — or, for a waste
   treatment, generating the waste — with the amount per unit of their
   product and, largest first, the amount each takes in this functional
-  unit's supply chain and its share; click one for its own pop-up, *go to*
+  unit's supply chain and its share; *go to*
   to open the tree at it), the ecoinvent description, included activities, time period, classifications,
   authors and file; actions "Use as functional unit" and "Open in new tab".
   **Alternatives** lists the other activities producing the same product
-  with their cumulative impact per unit, lowest first (plain rows, like the
-  others: Space opens one's pop-up).
+  with their cumulative impact per unit, lowest first (rows like the others;
+  below an expanded one, its inputs with their impact and share of it).
   Descriptions are stored in the cached model (`details.pkl`, 77 MB for
   ecoinvent, loaded on first use).
   **Exchanges** as recorded in the dataset, by direction: *Products* (the
@@ -288,8 +293,8 @@ API in `src/lca_viewer/server.py`.
   *Inputs from nature* (natural resources), *Outputs to treatment* (waste:
   technosphere exchanges with a negative amount, shown as positive) and
   *Emissions*, each with amount, impact per unit of product and share of the
-  cumulative impact, largest first. The rows move like the tree's: Space opens
-  the supplying activity's pop-up (the elementary flow's for an emission), **c**
+  cumulative impact, largest first. The rows of products are the process lists
+  described above; for an emission, Space opens the elementary flow's pop-up, **c**
   or the **(i)** of the row the exchange pop-up — comment, uncertainty
   (distribution, σ with and without pedigree), pedigree scores, formula and
   variable name. *Reference product
