@@ -373,17 +373,17 @@ button.link { border: none; background: none; padding: 0 4px; color: var(--accen
 .info-body table.flows th { color: var(--muted); font-weight: 400; border-bottom: 1px solid var(--border); }
 .info-body .num { text-align: right; font-family: var(--mono); font-size: 12px; white-space: nowrap; }
 .info-actions { display: flex; gap: 6px; padding: 8px 14px; border-top: 1px solid var(--border); }
-/* Exchanges in the info pop-up: rows with a comment or uncertainty open on click */
-.info-body tr.exchange.has-meta { cursor: pointer; }
-.info-body tr.exchange.has-meta:hover, .info-body tr.exchange.open { background: var(--hover); }
-.info-body tr.exchange .caret { display: inline-block; width: 12px; color: var(--muted); }
+/* Rows of a pop-up panel that ↑/↓ move through (Space, c act on the focused one) */
+.info-popup:focus { outline: none; }
+.info-body tr[data-nav] { cursor: pointer; }
+.info-body tr[data-nav]:hover { background: var(--hover); }
+.info-body tr[data-nav]:focus { outline: none; background: var(--hover); box-shadow: inset 3px 0 0 var(--accent); }
 .info-body a { color: var(--accent); }
 .info-body table.exchanges { table-layout: fixed; }
 .info-body table.exchanges tr.exchange > td:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .info-body table.exchanges th:nth-child(2) { width: 96px; }
 .info-body table.exchanges th:nth-child(3) { width: 64px; }
 .info-body table.exchanges th:nth-child(4) { width: 48px; }
-.info-body tr.exchange-detail > td { padding: 2px 0 8px 12px; }
 .exchange-meta { margin: 4px 0 2px; padding-left: 8px; border-left: 2px solid var(--border); }
 .exchange-meta .text { font-size: 12px; margin-bottom: 4px; }
 .exchange-meta table.kv th { width: 90px; }
@@ -446,7 +446,7 @@ table.results tr.selected td { background: var(--selected); }
 .contributors-list tbody tr:hover td { background: var(--hover); }
 .contributors-list tr.more td { color: var(--muted); cursor: default; }
 .contributors-list .loc { color: var(--muted); margin-left: 6px; }
-.menu.context { position: fixed; top: auto; right: auto; z-index: 40; }
+.menu.context { position: fixed; top: auto; right: auto; z-index: 40000; }
 @keyframes focus-flash { 0%, 40% { background-color: var(--accent-soft); } 100% { background-color: transparent; } }
 .tree tr.focus td { animation: focus-flash 4s ease-out; }
 .tree tr.focus td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
@@ -468,7 +468,6 @@ table.results tr.selected td { background: var(--selected); }
 .info-body table.users .toggle.muted { cursor: default; }
 .info-body table.users tr.more td { font-size: 12px; }
 .info-body table.alternatives tr.current td { color: var(--muted); }
-.info-body table.alternatives .chip:disabled { opacity: 0.4; cursor: default; }
 .info-body table.users .chip { font-size: 11px; padding: 0 6px; border-radius: 9px; }
 /* Merged / group panel: members with their amounts and impacts */
 .bundle-details .details-list td:first-child, .bundle-details .details-list th:first-child { width: auto; }
@@ -501,10 +500,35 @@ table.results tr.muted td { color: var(--muted); }
 .info-btn:hover { background: var(--accent); color: var(--panel); }
 .tree .row-actions { align-items: center; }
 .info-body tr.exchange .info-btn { visibility: hidden; margin-right: 4px; vertical-align: middle; }
-.info-body tr.exchange:hover .info-btn, .info-body tr.exchange .info-btn:focus-visible { visibility: visible; }
-/* Pop-up header: back (after following a link) and close */
+.info-body tr.exchange:hover .info-btn, .info-body tr.exchange:focus .info-btn, .info-body tr.exchange .info-btn:focus-visible { visibility: visible; }
+/* Pop-up header: pin, back (after following a link) and close. The header moves the pop-up. */
+.info-head { cursor: move; user-select: none; }
+.info-head button, .info-head a { cursor: pointer; }
 .info-head-actions { display: flex; gap: 4px; flex: none; }
 .info-head-actions button.back { font-size: 14px; }
+.info-head-actions button.pin { display: inline-flex; align-items: center; color: var(--muted); }
+.info-head-actions button.pin.active { color: var(--accent); border-color: var(--accent); }
+.info-popup.pinned { border-color: var(--accent); }
+.info-popup.moving { user-select: none; opacity: .92; }
+/* Edges and corners that resize a pop-up */
+.pop-resize { position: absolute; z-index: 2; }
+.pop-resize.n, .pop-resize.s { left: 10px; right: 10px; height: 5px; cursor: ns-resize; }
+.pop-resize.e, .pop-resize.w { top: 10px; bottom: 10px; width: 5px; cursor: ew-resize; }
+.pop-resize.n { top: 0; }
+.pop-resize.s { bottom: 0; }
+.pop-resize.e { right: 0; }
+.pop-resize.w { left: 0; }
+.pop-resize.ne, .pop-resize.nw, .pop-resize.se, .pop-resize.sw { width: 12px; height: 12px; }
+.pop-resize.ne { top: 0; right: 0; cursor: nesw-resize; }
+.pop-resize.sw { bottom: 0; left: 0; cursor: nesw-resize; }
+.pop-resize.nw { top: 0; left: 0; cursor: nwse-resize; }
+.pop-resize.se { bottom: 0; right: 0; cursor: nwse-resize; }
+/* Where a dragged pop-up would open as a tab (a tab list) or in a new pane (an edge) */
+.popup-dock {
+  position: fixed; z-index: 100000; pointer-events: none; display: flex; align-items: center; justify-content: center;
+  background: color-mix(in srgb, var(--accent) 20%, transparent); border: 2px dashed var(--accent); border-radius: 4px;
+  color: var(--accent); font-weight: 600; font-size: 12px;
+}
 /* Bundle pop-ups (others, merged, group): members open their own pop-up */
 .info-body p.note { color: var(--muted); margin: 6px 0; }
 .others-popup .details-list tr.member { cursor: pointer; }
@@ -513,7 +537,7 @@ table.results tr.muted td { color: var(--muted); }
 /* Load database: dialog over the app, or the start page when nothing is loaded */
 .database-title { font-weight: 600; }
 .modal-backdrop {
-  position: fixed; inset: 0; z-index: 40; display: flex; align-items: flex-start; justify-content: center;
+  position: fixed; inset: 0; z-index: 50000; display: flex; align-items: flex-start; justify-content: center;  /* above pop-ups, which rise as they are clicked */
   padding: 6vh 16px 16px; background: rgba(0,0,0,.28);
 }
 .load-dialog {

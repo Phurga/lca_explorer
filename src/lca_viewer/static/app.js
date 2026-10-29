@@ -1565,8 +1565,8 @@ function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onU
                         </span>`}
                     <span class=${`row-actions ${renaming === r.id ? "renaming" : ""}`}>
                       ${hasDetails(r) && html`
-                        <button class="info-btn" title="Details (or right-click, or Space)" aria-label="Details"
-                          onClick=${(e) => { e.stopPropagation(); onInfo(r, e); }}>i</button>`}
+                        <button class="info-btn" title="Comment and uncertainty of the exchange (c); the activity: right-click or Space" aria-label="Details"
+                          onClick=${(e) => { e.stopPropagation(); onInfo(r, e, true); }}>i</button>`}
                       ${labelKey(r) && !editing && html`
                         <button class="rename-btn" title="Rename in this view (r) — the database is not changed" aria-label="Rename"
                           onClick=${(e) => { e.stopPropagation(); onStartRename(r); }}>✎</button>`}
@@ -1586,7 +1586,7 @@ function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onU
                         <button class="chip pin" title="Shown despite the cut-off — click to hide again"
                           onClick=${(e) => { e.stopPropagation(); onUnpin(r); }}>pinned ×</button>`}
                       ${r.replaced && html`
-                        <button class="chip merge" title="Supplied by another activity (Alternative suppliers, in the pop-up) — back to the original"
+                        <button class="chip merge" title="Supplied by another activity — back to the original"
                           onClick=${(e) => { e.stopPropagation(); onRevert(r); }}>replaced ×</button>`}
                       ${movable(r) && (inOthers(r)
                         ? html`<button class="chip pin" title="Pin: take it out of others, shown in the tree and the chart despite the cut-off"
@@ -2017,7 +2017,7 @@ function TreeGraph({ rows, rootImpact, shareBasis, selection, onToggle, onSelect
 
 // What an "others" row contains (below the cut-off, or moved there by the user);
 // ticking a member brings it back into the tree and the chart (pins it).
-function OthersPopup({ target, rest, rows, rootImpact, cutoff, cutoffBasis, pinned, setPinned, others, setOthers, onMember, view, onClose, onBack }) {
+function OthersPopup({ target, win, rest, rows, rootImpact, cutoff, cutoffBasis, pinned, setPinned, others, setOthers, onMember, view, onClose, onBack }) {
   const byId = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
   const parent = byId.get(rest.parent);
   const shownPins = rows.filter((r) => r.parent === rest.parent && r.pinned);
@@ -2039,7 +2039,7 @@ function OthersPopup({ target, rest, rows, rootImpact, cutoff, cutoffBasis, pinn
     nZero && `${nZero} without impact for this method`, nMoved && `${nMoved} moved here by you`].filter(Boolean).join(", ");
   const things = rest.label.includes("flow") ? "flow" : "process";
   return html`
-    <${PopupFrame} target=${target} label="Others" className="others-popup" onClose=${onClose} onBack=${onBack}
+    <${PopupFrame} target=${target} win=${win} label="Others" className="others-popup" onClose=${onClose} onBack=${onBack}
       title=${html`Others${parent ? html` <span class="muted">under ${shortLabel(parent, byId)}</span>` : ""}`}
       subtitle=${`${reasons} · ${fmt(rest.impacts[0])} (${pct(share(rest))})`}
       footer=${html`
@@ -2073,7 +2073,7 @@ function OthersPopup({ target, rest, rows, rootImpact, cutoff, cutoffBasis, pinn
 
 // The members of a merged or group row (processes, or flows for a group of flows) with
 // their own amounts and impacts, absolute and as a share of the row.
-function BundlePopup({ target, row, methodInfo, rootImpact, actions, onPart, onClose, onBack }) {
+function BundlePopup({ target, win, row, methodInfo, rootImpact, actions, onPart, onClose, onBack }) {
   const parts = [...row.parts].sort((a, b) => Math.abs(b.impacts[0]) - Math.abs(a.impacts[0]));
   // Amounts only add up (and have a share) when every member delivers the same product
   const sameUnit = !!row.unit;
@@ -2082,7 +2082,7 @@ function BundlePopup({ target, row, methodInfo, rootImpact, actions, onPart, onC
   const things = parts.some((p) => p.index === undefined) ? "flows" : "processes";
   const kind = row.kind === "merged" ? "Merged" : "Group";
   return html`
-    <${PopupFrame} target=${target} label=${`${kind} row`} className="bundle-details" onClose=${onClose} onBack=${onBack}
+    <${PopupFrame} target=${target} win=${win} label=${`${kind} row`} className="bundle-details" onClose=${onClose} onBack=${onBack}
       title=${html`${row.custom || row.label} <span class="loc-chip">${kind.toLowerCase()}</span>`}
       subtitle=${`${parts.length} ${things} · ${fmt(total)} ${methodInfo.unit} (${pct(rootImpact ? total / rootImpact : 0)} of the total)`}
       footer=${actions}>
@@ -2195,40 +2195,46 @@ function ExchangeMeta({ e }) {
     </div>`;
 }
 
-// Inputs or elementary flows of an activity as in its dataset; click a row for its comment and uncertainty
-// ``onOpen(index)``: items are products (technosphere), their (i) and name open the activity's
-// pop-up; ``onFlow(index, event)``: items are elementary flows, their (i) opens the flow pop-up
-function ExchangeTable({ title, items, cumulative, unitPer, onOpen, onFlow, onAmount, locked, limit = 10 }) {
-  const [open, setOpen] = useState(() => new Set());
+// Inputs or elementary flows of an activity as in its dataset, moved through like the main view:
+// ↑/↓ select a row (click too), Space opens its activity (or flow) pop-up, c or its (i) the
+// pop-up of the exchange (comment, uncertainty). ``onActivity(index)`` / ``onExchange(item)``:
+// items are products (technosphere); ``onFlow(index)``: items are elementary flows, whose
+// pop-up has both.
+// ``onAmount(item, text)``: double-click an amount to stage a change (Edit mode).
+function ExchangeTable({ title, items, cumulative, unitPer, onActivity, onExchange, onFlow, onAmount, locked, limit = 10 }) {
   const [all, setAll] = useState(false);
-  const toggle = (i) => setOpen((s) => { const next = new Set(s); next.has(i) ? next.delete(i) : next.add(i); return next; });
   const shown = all ? items : items.slice(0, limit);
   return html`
     <section>
       <h4>${title} · ${items.length}</h4>
       <table class="flows exchanges">
         <thead><tr>
-          <th>${onOpen ? "Product" : "Flow"} <span class="muted">· click a row for its comment and uncertainty, (i) for its details</span></th>
+          <th>${onActivity ? "Product" : "Flow"} <span class="muted">· Space: details, c: comment and uncertainty</span></th>
           <th class="num" title="Amount in the dataset">amount</th><th class="num" title=${unitPer}>impact</th><th class="num">share</th>
         </tr></thead>
         <tbody>${shown.map((e, i) => {
-          const meta = hasExchangeMeta(e);
+          const exchange = () => (onActivity ? onExchange(e) : onFlow(e.index));
+          const keys = (ev) => {
+            if (ev.ctrlKey || ev.metaKey || ev.altKey || (ev.key !== " " && ev.key !== "c")) return;
+            ev.preventDefault();
+            ev.stopPropagation();
+            if (ev.key === "c") exchange();
+            else if (onActivity) onActivity(e.index);
+            else onFlow(e.index);
+          };
           return html`
-            <tr key=${i} class=${`exchange ${meta ? "has-meta" : ""} ${open.has(i) ? "open" : ""}`} onClick=${() => meta && toggle(i)}>
-              <td><span class="caret">${meta ? (open.has(i) ? "▾" : "▸") : ""}</span>
-                <button class="info-btn" title="Details" aria-label="Details"
-                  onClick=${(ev) => { ev.stopPropagation(); onOpen ? onOpen(e.index) : onFlow?.(e.index, ev); }}>i</button>
-                ${onOpen
-                  ? html`<a href="#" title=${`${e.name} | ${e.location}`} onClick=${(ev) => { ev.preventDefault(); ev.stopPropagation(); onOpen(e.index); }}>${e.reference_product}</a>
-                      <span class="loc-chip">${e.location}</span>`
+            <tr key=${i} class="exchange" data-nav tabindex="-1" onKeyDown=${keys}>
+              <td><button class="info-btn" title="Comment and uncertainty (c)" aria-label="Comment and uncertainty"
+                  onClick=${(ev) => { ev.stopPropagation(); exchange(); }}>i</button>
+                ${onActivity
+                  ? html`<span title=${`${e.name} | ${e.location}`}>${e.reference_product}</span> <span class="loc-chip">${e.location}</span>`
                   : html`<span title=${`${e.name} | ${e.categories.join(" / ")}`}>${e.name} <span class="muted">${e.categories.join(" / ")}</span></span>`}</td>
               <td class="num"><${Editable} value=${Math.abs(e.amount)} format=${fmt} disabled=${locked || !onAmount || !e.input}
                   title=${locked ? undefined : !e.input ? "Build this database again once, to edit amounts here" : "Double-click to change this amount in the dataset"}
                   onCommit=${(text) => onAmount(e, text)} /> ${unit(e.unit)}</td>
               <td class="num impact">${e.impact ? fmt(e.impact) : "–"}</td>
               <td class="num impact">${e.impact && cumulative ? pct(e.impact / cumulative) : ""}</td>
-            </tr>
-            ${open.has(i) && html`<tr class="exchange-detail"><td colspan="4"><${ExchangeMeta} e=${e} /></td></tr>`}`;
+            </tr>`;
         })}
         </tbody>
       </table>
@@ -2243,19 +2249,23 @@ const DETAIL_SECTIONS = [
 ];
 
 // Esc or a click outside closes a pop-up; Backspace (or ←) goes back to the previous one
-// when a link inside it was followed
-function usePopupKeys(box, onClose, onBack) {
-  const back = useRef(onBack);
+// when a link inside it was followed. A pinned pop-up ignores clicks outside, and answers to
+// the keys only while the pointer or the focus is on it (several can be open).
+function usePopupKeys(box, onClose, onBack, pinned = false) {
+  const back = useRef(onBack), pin = useRef(pinned);
   back.current = onBack;
+  pin.current = pinned;
   useEffect(() => {
+    const mine = () => !pin.current || box.current?.matches(":hover, :focus-within");
     const onKey = (e) => {
+      if (!mine()) return;
       if (e.key === "Escape") onClose();
       else if (e.key === "Backspace" && back.current && !e.target.closest?.("input, textarea, select, [contenteditable]")) {
         e.preventDefault();
         back.current();
       }
     };
-    const onDown = (e) => box.current && !box.current.contains(e.target) && onClose();
+    const onDown = (e) => !pin.current && box.current && !box.current.contains(e.target) && onClose();
     document.addEventListener("keydown", onKey);
     document.addEventListener("mousedown", onDown);
     return () => { document.removeEventListener("keydown", onKey); document.removeEventListener("mousedown", onDown); };
@@ -2263,39 +2273,164 @@ function usePopupKeys(box, onClose, onBack) {
 }
 const BackButton = ({ onBack }) => onBack && html`
   <button class="back" onClick=${onBack} title="Back (Backspace)" aria-label="Back">←</button>`;
+const PinIcon = () => html`<svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true" fill="currentColor">
+  <path d="M10 1.5L14.5 6l-1.3.6-2.6 2.6.3 3-1.1 1.1-2.9-2.9L3 14.5l-1-1 4.2-4.2-2.9-2.9 1.1-1.1 3 .3 2.6-2.6z" /></svg>`;
 
-// Pop-up chrome: placed at the click, header (title, ←, ×), scrolling body, actions
-function PopupFrame({ target, label, className = "", title, subtitle, footer, onClose, onBack, children, maxWidth = 620 }) {
+// Pop-up windows: dragged by the header, resized by the edges and corners, pinned to stay open
+// beside others. Dropped on a pane's tab list, or on the edge of a pane, a pop-up that can
+// (an activity's) opens as a tab there, or in a new pane on that side.
+const POPUP_MIN = { width: 300, height: 140 };
+const DOCK_EDGE = 56;  // px from the edge of a pane where a dragged pop-up docks
+const RESIZE_EDGES = ["n", "s", "e", "w", "ne", "nw", "se", "sw"];
+let popupZ = 30;  // raised on each click, so that the pop-up last used is on top
+
+// The place a pop-up dropped at (x, y) would open its activity at: { pane, zone, left, top, width,
+// height } (the last four: the part of the screen it would take, for the hint), or null
+function dockAt(x, y, popup) {
+  const under = document.elementsFromPoint(x, y).find((el) => !popup.contains(el));
+  const tabs = under?.closest(".pane-tabs");
+  const body = under?.closest(".pane-body");
+  const r = (tabs || body)?.getBoundingClientRect();
+  if (tabs) return { pane: tabs.dataset.pane, zone: "center", left: r.left, top: r.top, width: r.width, height: r.height };
+  if (!body) return null;
+  const zone = x - r.left < DOCK_EDGE ? "left" : r.right - x < DOCK_EDGE ? "right"
+    : y - r.top < DOCK_EDGE ? "top" : r.bottom - y < DOCK_EDGE ? "bottom" : null;
+  if (!zone) return null;
+  const across = zone === "left" || zone === "right";
+  return { pane: body.dataset.pane, zone,
+    left: zone === "right" ? r.left + r.width / 2 : r.left, top: zone === "bottom" ? r.top + r.height / 2 : r.top,
+    width: across ? r.width / 2 : r.width, height: across ? r.height : r.height / 2 };
+}
+
+// ``win``: { rect, pinned, onPin, onRect } (kept by the view, so that a pop-up keeps its place and
+// size when a link inside it opens another kind of pop-up); ``head``: the title lines; the children
+// follow the header. ``onDock(place)``: given when the pop-up can open as a tab.
+function PopupWindow({ target, win, label, className = "", head, width = 560, onClose, onBack, onDock, onKeyDown, children }) {
   const box = useRef(null);
-  usePopupKeys(box, onClose, onBack);
-  const width = Math.min(maxWidth, window.innerWidth - 24);
-  const left = Math.max(12, Math.min(target.x + 8, window.innerWidth - width - 12));
-  const top = Math.max(12, Math.min(target.y + 8, window.innerHeight - 320));
+  usePopupKeys(box, onClose, onBack, win.pinned);
+  // A pop-up that opens takes the keyboard (arrows, Space, c: see popupKeys)
+  useEffect(() => { if (!win.pinned) box.current?.focus({ preventScroll: true }); }, []);
+  const [live, setLive] = useState(null);  // the geometry while it is dragged or resized
+  const [dock, setDock] = useState(null);  // where it would dock, while it is dragged over a pane
+  const w = Math.min(width, window.innerWidth - 24);
+  const rect = live || win.rect || {
+    left: Math.max(12, Math.min(target.x + 8, window.innerWidth - w - 12)),
+    top: Math.max(12, Math.min(target.y + 8, window.innerHeight - 320)), width: w, height: null,
+  };
+  const left = Math.max(80 - rect.width, Math.min(rect.left, window.innerWidth - 80));
+  const top = Math.max(0, Math.min(rect.top, window.innerHeight - 40));
+
+  // mode: "move" (by the header) or the edges being dragged ("e", "nw", …)
+  function begin(e, mode) {
+    e.preventDefault();
+    const at = box.current.getBoundingClientRect();
+    const from = { x: e.clientX, y: e.clientY, left: at.left, top: at.top, width: at.width, height: at.height };
+    let last = null;
+    const move = (ev) => {
+      const dx = ev.clientX - from.x, dy = ev.clientY - from.y;
+      const next = { left: from.left, top: from.top, width: from.width, height: rect.height };
+      if (mode === "move") {
+        next.left += dx;
+        next.top += dy;
+      } else {
+        if (mode.includes("e")) next.width = Math.max(POPUP_MIN.width, from.width + dx);
+        if (mode.includes("w")) { next.width = Math.max(POPUP_MIN.width, from.width - dx); next.left = from.left + from.width - next.width; }
+        if (mode.includes("s")) next.height = Math.max(POPUP_MIN.height, from.height + dy);
+        if (mode.includes("n")) { next.height = Math.max(POPUP_MIN.height, from.height - dy); next.top = from.top + from.height - next.height; }
+      }
+      last = next;
+      setLive(next);
+      if (mode === "move" && onDock) setDock(dockAt(ev.clientX, ev.clientY, box.current));
+    };
+    const up = (ev) => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      const place = last && mode === "move" && onDock ? dockAt(ev.clientX, ev.clientY, box.current) : null;
+      setLive(null);
+      setDock(null);
+      if (place) onDock(place);
+      else if (last) win.onRect(last);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  }
+
   return html`
-    <div class=${`info-popup ${className}`} ref=${box} role="dialog" aria-label=${label}
-         style=${{ left: `${left}px`, top: `${top}px`, width: `${width}px`, maxHeight: `calc(100vh - ${top + 12}px)` }}>
-      <div class="info-head">
-        <div>
-          <div class="info-title">${title}</div>
-          ${subtitle && html`<div class="muted">${subtitle}</div>`}
+    <${Fragment}>
+      <div class=${`info-popup ${className} ${win.pinned ? "pinned" : ""} ${live ? "moving" : ""}`} ref=${box} role="dialog" aria-label=${label}
+           tabindex="-1" onKeyDown=${onKeyDown}
+           style=${{ left: `${left}px`, top: `${top}px`, width: `${rect.width}px`, height: rect.height ? `${rect.height}px` : undefined,
+             maxHeight: `max(160px, calc(100vh - ${top + 12}px))` }}
+           onPointerDownCapture=${() => { box.current.style.zIndex = ++popupZ; }}
+           onPointerDown=${(e) => e.button === 0 && e.target.closest(".info-head") && !e.target.closest("button, a, input, select, textarea") && begin(e, "move")}>
+        <div class="info-head" title="Drag to move">
+          <div>${head}</div>
+          <span class="info-head-actions">
+            <button class=${`pin ${win.pinned ? "active" : ""}`} onClick=${win.onPin} aria-label="Pin" aria-pressed=${win.pinned}
+              title=${win.pinned ? "Unpin: Esc or a click outside closes it again" : "Pin: keep it open, to have several pop-ups at once"}><${PinIcon} /></button>
+            <${BackButton} onBack=${onBack} />
+            <button onClick=${onClose} aria-label="Close">×</button>
+          </span>
         </div>
-        <span class="info-head-actions"><${BackButton} onBack=${onBack} /><button onClick=${onClose} aria-label="Close">×</button></span>
+        ${children}
+        ${RESIZE_EDGES.map((edge) => html`<div key=${edge} class=${`pop-resize ${edge}`} onPointerDown=${(e) => e.button === 0 && begin(e, edge)}></div>`)}
       </div>
+      ${dock && html`<div class="popup-dock" style=${{ left: `${dock.left}px`, top: `${dock.top}px`, width: `${dock.width}px`, height: `${dock.height}px` }}>
+        <span>${dock.zone === "center" ? "Open as a tab here" : "Open in a new pane here"}</span></div>`}
+    <//>`;
+}
+
+// Keys inside a pop-up that has the focus (the main view's keys do not reach it): ←/→ switch
+// panel, ↑/↓ move between the rows of the panel (``[data-nav]``, focusable; each row handles
+// its own Space and c), or scroll a panel without rows; Space or c with no row closes it.
+function popupKeys({ tabs, shown, setTab, body, onClose, exchange }) {
+  return (e) => {
+    const box = e.currentTarget;
+    if (e.ctrlKey || e.metaKey || e.altKey || e.target.closest("input, textarea, select, [contenteditable]")) return;
+    // A button clicked last (a panel) would also react to Space
+    if (e.target !== box && e.target.matches("button")) box.focus();
+    const used = () => { e.preventDefault(); e.stopPropagation(); };
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      const down = e.key === "ArrowDown";
+      const rows = [...box.querySelectorAll(".info-body [data-nav]")];
+      used();
+      if (!rows.length) { body.current?.scrollBy(0, down ? 48 : -48); return; }
+      const at = rows.indexOf(document.activeElement);
+      const next = rows[at < 0 ? (down ? 0 : rows.length - 1) : at + (down ? 1 : -1)];
+      next?.focus({ preventScroll: true });
+      next?.scrollIntoView({ block: "nearest" });
+    } else if ((e.key === "ArrowRight" || e.key === "ArrowLeft") && tabs.length > 1) {
+      used();
+      const next = tabs[tabs.findIndex((t) => t.id === shown) + (e.key === "ArrowRight" ? 1 : -1)];
+      if (next) { box.focus(); setTab(next.id); }
+    } else if (e.key === " " || (exchange && e.key === "c")) {
+      used();
+      onClose();
+    }
+  };
+}
+
+// Pop-up chrome: header (title, pin, ←, ×), scrolling body, actions
+function PopupFrame({ target, win, label, className = "", title, subtitle, footer, onClose, onBack, children, maxWidth = 620 }) {
+  return html`
+    <${PopupWindow} target=${target} win=${win} label=${label} className=${className} width=${maxWidth} onClose=${onClose} onBack=${onBack}
+      head=${html`
+        <div class="info-title">${title}</div>
+        ${subtitle && html`<div class="muted">${subtitle}</div>`}`}>
       <div class="info-body">${children}</div>
       ${footer && html`<div class="info-actions">${footer}</div>`}
-    </div>`;
+    <//>`;
 }
 
 // Right-click on an elementary flow: the exchanges of the processes emitting it (amount,
 // comment, uncertainty as recorded in their datasets), its characterisation factors and
 // its metadata. ``target.flows``: several flows of one substance (switch compartment).
-function FlowInfoPopup({ target, method, methods, onClose, onOpen, onBack }) {
+function FlowInfoPopup({ target, win, method, methods, onClose, onOpen, onBack }) {
   const [current, setCurrent] = useState(target.flow);
   const [info, setInfo] = useState(null);
   const [error, setError] = useState(null);
   const [tab, setTab] = useState(null);
   const [filter, setFilter] = useState("");
-  const box = useRef(null);
   useEffect(() => { setCurrent(target.flow); setTab(null); }, [target.flow, target.x, target.y]);
   useEffect(() => {
     setInfo(null);
@@ -2303,11 +2438,6 @@ function FlowInfoPopup({ target, method, methods, onClose, onOpen, onBack }) {
     request(`/api/flow/${current}?method=${method}&activities=${(target.activities || []).join(",")}`)
       .then(setInfo).catch((e) => setError(e.message));
   }, [current, method, target.activities]);
-  usePopupKeys(box, onClose, onBack);
-
-  const width = Math.min(560, window.innerWidth - 24);
-  const left = Math.max(12, Math.min(target.x + 8, window.innerWidth - width - 12));
-  const top = Math.max(12, Math.min(target.y + 8, window.innerHeight - 320));
   const compartment = info ? [info.compartment, info.subcompartment].filter(Boolean).join(", ") : "";
   const hasExchanges = info && info.exchanges.length > 0;
   const tabs = info ? [
@@ -2318,19 +2448,16 @@ function FlowInfoPopup({ target, method, methods, onClose, onOpen, onBack }) {
   const shown = tabs.some((t) => t.id === tab) ? tab : tabs[0]?.id;
   const words = filter.toLowerCase().split(/\s+/).filter(Boolean);
   const factors = info ? info.factors.filter((f) => words.every((w) => methodLabel(methods[f.method]).toLowerCase().includes(w))) : [];
+  const body = useRef(null);
   return html`
-    <div class="info-popup" ref=${box} style=${{ left: `${left}px`, top: `${top}px`, width: `${width}px`, maxHeight: `calc(100vh - ${top + 12}px)` }}
-         role="dialog" aria-label="Elementary flow information">
-      <div class="info-head">
-        <div>
-          <div class="info-title">${info?.name ?? "…"} ${info && html`<span class="loc-chip">${compartment || "no compartment"}</span>`}</div>
-          ${info && html`<div class="muted">Elementary flow · ${unit(info.unit)} · ${fmt(info.cf)} ${methods[method].unit} / ${unit(info.unit)} in ${methodLabel(methods[method])}</div>`}
-          ${target.flows?.length > 1 && html`
-            <div class="flow-compartments" role="group" aria-label="Compartment">${target.flows.map((f, i) => html`
-              <button class=${`chip ${f === current ? "active" : ""}`} onClick=${() => setCurrent(f)}>${target.labels?.[i] || `flow ${i + 1}`}</button>`)}</div>`}
-        </div>
-        <span class="info-head-actions"><${BackButton} onBack=${onBack} /><button onClick=${onClose} aria-label="Close">×</button></span>
-      </div>
+    <${PopupWindow} target=${target} win=${win} label="Elementary flow information" onClose=${onClose} onBack=${onBack}
+      onKeyDown=${popupKeys({ tabs, shown, setTab, body, onClose })}
+      head=${html`
+        <div class="info-title">${info?.name ?? "…"} ${info && html`<span class="loc-chip">${compartment || "no compartment"}</span>`}</div>
+        ${info && html`<div class="muted">Elementary flow · ${unit(info.unit)} · ${fmt(info.cf)} ${methods[method].unit} / ${unit(info.unit)} in ${methodLabel(methods[method])}</div>`}
+        ${target.flows?.length > 1 && html`
+          <div class="flow-compartments" role="group" aria-label="Compartment">${target.flows.map((f, i) => html`
+            <button class=${`chip ${f === current ? "active" : ""}`} onClick=${() => setCurrent(f)}>${target.labels?.[i] || `flow ${i + 1}`}</button>`)}</div>`}`}>
       ${error && html`<div class="error">${error}</div>`}
       ${info && html`
         <div class="tabs info-tabs" role="tablist">
@@ -2338,7 +2465,7 @@ function FlowInfoPopup({ target, method, methods, onClose, onOpen, onBack }) {
             <button role="tab" aria-selected=${t.id === shown} class=${t.id === shown ? "active" : ""}
               onClick=${() => setTab(t.id)}>${t.label}</button>`)}
         </div>
-        <div class="info-body">
+        <div class="info-body" ref=${body}>
           ${shown === "exchange" && info.exchanges.map(({ activity, exchanges }) => html`
             <section key=${activity.index}>
               <h4>In the dataset of <a href="#" onClick=${(e) => { e.preventDefault(); onOpen(activity.index); }}>${activity.name}</a>
@@ -2378,7 +2505,7 @@ function FlowInfoPopup({ target, method, methods, onClose, onOpen, onBack }) {
               </table>
             </section>`}
         </div>`}
-    </div>`;
+    <//>`;
 }
 
 // The processes in whose dataset a row (or a bundle's members) is an input: the nearest
@@ -2394,7 +2521,9 @@ function suppliedTo(row, rowsById) {
 // One activity of a "Used by" table. Expanding it lists the activities using its product (in the
 // functional unit's supply chain, else in the database), so that the users can be followed up
 // as a reverse tree. A user already above it on the path is a loop: shown, not expanded.
-function UserRow({ user: u, inputUnit, root, amount, method, ancestors, depth, onOpen, onGoTo }) {
+// Keys on the row: Space opens the user's pop-up, c the exchange of the product in its dataset,
+// Enter expands it
+function UserRow({ user: u, inputUnit, root, amount, method, ancestors, depth, onOpen, onExchange, onGoTo }) {
   const [open, setOpen] = useState(false);
   const [users, setUsers] = useState(null);
   const loop = ancestors.includes(u.index);
@@ -2410,8 +2539,16 @@ function UserRow({ user: u, inputUnit, root, amount, method, ancestors, depth, o
       .then(setUsers).catch(() => setUsers({ users: [], count: 0 }));
   }, [open]);
   const span = root ? 5 : 2;
+  const keys = (e) => {
+    if (e.ctrlKey || e.metaKey || e.altKey || ![" ", "c", "Enter"].includes(e.key)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.key === " ") onOpen(u.index);
+    else if (e.key === "c") onExchange(u, ancestors[ancestors.length - 1]);
+    else if (!loop) setOpen(!open);
+  };
   return html`<${Fragment}>
-    <tr>
+    <tr data-nav tabindex="-1" onKeyDown=${keys}>
       <td class="user" title=${`${u.reference_product} | ${u.name} | ${u.location}`}>
         <span class="user-cell" style=${{ paddingLeft: `${depth * 16}px` }}>
           ${loop
@@ -2430,13 +2567,17 @@ function UserRow({ user: u, inputUnit, root, amount, method, ancestors, depth, o
     ${open && users && children.length === 0 && html`<tr><td colspan=${span} class="muted">No activity uses it${root ? " in this supply chain" : ""}.</td></tr>`}
     ${open && users && children.map((c) => html`
       <${UserRow} key=${c.index} user=${c} inputUnit=${unit(u.unit)} root=${root} amount=${amount} method=${method}
-        ancestors=${[...ancestors, u.index]} depth=${depth + 1} onOpen=${onOpen} onGoTo=${onGoTo} />`)}
+        ancestors=${[...ancestors, u.index]} depth=${depth + 1} onOpen=${onOpen} onExchange=${onExchange} onGoTo=${onGoTo} />`)}
     ${open && users && more > 0 && html`
       <tr class="more"><td colspan=${span} class="muted">+ ${more} more</td></tr>`}
   <//>`;
 }
 
-function InfoPopup({ target, method, methodInfo, rootImpact, rowsById, onClose, onUseAsRoot, onOpenTab, onMoveToOthers, onReplace, root, amount, onOpen, onGoTo, onFlow, onBack }) {
+// Two pop-ups of a process: the activity's (Space, right-click: its exchanges, users, alternatives,
+// description, metadata) and the exchange's (c, (i): the amount in this tree and the comment and
+// uncertainty of the input, ``target.exchange``). ``onFollow(target)`` opens another in place.
+function InfoPopup({ target, win, method, methodInfo, rootImpact, rowsById, onClose, onUseAsRoot, onOpenTab, root, amount, onFollow, onGoTo, onBack }) {
+  const exchange = !!target.exchange;
   const [info, setInfo] = useState(null);
   const [error, setError] = useState(null);
   const [users, setUsers] = useState(null);
@@ -2445,13 +2586,13 @@ function InfoPopup({ target, method, methodInfo, rootImpact, rowsById, onClose, 
   const [alternatives, setAlternatives] = useState(null);
   // Open tab, back to the default on each right-click (following a link inside keeps it)
   const [tab, setTab] = useState(null);
-  const box = useRef(null);
+  const body = useRef(null);
   useEffect(() => setTab(null), [target.x, target.y]);
   useEffect(() => {
     setInfo(null);
     request(`/api/activity/${target.index}?method=${method}`).then(setInfo).catch((e) => setError(e.message));
   }, [target.index, method]);
-  useEffect(() => { setAllUsers(false); box.current?.querySelector(".info-body")?.scrollTo(0, 0); }, [target.index]);
+  useEffect(() => { setAllUsers(false); body.current?.scrollTo(0, 0); }, [target.index]);
   // Exchanges as in the dataset, and for a tree row, the parent's input of this product
   // (comment, uncertainty): ``link`` is [{ meta, inputs }], one per parent dataset using it
   // (several under a merged row), also when the row is in a group or an others row
@@ -2461,30 +2602,32 @@ function InfoPopup({ target, method, methodInfo, rootImpact, rowsById, onClose, 
   const parentKey = parentMetas.map((m) => m.index).join(",");
   useEffect(() => {
     setExchanges(null);
+    if (exchange) return;
     request(`/api/activity/${target.index}/exchanges?method=${method}`).then(setExchanges).catch(() => setExchanges(null));
-  }, [target.index, method]);
+  }, [target.index, method, exchange]);
   useEffect(() => {
     setLink(null);
-    if (!parentMetas.length) return;
+    if (!exchange || !parentMetas.length) return;
     let live = true;
     Promise.all(parentMetas.map((m) => request(`/api/activity/${m.index}/exchanges?method=${method}&product=${target.index}`)
       .then((r) => ({ meta: m, inputs: r.inputs }))))
       .then((links) => live && setLink(links.filter((l) => l.inputs.length)))
       .catch(() => live && setLink(null));
     return () => { live = false; };
-  }, [target.index, parentKey, method]);
+  }, [target.index, parentKey, method, exchange]);
   useEffect(() => {
     setUsers(null);
+    if (exchange) return;
     const fu = root ? `&root=${root.index}&amount=${amount}` : "";
     request(`/api/activity/${target.index}/users?method=${method}&limit=${allUsers ? 1000 : 15}${fu}`)
       .then(setUsers).catch((e) => setError(e.message));
-  }, [target.index, method, root, amount, allUsers]);
+  }, [target.index, method, root, amount, allUsers, exchange]);
   useEffect(() => {
     setAlternatives(null);
-    if (target.direct) return;
+    if (target.direct || exchange) return;
     request(`/api/activity/${target.index}/alternatives?method=${method}`)
       .then(setAlternatives).catch(() => setAlternatives(null));
-  }, [target.index, method]);
+  }, [target.index, method, exchange]);
   // Edit mode: the dataset as the project holds it (what the fields stand for), and what can be changed in place
   const ctx = useContext(EditorContext);
   const [ds, setDs] = useState(null);
@@ -2499,41 +2642,30 @@ function InfoPopup({ target, method, methodInfo, rootImpact, rowsById, onClose, 
   const stagedHere = !!ds && ctx.pending.some((c) => c.kind === "edit" && c.database === ds.database && c.code === ds.code);
   const own = (patch) => quickEdit(ctx, info.database, info.code, patch);
   const inDataset = (meta) => ({ locked: ctx.locked.includes(meta.database), change: (patch) => quickEdit(ctx, meta.database, meta.code, patch) });
-  usePopupKeys(box, onClose, onBack);
-
-  const width = Math.min(560, window.innerWidth - 24);
-  const left = Math.max(12, Math.min(target.x + 8, window.innerWidth - width - 12));
-  const top = Math.max(12, Math.min(target.y + 8, window.innerHeight - 320));
   const row = target.row;
   const path = [];
   for (let r = row; r; r = rowsById.get(r.parent)) if (r.meta && r.kind === "process") path.unshift(r.meta.name);
   const d = info?.details || {};
   const unitPer = info ? `${methodInfo.unit} / ${unit(info.unit)}` : "";
-  const directTotal = info ? info.direct_flows.reduce((sum, f) => sum + f.impact, 0) : 0;
   const production = exchanges?.production;
-  // Tabs: for a tree row, the exchange (the parent's input of this process: comment,
-  // uncertainty) comes first and is opened; a direct emissions row opens on its flows
-  const inTree = (row && (row.kind === "process" || row.kind === "direct")) || parentMetas.length > 0;
-  // An input of a tree can be replaced by another supplier: the node it is an input of is the
-  // nearest row above that is not a group or others row. A candidate that the node already has
-  // as an input is not offered (its row would be taken twice).
-  const replaceable = !!(onReplace && row && row.kind === "process" && row.depth > 0);
-  let node = replaceable ? rowsById.get(row.parent) : null;
-  while (node && (node.kind === "group" || node.kind === "rest")) node = rowsById.get(node.parent);
-  const takenBy = (index) => !!node && rowsById.has(`${node.id}/${index}`);
+  const asMeta = (a) => ({ index: a.index, name: a.name, location: a.location });
+  // Following a row replaces the panel, and the row that had the focus: the pop-up takes it, to keep the keys
+  const follow = (next) => { body.current?.closest(".info-popup")?.focus({ preventScroll: true }); onFollow(next); };
+  const openActivity = (index) => follow({ index, row: null });
+  // The exchange of ``index``'s product in the dataset of ``user``
+  const openExchange = (index, user) => follow({ index, row: null, parents: [asMeta(user)], exchange: true });
+  // The exchange pop-up is its one panel; the activity's: exchanges first (a direct emissions row
+  // opens on its emissions), then users, alternatives, description, metadata
   const hasDescription = ctx.editing || DETAIL_SECTIONS.some(([k]) => d[k])
     || (production && (production.comment || production.properties || production["production volume"]));
-  const tabs = info ? [
-    inTree && { id: "tree", label: parentMetas.length ? "Exchange" : "In this tree" },
-    { id: "results", label: "Results" },
+  const tabs = info && !exchange ? [
     exchanges?.available && { id: "exchanges", label: `Exchanges · ${(production ? 1 : 0) + exchanges.inputs.length + exchanges.flows.length}` },
     { id: "users", label: `${users?.waste ? "Treats" : "Used by"}${users ? ` · ${users.count}` : ""}` },
     alternatives && !target.direct && { id: "alternatives", label: `Alternatives · ${alternatives.count}` },
     hasDescription && { id: "description", label: "Description" },
     { id: "metadata", label: "Metadata" },
   ].filter(Boolean) : [];
-  const has = (id) => tabs.some((t) => t.id === id);
-  const shown = has(tab) ? tab : target.direct && has("exchanges") ? "exchanges" : has("tree") ? "tree" : tabs[0]?.id;
+  const shown = exchange ? "tree" : tabs.some((t) => t.id === tab) ? tab : tabs[0]?.id;
   // Exchanges by direction, as in the dataset: products, inputs (from the technosphere,
   // from nature), outputs (waste to treatment, emissions)
   const sections = useMemo(() => {
@@ -2556,36 +2688,35 @@ function InfoPopup({ target, method, methodInfo, rootImpact, rowsById, onClose, 
     // A direct emissions row is about the emissions: those first
     return target.direct ? [...list.filter(([k]) => k === "emissions"), ...list.filter(([k]) => k !== "emissions")] : list;
   }, [exchanges, info, target.direct]);
-  useEffect(() => { box.current?.querySelector(".info-body")?.scrollTo(0, 0); }, [shown]);
+  useEffect(() => { body.current?.scrollTo(0, 0); }, [shown]);
   return html`
-    <div class="info-popup" ref=${box} style=${{ left: `${left}px`, top: `${top}px`, width: `${width}px`, maxHeight: `calc(100vh - ${top + 12}px)` }}
-         role="dialog" aria-label="Activity information">
-      <div class="info-head">
-        <div>
-          <div class="info-title">${target.direct ? "Direct emissions of " : ""}${(target.direct ? rowsById.get(row?.parent)?.custom : row?.custom)
-            || (info ? html`<${Editable} value=${info.name} disabled=${locked} onCommit=${(t) => own((dr) => { dr.process.name = t; })} />` : "…")}${" "}
-            ${info && html`<${Editable} className="loc-chip" value=${info.location} disabled=${locked} onCommit=${(t) => own((dr) => { dr.process.location = t; })} />`}
-            ${stagedHere && html` <span class="chip staged" title="A change of this process is staged: the values below are those of the last build">changes staged</span>`}
-            ${ctx.editing && locked && html` <span class="chip" title="Its database is locked">🔒 locked</span>`}</div>
-          ${info && (target.direct ? rowsById.get(row?.parent)?.custom : row?.custom) && html`<div class="muted">renamed in this view · ${info.name}</div>`}
-          ${info && html`<div class="muted"><${Editable} value=${info.reference_product} disabled=${locked}
+    <${PopupWindow} target=${target} win=${win} label=${exchange ? "Exchange information" : "Activity information"} onClose=${onClose} onBack=${onBack}
+      onDock=${info && !exchange ? (place) => { onOpenTab(info, place); onClose(); } : null}
+      onKeyDown=${popupKeys({ tabs, shown, setTab, body, onClose, exchange })}
+      head=${html`
+        <div class="info-title">${target.direct ? "Direct emissions of " : ""}${(target.direct ? rowsById.get(row?.parent)?.custom : row?.custom)
+          || (info ? (exchange ? info.name : html`<${Editable} value=${info.name} disabled=${locked} onCommit=${(t) => own((dr) => { dr.process.name = t; })} />`) : "…")}${" "}
+          ${info && (exchange ? html`<span class="loc-chip">${info.location}</span>`
+            : html`<${Editable} className="loc-chip" value=${info.location} disabled=${locked} onCommit=${(t) => own((dr) => { dr.process.location = t; })} />`)}
+          ${stagedHere && html` <span class="chip staged" title="A change of this process is staged: the values below are those of the last build">changes staged</span>`}
+          ${ctx.editing && locked && html` <span class="chip" title="Its database is locked">🔒 locked</span>`}</div>
+        ${info && (target.direct ? rowsById.get(row?.parent)?.custom : row?.custom) && html`<div class="muted">renamed in this view · ${info.name}</div>`}
+        ${info && (exchange ? html`<div class="muted">Exchange · ${info.reference_product} · ${unit(info.unit)}</div>` : html`<div class="muted">${info.activity_type} ·${" "}
+          <${Editable} value=${info.reference_product} disabled=${locked}
             onCommit=${(t) => own((dr) => { productOfProcess(dr, info.code).name = t; })} /> ·${" "}
-            <${Editable} value=${info.unit} display=${unit(info.unit)} disabled=${locked}
-              onCommit=${(t) => own((dr) => { productOfProcess(dr, info.code).unit = t; })} /> · ${info.activity_type}</div>`}
-        </div>
-        <span class="info-head-actions"><${BackButton} onBack=${onBack} /><button onClick=${onClose} aria-label="Close">×</button></span>
-      </div>
+          <${Editable} value=${info.unit} display=${unit(info.unit)} disabled=${locked}
+            onCommit=${(t) => own((dr) => { productOfProcess(dr, info.code).unit = t; })} /></div>`)}`}>
       ${error && html`<div class="error">${error}</div>`}
       ${info && html`
-        <div class="tabs info-tabs" role="tablist">
+        ${!exchange && html`<div class="tabs info-tabs" role="tablist">
           ${tabs.map((t) => html`
             <button role="tab" aria-selected=${t.id === shown} class=${t.id === shown ? "active" : ""}
               onClick=${() => setTab(t.id)}>${t.label}</button>`)}
-        </div>
-        <div class="info-body">
+        </div>`}
+        <div class="info-body" ref=${body}>
           ${shown === "tree" && html`
             <section>
-              <h4>In this tree</h4>
+              <h4>${row ? "In this tree" : "Exchange"}</h4>
               <table class="kv">
                 ${row?.kind === "process" && html`<tr><th>Amount</th><td>${row.waste ? `${fmt(-row.amount)} ${unit(row.unit)} treated` : `${fmt(row.amount)} ${unit(row.unit)}`}</td></tr>`}
                 ${row && html`<tr><th>Impact</th><td>${fmt(row.impacts[0])} ${methodInfo.unit} (${pct(rootImpact ? row.impacts[0] / rootImpact : 0)} of the total)</td></tr>`}
@@ -2602,26 +2733,11 @@ function InfoPopup({ target, method, methodInfo, rootImpact, rowsById, onClose, 
               ${link && !link.some((l) => l.inputs.some(hasExchangeMeta)) && html`
                 <p class="text muted">No comment or uncertainty recorded for this exchange.</p>`}
             </section>`}
-          ${shown === "results" && html`
-          <section>
-            <h4>Per ${unit(info.unit)} of ${info.reference_product}</h4>
-            <table class="kv">
-              <tr><th>Cumulative</th><td class="impact">${fmt(info.cumulative_per_unit)} ${unitPer}</td></tr>
-              <tr><th>Direct</th><td class="impact">${fmt(info.direct_per_unit)} ${unitPer}${info.cumulative_per_unit ? ` (${pct(info.direct_per_unit / info.cumulative_per_unit)} of cumulative)` : ""}</td></tr>
-            </table>
-            ${!exchanges?.available && info.direct_flows.length > 0 && html`
-              <table class="flows">
-                <thead><tr><th>Main direct emissions (${methodLabel(methodInfo)})</th><th class="num">${unitPer}</th><th class="num">share</th></tr></thead>
-                <tbody>${info.direct_flows.map((f) => html`
-                  <tr><td>${f.name} <span class="muted">${f.categories.join(" / ")}</span></td>
-                      <td class="num">${fmt(f.impact)}</td><td class="num">${pct(directTotal ? f.impact / directTotal : 0)}</td></tr>`)}
-                </tbody>
-              </table>`}
-          </section>`}
           ${shown === "exchanges" && sections.map(([key, title, items, products]) => html`
             <${ExchangeTable} key=${`${key}-${target.index}`} title=${title} items=${items}
               cumulative=${info.cumulative_per_unit} unitPer=${unitPer}
-              onOpen=${products ? onOpen : null} onFlow=${products ? null : (flow, ev) => onFlow(flow, target.index, ev)}
+              onActivity=${products ? openActivity : null} onExchange=${(e) => openExchange(e.index, { index: target.index, name: info.name, location: info.location })}
+              onFlow=${products ? null : (flow) => follow({ flow, activities: [target.index] })}
               locked=${locked} onAmount=${(e, text) => (e.own ? own((dr) => { productOfProcess(dr, info.code).amount = text; }) : own(patchExchange(e.input, e.amount, text)))} />`)}
           ${shown === "users" && users && html`
             <section>
@@ -2629,13 +2745,13 @@ function InfoPopup({ target, method, methodInfo, rootImpact, rowsById, onClose, 
               ${users.count === 0 ? html`<p class="text muted">No activity in the database uses this product.</p>` : html`
                 <table class="flows users">
                   <thead><tr>
-                    <th>Activity <span class="muted">· ▸ for the activities using it, click for its details</span></th>
+                    <th>Activity <span class="muted">· Space: details, c: its exchange, Enter: ▸ the activities using it</span></th>
                     <th class="num" title=${`${unit(info.unit)} ${users.waste ? "of waste" : ""} per unit of the activity's product`}>per unit</th>
                     ${root && html`<th class="num" title="Amount going to this activity in the supply chain of the functional unit">in this tree</th><th class="num">share</th><th></th>`}
                   </tr></thead>
                   <tbody>${users.users.map((u) => html`
                     <${UserRow} key=${u.index} user=${u} inputUnit=${unit(info.unit)} root=${root} amount=${amount} method=${method}
-                      ancestors=${[target.index]} depth=${0} onOpen=${onOpen} onGoTo=${(index) => { onGoTo(index); onClose(); }} />`)}
+                      ancestors=${[target.index]} depth=${0} onOpen=${openActivity} onExchange=${openExchange} onGoTo=${(index) => { onGoTo(index); onClose(); }} />`)}
                   </tbody>
                 </table>
                 ${users.count > users.users.length && html`
@@ -2646,31 +2762,25 @@ function InfoPopup({ target, method, methodInfo, rootImpact, rowsById, onClose, 
             <h4>Alternative suppliers · ${alternatives.count} ${alternatives.count === 1 ? "activity" : "activities"} making ${alternatives.product}</h4>
             <p class="note">
               Cumulative impact per ${unit(alternatives.unit)} of ${alternatives.product}, lowest first.
-              ${replaceable ? "Use instead puts that activity in place of this input (same amount, its own supply chain) in the tree."
-                : "Open the pop-up of an input in the tree to use one of them in its place."}
             </p>
             <table class="flows alternatives">
               <thead><tr>
-                <th>Activity <span class="muted">· click for its details</span></th>
+                <th>Activity <span class="muted">· Space: details</span></th>
                 <th class="num" title=${`${methodInfo.unit} per ${unit(alternatives.unit)} of ${alternatives.product}`}>${methodInfo.unit} per ${unit(alternatives.unit)}</th>
                 <th class="num">vs. current</th>
-                ${replaceable && html`<th></th>`}
               </tr></thead>
               <tbody>
                 <tr class="current">
                   <td class="user">${alternatives.current.name} <span class="loc-chip">${alternatives.current.location}</span> <span class="muted">current</span></td>
                   <td class="num">${fmt(alternatives.current.per_unit)}</td><td class="num"></td>
-                  ${replaceable && html`<td></td>`}
                 </tr>
                 ${alternatives.alternatives.map((a) => html`
-                  <tr key=${a.index}>
-                    <td class="user"><a href="#" onClick=${(e) => { e.preventDefault(); onOpen(a.index); }}>${a.name}</a>
+                  <tr key=${a.index} data-nav tabindex="-1"
+                      onKeyDown=${(e) => { if (e.key === " " && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); e.stopPropagation(); openActivity(a.index); } }}>
+                    <td class="user"><a href="#" onClick=${(e) => { e.preventDefault(); openActivity(a.index); }}>${a.name}</a>
                       <span class="loc-chip">${a.location}</span></td>
                     <td class="num">${fmt(a.per_unit)}</td>
                     <td class="num">${a.relative === null ? "" : `${a.relative > 0 ? "+" : ""}${pct(a.relative)}`}</td>
-                    ${replaceable && html`<td><button class="chip" disabled=${takenBy(a.index)}
-                      title=${takenBy(a.index) ? "Already an input of this activity" : "Put this activity in place of this input"}
-                      onClick=${() => { onReplace(row, a.index); onClose(); }}>use instead</button></td>`}
                   </tr>`)}
               </tbody>
             </table>
@@ -2708,17 +2818,14 @@ function InfoPopup({ target, method, methodInfo, rootImpact, rowsById, onClose, 
             </table>
           </section>`}
         </div>
-        <div class="info-actions">
+        ${!exchange && html`<div class="info-actions">
           <button onClick=${() => { onUseAsRoot(info); onClose(); }}>Use as functional unit</button>
-          <button onClick=${() => { onOpenTab(info); onClose(); }} title="Open this activity as the functional unit of a new tab">Open in new tab</button>
-          ${alternatives && !target.direct && html`<button onClick=${() => setTab("alternatives")}
-            title="Other activities producing the same product, with their impact per unit: use one in place of this input in the tree">Alternative suppliers</button>`}
-          ${row && movable(row) && html`<button onClick=${() => { onMoveToOthers([row.id]); onClose(); }}>Move to others</button>`}
+          <button onClick=${() => { onOpenTab(info); onClose(); }} title="Open this activity as the functional unit of a new tab (or drag the pop-up by its header to a tab list or the edge of a pane)">Open in new tab</button>
           ${ctx.editing && ctx.origin && html`<button class="primary" disabled=${locked}
             title=${locked ? "Its database is locked: unlock it in Load database" : "Open the form of this process: the change is staged, then applied with the others"}
             onClick=${() => { ctx.openForm({ edit: { database: info.database, code: info.code } }); onClose(); }}>Edit</button>`}
-        </div>`}
-    </div>`;
+        </div>`}`}
+    <//>`;
 }
 
 // ---------------------------------------------------------------- chart row naming
@@ -3560,19 +3667,22 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
   const [cutoff, setCutoff] = useState(1);
   const [cutoffBasis, setCutoffBasis] = useState("parent");
   const [undo, setUndo] = useState(null);
-  const [infoTarget, setInfoTarget] = useState(null);
-  // Pop-ups visited by following links inside the open one (back button / Backspace);
-  // opening a pop-up from outside, or closing it, starts over
-  const [infoHistory, setInfoHistory] = useState([]);
-  useEffect(() => { setInfoHistory([]); }, [infoTarget?.x, infoTarget?.y, !infoTarget]);
-  const followInfo = (next) => {
-    setInfoHistory([...infoHistory, infoTarget]);
-    setInfoTarget({ ...next, x: infoTarget.x, y: infoTarget.y });
-  };
-  const backInfo = infoHistory.length ? () => {
-    setInfoTarget(infoHistory[infoHistory.length - 1]);
-    setInfoHistory(infoHistory.slice(0, -1));
-  } : null;
+  // Pop-ups: { key, target, history, pinned, rect }. At most one is not pinned: opening a pop-up
+  // from outside replaces it, and a click outside or Esc closes it. Pinned ones stay open.
+  // ``history``: the targets visited by following links inside the pop-up (back button /
+  // Backspace); opening a pop-up from outside, or closing it, starts over. ``rect``: where it was
+  // dragged or resized to (null: at the click).
+  const [popups, setPopups] = useState([]);
+  const infoTarget = popups.find((p) => !p.pinned)?.target;
+  const updatePopup = (key, change) => setPopups((ps) => ps.map((p) => (p.key === key ? { ...p, ...change(p) } : p)));
+  const openInfo = (target) => setPopups((ps) => [...ps.filter((p) => p.pinned), { key: newId("i"), target, history: [], pinned: false, rect: null }]);
+  // Without a key: the pop-up that is not pinned
+  const closeInfo = (key) => setPopups((ps) => ps.filter((p) => (key ? p.key !== key : p.pinned)));
+  const pinInfo = (key) => setPopups((ps) => (ps.find((p) => p.key === key)?.pinned
+    ? ps.filter((p) => p.pinned || p.key === key).map((p) => (p.key === key ? { ...p, pinned: false } : p))
+    : ps.map((p) => (p.key === key ? { ...p, pinned: true } : p))));
+  const followInfo = (key, next) => updatePopup(key, (p) => ({ history: [...p.history, p.target], target: { ...next, x: p.target.x, y: p.target.y } }));
+  const backInfo = (p) => p.history.length ? () => updatePopup(p.key, (q) => ({ target: q.history[q.history.length - 1], history: q.history.slice(0, -1) })) : null;
   const [focus, setFocus] = useState(null);
   const focusTimer = useRef(null);
   const [expanded, setExpanded] = useState(new Set());
@@ -3739,7 +3849,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
     setLabels({});
     if (view.groupProducts) setView({ ...view, groupProducts: false });
     setSelection(new Set());
-    setInfoTarget(null);
+    closeInfo();
   }
   // Undo: each change of the tree, groups, pins, names and settings is a step. Expanding and
   // collapsing are no steps of their own: they are kept with the step they fall in. A functional
@@ -3842,12 +3952,8 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
     setMerges(merges.filter((m) => !(m.scope === ownerOf(row) && m.products.length === row.products.length
       && m.products.every((p) => row.products.includes(p)))));
   }
-  // An input supplied by another activity (Alternative suppliers, in the pop-up). Keyed by the
-  // input's row id without the replacement, so that a second replacement replaces the first.
-  function replaceInput(row, index) {
-    setUndo({ message: `Supplier of ${rowNames(row, rowsById, view).main} replaced.` });
-    setSubstitutions({ ...substitutions, [row.replaced || row.id]: index });
-  }
+  // An input supplied by another activity (a saved view). Keyed by the input's row id without
+  // the replacement.
   function revertInput(row) {
     const rest = { ...substitutions };
     delete rest[row.replaced];
@@ -3880,18 +3986,19 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
     if (!additive) anchor.current = row.id;
   }
   // ``target``: { flow, flows?, activities? } (activities whose exchange of the flow is shown)
-  const showFlowInfo = (target, e) => { e.preventDefault(); setInfoTarget({ ...target, x: e.clientX, y: e.clientY }); };
+  const showFlowInfo = (target, e) => { e.preventDefault(); openInfo({ ...target, x: e.clientX, y: e.clientY }); };
   // The pop-up of a row: a process (or direct emissions: its emitter), a flow, or the
   // members of a bundle (others, merged, group); null when there is nothing to show
-  function infoTargetOf(row) {
+  // ``exchange``: a process's exchange (comment, uncertainty) rather than its activity
+  function infoTargetOf(row, exchange = false) {
     if (row.kind === "rest" || row.kind === "merged" || row.kind === "group") return { bundle: row.id };
     if (row.kind === "flow") return { flow: row.flow.index, activities: (row.emitters || []).map((m) => m.index) };
-    return row.meta ? { index: row.meta.index, row, direct: row.kind === "direct" } : null;
+    return row.meta ? { index: row.meta.index, row, direct: row.kind === "direct", exchange } : null;
   }
-  function showInfo(row, e) {
+  function showInfo(row, e, exchange = false) {
     e.preventDefault();
-    const target = infoTargetOf(row);
-    if (target) setInfoTarget({ ...target, x: e.clientX, y: e.clientY });
+    const target = infoTargetOf(row, exchange);
+    if (target) openInfo({ ...target, x: e.clientX, y: e.clientY });
   }
   // A visible row, or one bundled in an others row (bundle pop-ups follow the rows)
   const findRow = (rowId) => rowsById.get(rowId) || data.rows.flatMap((r) => r.members || []).find((m) => m.id === rowId);
@@ -3947,9 +4054,11 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
     setSelection(new Set());
   }
   const movableSelection = selectedRows.filter(movable);
-  const bundle = infoTarget?.bundle ? findRow(infoTarget.bundle) : null;
   // A bundle that disappeared (all its members shown, unmerged, ungrouped) closes its pop-up
-  useEffect(() => { if (infoTarget?.bundle && !bundle) setInfoTarget(null); }, [infoTarget, bundle]);
+  useEffect(() => {
+    const live = (p) => !p.target.bundle || findRow(p.target.bundle);
+    setPopups((ps) => (ps.every(live) ? ps : ps.filter(live)));
+  }, [popups, data]);
   const activeRules = rules.filter((r) => !r.disabled).length;
   const manualRuleFor = (groupRow) => rules.findIndex((r) => r.predicate && !r.disabled && r.scope === ownerOf(groupRow) && `${ownerOf(groupRow)}/g:${r.name}` === groupRow.id);
   // A group that can be ungrouped: one of a rule, or one of "group by product"
@@ -4030,7 +4139,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
       cursor.current = { id: r.id, index: rows.indexOf(r) };
       anchor.current = r.id;
       setSelection(new Set([r.id]));
-      setInfoTarget(null);
+      closeInfo();
     };
     // After g / m the new group or merged row is selected, so that the same key undoes it
     const selectNew = (rowId) => {
@@ -4075,10 +4184,12 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
         if (row.expandable && row.expanded) toggle(row);
         else if (rowsById.has(row.parent)) moveTo(rowsById.get(row.parent));
         return true;
-      case " ": {
-        if (infoTarget) { setInfoTarget(null); return true; }
+      case " ":
+      case "c": {
+        // Space: the row's pop-up (the activity); c: its exchange (comment, uncertainty)
+        if (infoTarget) { closeInfo(); return true; }
         const el = treeSection.current?.querySelector(`[data-id="${CSS.escape(row.id)}"]`)?.getBoundingClientRect();
-        showInfo(row, { preventDefault() {}, clientX: el ? el.left + 40 : 200, clientY: el ? el.bottom : 200 });
+        showInfo(row, { preventDefault() {}, clientX: el ? el.left + 40 : 200, clientY: el ? el.bottom : 200 }, key === "c");
         return true;
       }
       case "o":
@@ -4117,7 +4228,8 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
   treeKey.current = onTreeKey;
   useEffect(() => {
     const onKey = (e) => {
-      if (keyboardOwner !== id || e.target.closest?.("input, textarea, select, [contenteditable]")) return;
+      // A pop-up that has the focus has its own keys
+      if (keyboardOwner !== id || e.target.closest?.("input, textarea, select, [contenteditable], .info-popup")) return;
       // A tree button clicked last (▸, a chip) would also react to Space
       if (document.activeElement?.tagName === "BUTTON" && treeSection.current?.contains(document.activeElement)) document.activeElement.blur();
       if (treeKey.current(e)) e.preventDefault();
@@ -4140,6 +4252,32 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
   }, [selection, data]);
 
   const methodInfo = info.methods[method];
+  // One pop-up: of a bundle (others, merged, group), an elementary flow, or a process
+  function renderPopup(p) {
+    const t = p.target;
+    const bundle = t.bundle ? findRow(t.bundle) : null;
+    const win = { rect: p.rect, pinned: p.pinned, onPin: () => pinInfo(p.key), onRect: (rect) => updatePopup(p.key, () => ({ rect })) };
+    const follow = (next) => followInfo(p.key, next);
+    const common = { key: p.key, target: t, win, onClose: () => closeInfo(p.key), onBack: backInfo(p) };
+    if (bundle?.kind === "rest") return html`<${OthersPopup} ...${common} rest=${bundle} rows=${data.rows} rootImpact=${rootImpact}
+        cutoff=${cutoff} cutoffBasis=${cutoffBasis} pinned=${pinned} setPinned=${setPinned} others=${others} setOthers=${setOthers} view=${view}
+        onMember=${(r) => { const next = infoTargetOf(r); if (next) follow(next); }} />`;
+    if (bundle?.parts) return html`<${BundlePopup} ...${common} row=${bundle} methodInfo=${methodInfo} rootImpact=${rootImpact}
+        actions=${bundle.kind === "merged"
+          ? !bundle.by_rule && !editing && html`<button onClick=${() => unmerge(bundle)} title="Split back into the original processes">Unmerge</button>`
+          : html`
+            ${bundle.products && !editing && html`<button onClick=${() => mergeRows([bundle])} title="Merge into one process whose inventory is the union of the members'">Merge</button>`}
+            ${ungroupable(bundle) && html`<button onClick=${() => ungroup(bundle)}>Ungroup</button>`}`}
+        onPart=${(part) => follow(part.flow !== undefined
+          ? { flow: part.flow, activities: (bundle.emitters || []).map((m) => m.index) }
+          : { index: part.index, row: null, parents: suppliedTo(bundle, rowsById) })} />`;
+    if (t.flow !== undefined) return html`<${FlowInfoPopup} ...${common} method=${method} methods=${info.methods}
+        onOpen=${(index) => follow({ index, row: null })} />`;
+    if (t.bundle) return null;
+    return html`<${InfoPopup} ...${common} method=${method} methodInfo=${methodInfo} rootImpact=${rootImpact} rowsById=${rowsById}
+        onUseAsRoot=${selectRoot} onOpenTab=${(r, place) => onOpenTab(id, r, place)} root=${root} amount=${amount}
+        onFollow=${follow} onGoTo=${(index) => goTo(index)} />`;
+  }
   return html`
     <div class="fu-view" ref=${box} style=${{ display: visible ? "" : "none" }}>
       <header class="fu-header">
@@ -4198,27 +4336,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
             : html`<${TreeGraph} rows=${data.rows} rootImpact=${rootImpact} shareBasis=${shareBasisOf(cutoffBasis)} selection=${selection} onToggle=${toggle} onSelect=${select}
                 onUngroup=${ungroup} onRegroup=${regroup} ungroupable=${ungroupable} onMergeGroup=${(r) => mergeRows([r])} onUnpin=${unpin} onPin=${pin} onMoveToOthers=${moveToOthers} onInfo=${showInfo} onUnmerge=${unmerge} view=${view}
                 orientation=${orientation} setOrientation=${setOrientation} cycles=${cycles} setCycles=${setCycles} sankey=${display === "sankey"} focus=${focus} />`}
-          ${bundle?.kind === "rest" && html`<${OthersPopup} target=${infoTarget} rest=${bundle} rows=${data.rows} rootImpact=${rootImpact}
-              cutoff=${cutoff} cutoffBasis=${cutoffBasis} pinned=${pinned} setPinned=${setPinned} others=${others} setOthers=${setOthers}
-              view=${view} onClose=${() => setInfoTarget(null)} onBack=${backInfo}
-              onMember=${(r) => { const t = infoTargetOf(r); if (t) followInfo(t); }} />`}
-          ${bundle && bundle.kind !== "rest" && bundle.parts && html`<${BundlePopup} target=${infoTarget} row=${bundle}
-              methodInfo=${methodInfo} rootImpact=${rootImpact} onClose=${() => setInfoTarget(null)} onBack=${backInfo}
-              actions=${bundle.kind === "merged"
-                ? !bundle.by_rule && !editing && html`<button onClick=${() => unmerge(bundle)} title="Split back into the original processes">Unmerge</button>`
-                : html`
-                  ${bundle.products && !editing && html`<button onClick=${() => mergeRows([bundle])} title="Merge into one process whose inventory is the union of the members'">Merge</button>`}
-                  ${ungroupable(bundle) && html`<button onClick=${() => ungroup(bundle)}>Ungroup</button>`}`}
-              onPart=${(p) => followInfo(p.flow !== undefined
-                ? { flow: p.flow, activities: (bundle.emitters || []).map((m) => m.index) }
-                : { index: p.index, row: null, parents: suppliedTo(bundle, rowsById) })} />`}
-          ${infoTarget?.flow !== undefined && html`<${FlowInfoPopup} target=${infoTarget} method=${method} methods=${info.methods}
-              onClose=${() => setInfoTarget(null)} onOpen=${(index) => followInfo({ index, row: null })} onBack=${backInfo} />`}
-          ${infoTarget && infoTarget.flow === undefined && !infoTarget.bundle && html`<${InfoPopup} target=${infoTarget} method=${method} methodInfo=${methodInfo}
-              rootImpact=${rootImpact} rowsById=${rowsById} onClose=${() => setInfoTarget(null)} onReplace=${editing ? null : replaceInput}
-              onUseAsRoot=${selectRoot} onOpenTab=${(r) => onOpenTab(id, r)} onMoveToOthers=${moveToOthers} root=${root} amount=${amount}
-              onOpen=${(index) => followInfo({ ...infoTarget, index, row: null, direct: false, parents: null })} onGoTo=${(index) => goTo(index)}
-              onFlow=${(flow, activity) => followInfo({ flow, activities: [activity] })} onBack=${backInfo} />`}
+          ${popups.map(renderPopup)}
           <div class="toolbar"><span class="hint">
             ${root ? `Total: ${fmt(rootImpact)} ${methodInfo.unit} — ${methodLabel(methodInfo)}` : ""}
           </span>
@@ -4240,12 +4358,12 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
           ${tab === "chart" && data.rows.length > 0 && html`<${ChartPanel} data=${data} info=${info} method=${method}
               chartMethods=${chartMethods} setChartMethods=${setChartMethods} view=${view} />`}
           ${tab === "flows" && root && html`<${FlowPanel} info=${info} root=${root} amount=${amount} method=${method}
-              onLocate=${goTo} onInfo=${(index, x, y) => setInfoTarget({ index, row: null, x, y })} onFlowInfo=${showFlowInfo}
+              onLocate=${goTo} onInfo=${(index, x, y) => openInfo({ index, row: null, x, y })} onFlowInfo=${showFlowInfo}
               rules=${rules} setRules=${setRules} />`}
           ${tab === "groups" && html`<${GroupPanel} info=${info} rules=${rules} setRules=${setRules}
               selectedRow=${selectedRows.length === 1 ? selectedRows[0] : null} />`}
           ${tab === "global" && html`<${GlobalPanel} info=${info} root=${root} amount=${amount} method=${method} rules=${rules}
-              onLocate=${goTo} onInfo=${(index, x, y) => setInfoTarget({ index, row: null, x, y })} />`}
+              onLocate=${goTo} onInfo=${(index, x, y) => openInfo({ index, row: null, x, y })} />`}
         </section>
       <//>
     </div>`;
@@ -4352,7 +4470,7 @@ function PaneView({ pane, focused, multiple, titles, dragging, drop, setDrop, ac
   const title = (id) => titles[id] ? titles[id].name : "New tab";
   return html`
     <div class="pane ${focused && multiple ? "focused" : ""}" onMouseDownCapture=${() => actions.focus(pane.id)}>
-      <div class="pane-tabs" role="tablist" onDragOver=${over("center")} onDrop=${dropHere}>
+      <div class="pane-tabs" role="tablist" data-pane=${pane.id} onDragOver=${over("center")} onDrop=${dropHere}>
         ${pane.tabs.map((id) => html`
           <div key=${id} role="tab" aria-selected=${id === pane.active} draggable="true"
                class="pane-tab ${id === pane.active ? "active" : ""} ${drop?.pane === pane.id && drop.before === id ? "drop-before" : ""}"
@@ -4374,7 +4492,7 @@ function PaneView({ pane, focused, multiple, titles, dragging, drop, setDrop, ac
         <button class="icon" onClick=${() => actions.split(pane.id, "bottom")} title="Split down: open a copy of this tab below"
           aria-label="Split down"><${SplitIcon} dir="column" /></button>
       </div>
-      <div class="pane-body" ref=${body} onDragOver=${over(zoneAt)} onDrop=${dropHere}
+      <div class="pane-body" ref=${body} data-pane=${pane.id} onDragOver=${over(zoneAt)} onDrop=${dropHere}
            onDragLeave=${(e) => !body.current.contains(e.relatedTarget) && drop?.pane === pane.id && setDrop(null)}>
         ${children}
         ${dragging && drop?.pane === pane.id && !drop.before && html`<div class="drop-zone ${drop.zone}"></div>`}
@@ -4620,7 +4738,7 @@ function App() {
       ${pane.tabs.map((id) => html`
         <${FUView} key=${id} id=${id} info=${info} initial=${initialOf(id)} visible=${id === pane.active}
           onSave=${onSave} onTitle=${onTitle} onCollapseSide=${() => setSideOpen(false)}
-          onOpenTab=${(from, root) => openTab(paneOfTab(layout, from).id, { inherit: states.current[from], root })} />`)}
+          onOpenTab=${(from, root, place) => openTab(place?.pane ?? paneOfTab(layout, from).id, { inherit: states.current[from], root }, place?.zone)} />`)}
     <//>`;
   return html`
     <${EditorContext.Provider} value=${editor}>
