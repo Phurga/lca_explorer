@@ -1689,7 +1689,7 @@ function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onU
             const [product, name, location] = r.kind === "process" ? r.label.split(" | ") : [r.label];
             return html`
               <${Fragment} key=${r.id}>
-              ${heading && html`<tr class="section"><td colspan=${span}><span style=${{ paddingLeft: `${r.depth * 16 + 18}px` }}>${heading}</span></td></tr>`}
+              ${heading && html`<tr class="section"><td colspan=${span} style=${{ "--depth": r.depth }}><span style=${{ paddingLeft: `${r.depth * 16 + 18}px` }}>${heading}</span></td></tr>`}
               <tr data-id=${r.id} class="${r.kind} ${selection.has(r.id) ? "selected" : ""} ${focus === r.id ? "focus" : ""} ${colors.has(r.id) ? "in-group" : ""}"
                   style=${colors.has(r.id) ? { "--group-color": colors.get(r.id) } : null}
                   onClick=${(e) => onSelect(r, e.ctrlKey || e.metaKey || e.shiftKey)}
@@ -2337,7 +2337,9 @@ function ViewBar({ view, setView, example, embedded }) {
         <button class=${view.groupProducts ? "primary" : ""} onClick=${() => set({ groupProducts: !view.groupProducts })}
           title="Bundle sibling inputs of the same product (other regions or routes) under one row">Group by product</button>
         <button class=${view.splitByType ? "primary" : ""} onClick=${() => set({ splitByType: !view.splitByType })}
-          title="Order what is below each row in the sections of a SimaPro process: resources, materials / fuels, electricity / heat, emissions, waste to treatment">Split by flow type</button>
+          title="Order what is below each row in sections, as in the form of a new process: inputs from technosphere, inputs from nature, emissions, direct emissions, waste to treatment">Split by flow type</button>
+        <button class=${view.hideOthers ? "primary" : ""} onClick=${() => set({ hideOthers: !view.hideOthers })}
+          title="Hide the others rows (what the cut-off or a move to others took out) from the list, the tree and the Sankey; the chart keeps them">Hide others</button>
         ${!embedded && html`<span class="segmented" role="group" aria-label="Row names">
           ${[["full", "Full names"], ["short", "Short names"], ["custom", "Custom name"]].map(([id, label]) => html`
             <button class=${view.naming === id ? "primary" : ""} onClick=${() => set({ naming: id })}>${label}</button>`)}
@@ -3929,6 +3931,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
   const [view, setView] = useState(() => ({
     naming: embedded ? "full" : loadPreference("naming", "full"),
     splitByType: embedded || loadPreference("splitByType", "0") === "1",  // a pop-up lists its exchanges by section
+    hideOthers: !embedded && loadPreference("hideOthers", "0") === "1",
     recipe: {
       main: loadPreference("recipeMain", DEFAULT_RECIPE.main), secondary: loadPreference("recipeSecondary", DEFAULT_RECIPE.secondary),
       flowMain: loadPreference("recipeFlowMain", DEFAULT_RECIPE.flowMain), flowSecondary: loadPreference("recipeFlowSecondary", DEFAULT_RECIPE.flowSecondary),
@@ -3946,6 +3949,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
     if (embedded) return;  // the preferences are the main view's
     savePreference("naming", view.naming);
     savePreference("splitByType", view.splitByType ? "1" : "0");
+    savePreference("hideOthers", view.hideOthers ? "1" : "0");
     savePreference("recipeMain", view.recipe.main);
     savePreference("recipeSecondary", view.recipe.secondary);
     savePreference("recipeFlowMain", view.recipe.flowMain ?? DEFAULT_RECIPE.flowMain);
@@ -3964,10 +3968,13 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
   // so that the tree, the pop-ups and the chart all read them
   const [labels, setLabels] = useState({});
   const [renaming, setRenaming] = useState(null);
-  const data = useMemo(() => {
+  const allData = useMemo(() => {
     const rows = withLabels(rawData.rows, editing ? {} : labels);
     return { ...rawData, rows: view.splitByType ? splitRows(rows) : rows };
   }, [rawData, labels, editing, view.splitByType]);
+  // Hide others: the others rows are left out of the list, the tree and the Sankey (the chart keeps them)
+  const data = useMemo(() => (view.hideOthers ? { ...allData, rows: allData.rows.filter((r) => r.kind !== "rest") } : allData),
+    [allData, view.hideOthers]);
   const [error, setError] = useState(null);
   const [tab, setTab] = useState("chart");
   const [groupName, setGroupName] = useState("");
@@ -4332,7 +4339,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
       model: { title: info.title, activities: info.activities },
       root, amount, method: info.methods[method].name, chartMethods: chartMethods.map((k) => info.methods[k].name),
       cutoff: +cutoffValue(cutoff, cutoffBasis).toFixed(8), cutoffBasis, expanded: [...expanded], rules, pinned: [...pinned], others: [...others], merges, ungrouped: [...ungrouped], substitutions, labels,
-      display: { naming: view.naming, recipe: view.recipe, groupProducts: view.groupProducts, splitByType: view.splitByType, columns: view.columns, groupColors: view.groupColors, colorBy: view.colorBy, ruleColors: view.ruleColors },
+      display: { naming: view.naming, recipe: view.recipe, groupProducts: view.groupProducts, splitByType: view.splitByType, hideOthers: view.hideOthers, columns: view.columns, groupColors: view.groupColors, colorBy: view.colorBy, ruleColors: view.ruleColors },
     };
   }
   function exportView() {
@@ -4630,13 +4637,9 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
             ${[["chart", "Process contribution"], ["flows", "Flow contribution"], ["groups", `Group rules${activeRules ? ` (${activeRules})` : ""}`], ["global", "Group contributions"]].map(([key, label]) => html`
               <button role="tab" class=${tab === key ? "active" : ""} onClick=${() => setTab(key)}>${label}</button>`)}
             <span class="spacer"></span>
-            <button class=${`color-toggle ${view.groupColors ? "on" : ""}`} aria-pressed=${view.groupColors}
-              onClick=${() => setView({ ...view, groupColors: !view.groupColors })}
-              title=${view.groupColors ? "Hide the group colours (tree, charts, rules)" : "Show the group colours (tree, charts, rules)"}
-              aria-label="Group colours"></button>
             <button class="collapse-side" onClick=${onCollapseSide} title="Hide the side panel" aria-label="Hide the side panel">»</button>
           </div>
-          ${tab === "chart" && data.rows.length > 0 && html`<${ChartPanel} data=${data} info=${info} method=${method}
+          ${tab === "chart" && allData.rows.length > 0 && html`<${ChartPanel} data=${allData} info=${info} method=${method}
               chartMethods=${chartMethods} setChartMethods=${setChartMethods} view=${view} />`}
           ${tab === "flows" && root && html`<${FlowPanel} info=${info} root=${root} amount=${amount} method=${method}
               onLocate=${goTo} onInfo=${(index, x, y) => openInfo({ index, row: null, x, y })} onFlowInfo=${showFlowInfo}

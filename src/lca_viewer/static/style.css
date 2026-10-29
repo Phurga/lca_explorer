@@ -252,8 +252,6 @@ section { display: flex; flex-direction: column; min-height: 0; border-right: 1p
 .rules li input.swatch::-webkit-color-swatch { border: none; border-radius: 4px; }
 .rules li input.swatch::-moz-color-swatch { border: none; border-radius: 4px; }
 /* Discreet switch of the group colours, in the side panel's tab bar */
-.tabs button.color-toggle { width: 14px; height: 14px; min-width: 0; padding: 0; margin: 0 4px; align-self: center; border-radius: 50%; border: 1px solid var(--muted); background: transparent; cursor: pointer; flex: none; }
-.tabs button.color-toggle.on { border-color: transparent; background: conic-gradient(#d9534f, #e8a33d, #5cb85c, #3d8fe8, #8c5ce0, #d9534f); }
 .rules li.dragging { opacity: 0.4; }
 .rules li.drop-before { box-shadow: 0 -3px 0 var(--accent); }
 .rules li.drop-after { box-shadow: 0 3px 0 var(--accent); }
@@ -449,8 +447,9 @@ header { gap: 10px; }
 .fu-view.embedded .tree table { min-width: 460px; }
 .info-body .tree td, .info-body .tree th { padding: 3px 8px; vertical-align: middle; }
 /* Split by flow type: the heading of a section of the list */
-.tree tr.section td { background: var(--bg); color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .03em; padding: 2px 8px; }
-.tree tr.section:hover td { background: var(--bg); }
+/* (only the colour is set: the nesting guides, a background image of the cell, run through the heading) */
+.tree tr.section td { background-color: var(--bg); color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .03em; padding: 2px 8px; }
+.tree tr.section:hover td { background-color: var(--bg); }
 /* Right-click on the list's headers: its columns */
 .column-menu { position: fixed; z-index: 90; min-width: 170px; padding: 4px 0; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 6px 20px rgba(0, 0, 0, .3); }
 .column-menu label { display: flex; align-items: center; gap: 8px; padding: 3px 12px; cursor: pointer; white-space: nowrap; }

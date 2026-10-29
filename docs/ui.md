@@ -263,7 +263,8 @@ API in `src/lca_viewer/server.py`.
 - **View bar** (under the toolbar): *Group by product*, *Split by flow type* (below each
   row, the rows in the sections of the form of a new process, as in the flow type colours, with a
   heading each: inputs from technosphere, inputs from nature, emissions, direct emissions, waste
-  to treatment, others; the order inside a section is kept), *Full / Short /
+  to treatment, others; the order inside a section is kept), *Hide others* (the others
+  rows, and their boxes in the tree view and the Sankey, are left out; the chart keeps them), *Full / Short /
   Custom* names, applied
   to the list, the tree view, the others panel and the chart; see
   [charts.md](charts.md); and the colours: *No colours*, *Group colours* or *Flow type colours*.
@@ -387,8 +388,7 @@ API in `src/lca_viewer/server.py`.
     another colour (right-click resets it). The groups of a rule carry it in
     the tree, graph and Sankey, and the bars of the *Process contribution*,
     *Flow contribution* (a substance in a named flow group) and *Group
-    contributions* charts; the round button at the right of the side panel's
-    tabs switches all group colours off and on. The view bar's *Flow type
+    contributions* charts; *No colours* in the view bar switches all colours off. *Flow type
     colours* colour the rows (list, tree view, Sankey and charts) by the kind of exchange instead:
     product (the root), technosphere input, waste (output to treatment),
     resource (input from nature), emission (output to nature) and direct
