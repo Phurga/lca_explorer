@@ -257,7 +257,7 @@ API in `src/lca_viewer/server.py`.
   in the tooltip or with **c**). `/api/rows` sends it as the row's `comment`.
 
   **Amounts** never show more than three digits, in the list, tree view, pop-ups and chart
-  tables: from 0.1 to 1000 as `0.101`, `1.00`, `123`; below and above in scientific notation
+  tables: from 0.01 to 1000 as `0.0101`, `1.00`, `123`; below and above in scientific notation
   (`5.29e-3`, `1.23e+3`), `fmtAmount` in `app.js`. Impacts keep `fmt`. The input of an edited
   amount always has the full value.
 

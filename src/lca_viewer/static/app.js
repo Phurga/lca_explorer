@@ -34,11 +34,11 @@ function fmt(x) {
   const a = Math.abs(x);
   return a >= 1e4 || a < 1e-3 ? x.toExponential(2) : x.toPrecision(3);
 }
-// An amount: three digits at most, so scientific notation below 0.1 and from 1000
+// An amount: three digits at most, so scientific notation below 0.01 and from 1000
 function fmtAmount(x) {
   if (x === 0) return "0";
   const a = Math.abs(x);
-  return a >= 1e3 || a < 0.1 ? x.toExponential(2) : x.toPrecision(3);
+  return a >= 1e3 || a < 0.01 ? x.toExponential(2) : x.toPrecision(3);
 }
 const pct = (x) => `${(x * 100).toFixed(1)}%`;
 const methodLabel = (m) => m.name.join(" | ");
