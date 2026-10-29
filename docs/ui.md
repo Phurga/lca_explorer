@@ -261,9 +261,9 @@ API in `src/lca_viewer/server.py`.
   row actions are in the selection bar and the pop-ups. Always a tree drawn
   left to right: the Cycles and orientation controls are hidden here.
 - **View bar** (under the toolbar): *Group by product*, *Split by flow type* (below each
-  row, the rows in the sections of a SimaPro process, with a heading each: resources, materials /
-  fuels, electricity / heat, direct exchanges with nature, emissions to air / water / soil, other
-  flows, waste to treatment, others; the order inside a section is kept), *Full / Short /
+  row, the rows in the sections of the form of a new process, as in the flow type colours, with a
+  heading each: inputs from technosphere, inputs from nature, emissions, direct emissions, waste
+  to treatment, others; the order inside a section is kept), *Full / Short /
   Custom* names, applied
   to the list, the tree view, the others panel and the chart; see
   [charts.md](charts.md); and the colours: *No colours*, *Group colours* or *Flow type colours*.

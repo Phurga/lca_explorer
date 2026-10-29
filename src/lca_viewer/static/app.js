@@ -178,28 +178,16 @@ function flowTypeOf(r) {
   if (part?.flow !== undefined) return fromNature(part.location) ? "resource" : "emission";
   return (r.kind === "process" ? r.waste : part?.waste) ? "waste" : "technosphere";
 }
-// "Split by flow type": below each row, the rows are in the order of a SimaPro process (inputs from nature, materials
-// and fuels, electricity and heat, emissions, waste to treatment), the list showing a heading for each section
+// "Split by flow type": below each row, the rows are in the sections of the form of a new process (and the types of the
+// flow type colours), the list showing a heading for each: inputs from technosphere, inputs from nature, emissions,
+// direct emissions, waste to treatment, others
 const SPLIT_SECTIONS = [
-  ["resource", "Resources"], ["material", "Materials / fuels"], ["energy", "Electricity / heat"],
-  ["direct", "Direct exchanges with nature"], ["air", "Emissions to air"], ["water", "Emissions to water"],
-  ["soil", "Emissions to soil"], ["other", "Other flows"], ["waste", "Waste to treatment"], ["rest", "Others"],
+  ["technosphere", "Inputs from technosphere"], ["resource", "Inputs from nature"], ["emission", "Emissions"],
+  ["direct", "Direct emissions"], ["waste", "Waste to treatment"], ["rest", "Others"],
 ];
 const SECTION_LABELS = Object.fromEntries(SPLIT_SECTIONS);
 const SECTION_RANK = Object.fromEntries(SPLIT_SECTIONS.map(([key], i) => [key, i]));
-function sectionOf(r) {
-  if (r.kind === "rest") return "rest";
-  if (r.kind === "direct") return "direct";
-  const part = r.parts?.[0];
-  const compartment = r.kind === "flow" ? r.flow.compartment : part?.flow !== undefined ? part.location : null;
-  if (compartment !== null) {
-    const c = String(compartment).toLowerCase();
-    return /resource/.test(c) ? "resource" : /\bair\b/.test(c) ? "air" : /water/.test(c) ? "water" : /soil/.test(c) ? "soil" : "other";
-  }
-  if (r.kind === "process" ? r.waste : part?.waste) return "waste";
-  const product = r.kind === "process" ? r.label.split(" | ")[0] : part?.reference_product || part?.name || "";
-  return /^(electricity|heat|steam|cooling)\b/i.test(product) ? "energy" : "material";
-}
+const sectionOf = (r) => (r.kind === "rest" ? "rest" : flowTypeOf(r));
 // The rows with the rows below each row ordered by section (the order inside a section is kept)
 function splitRows(rows) {
   const below = new Map();
