@@ -248,7 +248,9 @@ table.results td.num { text-align: right; font-family: var(--mono); }
 .segmented { display: inline-flex; }
 .segmented button { border-radius: 0; }
 .segmented button:first-child { border-radius: 6px 0 0 6px; }
-.segmented button:last-child { border-radius: 0 6px 6px 0; border-left: none; }
+.segmented button:last-child { border-radius: 0 6px 6px 0; }
+.segmented button + button { border-left: none; }
+.dataset-dialog .note { color: var(--muted); margin: 6px 0; padding-left: 0; list-style: none; }
 
 /* Tree graph */
 .graph { position: relative; flex: 1; min-height: 0; overflow: hidden; background: var(--bg); cursor: grab; touch-action: none; }

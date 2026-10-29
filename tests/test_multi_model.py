@@ -34,8 +34,8 @@ def wait(client, job):
 def test_each_model_has_its_own_api(two_models, tmp_path):
     client = TestClient(app_for(two_models, tmp_path))
     assert client.get("/api/databases").json() == [
-        {"key": "bread", "title": "Bread", "activities": 3},
-        {"key": "energy-system", "title": "Energy", "activities": 2},
+        {"key": "bread", "title": "Bread", "activities": 3, "source": None},
+        {"key": "energy-system", "title": "Energy", "activities": 2, "source": None},
     ]
     root = client.get("/", follow_redirects=False)
     assert root.status_code in (302, 307) and root.headers["location"] == "/db/bread/"
@@ -178,6 +178,12 @@ def test_brightway_builds_are_kept_per_folder_and_tell_what_changed(tmp_path, li
     job = wait(client, client.post("/api/load", json=body).json())
     assert job["status"] == "done" and job["key"] == "p-agb"
     assert models()["agb"] == {"key": "p-agb", "outdated": "changed since the model was built"}
+    # The page finds the project a loaded database was built from (to edit its datasets)
+    loaded = client.get("/api/databases").json()[0]["source"]
+    assert (loaded["brightway"], loaded["project"], loaded["database"]) == (str((tmp_path / "bw").resolve()), "p", "agb")
+    activity = client.get("/db/p-agb/api/activity/0").json()
+    assert set(activity) >= {"index", "name", "database", "code"}
+    assert client.get("/db/p-agb/api/activity/999").status_code == 404
     # Open, it is not rebuilt: its matrices in memory would not match the new files
     job = wait(client, client.post("/api/load", json={**body, "rebuild": True}).json())
     assert job["status"] == "failed" and "is open" in job["error"]

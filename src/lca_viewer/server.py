@@ -163,7 +163,7 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
     default_method = _default_method(model)
     layout = _layout(model)
 
-    META_FIELDS = ["name", "reference_product", "location", "unit", "activity_type", "isic", "cpc", "database"]
+    META_FIELDS = ["name", "reference_product", "location", "unit", "activity_type", "isic", "cpc", "database", "code"]
     rows_by_product = model.A.tocsr()  # row j: the activities using product j
     supplies: dict[tuple[int, float], np.ndarray] = {}
 
@@ -185,7 +185,9 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
     def describe(i: int) -> dict:
         r = activities.iloc[i]
         return {"index": int(i), "name": r["name"], "reference_product": r["reference_product"],
-                "location": r["location"], "unit": r["unit"]}
+                "location": r["location"], "unit": r["unit"],
+                # Its Brightway node, for models built from a project (to edit the dataset)
+                "database": r.get("database"), "code": r.get("code")}
 
     @app.get("/api/info")
     def info():
@@ -653,7 +655,10 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
     lock = threading.Lock()
 
     def listing() -> list[dict]:
-        return [{"key": m["key"], "title": m["title"], "activities": m["activities"]} for m in loaded.values()]
+        """Databases loaded, with the Brightway project each was built from (``source``), if any."""
+        origin = {Path(m["path"]).resolve(): m.get("source") for m in sources.catalog(data)}
+        return [{"key": m["key"], "title": m["title"], "activities": m["activities"], "source": origin.get(m["path"])}
+                for m in loaded.values()]
 
     def loaded_key(path) -> str | None:
         path = Path(path).resolve()
@@ -1187,9 +1192,17 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
         except (FileNotFoundError, ValueError) as e:
             raise HTTPException(404, str(e))
 
+    @app.get("/api/brightway/dataset")
+    def read_dataset(folder: str, project: str, database: str, code: str):
+        """A process as the dataset editor enters it, to copy or edit it."""
+        try:
+            return sources.read_dataset(folder_of(folder), project, database, code)
+        except (FileNotFoundError, ValueError) as e:
+            raise HTTPException(404, str(e))
+
     @app.post("/api/brightway/dataset")
     def write_dataset(req: DatasetRequest):
-        """Write a new dataset into a project (``lca-viewer dataset``)."""
+        """Write a new dataset into a project, or replace one written from the app (``lca-viewer dataset``)."""
         import json
         import tempfile
 
@@ -1205,7 +1218,8 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
             finally:
                 Path(f.name).unlink(missing_ok=True)
             result = next((json.loads(line[7:]) for line in reversed(lines) if line.startswith("RESULT ")), {})
-            return {"result": result, "message": f"{req.spec['process']['name']} saved in {result.get('database')}"}
+            deleted = [line for line in lines if line.startswith("Deleted the product")]
+            return {"result": result, "message": " ".join([f"{req.spec['process']['name']} saved in {result.get('database')}.", *deleted])}
 
         name = (req.spec.get("process") or {}).get("name") or "dataset"
         return start(name, ("dataset", folder, req.project, name, uuid.uuid4().hex), work)
