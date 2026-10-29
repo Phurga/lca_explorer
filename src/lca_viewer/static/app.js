@@ -37,6 +37,8 @@ function fmt(x) {
 const pct = (x) => `${(x * 100).toFixed(1)}%`;
 const methodLabel = (m) => m.name.join(" | ");
 const productOf = (rowId) => Number(rowId.split("/").pop());
+// The reference product of a process row: its label starts with it ("product | name | location")
+const productNameOf = (row) => (row.kind === "process" ? row.label.split(" | ")[0] : "");
 const truncate = (s, n) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
 const UNITS = {
   kilogram: "kg", "kilowatt hour": "kWh", megajoule: "MJ", "cubic meter": "m3", hectare: "ha",
@@ -99,6 +101,27 @@ function rowAmount(r) {
   if (r.kind === "merged" || r.kind === "group" || r.kind === "flow") return r.unit ? `${fmt(r.amount)} ${unit(r.unit)}` : "";
   if (r.kind !== "process") return "";
   return r.waste ? `${fmt(-r.amount)} ${unit(r.unit)} treated` : `${fmt(r.amount)} ${unit(r.unit)}`;
+}
+// Status bar totals of the selected processes: amounts per unit (waste as treated, as in the
+// Amount column; units are not added together) and the summed impact. A process inside
+// another selected process is left out: its impact is already in that process's cumulative one.
+function selectedProcessTotals(byId, selection) {
+  const inSelectedProcess = (r) => {
+    for (let p = byId.get(r.parent); p; p = byId.get(p.parent)) if (p.kind === "process" && selection.has(p.id)) return true;
+    return false;
+  };
+  const counted = [...selection].map((id) => byId.get(id))
+    .filter((r) => r?.kind === "process" && !inSelectedProcess(r));
+  const amounts = new Map();
+  for (const r of counted) {
+    const key = r.waste ? `${unit(r.unit)} treated` : unit(r.unit);
+    amounts.set(key, (amounts.get(key) || 0) + (r.waste ? -r.amount : r.amount));
+  }
+  return {
+    count: counted.length,
+    amounts: [...amounts].map(([u, n]) => `${fmt(n)} ${u}`).join(" + "),
+    impact: counted.reduce((sum, r) => sum + r.impacts[0], 0),
+  };
 }
 
 function shortLabel(row, byId) {
@@ -520,6 +543,7 @@ const DATABASE_SOURCES = [
   { kind: "ecospold2", label: "ecoSpold2", hint: "an ecoinvent release (.7z) or its unpacked folder" },
   { kind: "simapro", label: "SimaPro CSV", hint: "a process export, e.g. Agribalyse" },
   { kind: "ecoinvent", label: "ecoinvent", hint: "downloaded with your ecoinvent account" },
+  { kind: "repository", label: "Brightway repository", hint: "biosphere and impact methods, from files.brightway.dev" },
 ];
 
 // The forms of the Brightway projects section: a new project (empty, or from a backup such as
@@ -546,7 +570,7 @@ function ProjectForm({ form, folder, projects, onJob, onCancel, onForm, busy }) 
   const [version, setVersion] = useState(null);  // of the default biosphere and methods; null: the detected one
   const source = form.kind === "add" ? form.source : null;
   useEffect(() => {
-    if (source === "ecospold2" || source === "simapro") serverRequest("/api/brightway/defaults").then((r) => setVersions(r.versions)).catch(() => {});
+    if (source === "ecospold2" || source === "simapro" || source === "repository") serverRequest("/api/brightway/defaults").then((r) => setVersions(r.versions)).catch(() => {});
   }, [source]);
   useEffect(() => { if (path && !database) setDatabase(ECOSPOLD_NAME(path)); }, [path]);
   useEffect(() => {
@@ -604,7 +628,7 @@ function ProjectForm({ form, folder, projects, onJob, onCancel, onForm, busy }) 
             onClick=${() => onForm({ kind: "add", project: form.project, source: s.kind })}>
             <b>${s.label}</b><span class="muted small">${s.hint}</span></button>`)}
       </div>
-      ${source && html`
+      ${source && source !== "repository" && html`
         <label class="check"><input type="checkbox" checked=${defaults} onChange=${(e) => setDefaults(e.target.checked)} />
           <span>Add the default biosphere and impact methods ${source === "ecoinvent"
             && html`<span class="muted small">— those of the release: its elementary flows and LCIA methods</span>`}</span></label>
@@ -630,6 +654,25 @@ function ProjectForm({ form, folder, projects, onJob, onCancel, onForm, busy }) 
             </select></label>`
           : html`<p class="note">This project has no biosphere database yet: tick the box above to add one.</p>`)}`}`;
     if (!source) return html`<div class="project-form">${head}${actions(null)}</div>`;
+    if (source === "repository") {
+      const repoVersion = version ?? versions[0] ?? "";
+      const here = repoVersion === "bundled" ? hasBundled : flowDbs.includes(`ecoinvent-${repoVersion}-biosphere`);
+      return html`
+        <div class="project-form">${head}
+          <form class="source-form" onSubmit=${submit("/api/brightway/defaults/install", { folder, project: form.project, version: repoVersion })}>
+            <label>Biosphere and impact methods of
+              <select value=${repoVersion} onChange=${(e) => setVersion(e.target.value)}>
+                ${versions.map((v) => html`<option value=${v}>${defaultsLabel(v)}</option>`)}
+                <option value="bundled">${defaultsLabel("bundled")}</option>
+              </select></label>
+            <p class="muted small">${here ? "Its biosphere is already in this project: only impact methods that are missing are added."
+              : repoVersion === "bundled" ? "A few minutes, offline."
+                : `ecoinvent's elementary flows and impact methods of ${repoVersion}, from files.brightway.dev (about 20 MB, 3 minutes).`}
+${" "}Databases imported afterwards can link to them.</p>
+            ${actions("Add from the repository", !repoVersion || here && repoVersion === "bundled")}
+          </form>
+        </div>`;
+    }
     if (source === "ecoinvent") return html`
       <div class="project-form">${head}
         <${EcoinventForm} folder=${folder} project=${form.project} existing=${processDbs} biosphere=${defaults ? null : biosphere}
@@ -688,6 +731,17 @@ function ProjectForm({ form, folder, projects, onJob, onCancel, onForm, busy }) 
           ${actions(form.unlinked === "drop" ? "Import without the unlinked exchanges" : "Import", !path || !database.trim() || !linked)}
         </form>
       </div>`;
+  }
+  if (form.kind === "removeDb") {
+    const users = (project?.databases || []).filter((d) => d.depends.includes(form.database)).map((d) => d.name);
+    return html`
+      <form class="project-form danger" onSubmit=${submit("/api/brightway/databases/delete", { folder, project: form.project, database: form.database })}>
+        <h4>Remove ${form.database} from ${form.project}</h4>
+        <p>This deletes the database from the project, for Brightway and Activity Browser too. It cannot be undone.
+          ${(project?.databases || []).find((d) => d.name === form.database)?.processes ? "The model already built from it stays in the app." : ""}</p>
+        ${users.length > 0 && html`<div class="error">${`${users.join(", ")} ${users.length === 1 ? "links" : "link"} to it: remove ${users.length === 1 ? "it" : "them"} first.`}</div>`}
+        ${actions("Remove database", users.length > 0, true)}
+      </form>`;
   }
   if (form.kind === "delete") return html`
     <form class="project-form danger" onSubmit=${submit("/api/brightway/projects/delete", { folder, project: form.project, confirm })}>
@@ -893,7 +947,9 @@ function LoadDatabase({ onClose, missing, onDatabases }) {
                 <tr key=${`d:${p.name}/${d.name}`} class=${p.twofive && d.processes ? "" : "muted"}>
                   <td class="indent">${d.name}${d.model?.outdated && html`<div class="muted small">${d.model.outdated}${d.model.key ? ": close it to rebuild it" : ""}</div>`}</td>
                   <td class="num muted">${d.processes ? `${count(d.processes)} processes` : `${count(d.flows)} flows`}</td>
-                  <td class="actions">${dbAction(p, d)}</td>
+                  <td class="actions">${dbAction(p, d)}
+                    ${p.twofive && html`<button class="link danger" disabled=${busy} onClick=${() => setForm({ kind: "removeDb", project: p.name, database: d.name })}
+                      title="Delete this database from the project">Remove</button>`}</td>
                 </tr>`)}`)}
           </table>
           ${!projects.projects.length && html`<p class="muted">No project in this folder yet: create one with <i>New project</i>.</p>`}`}
@@ -1319,7 +1375,7 @@ function MethodSelect({ methods, value, onChange }) {
 }
 
 // ---------------------------------------------------------------- tree
-function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onUngroup, ungroupable, onMergeGroup, onUnpin, onPin, onMoveToOthers, onInfo, onUnmerge, view, focus, renaming, onStartRename, onRename }) {
+function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onUngroup, onRegroup, ungroupable, onMergeGroup, onUnpin, onPin, onMoveToOthers, onInfo, onUnmerge, view, focus, renaming, onStartRename, onRename }) {
   const byId = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
   const box = useRef(null);
   const scrolledTo = useRef(null);
@@ -1364,6 +1420,9 @@ function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onU
                           onClick=${(e) => { e.stopPropagation(); onStartRename(r); }}>✎</button>`}
                       ${r.kind === "group" && ungroupable(r) && html`
                         <button class="chip" onClick=${(e) => { e.stopPropagation(); onUngroup(r); }}>ungroup</button>`}
+                      ${r.regroup && html`
+                        <button class="chip" title="Put back in the group by product it was ungrouped from"
+                          onClick=${(e) => { e.stopPropagation(); onRegroup(r.regroup); }}>regroup</button>`}
                       ${r.kind === "group" && r.products && html`
                         <button class="chip merge" title="Merge into one process whose inventory is the union of the members'"
                           onClick=${(e) => { e.stopPropagation(); onMergeGroup(r); }}>merge</button>`}
@@ -1620,7 +1679,7 @@ function sankeyMarks({ graph, byId, view, selection, focus, onSelect, onToggle, 
     })}`;
 }
 
-function TreeGraph({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onUngroup, ungroupable, onMergeGroup, onUnpin, onPin, onMoveToOthers, onInfo, onUnmerge, view, orientation: chosenOrientation, setOrientation, cycles: chosenCycles, setCycles, sankey, focus }) {
+function TreeGraph({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onUngroup, onRegroup, ungroupable, onMergeGroup, onUnpin, onPin, onMoveToOthers, onInfo, onUnmerge, view, orientation: chosenOrientation, setOrientation, cycles: chosenCycles, setCycles, sankey, focus }) {
   // The Sankey is a tree drawn left to right
   const orientation = sankey ? "horizontal" : chosenOrientation;
   const cycles = chosenCycles && !sankey;
@@ -1744,6 +1803,9 @@ function TreeGraph({ rows, rootImpact, shareBasis, selection, onToggle, onSelect
                 ${r.kind === "group" && ungroupable(r) && html`
                   <text x=${x + BOX.w - 10} y=${y + 17} class="ungroup" text-anchor="end"
                         onClick=${(e) => { e.stopPropagation(); onUngroup(r); }}>ungroup</text>`}
+                ${r.regroup && html`
+                  <text x=${x + BOX.w - 10} y=${y + 17} class="ungroup" text-anchor="end"
+                        onClick=${(e) => { e.stopPropagation(); onRegroup(r.regroup); }}>regroup</text>`}
                 ${r.kind === "group" && r.products && html`
                   <text x=${x + BOX.w - (ungroupable(r) ? 62 : 10)} y=${y + 17} class="unmerge" text-anchor="end"
                         onClick=${(e) => { e.stopPropagation(); onMergeGroup(r); }}>merge</text>`}
@@ -3207,6 +3269,8 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
   const [pinned, setPinned] = useState(new Set());
   const [others, setOthers] = useState(new Set());
   const [merges, setMerges] = useState([]);
+  const [ungrouped, setUngrouped] = useState(new Set());  // "group by product" rows the user ungrouped
+  const [undoSteps, setUndoSteps] = useState([]);  // states before the changes, the last one undone first
   const [view, setView] = useState(() => ({
     naming: loadPreference("naming", "full"),
     recipe: {
@@ -3286,8 +3350,9 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
     setPinned(new Set(same ? saved.pinned || [] : []));
     setOthers(new Set(same ? saved.others || [] : []));
     setMerges(same ? saved.merges || [] : []);
+    setUngrouped(new Set(same ? saved.ungrouped || [] : []));
     setLabels(same ? saved.labels || {} : {});
-    if (!same) setUndo({ message: "This database was rebuilt since the tab was saved: expansions, pins, moved rows, merges and names were not restored.", state: {} });
+    if (!same) setUndo({ message: "This database was rebuilt since the tab was saved: expansions, pins, moved rows, merges and names were not restored." });
   }
 
   function startTab() {
@@ -3316,6 +3381,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
     setPinned(new Set());
     setOthers(new Set());
     setMerges([]);
+    setUngrouped(new Set());
     setRules((current) => current.filter((rule) => rule.scope === "*"));
     setSelection(new Set());
     setUndo(null);
@@ -3327,7 +3393,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
   const describeCustom = (p, o) => [p.size && `${plural(p.size, "pinned row")}`, o.size && `${plural(o.size, "row")} moved to others`].filter(Boolean).join(" and ");
   function changeCutoff(next, basis = cutoffBasis) {
     if (pinned.size || others.size) {
-      setUndo({ message: `Cut-off changed: ${describeCustom(pinned, others)} reset.`, state: { cutoff, cutoffBasis, pinned, others } });
+      setUndo({ message: `Cut-off changed: ${describeCustom(pinned, others)} reset.` });
       setPinned(new Set());
       setOthers(new Set());
     }
@@ -3340,31 +3406,48 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
     const removed = [describeCustom(pinned, others), rules.length && plural(rules.length, "grouping rule"),
       merges.length && plural(merges.length, "merge"), view.groupProducts && "group by product",
       Object.keys(labels).length && plural(Object.keys(labels).length, "custom name")].filter(Boolean).join(", ");
-    setUndo({ message: `View reset${removed ? ` (${removed} removed)` : ""}.`, state: { expanded, pinned, others, rules, merges, labels, view } });
+    setUndo({ message: `View reset${removed ? ` (${removed} removed)` : ""}.` });
     setExpanded(new Set([String(root.index)]));
     setPinned(new Set());
     setOthers(new Set());
     setRules([]);
     setMerges([]);
+    setUngrouped(new Set());
     setLabels({});
     if (view.groupProducts) setView({ ...view, groupProducts: false });
     setSelection(new Set());
     setInfoTarget(null);
   }
-  function applyUndo() {
-    const state = undo.state;
-    const setters = {
-      root: setRoot, amount: setAmount, method: setMethod, cutoff: setCutoff, cutoffBasis: setCutoffBasis,
-      expanded: setExpanded, rules: setRules, pinned: setPinned, others: setOthers, merges: setMerges,
-      labels: setLabels, chartMethods: setChartMethods, view: setView,
-    };
-    Object.entries(state).forEach(([key, value]) => setters[key]?.(value));
-    setUndo(null);
+  // Undo: each change of the tree, groups, pins, names and settings is a step. Expanding and
+  // collapsing are no steps of their own: they are kept with the step they fall in. A functional
+  // unit's first change has nothing to go back to (no step), so a new tab starts without steps.
+  const edits = { root, amount, method, cutoff, cutoffBasis, chartMethods, rules, pinned: [...pinned], others: [...others],
+    merges, labels, ungrouped: [...ungrouped], view };
+  const editKey = JSON.stringify(edits);
+  const expandedKey = JSON.stringify([...expanded]);
+  const undoBase = useRef(null);  // the state seen last: { key, edits, expanded }
+  useEffect(() => {
+    const before = undoBase.current;
+    undoBase.current = { key: editKey, edits, expanded: [...expanded] };
+    if (before && before.key !== editKey && before.edits.root) setUndoSteps((steps) => [...steps.slice(-99), before]);
+  }, [editKey, expandedKey]);
+  // Ctrl+Z and the Undo buttons: back to the state before the last change
+  function undoLast() {
+    const step = undoSteps[undoSteps.length - 1];
+    if (!step) return false;
+    setUndoSteps(undoSteps.slice(0, -1));
+    undoBase.current = step;
+    const e = step.edits;
+    setRoot(e.root); setAmount(e.amount); setMethod(e.method); setChartMethods(e.chartMethods);
+    setCutoff(e.cutoff); setCutoffBasis(e.cutoffBasis); setRules(e.rules); setView(e.view);
+    setPinned(new Set(e.pinned)); setOthers(new Set(e.others)); setMerges(e.merges); setLabels(e.labels);
+    setUngrouped(new Set(e.ungrouped)); setExpanded(new Set(step.expanded)); setSelection(new Set());
+    return true;
   }
 
   const viewState = (exp = expanded) => ({
     root: [root.index], amount, expanded: [...exp], rules, cutoff: cutoff / 100, cutoff_basis: cutoffBasis, method, methods: chartMethods,
-    pinned: [...pinned], others: [...others], merges, group_products: view.groupProducts,
+    pinned: [...pinned], others: [...others], merges, ungrouped: [...ungrouped], group_products: view.groupProducts,
   });
 
   useEffect(() => {
@@ -3374,13 +3457,13 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
       .then((d) => { if (!cancelled) { setData(d); setError(null); } })
       .catch((e) => !cancelled && setError(e.message));
     return () => { cancelled = true; };
-  }, [root, amount, method, cutoff, cutoffBasis, expanded, rules, chartMethods, pinned, others, merges, view.groupProducts, info]);
+  }, [root, amount, method, cutoff, cutoffBasis, expanded, rules, chartMethods, pinned, others, merges, ungrouped, view.groupProducts, info]);
   // The tab's state is kept for the next visit (renaming does not reload the rows)
   useEffect(() => {
     if (!root || !info) return;
-    onSave(id, { root, amount, method, cutoff, cutoffBasis, expanded: [...expanded], rules, chartMethods, pinned: [...pinned], others: [...others], merges, labels,
+    onSave(id, { root, amount, method, cutoff, cutoffBasis, expanded: [...expanded], rules, chartMethods, pinned: [...pinned], others: [...others], merges, ungrouped: [...ungrouped], labels,
       layout: info.layout, methodName: info.methods[method]?.name, chartMethodNames: chartMethods.map((k) => info.methods[k]?.name) });
-  }, [root, amount, method, cutoff, cutoffBasis, expanded, rules, chartMethods, pinned, others, merges, labels, info]);
+  }, [root, amount, method, cutoff, cutoffBasis, expanded, rules, chartMethods, pinned, others, merges, ungrouped, labels, info]);
   function startRename(row) {
     if (!labelKey(row)) return;
     // The tree and Sankey views have no inline editor: ask
@@ -3403,7 +3486,8 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
   const rootImpact = data.rows[0]?.impacts[0] || 0;
   const rowsById = useMemo(() => new Map(data.rows.map((r) => [r.id, r])), [data]);
   const selectedRows = [...selection].map((id) => rowsById.get(id)).filter(Boolean);
-  const siblings = selectedRows.length >= 2 && selectedRows.every((r) => ownerOf(r) === ownerOf(selectedRows[0]))
+  const selectedTotals = selectedProcessTotals(rowsById, selection);
+  const siblings =selectedRows.length >= 2 && selectedRows.every((r) => ownerOf(r) === ownerOf(selectedRows[0]))
     && !ownerOf(selectedRows[0]).includes("/g:");
   const canGroup = siblings && (selectedRows.every((r) => r.kind === "process") || selectedRows.every((r) => r.kind === "flow"));
   // Groups of processes carry their members' products, so they can be merged too: one
@@ -3482,7 +3566,6 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
       const target = found.path[found.path.length - 1];
       setUndo({
         message: `Opened the tree at ${target.name} (${target.location}), ${found.path.length - 1} levels down along its largest supply path${found.found ? "" : " — shown as far as merged rows allow"}.`,
-        state: { expanded, pinned, others },
       });
       setExpanded(new Set(found.expanded));
       setPinned(new Set(found.pinned));
@@ -3493,12 +3576,21 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
       setError(null);
     } catch (e) { setError(e.message); }
   }
-  function groupSelected() {
-    const parent = ownerOf(selectedRows[0]);
-    const name = groupName.trim() || `group ${rules.filter((r) => r.predicate?.products || r.predicate?.flows).length + 1}`;
-    const rule = selectedRows[0].kind === "flow"
-      ? { predicate: { flows: selectedRows.map((r) => r.flow.index) }, target: "flows" }
-      : { predicate: { products: selectedRows.map((r) => productOf(r.id)) } };
+  function groupSelected() { return groupRows(selectedRows); }
+  // A group of sibling rows. Its name: the typed one; else the product name when the processes all
+  // deliver one product; else "group N". A default name already in use gets a number.
+  function groupRows(members) {
+    const parent = ownerOf(members[0]);
+    const sameProduct = members.every((r) => r.kind === "process") && members.every((r) => productNameOf(r) === productNameOf(members[0]));
+    let name = groupName.trim();
+    if (!name) {
+      const base = sameProduct ? productNameOf(members[0]) : `group ${rules.filter((r) => r.predicate?.products || r.predicate?.flows).length + 1}`;
+      name = base;
+      for (let n = 2; rules.some((r) => r.scope === parent && r.name === name); n++) name = `${base} ${n}`;
+    }
+    const rule = members[0].kind === "flow"
+      ? { predicate: { flows: members.map((r) => r.flow.index) }, target: "flows" }
+      : { predicate: { products: members.map((r) => productOf(r.id)) } };
     setRules([...rules, { name, ...rule, scope: parent }]);
     setExpanded(new Set([...expanded, `${parent}/g:${name}`]));
     setSelection(new Set());
@@ -3524,10 +3616,17 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
   useEffect(() => { if (infoTarget?.bundle && !bundle) setInfoTarget(null); }, [infoTarget, bundle]);
   const activeRules = rules.filter((r) => !r.disabled).length;
   const manualRuleFor = (groupRow) => rules.findIndex((r) => r.predicate && !r.disabled && r.scope === ownerOf(groupRow) && `${ownerOf(groupRow)}/g:${r.name}` === groupRow.id);
+  // A group that can be ungrouped: one of a rule, or one of "group by product"
+  const ungroupable = (groupRow) => !!groupRow.by_product || manualRuleFor(groupRow) >= 0;
   function ungroup(groupRow) {
+    if (groupRow.by_product) { setUngrouped(new Set([...ungrouped, groupRow.id])); return; }
     const i = manualRuleFor(groupRow);
     if (i >= 0) setRules(rules.filter((_, j) => j !== i));
   }
+  // Put an ungrouped "group by product" back: its members are bundled again
+  const regroup = (groupId) => setUngrouped(new Set([...ungrouped].filter((id) => id !== groupId)));
+  // Turning "group by product" on starts from a clean slate: the groups ungrouped before are grouped again
+  const setDisplayView = (next) => { if (next.groupProducts && !view.groupProducts) setUngrouped(new Set()); setView(next); };
   // Saved views store names (method, functional unit) as well as positions: node ids are
   // positions in the model, valid only for the model the view was saved from.
   // Version 2: ``cutoff`` is a fraction, as in the API (the page shows a percentage; version 1 stored it)
@@ -3536,7 +3635,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
       format: "lca_viewer view", version: 2,
       model: { title: info.title, activities: info.activities },
       root, amount, method: info.methods[method].name, chartMethods: chartMethods.map((k) => info.methods[k].name),
-      cutoff: +(cutoff / 100).toFixed(8), cutoffBasis, expanded: [...expanded], rules, pinned: [...pinned], others: [...others], merges, labels,
+      cutoff: +(cutoff / 100).toFixed(8), cutoffBasis, expanded: [...expanded], rules, pinned: [...pinned], others: [...others], merges, ungrouped: [...ungrouped], labels,
       display: { naming: view.naming, recipe: view.recipe, groupProducts: view.groupProducts },
     };
   }
@@ -3545,7 +3644,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
     download(`lca-view-${name}.json`, JSON.stringify(viewFile(), null, 2), "application/json");
   }
   async function copyView() {
-    try { await navigator.clipboard.writeText(JSON.stringify(viewFile(), null, 2)); setUndo({ message: "View copied to the clipboard as JSON.", state: {} }); }
+    try { await navigator.clipboard.writeText(JSON.stringify(viewFile(), null, 2)); setUndo({ message: "View copied to the clipboard as JSON." }); }
     catch { setError("The browser did not allow copying to the clipboard."); }
   }
   async function loadView(file) {
@@ -3558,7 +3657,6 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
       const { target, same: sameModel } = found;
       setUndo({
         message: `View loaded from ${file.name}${sameModel ? "" : " — saved from another model: expansions, pins, moved rows, merges and names were not restored"}.`,
-        state: { root, amount, method, cutoff, cutoffBasis, expanded, rules, pinned, others, merges, labels, chartMethods, view },
       });
       setRoot(target);
       setAmount(saved.amount ?? 1);
@@ -3572,6 +3670,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
       setPinned(new Set(sameModel ? saved.pinned || [] : []));
       setOthers(new Set(sameModel ? saved.others || [] : []));
       setMerges(sameModel ? saved.merges || [] : []);
+      setUngrouped(new Set(sameModel ? saved.ungrouped || [] : []));
       setLabels(sameModel ? saved.labels || {} : {});
       if (saved.display) setView({ ...view, ...saved.display });
       setSelection(new Set());
@@ -3584,6 +3683,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
   // Keys on the selected row (see docs/ui.md); returns true when the key was used
   function onTreeKey(e) {
     const rows = data.rows;
+    if (visible && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "z") return undoLast();
     if (!visible || !rows.length || e.ctrlKey || e.metaKey || e.altKey) return false;
     const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
     const found = rows.findIndex((r) => r.id === cursor.current.id);
@@ -3659,7 +3759,14 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
         return true;
       case "g":
         followCursor.current = true;
-        if (selectedRows.length === 1 && row.kind === "group" && manualRuleFor(row) >= 0) ungroup(row);
+        if (selectedRows.length === 1 && row.kind === "group" && ungroupable(row)) ungroup(row);
+        else if (selectedRows.length === 1 && row.kind === "process") {
+          // One process: its product group back if it was ungrouped; else its same-named siblings grouped
+          const same = rows.filter((r) => r.kind === "process" && r.parent === row.parent && productNameOf(r) === productNameOf(row));
+          if (row.regroup) regroup(row.regroup);
+          else if (same.length > 1) selectNew(groupRows(same));
+          else followCursor.current = false;
+        }
         else if (canGroup) selectNew(groupSelected());
         else followCursor.current = false;
         return true;
@@ -3723,7 +3830,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
             <span class="spacer"></span>
             <${SaveMenu} disabled=${!root} onSave=${exportView} onLoad=${loadView} onCopy=${copyView} />
           </div>
-          <${ViewBar} view=${view} setView=${setView}
+          <${ViewBar} view=${view} setView=${setDisplayView}
             example=${(() => { const r = data.rows.find((x) => x.kind === "process" && x.depth > 0); return r ? rowNames(r, rowsById, view) : null; })()} />
           ${selection.size > 0 && html`
             <div class="selection-bar">
@@ -3743,16 +3850,15 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
           ${undo && html`
             <div class="notice" role="status">
               <span>${undo.message}</span>
-              ${Object.keys(undo.state).length > 0 && html`<button onClick=${applyUndo}>Undo</button>`}
               <button onClick=${() => setUndo(null)} aria-label="Dismiss">×</button>
             </div>`}
           ${error && html`<div class="error">${error}</div>`}
           ${display === "list"
             ? html`<${Tree} rows=${data.rows} rootImpact=${rootImpact} shareBasis=${cutoffBasis} selection=${selection} onToggle=${toggle} onSelect=${select}
                 renaming=${renaming} onStartRename=${startRename} onRename=${rename}
-                onUngroup=${ungroup} ungroupable=${(r) => manualRuleFor(r) >= 0} onMergeGroup=${(r) => mergeRows([r])} onUnpin=${unpin} onPin=${pin} onMoveToOthers=${moveToOthers} onInfo=${showInfo} onUnmerge=${unmerge} view=${view} focus=${focus} />`
+                onUngroup=${ungroup} onRegroup=${regroup} ungroupable=${ungroupable} onMergeGroup=${(r) => mergeRows([r])} onUnpin=${unpin} onPin=${pin} onMoveToOthers=${moveToOthers} onInfo=${showInfo} onUnmerge=${unmerge} view=${view} focus=${focus} />`
             : html`<${TreeGraph} rows=${data.rows} rootImpact=${rootImpact} shareBasis=${cutoffBasis} selection=${selection} onToggle=${toggle} onSelect=${select}
-                onUngroup=${ungroup} ungroupable=${(r) => manualRuleFor(r) >= 0} onMergeGroup=${(r) => mergeRows([r])} onUnpin=${unpin} onPin=${pin} onMoveToOthers=${moveToOthers} onInfo=${showInfo} onUnmerge=${unmerge} view=${view}
+                onUngroup=${ungroup} onRegroup=${regroup} ungroupable=${ungroupable} onMergeGroup=${(r) => mergeRows([r])} onUnpin=${unpin} onPin=${pin} onMoveToOthers=${moveToOthers} onInfo=${showInfo} onUnmerge=${unmerge} view=${view}
                 orientation=${orientation} setOrientation=${setOrientation} cycles=${cycles} setCycles=${setCycles} sankey=${display === "sankey"} focus=${focus} />`}
           ${bundle?.kind === "rest" && html`<${OthersPopup} target=${infoTarget} rest=${bundle} rows=${data.rows} rootImpact=${rootImpact}
               cutoff=${cutoff} cutoffBasis=${cutoffBasis} pinned=${pinned} setPinned=${setPinned} others=${others} setOthers=${setOthers}
@@ -3764,7 +3870,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
                 ? !bundle.by_rule && html`<button onClick=${() => unmerge(bundle)} title="Split back into the original processes">Unmerge</button>`
                 : html`
                   ${bundle.products && html`<button onClick=${() => mergeRows([bundle])} title="Merge into one process whose inventory is the union of the members'">Merge</button>`}
-                  ${manualRuleFor(bundle) >= 0 && html`<button onClick=${() => ungroup(bundle)}>Ungroup</button>`}`}
+                  ${ungroupable(bundle) && html`<button onClick=${() => ungroup(bundle)}>Ungroup</button>`}`}
               onPart=${(p) => followInfo(p.flow !== undefined
                 ? { flow: p.flow, activities: (bundle.emitters || []).map((m) => m.index) }
                 : { index: p.index, row: null, parents: suppliedTo(bundle, rowsById) })} />`}
@@ -3777,7 +3883,13 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
               onFlow=${(flow, activity) => followInfo({ flow, activities: [activity] })} onBack=${backInfo} />`}
           <div class="toolbar"><span class="hint">
             ${root ? `Total: ${fmt(rootImpact)} ${methodInfo.unit} — ${methodLabel(methodInfo)}` : ""}
-          </span></div>
+          </span>
+            ${selectedTotals.count > 0 && html`
+              <span class="spacer"></span>
+              <span class="hint selected-total" title="Selected processes: a process inside another selected one is not counted again">
+                Selected (${selectedTotals.count} ${selectedTotals.count === 1 ? "process" : "processes"}): ${selectedTotals.amounts} · impact ${fmt(selectedTotals.impact)} ${methodInfo.unit}
+              </span>`}
+          </div>
         </section>
       <${Portal} slot=${`side-${id}`}>
         <section class="side">

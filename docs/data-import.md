@@ -116,6 +116,12 @@ builds do: the server itself never imports bw2data.
   with those `default_migrations` picks for the ticked background databases)
   and, when exchanges stay unlinked, the rows of the report CSV, then offers
   `--unlinked drop`.
+- **Biosphere and impact methods alone** (*Add database* → *Brightway
+  repository*, or `lca-viewer defaults 3.10 --project P`): `install_defaults`
+  as above, for a project that has none yet or needs another ecoinvent
+  version's. A database is removed from a project with *Remove* on its row
+  (`lca-viewer database delete NAME --project P`), unless another database
+  links to it.
 - **ecoinvent with the user's account** (*Add database* → *ecoinvent*, or
   `lca-viewer ecoinvent login` then `lca-viewer ecoinvent import --project P
   --version 3.10.1 --system-model cutoff`): `importing.import_ecoinvent_release`
@@ -322,7 +328,14 @@ added later.
    ecoinvent version in the database name; override with `--migration`), then
    linked on those three fields. Waste to treatment (written by
    bw_simapro_csv as non-functional production exchanges) is linked the same
-   way.
+   way. The correspondence maps names only, and SimaPro gives some ecoinvent
+   processes in other units than ecoinvent: inputs are then converted to the
+   linked process's unit (`importing.convert_to_linked_units`, exact SI
+   factors). In Agribalyse 3.1, 14,814 of the 90,511 inputs linked to
+   ecoinvent 3.8 needed it: 13,452 electricity inputs in MJ (ecoinvent: kWh),
+   1,119 field operations in m² (ecoinvent: hectare, so 10,000 times too much
+   without it: soy at 426 kg CO2-eq/kg), and a few s, m³, m. An input whose
+   units don't convert is reported as unlinked.
 5. **Emissions and resources**, in this order, each for the flows still
    unlinked: SimaPro's final waste flows, non material emissions, social and
    economic issues are left out (not elementary flows in ecoinvent);
@@ -339,6 +352,11 @@ added later.
    EF 3.1 correspondences read backwards for EF names (`Phosphorus, total` →
    `Phosphorus` in the same compartment, when a single ecoinvent flow maps
    there); then a link on name, compartment and unit, whatever the case.
+   Flowmapper entries whose units don't convert (a NaN factor: 207 in the
+   3.9 list, e.g. `Manganese` in kg matched to a radioactive flow in kBq)
+   are wrong matches and skipped. An exchange whose amount is not a number
+   is reported with the unlinked ones rather than linked: bw2data refuses to
+   write it, at the end of the import.
 6. **Unlinked exchanges** are listed in `data/import-<database>-unlinked.csv`
    (type, name, compartment, unit, count, an example process). By default
    nothing is written: a matrix with dangling inputs would silently miss part
@@ -347,7 +365,15 @@ added later.
    export is not read twice.
 7. **Names**: the `{FR} U` suffix of Agribalyse names moves into `location`
    (`Soft wheat grain, at farm gate {FR} U` → name without suffix, location
-   `FR`). The original name is kept as `simapro name`.
+   `FR`). The original name is kept as `simapro name`. Allocated processes
+   take their product's name.
+8. **Writing**: bw_simapro_csv allocates multi-output processes before
+   writing, so the database is processed without allocating them again.
+   `multifunctional` would otherwise re-allocate each of them at write time,
+   saving every allocated process and exchange in its own transaction and
+   scanning the whole database each time: 1,829 of the 1,933 s of writing
+   Agribalyse 3.1 (488 multi-output processes), for the same result
+   (`importing._allocated_database`).
 
 `lca-viewer build` then loads the technosphere from one node of the new
 database. Brightway adds every database it depends on (ecoinvent,

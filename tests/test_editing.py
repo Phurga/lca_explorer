@@ -602,3 +602,80 @@ def test_import_without_the_default_biosphere(tmp_path, monkeypatch):
     bad = client.post("/api/brightway/import", json={"folder": str(tmp_path / "bw"), "project": "p", "format": "simapro-csv",
                                                      "path": str(export), "database": "y", "defaults": "--unlinked"})
     assert bad.status_code == 400
+
+
+def test_delete_database(project):
+    import bw2data as bd
+
+    with pytest.raises(SystemExit, match="used by bg"):
+        editing.delete_database("toy", "bio")
+    with pytest.raises(SystemExit, match="No database"):
+        editing.delete_database("toy", "nothing")
+    editing.delete_database("toy", "bg")
+    editing.delete_database("toy", "bio")
+    assert "bg" not in bd.databases and "bio" not in bd.databases
+    assert [d["name"] for p in sources.brightway_projects(project) for d in p["databases"]] == []
+
+
+def test_delete_database_through_the_api(project, tmp_path):
+    import time
+
+    from fastapi.testclient import TestClient
+
+    from lca_viewer.server import create_library
+
+    def wait(job):
+        for _ in range(600):
+            if job["status"] != "running":
+                return job
+            time.sleep(0.1)
+            job = client.get(f"/api/jobs/{job['id']}").json()
+        raise AssertionError("job still running")
+
+    client = TestClient(create_library(tmp_path / "data"))
+    body = {"folder": str(project), "project": "toy"}
+    used = client.post("/api/brightway/databases/delete", json={**body, "database": "bio"})
+    assert used.status_code == 400 and "bg" in used.json()["detail"]
+    assert client.post("/api/brightway/databases/delete", json={**body, "database": "nothing"}).status_code == 404
+    assert client.post("/api/brightway/databases/delete", json={**body, "project": "nope", "database": "bg"}).status_code == 404
+    job = wait(client.post("/api/brightway/databases/delete", json={**body, "database": "bg"}).json())
+    assert job["status"] == "done", job
+    names = [d["name"] for p in sources.brightway_projects(project) if p["name"] == "toy" for d in p["databases"]]
+    assert names == ["bio"]
+
+
+def test_add_defaults_from_the_repository(tmp_path, monkeypatch):
+    """The Brightway repository option: ``lca-viewer defaults <version> --project …`` in a separate process."""
+    import subprocess
+    import time
+
+    from fastapi.testclient import TestClient
+
+    from lca_viewer.server import create_library
+
+    seen = []
+
+    class Done:
+        stdout = iter(["Downloading the biosphere\n"])
+
+        def __init__(self, command, **kwargs):
+            seen.append(command)
+
+        def wait(self):
+            return 0
+
+    monkeypatch.setattr(subprocess, "Popen", Done)
+    monkeypatch.setattr(sources, "brightway_projects", lambda folder: [{"name": "p", "databases": []}])
+    client = TestClient(create_library(tmp_path / "data"))
+    job = client.post("/api/brightway/defaults/install", json={"folder": str(tmp_path / "bw"), "project": "p", "version": "3.10"}).json()
+    for _ in range(100):
+        if job["status"] != "running":
+            break
+        time.sleep(0.05)
+        job = client.get(f"/api/jobs/{job['id']}").json()
+    assert job["status"] == "done" and "3.10" in job["message"], job
+    assert seen[0][seen[0].index("defaults") + 1] == "3.10" and seen[0][seen[0].index("--project") + 1] == "p"
+    assert client.post("/api/brightway/defaults/install",
+                       json={"folder": str(tmp_path / "bw"), "project": "p", "version": "--x"}).status_code == 400
+    assert client.post("/api/brightway/defaults/install",
+                       json={"folder": str(tmp_path / "bw"), "project": "nope", "version": "3.10"}).status_code == 404

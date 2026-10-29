@@ -37,9 +37,13 @@ API in `src/lca_viewer/server.py`.
   not loaded (after a restart) shows the start page with a note.
   The Brightway section also changes projects: *+ New project* (empty, or
   from a backup: files.brightway.dev, e.g. BAFU, or a `.tar.gz`), and on
-  each project *+ Add database* and *Delete* (typing the name to confirm).
-  *Add database* asks for the source (ecoSpold2, SimaPro CSV, ecoinvent with
-  the user's account), with a box *Add the default biosphere and impact
+  each project *+ Add database* and *Delete* (typing the name to confirm), and
+  on each of its databases *Remove* (after a confirmation; refused while another
+  database of the project links to it or its model is open; the model already
+  built stays in the app). *Add database* asks for the source (ecoSpold2,
+  SimaPro CSV, ecoinvent with the user's account, or *Brightway repository*:
+  only the biosphere and impact methods of an ecoinvent version, from
+  files.brightway.dev, without a database), with a box *Add the default biosphere and impact
   methods* and their ecoinvent version (detected from the file name or the
   SimaPro background, else chosen), ticked when the project has no biosphere
   database; it opens by itself on a project just created empty. Forms on a
@@ -114,10 +118,14 @@ API in `src/lca_viewer/server.py`.
   [grouping.md](grouping.md). Ctrl/⌘-click selects sibling
   rows; a selection bar then offers **Group** (bundle them under one row,
   "ungroup" chip to undo; a group of processes, from any rule or "Group by
-  product", has a "merge" chip — or select it and click Merge — to turn it into a
+  product" (whose "ungroup" chip splits just that group back into its
+  members, each of which then has a "regroup" chip that bundles them again;
+  turning "Group by product" on again regroups all of them), has a "merge" chip — or select it and click Merge — to turn it into a
   merged process), **Merge** (combine their inventories into one
   process, "merged ×" chip to undo — see [grouping.md](grouping.md)) and
-  **To others**.
+  **To others**. The status bar under the tree sums the selected processes:
+  amounts per unit (units are not added together) and impact; a process inside
+  another selected process is not counted again, its impact is in that one's.
   Every row has a **×** (on hover: at the right end of the name in the list,
   after the other row actions; at the box corner in the tree view) that moves
   it to its parent's **others** row; "To others" does the same for a
@@ -161,7 +169,7 @@ API in `src/lca_viewer/server.py`.
   **Reset view** goes back to the plain tree: collapsed, no pins or moved
   rows, no groups (every grouping rule, quick groups included, and *Group by
   product*), no merges and no custom names. Changing the cut-off clears pins and moved rows.
-  Both show a notice with **Undo**, which restores everything they removed.
+  Both show a notice saying what they removed; Ctrl/⌘+Z brings it back.
 - **Keyboard** (the tree clicked last; not while typing in a field):
 
   | Key | Action |
@@ -173,8 +181,9 @@ API in `src/lca_viewer/server.py`.
   | Space | open (or close) the row's pop-up (members pop-up for a bundle) |
   | o | move the selection to others (inside an expanded others row: pin it out) |
   | m | merge the selection, or unmerge a selected merged row |
-  | g | group the selection, or ungroup a selected group |
+  | g | one group: ungroup it (a "group by product" becomes an exception, put back by its regroup chip or by g on one of its processes); one process: put back its ungrouped product group, else group its same-named siblings under the product name, else nothing; several rows: group them (named after the product when they all deliver one, else "group N") |
   | r | rename the selected row (display name only) |
+  | Ctrl/⌘ + Z | undo the last change to the tree |
   | Esc | clear the selection |
   | Backspace | in a pop-up: back to the previous one |
 
@@ -360,7 +369,14 @@ functional unit is not at the same position (view saved from another model
 or database version), it is found by name and location and only the
 position-free parts are applied (functional unit, amount, method, cut-off,
 rules scoped everywhere, names); expansions, pins, moved rows and merges are
-dropped, and the notice says so. Loading is undoable.
+dropped, and the notice says so. Loading can be undone with Ctrl/⌘+Z.
+
+**Undo** (Ctrl/⌘+Z): each change of the tree — groups,
+ungroups, merges, pins, moved rows, names, cut-off, amount, method, display
+settings and a functional unit change — is a step, and undo goes back one step
+at a time. Expanding and collapsing are not steps of their own: they are kept
+with the step they fall in. A tab's first functional unit has nothing to go
+back to. Steps are kept per tab and not saved.
 
 Expansion semantics: a group that hides an expanded member opens by itself,
 so adding a group-by rule does not hide the branch being explored; collapsing

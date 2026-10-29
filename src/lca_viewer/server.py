@@ -301,6 +301,8 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
                 f = flows.iloc[r.node.flow]
                 out["flow"] = {"index": int(r.node.flow), "name": f["name"], "compartment": f["compartment"],
                                "subcompartment": f["subcompartment"]}
+            if r.regroup:
+                out["regroup"] = r.regroup
             if r.kind != "direct" and r.sources is not None:
                 out["emitters"] = [meta(j) for j, _ in r.sources]  # processes whose direct emissions these are
             if r.members is not None:
@@ -606,6 +608,20 @@ class DeleteProjectRequest(BaseModel):
     project: str
     confirm: str
     """The project's name again, typed by the user."""
+
+
+class DeleteDatabaseRequest(BaseModel):
+    folder: str
+    project: str
+    database: str
+
+
+class DefaultsRequest(BaseModel):
+    folder: str
+    project: str
+    version: str
+    """An ecoinvent version of files.brightway.dev, or "bundled" (biosphere3 and the ecoinvent 3.9
+    methods of bw2io)."""
 
 
 class RestoreRequest(BaseModel):
@@ -994,7 +1010,7 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
 
     def ours(line: str):
         """The progress lines of lca_viewer.editing, not Brightway's own messages."""
-        return line if line.startswith(("Created project", "Installing", "Deleted project", "Restor")) \
+        return line if line.startswith(("Created project", "Installing", "Deleted", "Restor", "Downloading", "Writing")) \
             or line.endswith("impact methods installed") else None
 
     def uploaded(path: Path) -> None:
@@ -1031,6 +1047,49 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
             return {"message": f"Project {req.project} deleted"}
 
         return start(f"project {req.project}", ("delete", folder, req.project), work)
+
+    @app.post("/api/brightway/databases/delete")
+    def delete_database(req: DeleteDatabaseRequest):
+        """Delete a database from a project, unless a database linking to it, or its open model, needs it."""
+        folder = folder_of(req.folder)
+        try:
+            p = next((p for p in sources.brightway_projects(folder) if p["name"] == req.project), None)
+        except FileNotFoundError:
+            p = None
+        if p is None:
+            raise HTTPException(404, f"No project {req.project!r} in {folder}")
+        if not p["twofive"]:
+            raise HTTPException(400, f"Project {req.project!r} was made with Brightway 2: upgrade it to Brightway 2.5 first")
+        if req.database not in [d["name"] for d in p["databases"]]:
+            raise HTTPException(404, f"No database {req.database!r} in project {req.project!r}")
+        users = [d["name"] for d in p["databases"] if req.database in d["depends"]]
+        if users:
+            raise HTTPException(400, f"{req.database} is used by {', '.join(users)}: remove "
+                                     f"{'it' if len(users) == 1 else 'them'} first")
+        if any(built_from(m) == (folder, req.project, req.database) and loaded_key(m["path"]) for m in sources.catalog(data)):
+            raise HTTPException(400, f"{req.database} is open: close it first (Close, in the list of loaded databases)")
+
+        def work(job):
+            cli(job, folder, ["database", "delete", req.database, "--project", req.project], ours)
+            return {"message": f"{req.database} removed from {req.project}"}
+
+        return start(f"{req.database} ({req.project})", ("delete-database", folder, req.project, req.database), work)
+
+    @app.post("/api/brightway/defaults/install")
+    def install_defaults_(req: DefaultsRequest):
+        """Add the biosphere and impact methods of an ecoinvent version to a project (``lca-viewer defaults``)."""
+        folder = folder_of(req.folder)
+        if not re.fullmatch(r"bundled|\d+(\.\d+)+", req.version):
+            raise HTTPException(400, f"Unknown default biosphere {req.version!r}")
+        if req.project not in project_names(folder):
+            raise HTTPException(404, f"No project {req.project!r} in {folder}")
+
+        def work(job):
+            cli(job, folder, ["defaults", req.version, "--project", req.project, "--data", str(data)], ours)
+            return {"message": f"Biosphere and impact methods of ecoinvent {req.version.replace('bundled', '3.9')} "
+                               f"are in {req.project}"}
+
+        return start(f"biosphere ({req.project})", ("defaults", folder, req.project, req.version), work)
 
     @app.get("/api/brightway/remote")
     def remote():

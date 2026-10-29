@@ -165,6 +165,23 @@ def project(args) -> None:
         editing.restore_project(args.file, args.name)
 
 
+def database(args) -> None:
+    """Delete a database from a Brightway project."""
+    from . import editing
+
+    editing.delete_database(args.project, args.name)
+
+
+def defaults(args) -> None:
+    """Install the biosphere and impact methods of an ecoinvent version in a project."""
+    from .importing import install_defaults
+    from .sources import brightway_dir
+
+    print(f"Brightway data folder: {brightway_dir()}", flush=True)
+    name = install_defaults(args.project, args.version, Path(args.data) / "downloads")
+    print(f"{name} and its impact methods are ready in project {args.project}", flush=True)
+
+
 def ecoinvent(args) -> None:
     """ecoinvent account (kept in the system's credential store) and release downloads."""
     from . import credentials
@@ -283,6 +300,19 @@ def main(argv=None) -> None:
     p.add_argument("--setup", action="store_true",
                    help="With create: install the biosphere and impact methods bundled with Brightway (ecoinvent 3.9)")
     p.set_defaults(func=project)
+
+    p = sub.add_parser("database", help="Delete a database from a Brightway project (in BRIGHTWAY2_DIR)")
+    p.add_argument("action", choices=["delete"])
+    p.add_argument("name", help="Database name")
+    p.add_argument("--project", required=True)
+    p.set_defaults(func=database)
+
+    p = sub.add_parser("defaults", help="Install the default biosphere and impact methods of an ecoinvent version "
+                                        "from files.brightway.dev into a project (in BRIGHTWAY2_DIR)")
+    p.add_argument("version", help="e.g. 3.10; 'bundled': biosphere3 and the ecoinvent 3.9 methods that come with Brightway")
+    p.add_argument("--project", required=True)
+    p.add_argument("--data", default="data", help="Folder where the download is kept (default: data)")
+    p.set_defaults(func=defaults)
 
     p = sub.add_parser("ecoinvent", help="Download an ecoinvent release into a project (in BRIGHTWAY2_DIR) "
                                          "with your ecoinvent account")

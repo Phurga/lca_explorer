@@ -1147,3 +1147,26 @@ def test_group_products_bundles_siblings_of_the_same_product(grouping_model):
     view.rules = [GroupRule(name="FR only", predicate={"field": "location", "op": "eq", "value": "FR"})]
     assert [r.label for r in view.rows() if r.kind == "group"] == [products.iat[1]]  # FR alone: no group of one
     assert View.from_dict(grouping_model, view.to_dict()).group_products
+
+
+def test_ungrouping_a_product_group_keeps_its_members_as_rows(grouping_model):
+    view = View(Tree(grouping_model, 0), group_products=True)
+    view.expand("0")
+    group = next(r for r in view.rows() if r.kind == "group")
+    assert group.by_product
+    members = {m.product for m in group.node_members}
+    # ungrouped: its members are separate rows again, other groups stay
+    view.ungrouped = {group.id}
+    assert not [r for r in view.rows() if r.kind == "group"]
+    view.expand("0")
+    assert members <= {r.node.product for r in view.rows() if r.kind == "process"}
+    restored = View.from_dict(grouping_model, view.to_dict())
+    assert restored.ungrouped == {group.id} and not [r for r in restored.rows() if r.kind == "group"]
+    # the members remember their group, so that it can be put back
+    assert {r.node.product: r.regroup for r in view.rows() if r.kind == "process" and r.regroup} \
+        == {p: group.id for p in members if p != 0}
+    # put back: the group returns with the same members
+    view.ungrouped = set()
+    again = next(r for r in view.rows() if r.kind == "group")
+    assert again.id == group.id and {m.product for m in again.node_members} == {m.product for m in group.node_members}
+    assert not [r for r in view.rows() if r.regroup]
