@@ -149,6 +149,24 @@ const FLOW_TYPES = {
   emission: { label: "Emission", hint: "Output to nature (biosphere)", color: "hsl(2 65% 52%)" },
   direct: { label: "Direct", hint: "Direct emissions row: the exchanges with nature of the process above", color: "hsl(178 50% 38%)" },
 };
+// Columns of the list after the process (right-click the headers to choose); ``exchange``: what the exchange supplying
+// a process says, in the dataset of the process above it
+const COLUMNS = [
+  { id: "amount", label: "Amount", width: 130 },
+  { id: "impact", label: "Impact", width: 90 },
+  { id: "share", label: "Share", width: 150 },
+  { id: "comment", label: "Comment", width: 260, exchange: true, hint: "Comment on the exchange supplying the process, in the dataset of the process above it (c: all of it)" },
+  { id: "uncertainty", label: "Uncertainty", width: 230, exchange: true, hint: "Uncertainty distribution recorded on the exchange (c: with the pedigree and the rest)",
+    text: (r) => (r.exchanges || []).map(uncertaintyText).filter(Boolean).join("; ") },
+  { id: "pedigree", label: "Pedigree", width: 110, exchange: true, hint: "Pedigree scores of the exchange: reliability, completeness, time, geography, technology",
+    text: (r) => (r.exchanges || []).map((e) => e.pedigree && Object.values(e.pedigree).join(",")).filter(Boolean).join("; ") },
+  { id: "formula", label: "Formula", width: 160, exchange: true, hint: "Formula of the amount, as recorded",
+    text: (r) => (r.exchanges || []).map((e) => e.formula).filter(Boolean).join("; ") },
+  { id: "variable", label: "Variable name", width: 130, exchange: true, hint: "Variable name of the exchange, as recorded",
+    text: (r) => (r.exchanges || []).map((e) => e["variable name"]).filter(Boolean).join("; ") },
+];
+const DEFAULT_COLUMNS = ["amount", "impact", "share"];
+const columnText = (c, r) => (c.text ? c.text(r) : r[c.id]) || "";
 const fromNature = (compartment) => /resource/i.test(compartment || "");
 // The type of a row (a key of FLOW_TYPES); none for an others row. A group or merged row takes the type of its first member.
 function flowTypeOf(r) {
@@ -159,6 +177,43 @@ function flowTypeOf(r) {
   const part = r.parts?.[0];
   if (part?.flow !== undefined) return fromNature(part.location) ? "resource" : "emission";
   return (r.kind === "process" ? r.waste : part?.waste) ? "waste" : "technosphere";
+}
+// "Split by flow type": below each row, the rows are in the order of a SimaPro process (inputs from nature, materials
+// and fuels, electricity and heat, emissions, waste to treatment), the list showing a heading for each section
+const SPLIT_SECTIONS = [
+  ["resource", "Resources"], ["material", "Materials / fuels"], ["energy", "Electricity / heat"],
+  ["direct", "Direct exchanges with nature"], ["air", "Emissions to air"], ["water", "Emissions to water"],
+  ["soil", "Emissions to soil"], ["other", "Other flows"], ["waste", "Waste to treatment"], ["rest", "Others"],
+];
+const SECTION_LABELS = Object.fromEntries(SPLIT_SECTIONS);
+const SECTION_RANK = Object.fromEntries(SPLIT_SECTIONS.map(([key], i) => [key, i]));
+function sectionOf(r) {
+  if (r.kind === "rest") return "rest";
+  if (r.kind === "direct") return "direct";
+  const part = r.parts?.[0];
+  const compartment = r.kind === "flow" ? r.flow.compartment : part?.flow !== undefined ? part.location : null;
+  if (compartment !== null) {
+    const c = String(compartment).toLowerCase();
+    return /resource/.test(c) ? "resource" : /\bair\b/.test(c) ? "air" : /water/.test(c) ? "water" : /soil/.test(c) ? "soil" : "other";
+  }
+  if (r.kind === "process" ? r.waste : part?.waste) return "waste";
+  const product = r.kind === "process" ? r.label.split(" | ")[0] : part?.reference_product || part?.name || "";
+  return /^(electricity|heat|steam|cooling)\b/i.test(product) ? "energy" : "material";
+}
+// The rows with the rows below each row ordered by section (the order inside a section is kept)
+function splitRows(rows) {
+  const below = new Map();
+  for (const r of rows) {
+    if (!below.has(r.parent)) below.set(r.parent, []);
+    below.get(r.parent).push(r);
+  }
+  const out = [];
+  const place = (r) => {
+    out.push(r);
+    (below.get(r.id) || []).map((c) => [SECTION_RANK[sectionOf(c)], c]).sort((a, b) => a[0] - b[0]).forEach(([, c]) => place(c));
+  };
+  rows.filter((r) => r.parent == null || !rows.some((q) => q.id === r.parent)).forEach(place);
+  return out;
 }
 // Empty when group colours are switched off (``view.groupColors``)
 function groupColors(rows, view) {
@@ -430,22 +485,25 @@ function FunctionalUnit({ root, onSelect, fields }) {
     return () => clearTimeout(timer);
   }, [text, predicate, open]);
 
-  function choose(r) {
-    onSelect(r);
+  // ``inTab`` (Ctrl/⌘ with Enter or the click): the process opens in a new tab, this one stays as it is
+  function choose(r, inTab) {
+    onSelect(r, inTab);
     setText("");
     setOpen(false);
+    // The keys of the tab (Ctrl+Z) are not for a field
+    box.current?.querySelector("input")?.blur();
   }
   function onKeyDown(e) {
     if (e.key === "ArrowDown") { e.preventDefault(); setActive((a) => Math.min(a + 1, found.results.length - 1)); }
     else if (e.key === "ArrowUp") { e.preventDefault(); setActive((a) => Math.max(a - 1, 0)); }
-    else if (e.key === "Enter" && found.results[active]) choose(found.results[active]);
+    else if (e.key === "Enter" && found.results[active]) choose(found.results[active], e.ctrlKey || e.metaKey);
     else if (e.key === "Escape") setOpen(false);
   }
   useEffect(() => {
     box.current?.querySelector(".search-results .active")?.scrollIntoView({ block: "nearest" });
   }, [active]);
 
-  const current = root ? `${root.name} | ${root.location} — ${root.reference_product}` : "";
+  const current = root ? `${root.name} | ${root.location}${root.reference_product ? ` — ${root.reference_product}` : ""}` : "";
   const words = text.toLowerCase().split(/\s+/).filter(Boolean);
   return html`
     <div class="fu" ref=${box}>
@@ -470,7 +528,7 @@ function FunctionalUnit({ root, onSelect, fields }) {
               <div class="search-results" role="listbox">
                 ${found.results.map((r, i) => html`
                   <div role="option" aria-selected=${i === active} class=${i === active ? "active" : ""}
-                       onMouseEnter=${() => setActive(i)} onMouseDown=${(e) => { e.preventDefault(); choose(r); }}>
+                       onMouseEnter=${() => setActive(i)} onMouseDown=${(e) => { e.preventDefault(); choose(r, e.ctrlKey || e.metaKey); }}>
                     <div><b><${Highlight} text=${r.name} words=${words} /></b> <span class="loc-chip">${r.location}</span></div>
                     <small><${Highlight} text=${r.reference_product} words=${words} /> · ${unit(r.unit)}</small>
                   </div>`)}
@@ -1137,6 +1195,9 @@ function NodePicker({ folder, project, kind, placeholder, onPick }) {
 // What the pop-ups, the tree and the edit panel need of edit mode: { editing, origin, pending, locked, stale,
 // stage(change), openForm(what) }. Outside edit mode only ``editing`` (false) is there.
 const EditorContext = createContext({ editing: false, pending: [], locked: [] });
+// Whether the options of the views (amount, method, cut-off, display, view bar) are shown: one switch for all tabs
+// and pop-ups, while the options themselves are those of each tab or pop-up
+const ViewOptionsContext = createContext(true);
 const bwQuery = (o) => `folder=${encodeURIComponent(o.folder)}&project=${encodeURIComponent(o.project)}`;
 const datasetUrl = (o, database, code) => `/api/brightway/dataset?${bwQuery(o)}&database=${encodeURIComponent(database)}&code=${encodeURIComponent(code)}`;
 
@@ -1577,8 +1638,36 @@ function MethodSelect({ methods, value, onChange }) {
 }
 
 // ---------------------------------------------------------------- tree
-function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onUngroup, onRegroup, ungroupable, onMergeGroup, onUnpin, onPin, onMoveToOthers, onInfo, onUnmerge, onRevert, view, focus, renaming, onStartRename, onRename, nameEdit, onNameEdit }) {
+// Right-click on the headers of the list: choose its columns (the process is always there)
+function ColumnMenu({ at, columns, onChange, onClose }) {
+  const box = useRef(null);
+  useEffect(() => {
+    const down = (e) => !box.current?.contains(e.target) && onClose();
+    const key = (e) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } };
+    document.addEventListener("mousedown", down);
+    document.addEventListener("keydown", key, true);
+    return () => { document.removeEventListener("mousedown", down); document.removeEventListener("keydown", key, true); };
+  }, []);
+  const toggle = (id) => onChange(COLUMNS.map((c) => c.id).filter((x) => (x === id) !== columns.includes(x)));
+  const left = Math.max(4, Math.min(at.x, window.innerWidth - 220)), top = Math.max(4, Math.min(at.y, window.innerHeight - 290));
+  return html`
+    <div class="column-menu" ref=${box} style=${{ left: `${left}px`, top: `${top}px` }} role="menu" aria-label="Columns">
+      ${COLUMNS.map((c, i) => html`
+        <${Fragment} key=${c.id}>
+          ${c.exchange && !COLUMNS[i - 1].exchange && html`<div class="column-menu-head">Exchange data</div>`}
+          <label title=${c.hint}><input type="checkbox" checked=${columns.includes(c.id)} onChange=${() => toggle(c.id)} /> ${c.label}</label>
+        <//>`)}
+    </div>`;
+}
+
+function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onUngroup, onRegroup, ungroupable, onMergeGroup, onUnpin, onPin, onMoveToOthers, onInfo, onUnmerge, onRevert, view, focus, renaming, onStartRename, onRename, nameEdit, onNameEdit, onColumns }) {
   const byId = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
+  const [columnMenu, setColumnMenu] = useState(null);  // where the columns menu is open: { x, y }
+  const shown = new Set(view.columns);
+  const extra = COLUMNS.filter((c) => c.exchange && shown.has(c.id));
+  const sections = new Map();  // row id -> the section of the last row seen below it
+  const previous = { depth: 0 };  // the depth of the row before
+  const span = 1 + COLUMNS.filter((c) => shown.has(c.id)).length;
   const colors = useMemo(() => groupColors(rows, view), [rows, view.groupColors, view.colorBy, view.ruleColors]);
   const ctx = useContext(EditorContext);
   const editing = ctx.editing;
@@ -1593,18 +1682,27 @@ function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onU
   if (!rows.length) return html`<div class="empty">Choose a functional unit to start.</div>`;
   return html`
     <div class="tree" ref=${box}>
-      <table style=${view.comments ? { minWidth: "860px" } : null}>
-        <colgroup><col /><col style="width:130px" /><col style="width:90px" /><col style="width:150px" />${view.comments && html`<col style="width:260px" />`}</colgroup>
-        <thead><tr><th>Process</th><th class="num">Amount</th><th class="num">Impact</th>
-          <th title="Switched with the cut-off basis (total | parent)">Share of ${shareBasis === "parent" ? "parent" : "total"}</th>
-          ${view.comments && html`<th title="Comment on the exchange supplying the process, in the dataset of the process above it (c: all of it)">Comments</th>`}</tr></thead>
+      <table style=${{ minWidth: `${Math.max(460, 300 + COLUMNS.filter((c) => shown.has(c.id)).reduce((sum, c) => sum + c.width, 0))}px` }}>
+        <colgroup><col />${COLUMNS.filter((c) => shown.has(c.id)).map((c) => html`<col key=${c.id} style=${{ width: `${c.width}px` }} />`)}</colgroup>
+        <thead title="Right-click to choose the columns" onContextMenu=${(e) => { e.preventDefault(); setColumnMenu({ x: e.clientX, y: e.clientY }); }}><tr><th>Process</th>
+          ${shown.has("amount") && html`<th class="num">Amount</th>`}${shown.has("impact") && html`<th class="num">Impact</th>`}
+          ${shown.has("share") && html`<th title="Switched with the cut-off basis (total | parent)">Share of ${shareBasis === "parent" ? "parent" : "total"}</th>`}
+          ${extra.map((c) => html`<th key=${c.id} title=${c.hint}>${c.label}</th>`)}</tr></thead>
         <tbody>
           ${rows.map((r) => {
+            // Split by flow type: a heading where the section of the rows below a row changes
+            // (again when the rows come back from the rows below a sibling)
+            const section = view.splitByType && r.depth > 0 ? sectionOf(r) : null;
+            const returned = previous.depth > r.depth;
+            previous.depth = r.depth;
+            const heading = section && (sections.get(r.parent) !== section || returned) && (sections.set(r.parent, section), SECTION_LABELS[section]);
             const share = shareOf(r, byId, rootImpact, shareBasis);
             const amount = rowAmount(r);
             const [product, name, location] = r.kind === "process" ? r.label.split(" | ") : [r.label];
             return html`
-              <tr key=${r.id} data-id=${r.id} class="${r.kind} ${selection.has(r.id) ? "selected" : ""} ${focus === r.id ? "focus" : ""} ${colors.has(r.id) ? "in-group" : ""}"
+              <${Fragment} key=${r.id}>
+              ${heading && html`<tr class="section"><td colspan=${span}><span style=${{ paddingLeft: `${r.depth * 16 + 18}px` }}>${heading}</span></td></tr>`}
+              <tr data-id=${r.id} class="${r.kind} ${selection.has(r.id) ? "selected" : ""} ${focus === r.id ? "focus" : ""} ${colors.has(r.id) ? "in-group" : ""}"
                   style=${colors.has(r.id) ? { "--group-color": colors.get(r.id) } : null}
                   onClick=${(e) => onSelect(r, e.ctrlKey || e.metaKey || e.shiftKey)}
                   onContextMenu=${(e) => onInfo(r, e)}>
@@ -1661,7 +1759,7 @@ function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onU
                     </span>
                   </div>
                 </td>
-                <td class="num" title=${amount}>${editing && r.kind === "process" && r.meta && r.depth > 0 && suppliedTo(r, byId).length === 1
+                ${shown.has("amount") && html`<td class="num" title=${amount}>${editing && r.kind === "process" && r.meta && r.depth > 0 && suppliedTo(r, byId).length === 1
                   ? html`<${Editable} value=${amount} title="Double-click to change this input in the dataset of the process above (not the amount in this tree)"
                       disabled=${ctx.locked.includes(suppliedTo(r, byId)[0].database)}
                       load=${async () => {
@@ -1675,20 +1773,22 @@ function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onU
                       }}
                       onCommit=${(text) => { const parent = suppliedTo(r, byId)[0]; const e = links[r.id];
                         return quickEdit(ctx, parent.database, parent.code, patchExchange(e.input, e.amount, text)); }} />`
-                  : amount}</td>
-                <td class="num impact">${fmt(r.impacts[0])}</td>
-                <td class="impact">
+                  : amount}</td>`}
+                ${shown.has("impact") && html`<td class="num impact">${fmt(r.impacts[0])}</td>`}
+                ${shown.has("share") && html`<td class="impact">
                   <div class="share">
                     <div class="track"><div class="fill ${share < 0 ? "neg" : ""}"
                       style=${{ width: `${Math.min(100, Math.abs(share) * 100)}%` }}></div></div>
                     <span>${pct(share)}</span>
                   </div>
-                </td>
-                ${view.comments && html`<td class="comment" title=${r.comment || ""}>${r.comment}</td>`}
-              </tr>`;
+                </td>`}
+                ${extra.map((c) => html`<td key=${c.id} class="comment" title=${columnText(c, r)}>${columnText(c, r)}</td>`)}
+              </tr>
+              <//>`;
           })}
         </tbody>
       </table>
+      ${columnMenu && html`<${ColumnMenu} at=${columnMenu} columns=${view.columns} onChange=${onColumns} onClose=${() => setColumnMenu(null)} />`}
     </div>`;
 }
 
@@ -1699,23 +1799,46 @@ const GAP = {
   vertical: { depth: 56, slot: 16 }, // root on top, inputs below
 };
 
-// Tidy tree: leaves take consecutive slots, a parent is centred on its children.
-// Sets x, y and depth on each node reachable from ``root`` through ``childrenOf``.
+// Compact tidy tree: a parent is centred on its children, and a subtree is pushed along the
+// slot axis only as far as needed not to meet a node of the subtrees before it *at the same
+// depth* — so nodes at different depths share a slot (a row, in the horizontal display) and
+// a depth holds one node per slot. Sets x, y and depth on each node reachable from ``root``
+// through ``childrenOf``.
 function tidyLayout(root, childrenOf, orientation) {
   const gap = GAP[orientation];
   const depthStep = (orientation === "horizontal" ? BOX.w : BOX.h) + gap.depth;
   const slotStep = (orientation === "horizontal" ? BOX.h : BOX.w) + gap.slot;
-  let nextSlot = 0;
-  function place(node, depth) {
+  // Slot of each node relative to its parent; returns the subtree's contour: the lowest and
+  // highest slot at each depth below the node, relative to the node (index 0 is the node)
+  function pack(node) {
     const kids = childrenOf(node);
-    const slot = kids.length
-      ? (() => { const s = kids.map((k) => place(k, depth + 1)); return (s[0] + s[s.length - 1]) / 2; })()
-      : nextSlot++;
-    [node.x, node.y] = orientation === "horizontal" ? [depth * depthStep, slot * slotStep] : [slot * slotStep, depth * depthStep];
-    node.depth = depth;
-    return slot;
+    if (!kids.length) return { lo: [0], hi: [0] };
+    const lo = [], hi = [], shifts = [];
+    kids.forEach((kid, i) => {
+      const c = pack(kid);
+      let shift = 0;
+      if (i) for (let d = 0; d < Math.min(c.lo.length, hi.length); d++) shift = Math.max(shift, hi[d] + 1 - c.lo[d]);
+      shifts.push(shift);
+      c.lo.forEach((v, d) => { if (d >= lo.length) lo.push(v + shift); });
+      c.hi.forEach((v, d) => { if (d >= hi.length || v + shift > hi[d]) hi[d] = v + shift; });
+    });
+    const mid = shifts[shifts.length - 1] / 2;
+    kids.forEach((kid, i) => { kid.rel = shifts[i] - mid; });
+    return { lo: [0, ...lo.map((v) => v - mid)], hi: [0, ...hi.map((v) => v - mid)] };
   }
-  place(root, 0);
+  pack(root);
+  const placed = [];
+  (function assign(node, depth, slot) {
+    node.depth = depth;
+    node.slot = slot;
+    placed.push(node);
+    for (const kid of childrenOf(node)) assign(kid, depth + 1, slot + kid.rel);
+  })(root, 0, 0);
+  const first = Math.min(...placed.map((n) => n.slot));
+  for (const n of placed) {
+    const slot = n.slot - first;
+    [n.x, n.y] = orientation === "horizontal" ? [n.depth * depthStep, slot * slotStep] : [slot * slotStep, n.depth * depthStep];
+  }
 }
 
 function graphSize(nodes) {
@@ -1889,13 +2012,16 @@ function nodeTitle(r, s, places) {
   return `${r.label}\n${fmt(r.impacts[0])} (${pct(s)})${places.length > 1 ? `\nIn ${places.length} places in the tree: amounts summed, loops counted once` : ""}`;
 }
 
-// A group's colour overrides --group, which the group marks are drawn with
-const groupStyle = (colors, r) => (r.kind === "group" && colors.has(r.id) ? { "--group": colors.get(r.id) } : null);
+// The colour of a row (``colors``: see groupColors) is --mark, which the boxes, edges, bars and bands are drawn with; a
+// group's colour also overrides --group, which its name is drawn with
+const markStyle = (colors, r) => (colors.has(r.id)
+  ? { "--mark": colors.get(r.id), ...(r.kind === "group" && { "--group": colors.get(r.id) }) } : null);
+const coloredClass = (colors, r) => (colors.has(r.id) ? "colored" : "");
 
 function sankeyMarks({ graph, byId, view, colors, selection, focus, onSelect, onToggle, onInfo }) {
   return html`
     ${graph.edges.map((e) => html`
-      <path key=${`b-${e.key}`} class="band ${e.share < 0 ? "neg" : ""} ${e.to.row.kind}" d=${bandPath(e)} style=${groupStyle(colors, e.to.row)}>
+      <path key=${`b-${e.key}`} class="band ${e.share < 0 ? "neg" : ""} ${e.to.row.kind} ${coloredClass(colors, e.to.row)}" d=${bandPath(e)} style=${markStyle(colors, e.to.row)}>
         <title>${rowNames(e.to.row, byId, view).main} → ${rowNames(e.from.row, byId, view).main}\n${fmt(e.to.row.impacts[0])} (${pct(e.share)} of the total)</title>
       </path>`)}
     ${graph.nodes.map(({ key, row: r, share: s, x, y, h }) => {
@@ -1903,8 +2029,8 @@ function sankeyMarks({ graph, byId, view, colors, selection, focus, onSelect, on
       const detail = [names.qual && truncate(names.qual, 24), rowAmount(r), pct(s)].filter(Boolean).join(" · ");
       const cy = y + h / 2, lx = x + SANKEY.bar + 6;
       return html`
-        <g key=${key} data-id=${r.id} class="snode ${r.kind} ${selection.has(r.id) ? "selected" : ""} ${focus === r.id ? "focus" : ""} ${r.impacts[0] < 0 ? "neg" : ""}"
-           style=${groupStyle(colors, r)}
+        <g key=${key} data-id=${r.id} class="snode ${r.kind} ${selection.has(r.id) ? "selected" : ""} ${focus === r.id ? "focus" : ""} ${r.impacts[0] < 0 ? "neg" : ""} ${coloredClass(colors, r)}"
+           style=${markStyle(colors, r)}
            onClick=${(e) => onSelect(r, e.ctrlKey || e.metaKey || e.shiftKey)}
            onDblClick=${() => r.expandable && onToggle(r)}
            onContextMenu=${(e) => onInfo(r, e)}>
@@ -2011,7 +2137,8 @@ function TreeGraph({ rows, rootImpact, shareBasis, selection, onToggle, onSelect
         <g transform=${`translate(${transform.x},${transform.y}) scale(${transform.k})`}>
           ${sankey ? sankeyMarks({ graph, byId, view, colors, selection, focus, onSelect, onToggle, onInfo }) : html`
           ${graph.edges.map((e) => html`
-            <path key=${`e-${e.key}`} class="edge ${e.share < 0 ? "neg" : ""} ${e.back ? "back" : ""}"
+            <path key=${`e-${e.key}`} class="edge ${e.share < 0 ? "neg" : ""} ${e.back ? "back" : ""} ${coloredClass(colors, e.to.rows[0])}"
+              style=${markStyle(colors, e.to.rows[0])}
               d=${edgePath(e.from, e.to, orientation, e.back)} stroke-width=${1 + 14 * Math.min(1, Math.abs(e.share))}>
               <title>${edgeTitle(e)}</title>
             </path>`)}
@@ -2029,13 +2156,14 @@ function TreeGraph({ rows, rootImpact, shareBasis, selection, onToggle, onSelect
             const toggle = () => onToggle(r.expanded ? places.filter((p) => p.expanded) : [places.find((p) => p.expandable)]);
             const first = places[0];
             return html`
-              <g key=${key} data-id=${first.id} class="node ${r.kind} ${places.some((p) => selection.has(p.id)) ? "selected" : ""} ${places.some((p) => focus === p.id) ? "focus" : ""}"
-                 style=${groupStyle(colors, r)}
+              <g key=${key} data-id=${first.id} class="node ${r.kind} ${places.some((p) => selection.has(p.id)) ? "selected" : ""} ${places.some((p) => focus === p.id) ? "focus" : ""} ${coloredClass(colors, first)}"
+                 style=${markStyle(colors, first)}
                  onClick=${(e) => onSelect(first, e.ctrlKey || e.metaKey || e.shiftKey)}
                  onDblClick=${() => r.expandable && toggle()}
                  onContextMenu=${(e) => onInfo(first, e)}>
                 <title>${nodeTitle(r, s, places)}</title>
                 <rect x=${x} y=${y} width=${BOX.w} height=${BOX.h} rx="6" />
+                ${colors.has(first.id) && html`<rect x=${x} y=${y} width="5" height=${BOX.h} rx="2" class="mark" />`}
                 <text x=${x + 10} y=${y + 17} class="title">${truncate(title, 30)}</text>
                 <text x=${x + 10} y=${y + 32} class="subtitle">${truncate(subtitle, 34)}</text>
                 <rect x=${x + 10} y=${y + 41} width=${barWidth} height="7" rx="3.5" class="track" />
@@ -2213,32 +2341,33 @@ function SaveMenu({ disabled, onSave, onLoad, onCopy }) {
 }
 
 // ---------------------------------------------------------------- view bar (names and product grouping)
-function ViewBar({ view, setView, example }) {
+function ViewBar({ view, setView, example, embedded }) {
   const set = (patch) => setView({ ...view, ...patch });
   return html`
     <div class="view-bar">
       <div class="row">
         <button class=${view.groupProducts ? "primary" : ""} onClick=${() => set({ groupProducts: !view.groupProducts })}
           title="Bundle sibling inputs of the same product (other regions or routes) under one row">Group by product</button>
-        <button class=${view.comments ? "primary" : ""} onClick=${() => set({ comments: !view.comments })}
-          title="Show the comments column of the list: the comment on the exchange supplying each process">Comments</button>
-        <span class="segmented" role="group" aria-label="Row names">
+        <button class=${view.splitByType ? "primary" : ""} onClick=${() => set({ splitByType: !view.splitByType })}
+          title="Order what is below each row in the sections of a SimaPro process: resources, materials / fuels, electricity / heat, emissions, waste to treatment">Split by flow type</button>
+        ${!embedded && html`<span class="segmented" role="group" aria-label="Row names">
           ${[["full", "Full names"], ["short", "Short names"], ["custom", "Custom name"]].map(([id, label]) => html`
             <button class=${view.naming === id ? "primary" : ""} onClick=${() => set({ naming: id })}>${label}</button>`)}
-        </span>
-        <span class="segmented" role="group" aria-label="Colours">
-          ${[["group", "Group colours", "Colour the rows of each group with its rule's colour"],
+        </span>`}
+        ${!embedded && html`<span class="segmented" role="group" aria-label="Colours">
+          ${[["none", "No colours", "Colour nothing: rows and bars keep one colour"],
+            ["group", "Group colours", "Colour the rows of each group with its rule's colour"],
             ["type", "Flow type colours", "Colour the rows by the kind of exchange: product, technosphere input, waste, resource, emission"]].map(([id, label, hint]) => html`
-            <button class=${view.groupColors && (view.colorBy || "group") === id ? "primary" : ""} title=${hint}
-              onClick=${() => set({ colorBy: id, groupColors: true })}>${label}</button>`)}
-        </span>
+            <button class=${(view.groupColors ? view.colorBy || "group" : "none") === id ? "primary" : ""} title=${hint}
+              onClick=${() => set(id === "none" ? { groupColors: false } : { colorBy: id, groupColors: true })}>${label}</button>`)}
+        </span>`}
       </div>
-      ${view.groupColors && view.colorBy === "type" && html`
+      ${!embedded && view.groupColors && view.colorBy === "type" && html`
         <div class="color-legend" aria-label="Flow type colours">
           ${Object.entries(FLOW_TYPES).map(([key, t]) => html`
             <span key=${key} title=${t.hint}><i style=${{ background: t.color }}></i>${t.label}</span>`)}
         </div>`}
-      ${view.naming === "custom" && html`<${RecipeEditor} recipe=${view.recipe} setRecipe=${(recipe) => set({ recipe })} example=${example} />`}
+      ${!embedded && view.naming === "custom" && html`<${RecipeEditor} recipe=${view.recipe} setRecipe=${(recipe) => set({ recipe })} example=${example} />`}
     </div>`;
 }
 
@@ -2299,14 +2428,15 @@ function ProcessRow({ item, above, depth, ancestors, panel }) {
   }, [open]);
   const exchange = panel.onExchange && !(depth === 0 && !above);
   const keys = (e) => {
-    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const inTab = (e.ctrlKey || e.metaKey) && !e.altKey && e.key === "Enter";  // Ctrl/⌘+Enter: in a new tab
+    if ((e.ctrlKey || e.metaKey || e.altKey) && !inTab) return;
     const row = e.currentTarget;
     const used = () => { e.preventDefault(); e.stopPropagation(); };
     const rows = () => [...row.closest(".info-body").querySelectorAll("[data-nav]")];
     const go = (to) => { to?.focus({ preventScroll: true }); to?.scrollIntoView({ block: "nearest" }); };
     if (e.key === " ") { used(); panel.onOpen(item); }
     else if (e.key === "c") { used(); if (exchange) panel.onExchange(item, above); }
-    else if (e.key === "Enter") { used(); panel.onUse(item); }
+    else if (e.key === "Enter") { used(); panel.onUse(item, inTab); }
     else if (e.key === "ArrowRight" && expandable) {
       if (!open) { used(); setOpen(true); return; }
       const all = rows();
@@ -2491,7 +2621,8 @@ function PopupWindow({ target, win, label, className = "", head, width = 560, on
 function popupKeys({ tabs, shown, setTab, body, onClose, exchange, explorerKeys }) {
   return (e) => {
     const box = e.currentTarget;
-    if (e.ctrlKey || e.metaKey || e.altKey || e.target.closest("input, textarea, select, [contenteditable]")) return;
+    const inTab = (e.ctrlKey || e.metaKey) && !e.altKey && e.key === "Enter";  // for the explorer's selected process
+    if (((e.ctrlKey || e.metaKey || e.altKey) && !inTab) || e.target.closest("input, textarea, select, [contenteditable]")) return;
     // A button clicked last (a panel) would also react to Space
     if (e.target !== box && e.target.matches("button")) box.focus();
     const used = () => { e.preventDefault(); e.stopPropagation(); };
@@ -2707,8 +2838,9 @@ function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsByI
   const openActivity = (index) => follow({ index, row: null });
   // The exchange of ``index``'s product in the dataset of ``user``
   const openExchange = (index, user) => follow({ index, row: null, parents: [asMeta(user)], exchange: true });
-  // Enter on a process: it becomes the functional unit of the tab
-  const useAsRoot = (item) => request(`/api/activity/${item.index}?method=${method}`).then((found) => { onUseAsRoot(found); onClose(); })
+  // Enter on a process: it becomes the functional unit of the tab (Ctrl/⌘+Enter: of a new tab)
+  const useAsRoot = (item, inTab) => request(`/api/activity/${item.index}?method=${method}`)
+    .then((found) => { if (inTab) onOpenTab(found); else onUseAsRoot(found); onClose(); })
     .catch((e) => setError(e.message));
   // The panels of processes (exchanges, used by, alternatives) are lists like the main one: see ProcessRow
   const base = info && { index: target.index, name: info.name, location: info.location, unit: info.unit, database: info.database, code: info.code };
@@ -3747,6 +3879,7 @@ function Portal({ slot, children }) {
 // ---------------------------------------------------------------- functional unit view (one tab)
 // The tree that takes keyboard navigation: the one clicked last (several can be visible in split panes)
 let keyboardOwner = null;
+const ROOT_SETTERS = {};  // tab id -> the function that makes a process the functional unit of the tab (the search in the top bar)
 // ``initial``: { state } a saved view, { inherit, root? } settings taken from another tab,
 // or { defaultRoot: true } (first start: the model's default functional unit)
 // ``embedded``: the left panel alone (header, list and bars, without the side panel), inside the Exchanges tab of a
@@ -3806,29 +3939,31 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
   // Inputs replaced by another supplier: {row id of the input: activity index}
   const [substitutions, setSubstitutions] = useState({});
   const [view, setView] = useState(() => ({
-    naming: loadPreference("naming", "full"),
+    naming: embedded ? "full" : loadPreference("naming", "full"),
+    splitByType: embedded || loadPreference("splitByType", "0") === "1",  // a pop-up lists its exchanges by section
     recipe: {
       main: loadPreference("recipeMain", DEFAULT_RECIPE.main), secondary: loadPreference("recipeSecondary", DEFAULT_RECIPE.secondary),
       flowMain: loadPreference("recipeFlowMain", DEFAULT_RECIPE.flowMain), flowSecondary: loadPreference("recipeFlowSecondary", DEFAULT_RECIPE.flowSecondary),
     },
     groupProducts: loadPreference("groupProducts", "0") === "1",
-    comments: !embedded && loadPreference("comments", "1") === "1",  // the pop-up is narrow
+    columns: (() => { try { const c = JSON.parse(loadPreference("columns", "null")); if (Array.isArray(c)) return c; } catch { /* the default */ } return DEFAULT_COLUMNS; })(),
     groupColors: loadPreference("groupColors", "1") === "1",
     colorBy: loadPreference("colorBy", "group"),  // "group" or "type" (flow type)
     // colours picked for rules, by rule name (or field, for a group-by rule)
     ruleColors: (() => { try { return JSON.parse(loadPreference("ruleColors", "{}")) || {}; } catch { return {}; } })(),
   }));
-  const [viewOptions, setViewOptions] = useState(false);  // embedded: the view bar is folded away
+  const showOptions = useContext(ViewOptionsContext);
   const [nameEdit, setNameEdit] = useState(null);  // { id }: the row whose process name is being edited (Enter, in edit mode)
   useEffect(() => {
     if (embedded) return;  // the preferences are the main view's
     savePreference("naming", view.naming);
+    savePreference("splitByType", view.splitByType ? "1" : "0");
     savePreference("recipeMain", view.recipe.main);
     savePreference("recipeSecondary", view.recipe.secondary);
     savePreference("recipeFlowMain", view.recipe.flowMain ?? DEFAULT_RECIPE.flowMain);
     savePreference("recipeFlowSecondary", view.recipe.flowSecondary ?? DEFAULT_RECIPE.flowSecondary);
     savePreference("groupProducts", view.groupProducts ? "1" : "0");
-    savePreference("comments", view.comments ? "1" : "0");
+    savePreference("columns", JSON.stringify(view.columns));
     savePreference("groupColors", view.groupColors ? "1" : "0");
     savePreference("colorBy", view.colorBy);
     savePreference("ruleColors", JSON.stringify(view.ruleColors));
@@ -3841,7 +3976,10 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
   // so that the tree, the pop-ups and the chart all read them
   const [labels, setLabels] = useState({});
   const [renaming, setRenaming] = useState(null);
-  const data = useMemo(() => ({ ...rawData, rows: withLabels(rawData.rows, editing ? {} : labels) }), [rawData, labels, editing]);
+  const data = useMemo(() => {
+    const rows = withLabels(rawData.rows, editing ? {} : labels);
+    return { ...rawData, rows: view.splitByType ? splitRows(rows) : rows };
+  }, [rawData, labels, editing, view.splitByType]);
   const [error, setError] = useState(null);
   const [tab, setTab] = useState("chart");
   const [groupName, setGroupName] = useState("");
@@ -3919,9 +4057,10 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
     }
     if (initial?.root) selectRoot(initial.root);
     else if (initial?.defaultRoot && i.default_root) selectRoot(i.default_root);
-    else box.current?.querySelector(".fu-input input")?.focus({ preventScroll: true });
+    else document.querySelector(".top-bar .fu-input input")?.focus({ preventScroll: true });
   }
 
+  if (!embedded) ROOT_SETTERS[id] = (r) => { keyboardOwner = id; selectRoot(r); };
   function selectRoot(r) {
     setRoot(r);
     setExpanded(new Set([String(r.index)]));
@@ -4205,7 +4344,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
       model: { title: info.title, activities: info.activities },
       root, amount, method: info.methods[method].name, chartMethods: chartMethods.map((k) => info.methods[k].name),
       cutoff: +cutoffValue(cutoff, cutoffBasis).toFixed(8), cutoffBasis, expanded: [...expanded], rules, pinned: [...pinned], others: [...others], merges, ungrouped: [...ungrouped], substitutions, labels,
-      display: { naming: view.naming, recipe: view.recipe, groupProducts: view.groupProducts, comments: view.comments, groupColors: view.groupColors, colorBy: view.colorBy, ruleColors: view.ruleColors },
+      display: { naming: view.naming, recipe: view.recipe, groupProducts: view.groupProducts, splitByType: view.splitByType, columns: view.columns, groupColors: view.groupColors, colorBy: view.colorBy, ruleColors: view.ruleColors },
     };
   }
   function exportView() {
@@ -4243,7 +4382,11 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
       setUngrouped(new Set(sameModel ? saved.ungrouped || [] : []));
       setSubstitutions(sameModel ? saved.substitutions || {} : {});
       setLabels(sameModel ? saved.labels || {} : {});
-      if (saved.display) setView({ ...view, ...saved.display });
+      if (saved.display) {
+        // Views saved before the columns menu have a Comments switch
+        const { comments, ...display } = saved.display;
+        setView({ ...view, ...display, ...(!display.columns && comments ? { columns: [...DEFAULT_COLUMNS, "comment"] } : {}) });
+      }
       setSelection(new Set());
       setError(null);
     } catch (e) {
@@ -4255,7 +4398,8 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
   function onTreeKey(e) {
     const rows = data.rows;
     if (visible && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "z") return undoLast();
-    if (!visible || !rows.length || e.ctrlKey || e.metaKey || e.altKey) return false;
+    const inTab = (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key === "Enter";  // the process in a new tab
+    if (!visible || !rows.length || ((e.ctrlKey || e.metaKey) && !inTab) || e.altKey) return false;
     const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
     const found = rows.findIndex((r) => r.id === cursor.current.id);
     const row = rows[found >= 0 ? found : Math.min(cursor.current.index, rows.length - 1)];
@@ -4333,9 +4477,10 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
         return true;
       case "Enter":
         // The process becomes the functional unit of the tab; in Edit mode, it is renamed in the database
-        // (as a double-click on its name does)
+        // (as a double-click on its name does). With Ctrl/⌘ it opens in a new tab instead.
         if (selectedRows.length !== 1 || row.kind !== "process" || !row.meta) return false;
-        if (editing) setNameEdit({ id: row.id });
+        if (inTab) { if (embedded) embedded.onUse(row.meta, true); else onOpenTab(id, row.meta); }
+        else if (editing) setNameEdit({ id: row.id });
         else if (embedded) embedded.onUse(row.meta);
         else if (row.meta.index !== root?.index) { closeInfo(); selectRoot(row.meta); }
         return true;
@@ -4358,8 +4503,17 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
   }
   const treeKey = useRef(onTreeKey);
   treeKey.current = onTreeKey;
-  // Embedded: the pop-up asks this panel first for its keys; ←/→ with no row selected switch the pop-up's panel
-  if (embedded) embedded.keys.current = (e) => ((e.key === "ArrowLeft" || e.key === "ArrowRight") && !selection.size ? false : treeKey.current(e));
+  // Embedded: the pop-up asks this panel first for its keys. ↑ on the top row unselects it, and with no row selected ←/→
+  // (and ↑) are the pop-up's: they switch its panel
+  if (embedded) {
+    embedded.keys.current = (e) => {
+      if (e.key === "ArrowUp" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (!selection.size) return false;
+        if (cursor.current.id === data.rows[0]?.id) { setSelection(new Set()); return true; }
+      }
+      return (e.key === "ArrowLeft" || e.key === "ArrowRight") && !selection.size ? false : treeKey.current(e);
+    };
+  }
   useEffect(() => {
     if (embedded) return;
     const onKey = (e) => {
@@ -4415,8 +4569,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
   }
   return html`
     <div class=${`fu-view ${embedded ? "embedded" : ""}`} ref=${box} style=${{ display: visible ? "" : "none" }}>
-      <header class="fu-header">
-        ${!embedded && html`<${FunctionalUnit} root=${root} onSelect=${selectRoot} fields=${info.query_fields} />`}
+      ${showOptions && html`<header class="fu-header">
         <label>Amount <${NumberInput} class="amount" value=${amount} min=${1e-12} step="any"
           onValue=${setAmount} aria-label="Amount" />${root ? root.unit : ""}</label>
         <${MethodSelect} methods=${info.methods} value=${method} onChange=${setMethod} />
@@ -4427,23 +4580,21 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
           onChange=${(e) => changeCutoffMode(e.target.value)}>
           ${Object.entries(CUTOFF_MODES).map(([key, mode]) => html`<option value=${key} title=${mode.hint}>${mode.label}</option>`)}
         </select>
-      </header>
+      </header>`}
         <section class="tree-section" ref=${treeSection} onMouseDown=${() => { if (!embedded) keyboardOwner = id; }}>
-          <div class="toolbar">
-            ${!embedded && html`<div class="segmented" role="group" aria-label="Display">
+          ${(showOptions || !embedded) && html`<div class="toolbar">
+            ${showOptions && !embedded && html`<div class="segmented" role="group" aria-label="Display">
               <button class=${display === "list" ? "primary" : ""} onClick=${() => setDisplay("list")}>List</button>
               <button class=${display === "graph" ? "primary" : ""} onClick=${() => setDisplay("graph")}>Tree</button>
               <button class=${display === "sankey" ? "primary" : ""} onClick=${() => setDisplay("sankey")}
                 title="The tree as a flowchart: bands as thick as the impact flowing from each supplier to its user">Sankey</button>
             </div>`}
-            <button onClick=${() => setExpanded(new Set(root ? [String(root.index)] : []))} title="Collapse everything below the root">Collapse</button>
-            <button onClick=${resetView} disabled=${!root} title="Collapse the tree, clear pinned rows and rows moved to others, and remove all groups, merges and custom names (undoable)">Reset view</button>
-            ${embedded && html`<button class=${viewOptions ? "primary" : ""} onClick=${() => setViewOptions(!viewOptions)}
-              title="Names, comments, grouping by product and colours">View options</button>`}
+            ${showOptions && html`<button onClick=${() => setExpanded(new Set(root ? [String(root.index)] : []))} title="Collapse everything below the root">Collapse</button>
+            <button onClick=${resetView} disabled=${!root} title="Collapse the tree, clear pinned rows and rows moved to others, and remove all groups, merges and custom names (undoable)">Reset view</button>`}
             <span class="spacer"></span>
             ${!embedded && html`<${SaveMenu} disabled=${!root} onSave=${exportView} onLoad=${loadView} onCopy=${copyView} />`}
-          </div>
-          ${(!embedded || viewOptions) && html`<${ViewBar} view=${view} setView=${setDisplayView}
+          </div>`}
+          ${showOptions && html`<${ViewBar} embedded=${embedded} view=${view} setView=${setDisplayView}
             example=${(() => { const r = data.rows.find((x) => x.kind === "process" && x.depth > 0); return r ? rowNames(r, rowsById, view) : null; })()} />`}
           ${undo && html`
             <div class="notice" role="status">
@@ -4454,7 +4605,8 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
           ${display === "list"
             ? html`<${Tree} rows=${data.rows} rootImpact=${rootImpact} shareBasis=${shareBasisOf(cutoffBasis)} selection=${selection} onToggle=${toggle} onSelect=${select}
                 renaming=${renaming} onStartRename=${startRename} onRename=${rename} nameEdit=${nameEdit} onNameEdit=${() => setNameEdit(null)}
-                onUngroup=${ungroup} onRegroup=${regroup} ungroupable=${ungroupable} onMergeGroup=${(r) => mergeRows([r])} onUnpin=${unpin} onPin=${pin} onMoveToOthers=${moveToOthers} onInfo=${showInfo} onUnmerge=${unmerge} onRevert=${revertInput} view=${view} focus=${focus} />`
+                onUngroup=${ungroup} onRegroup=${regroup} ungroupable=${ungroupable} onMergeGroup=${(r) => mergeRows([r])} onUnpin=${unpin} onPin=${pin} onMoveToOthers=${moveToOthers} onInfo=${showInfo} onUnmerge=${unmerge} onRevert=${revertInput} view=${view} focus=${focus}
+                onColumns=${(columns) => setView({ ...view, columns })} />`
             : html`<${TreeGraph} rows=${data.rows} rootImpact=${rootImpact} shareBasis=${shareBasisOf(cutoffBasis)} selection=${selection} onToggle=${toggle} onSelect=${select}
                 onUngroup=${ungroup} onRegroup=${regroup} ungroupable=${ungroupable} onMergeGroup=${(r) => mergeRows([r])} onUnpin=${unpin} onPin=${pin} onMoveToOthers=${moveToOthers} onInfo=${showInfo} onUnmerge=${unmerge} view=${view}
                 orientation=${orientation} setOrientation=${setOrientation} cycles=${cycles} setCycles=${setCycles} sankey=${display === "sankey"} focus=${focus} />`}
@@ -4676,6 +4828,9 @@ function LayoutView({ node, renderPane, onResize }) {
 
 // Keys of the lists and pop-ups, for the Shortcuts dialog of the top bar: [keys, what they do]
 const SHORTCUTS = [
+  ["Anywhere", [
+    ["Ctrl/⌘ + K", "Search a process in the top bar: Enter makes it the functional unit of the tab, Ctrl/⌘ + Enter opens it in a new tab"],
+  ]],
   ["Lists and trees (the one clicked last)", [
     ["↓ ↑", "Select the row below / above"],
     ["Shift + ↓ ↑", "Extend the selection over siblings (what Group and Merge act on)"],
@@ -4684,6 +4839,7 @@ const SHORTCUTS = [
     ["Space", "Open (or close) the pop-up of the process"],
     ["c", "Open (or close) the pop-up of its exchange: comment and uncertainty"],
     ["Enter", "Use the process as the functional unit of the tab (in Edit mode: rename it in the database)"],
+    ["Ctrl/⌘ + Enter", "Open the process as the functional unit of a new tab"],
     ["r", "Rename the row in this view (the database is not changed)"],
     ["g", "Group the selected rows, or ungroup a group"],
     ["m", "Merge the selected rows, or unmerge a merged row"],
@@ -4695,12 +4851,13 @@ const SHORTCUTS = [
     ["← →", "Switch panel"],
     ["↓", "Enter the panel; then ↓ ↑ move between its rows, ↑ on the first goes back to the panels"],
     ["→ ←", "On a row of a list: expand, collapse (or go to the first child, the parent)"],
-    ["Space  c  Enter", "On a row of a list: as in the main list"],
+    ["Space  c  Enter  Ctrl/⌘ + Enter", "On a row of a list: as in the main list"],
     ["Backspace", "Back to the previous pop-up"],
     ["Esc", "Close the pop-up (a pinned one only while the pointer is on it)"],
   ]],
   ["Search fields", [
     ["↓ ↑  Enter", "Move through the results, choose one"],
+    ["Ctrl/⌘ + Enter", "Choose the result in a new tab (also Ctrl/⌘-click)"],
     ["Esc", "Close the results"],
   ]],
 ];
@@ -4739,6 +4896,23 @@ function App() {
   const [databases, setDatabases] = useState(undefined);
   const [loadOpen, setLoadOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  // The options of the views (amount, method, cut-off, display, view bar) shown or folded away, in all tabs and pop-ups
+  const [viewOptions, setViewOptions] = useState(() => loadPreference("viewOptions", "1") === "1");
+  useEffect(() => savePreference("viewOptions", viewOptions ? "1" : "0"), [viewOptions]);
+  // Ctrl/⌘ + K: the search of the top bar
+  useEffect(() => {
+    const onKey = (e) => {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "k") {
+        const input = document.querySelector(".top-bar .fu-input input");
+        if (!input) return;
+        e.preventDefault();
+        input.focus();
+        input.select();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
   // The process form: null (closed), or what to open it on: {} (a new process), { edit } (a dataset written
   // by the app), { copyFrom } (a process to start from), { initial } (a change staged before)
   const [datasetOpen, setDatasetOpen] = useState(null);
@@ -4888,8 +5062,10 @@ function App() {
     },
   };
 
-  const topBar = (sidePanel) => html`
+  // ``centre``: the search of a process (a model is open), in the middle of the bar
+  const topBar = (sidePanel, centre) => html`
     <header class="top-bar">
+      <div class="top-left">
       <h1>LCA Process Explorer</h1>
       <${DatabaseSelect} databases=${databases} />
       ${databases && html`<button onClick=${() => setLoadOpen(true)}
@@ -4906,9 +5082,12 @@ function App() {
         title=${`${outdated}: the model has to be built again, and its impacts are greyed out until then`}>
         ${rebuilding?.status === "running" ? "Rebuilding…" : "Rebuild required"}</button>`}
       ${rebuilding?.status === "failed" && html`<span class="error-inline" title=${rebuilding.error}>Rebuild failed</span>`}
-      <span class="spacer"></span>
+      </div>
+      <div class="top-centre">${centre}</div>
+      <div class="top-right">
       <button onClick=${() => setShortcutsOpen(true)} title="Keyboard navigation of the lists and pop-ups">Shortcuts</button>
       ${sidePanel}
+      </div>
     </header>
     ${shortcutsOpen && html`<${ShortcutsDialog} onClose=${() => setShortcutsOpen(false)} />`}
     ${loadOpen &&html`<${LoadDatabase} onClose=${() => setLoadOpen(false)} onDatabases=${setDatabases} onLocks=${refreshEditor} />`}
@@ -4934,6 +5113,11 @@ function App() {
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
   }
+  // The search of the top bar: the process becomes the functional unit of the tab in focus, or opens in a new tab
+  const pickRoot = (r, inTab) => {
+    if (inTab) openTab(focus, { inherit: states.current[focusedTab], root: r });
+    else ROOT_SETTERS[focusedTab]?.(r);
+  };
   const renderPane = (pane) => html`
     <${PaneView} key=${pane.id} pane=${pane} focused=${pane.id === focus} multiple=${allTabs.length > 1 && panesOf(layout).length > 1}
       titles=${titles} dragging=${dragging} drop=${drop} setDrop=${setDrop} actions=${actions}>
@@ -4944,9 +5128,13 @@ function App() {
     <//>`;
   return html`
     <${EditorContext.Provider} value=${editor}>
+    <${ViewOptionsContext.Provider} value=${viewOptions}>
     <div class=${`app ${stale ? "stale" : ""}`}>
       ${topBar(html`<button class=${sideOpen ? "primary" : ""} onClick=${() => setSideOpen(!sideOpen)}
-          title="Show or hide the side panel (process and flow contribution, grouping, whole supply chain)">Side panel</button>`)}
+          title="Show or hide the side panel (process and flow contribution, grouping, whole supply chain)">Side panel</button>`, html`
+        <${FunctionalUnit} root=${focusedRoot} fields=${info.query_fields} onSelect=${pickRoot} />
+        <button class=${viewOptions ? "primary" : ""} onClick=${() => setViewOptions(!viewOptions)} aria-pressed=${viewOptions}
+          title="Show or hide the options of the views: amount, impact method, cut-off, display, grouping, names and colours (each tab and pop-up has its own)">View options</button>`)}
       <div class="body">
         <div class="workspace"><${LayoutView} node=${layout} renderPane=${renderPane}
           onResize=${(id, sizes) => setLayout((l) => resizeSplit(l, id, sizes))} /></div>
@@ -4961,6 +5149,7 @@ function App() {
         </aside>
       </div>
     </div>
+    <//>
     <//>`;
 }
 

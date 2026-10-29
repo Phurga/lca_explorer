@@ -118,14 +118,22 @@ API in `src/lca_viewer/server.py`.
   bar), reopened with «, and resized by dragging its left edge. Each tab
   renders its panels into its own slot of the side panel (a small portal), so
   a tab keeps its panel state (current tab, chart choices) when hidden.
-- **Header** (per tab): functional unit search, amount, impact method (all 762
-  ecoinvent methods, grouped by family), display cut-off.
+- **Top bar**: in the middle, the **search** of a process, like a command palette
+  (Ctrl/⌘ + K focuses it; Enter makes the result the functional unit of the tab in
+  focus, Ctrl/⌘ + Enter opens it in a new tab), and the **View options** switch.
+  View options shows or folds away, in all tabs and pop-ups at once, the options of
+  the views: the header (amount, impact method (all 762 ecoinvent methods, grouped by
+  family), display cut-off), the toolbar (List / Tree / Sankey, Collapse, Reset view) and
+  the view bar. The switch is common (and remembered); the options are those of each tab
+  or pop-up, which have their own.
+- **Header** (per tab, with View options): amount, impact method, display cut-off.
 - **Search**: free words (each must appear in the name or product, or equal
   the location: `electricity low voltage fr`) and/or **filters** built with
   the same query builder as grouping rules (location, activity type, ISIC,
   CPC, product, …, with value suggestions). Filters alone browse the
   database (e.g. all `RER` market groups). Results show the match count,
-  highlighted words, location chips; ↑/↓/Enter to choose, Esc to close.
+  highlighted words, location chips; ↑/↓/Enter to choose (Ctrl/⌘+Enter or
+  Ctrl/⌘-click: in a new tab), Esc to close.
   Ranking (`query.search`, punctuation ignored): exact name, exact product,
   markets first, name/product starting with the text, text contained as a
   phrase, shorter names.
@@ -212,6 +220,7 @@ API in `src/lca_viewer/server.py`.
   | g | one group: ungroup it (a "group by product" becomes an exception, put back by its regroup chip or by g on one of its processes); one process: put back its ungrouped product group, else group its same-named siblings under the product name, else nothing; several rows: group them (named after the product when they all deliver one, else "group N") |
   | r | rename the selected row (display name only) |
   | Enter | make the selected process the functional unit of the tab; in Edit mode, rename it in the database instead (as a double-click on its name; Enter stages, Esc cancels) |
+  | Ctrl/⌘ + Enter | open the selected process as the functional unit of a new tab |
   | Ctrl/⌘ + Z | undo the last change to the tree |
   | Esc | clear the selection |
   | Backspace | in a pop-up: back to the previous one |
@@ -244,20 +253,27 @@ API in `src/lca_viewer/server.py`.
   tree as a flowchart. Each row is a bar as tall as its |impact| (the root
   480 px at 100 %), joined to its parent by a band of the same thickness, so
   the bands leaving a process add up to its bar and the main supply paths
-  are the widest. Bars and bands are coloured like the list (groups purple,
-  merged processes blue, direct emissions and others grey); the label beside
+  are the widest. Bars and bands take the colour of the list's colour mode (see the view bar), else
+  groups are purple, merged processes blue, direct emissions and others grey; the label beside
   each bar gives the name, qualifier, amount and share (of the total or of
   the parent, as in the other views). ▸ or double-click expands, click and
   Ctrl/⌘-click select, right-click opens the pop-up, drag pans, wheel zooms;
   row actions are in the selection bar and the pop-ups. Always a tree drawn
   left to right: the Cycles and orientation controls are hidden here.
-- **View bar** (under the toolbar): *Group by product*, *Comments* and *Full / Short /
+- **View bar** (under the toolbar): *Group by product*, *Split by flow type* (below each
+  row, the rows in the sections of a SimaPro process, with a heading each: resources, materials /
+  fuels, electricity / heat, direct exchanges with nature, emissions to air / water / soil, other
+  flows, waste to treatment, others; the order inside a section is kept), *Full / Short /
   Custom* names, applied
   to the list, the tree view, the others panel and the chart; see
-  [charts.md](charts.md). *Comments* (on by default, remembered, saved with the view) shows
-  the list's last column: the comment recorded on the exchange that supplies each process,
-  in the dataset of the process above it (several datasets for a merged one; the whole text
-  in the tooltip or with **c**). `/api/rows` sends it as the row's `comment`.
+  [charts.md](charts.md); and the colours: *No colours*, *Group colours* or *Flow type colours*.
+  **Columns of the list**: right-click the column headers to choose them (the process is
+  always there; remembered, saved with the view). *Amount*, *Impact* and *Share* are on by
+  default; *Exchange data* columns, off by default, show what the exchange supplying
+  each process records, in the dataset of the process above it (several datasets for a
+  merged one; the whole text in the tooltip or with **c**): *Comment*, *Uncertainty*
+  (distribution and parameters), *Pedigree* (the five scores), *Formula* and *Variable
+  name*. `/api/rows` sends the comment as the row's `comment` and the rest as its `exchanges`.
 
   **Amounts** never show more than three digits, in the list, tree view, pop-ups and chart
   tables: from 0.01 to 1000 as `0.0101`, `1.00`, `123`; below and above in scientific notation
@@ -277,7 +293,7 @@ API in `src/lca_viewer/server.py`.
   → expands a row (or goes to its first child), ← collapses it (or goes to the row it
   hangs from; where a row does not use ←/→ they switch panel), Space opens the
   process's pop-up, **c** the pop-up of the exchange the row stands for, and **Enter**
-  makes it the functional unit of the tab (the pop-up closes). Expanding an
+  makes it the functional unit of the tab (the pop-up closes), **Ctrl/⌘+Enter** the one of a new tab. Expanding an
   exchange or an alternative lists its own inputs; expanding a user, the activities
   using it. Esc or Space with no row selected closes the pop-up; Backspace goes back.
   **Used by** (the activities consuming its product — or, for a waste
@@ -292,15 +308,17 @@ API in `src/lca_viewer/server.py`.
   Descriptions are stored in the cached model (`details.pkl`, 77 MB for
   ecoinvent, loaded on first use).
   **Exchanges** is an instance of the main view's left panel (header, list, bars
-  and the keys of the list), rooted at the pop-up's process (amount 1, its
+  and the keys of the list, ↑ on its top row unselects it so that ←/→ switch panel again), rooted at the pop-up's process (amount 1, its
   inputs, direct emissions and waste below it, as in the tree) and with a state of
   its own: expanding, selection, cut-off (starting at the 500 largest rows, so that
   every input is listed), method, groups, merges, pins and names are not shared with
   the tab, nor with another pop-up, and are kept while the pop-up stays on the
-  process. *View options* unfolds the view bar. Space, **c** and the **(i)** of a
+  process. Its defaults differ from the tab's: full names, *Split by flow type* on, every input
+  listed (cut-off); its options (with *View options*) are the header, Collapse, Reset view, *Group
+  by product* and *Split by flow type* only. Space, **c** and the **(i)** of a
   process or flow row replace the pop-up with that process's, that exchange's or
   that flow's pop-up (←/Backspace comes back, the explorer then starts afresh);
-  **Enter** makes the process the functional unit of the tab. In Edit mode amounts and names
+  **Enter** makes the process the functional unit of the tab, **Ctrl/⌘+Enter** of a new tab. In Edit mode amounts and names
   are edited as in the tree. *Reference product exchange* (production
   volume, price, carbon and water content, dry mass, …) is in *Description*; comments,
   uncertainty (distribution, σ with and without pedigree), pedigree scores, formula
@@ -371,7 +389,7 @@ API in `src/lca_viewer/server.py`.
     *Flow contribution* (a substance in a named flow group) and *Group
     contributions* charts; the round button at the right of the side panel's
     tabs switches all group colours off and on. The view bar's *Flow type
-    colours* colour the rows (list and charts) by the kind of exchange instead:
+    colours* colour the rows (list, tree view, Sankey and charts) by the kind of exchange instead:
     product (the root), technosphere input, waste (output to treatment),
     resource (input from nature), emission (output to nature) and direct
     emissions rows; *Group colours* goes back to the colours of groups.
@@ -392,14 +410,22 @@ API in `src/lca_viewer/server.py`.
 ## Tree graph layout
 
 Decision: own tidy-tree layout and SVG rendering instead of a graph library
-(ECharts `tree` series, d3-hierarchy, …). The layout is ~20 lines (leaves
-take consecutive slots, a parent is centred on its children, depth sets the
-other axis), and owning the SVG gives full control over boxes with impact
+(ECharts `tree` series, d3-hierarchy, …). The layout is ~40 lines (a parent
+is centred on its children, depth sets the other axis), and owning the SVG gives full control over boxes with impact
 bars, per-edge widths, selection and grouping interactions — which the
 ECharts tree series does not offer. Opening a functional unit zooms to a
 readable 60 % centred on the root rather than fitting a large tree into an
 unreadable thumbnail; "Fit" shows everything. The view does not re-fit on
 each expansion, so the user keeps their place.
+
+The layout is compact: a subtree is pushed along the slot axis only as far as
+needed not to meet a node of the subtrees before it at the same depth (a
+contour per depth, as in Reingold–Tilford). So several processes can share a
+row in the horizontal display (a column in the vertical one) when they are at
+different depths, while a depth never holds two nodes in one slot. Decision:
+compactness over a strict one-node-per-row reading; edges stay readable
+because, at each depth, the order of the nodes along the slot axis is the
+order of their subtrees, so edges between two adjacent depths never cross.
 
 In cycles mode the same tidy layout is applied to a breadth-first spanning
 tree of the graph (each node at its shortest distance from the root, under

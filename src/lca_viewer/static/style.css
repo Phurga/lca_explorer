@@ -89,8 +89,18 @@ select.database { max-width: 220px; font-weight: 600; }
 .cutoff { width: 64px; }
 
 /* Workspace: panes of tabs (split left/right or top/bottom) and one side panel */
-.top-bar { padding: 6px 16px; }
+.top-bar { padding: 6px 16px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 560px) minmax(0, 1fr); gap: 12px; align-items: center; }
 .top-bar .spacer { flex: 1; }
+.top-left, .top-right { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; min-width: 0; }
+.top-right { justify-content: flex-end; }
+/* The search of a process, in the middle of the bar like a command palette, with the switch of the view options */
+.top-centre { display: flex; gap: 6px; align-items: center; min-width: 0; }
+.top-centre .fu { flex: 1; min-width: 0; position: relative; }
+.top-centre .search-panel { left: 50%; transform: translateX(-50%); width: min(680px, 92vw); z-index: 200; }
+@media (max-width: 1100px) {
+  .top-bar { grid-template-columns: minmax(0, 1fr) auto; }
+  .top-centre { order: 3; grid-column: 1 / -1; }
+}
 .body { display: flex; min-height: 0; }
 .workspace { flex: 1; min-width: 0; display: flex; }
 .layout-split { display: flex; flex: 1; min-width: 0; min-height: 0; }
@@ -311,6 +321,13 @@ table.results td.num { text-align: right; font-family: var(--mono); }
 .graph .node .fill { fill: var(--bar); }
 .graph .node .fill.neg { fill: var(--bar-negative); }
 .graph .node .ungroup { fill: var(--group); font-size: 11px; text-decoration: underline; }
+/* Colours (group or flow type): --mark of the row */
+.graph .edge.colored { stroke: var(--mark); }
+.graph .band.colored { fill: var(--mark); }
+.graph .snode.colored rect { fill: var(--mark); }
+.graph .node.colored > rect:first-of-type { stroke: var(--mark); stroke-width: 1.5; }
+.graph .node.colored .fill { fill: var(--mark); }
+.graph .node .mark { fill: var(--mark); }
 .graph .toggle circle { fill: var(--panel); stroke: var(--accent); stroke-width: 1.5; }
 .graph .toggle text { fill: var(--accent); font-size: 13px; font-weight: 600; }
 .graph .toggle:hover circle { fill: var(--accent-soft); }
@@ -431,6 +448,14 @@ header { gap: 10px; }
 .fu-view.embedded .tree { overflow: visible; }
 .fu-view.embedded .tree table { min-width: 460px; }
 .info-body .tree td, .info-body .tree th { padding: 3px 8px; vertical-align: middle; }
+/* Split by flow type: the heading of a section of the list */
+.tree tr.section td { background: var(--bg); color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .03em; padding: 2px 8px; }
+.tree tr.section:hover td { background: var(--bg); }
+/* Right-click on the list's headers: its columns */
+.column-menu { position: fixed; z-index: 90; min-width: 170px; padding: 4px 0; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 6px 20px rgba(0, 0, 0, .3); }
+.column-menu label { display: flex; align-items: center; gap: 8px; padding: 3px 12px; cursor: pointer; white-space: nowrap; }
+.column-menu label:hover { background: var(--hover); }
+.column-menu-head { padding: 4px 12px 2px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; border-top: 1px solid var(--border); margin-top: 4px; }
 .view-bar .color-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 2px 0 4px; font-size: 11px; color: var(--muted); }
 .view-bar .color-legend span { display: inline-flex; align-items: center; gap: 5px; }
 .view-bar .color-legend i { width: 3px; height: 12px; border-radius: 1px; }

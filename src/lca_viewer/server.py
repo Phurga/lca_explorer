@@ -42,6 +42,9 @@ QUERY_FIELDS = [
 GROUP_BY_FIELDS = ["location", "activity_type", "flow_type", "isic_division", "cpc_section", "reference_product", "unit", "database"]
 # Elementary flows (rules with ``target="flows"``)
 FLOW_FIELDS = ["name", "compartment", "subcompartment", "unit"]
+# Recorded data of the exchange supplying a row that the list can show as columns (comments are sent apart)
+EXCHANGE_COLUMNS = ["uncertainty type", "loc", "scale", "scale without pedigree", "shape", "minimum", "maximum",
+                    "pedigree", "formula", "variable name"]
 
 
 class ViewState(BaseModel):
@@ -284,23 +287,20 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
         rendered_by_id = {r.id: r for r in rendered}
         datasets: dict[int, list[dict]] = {}  # exchanges of the processes read for the comments
 
-        def comment_of(r) -> str | None:
-            """The comment(s) on the exchange supplying a process row, in the dataset(s) of the process
-            above it (past group and others rows); None when there is none."""
+        def supplying(r) -> list[dict]:
+            """The exchange(s) supplying a process row, in the dataset(s) of the process above it (past
+            group and others rows); none for a row without such a process."""
             above = rendered_by_id.get(r.parent)
             while above is not None and above.kind in ("group", "rest"):
                 above = rendered_by_id.get(above.parent)
             if above is None or above.kind not in ("process", "merged"):
-                return None
-            found: list[str] = []
+                return []
+            found: list[dict] = []
             for j in [above.node.product] if above.kind == "process" else [m.product for m in above.merged]:
                 if j not in datasets:
                     datasets[j] = model.exchange_details(int(j))
-                for e in datasets[j]:
-                    text = (e.get("comment") or "").strip()
-                    if text and e["type"] != "biosphere" and e["row"] == r.node.product and text not in found:
-                        found.append(text)
-            return "\n".join(found) or None
+                found += [e for e in datasets[j] if e["type"] != "biosphere" and e["row"] == r.node.product]
+            return found
 
         def serialise(r) -> dict:
             out = {
@@ -322,9 +322,18 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
             if r.kind == "process":
                 out["meta"] = meta(r.node.product)
                 out["replaced"] = r.replaced
-                comment = comment_of(r)
-                if comment:
-                    out["comment"] = comment
+                supplied = supplying(r)
+                comments: list[str] = []
+                for e in supplied:
+                    text = (e.get("comment") or "").strip()
+                    if text and text not in comments:
+                        comments.append(text)
+                if comments:
+                    out["comment"] = "\n".join(comments)
+                # What the exchange columns show (uncertainty, pedigree, formula), one entry per exchange
+                recorded = [{k: e[k] for k in EXCHANGE_COLUMNS if e.get(k) not in (None, "")} for e in supplied]
+                if any(recorded):
+                    out["exchanges"] = recorded
             elif r.kind == "direct" and len(r.node.path) > 1 and isinstance(r.node.path[-2], int):
                 out["meta"] = meta(r.node.path[-2])  # the process emitting
             elif r.kind == "merged":
