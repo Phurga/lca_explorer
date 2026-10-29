@@ -238,7 +238,9 @@ API in `src/lca_viewer/server.py`.
   product and, largest first, the amount each takes in this functional
   unit's supply chain and its share; click one for its own pop-up, *go to*
   to open the tree at it), the ecoinvent description, included activities, time period, classifications,
-  authors and file; actions "Use as functional unit" and "Move to others".
+  authors and file; actions "Use as functional unit" and "Open in new tab".
+  **Alternatives** lists the other activities producing the same product
+  with their cumulative impact per unit, lowest first.
   Descriptions are stored in the cached model (`details.pkl`, 77 MB for
   ecoinvent, loaded on first use).
   **Exchanges** as recorded in the dataset, by direction: *Products* (the
@@ -266,6 +268,16 @@ API in `src/lca_viewer/server.py`.
   supplier, a user, an exchange's (i), a flow's emitter) are kept in a
   history: **←** next to × (or **Backspace**) goes back; opening a pop-up
   from outside, or closing it, starts a new history.
+- **Pop-up windows** (all kinds). Drag the header to move a pop-up and any
+  edge or corner to resize it. The **pin** button keeps it open, so that several
+  can be side by side: a pinned pop-up ignores clicks outside and opening
+  another pop-up, and Esc / Backspace act on it only while the pointer is on
+  it; the one that is not pinned is replaced by the next you open. A pop-up
+  clicked comes to the front. Dragging an activity's pop-up onto a pane's
+  tab list opens that activity as a new tab there; dragging it to within
+  ~56 px of a pane's edge opens it in a new pane on that side (a hint shows
+  where it would go before you drop). Pop-ups belong to their tab and are
+  not kept in saved views.
 - **Right-click an elementary flow** (a flow row in the tree, in an others or
   group panel, or a substance / flow of the *Flow contribution* tab): pop-up
   with tabs *Exchange* (for each process emitting it there — the emitting
