@@ -69,7 +69,7 @@ Each loaded model is mounted at `/db/<key>/` with the API of `create_app`;
 
 ## Changing projects from the app
 
-The Brightway projects section of *Load database* and the *Create dataset*
+The Brightway projects section of *Load database* and the *edit panel*
 panel change projects. Each change runs as `lca-viewer project …`,
 `lca-viewer import …` or `lca-viewer dataset …` in a separate process with
 `BRIGHTWAY2_DIR` set to the chosen folder (`server.create_library.cli`), as
@@ -157,7 +157,7 @@ builds do: the server itself never imports bw2data.
 
 ## Datasets created in the app
 
-`editing.write_dataset` writes a dataset entered in *Create dataset*:
+`editing.write_dataset` writes a dataset entered in the edit panel:
 
 - **Single output**: a process with a production exchange to itself (as
   ecoinvent), in any database of the project.
@@ -176,7 +176,44 @@ builds do: the server itself never imports bw2data.
   Each carries its comment, and SimaPro's lognormal SD² becomes
   `uncertainty type` 2 with `scale = ln(SD²)/2`.
 - **Documentation**: the fields go to `documentation` (a dict) and, after the
-  comment, into `comment`, which the process pop-up shows.
+  comment, into `comment`, which the process pop-up shows (the comment as
+  typed is kept in `lca_viewer["comment"]`, with the creation date: that mark
+  is also what tells the app a dataset is its own, so only those can be edited
+  or deleted).
+- **Copy** (`sources.read_dataset`): the form's content of any process, read
+  from the project's SQLite file. A process allocated from a multi-output one
+  stands for its parent; so does a product for the dataset producing it.
+- **Edit** (`write_dataset` with `code`): one SQLite transaction
+  (`sqlite3_lci_db.atomic()`) that replaces the exchanges and the node's
+  fields and processes the database again before it ends. What the datasets
+  using it link to is never deleted or recreated, so they stay linked, and
+  their own processed matrices stay valid (they hold node ids, which do not
+  change):
+  - a process that is its own product keeps its node;
+  - a multi-output process keeps the nodes of its products (renamed in place;
+    their allocated processes keep their codes through `mf_allocated_process_code`);
+  - a process with one product can get co-products: its node cannot become
+    the multi-output process (users link to it), so it becomes the *first
+    product* node and a new multi-output node takes its place, the allocated
+    process of that product producing it. The dataset's code changes; the old
+    code still finds it (a product leads to the dataset producing it);
+  - co-products are removed down to one (then the process is a plain process
+    with one product node: `multifunctional` retypes it on save). A product
+    that another dataset of the project uses (any database: `_used_by`)
+    cannot be removed, nor the dataset deleted: deleting a node deletes the
+    exchanges that point to it, which would silently take an input out of those
+    datasets and change their results.
+  - Checked in `tests/test_editing.py` on models built the way the app builds
+    them, for the edited database and for one that uses it.
+- **Staged changes** (`editing.apply_changes`): the page stages creates, edits and
+  deletes (`data/pending/<project>.json`, one file per Brightway folder and project);
+  applying them runs all in order inside one `atomic()`, processes each touched database
+  once at the end, and on any failure rolls back and removes the databases made for
+  the batch. Later changes see earlier ones (delete the user, then the used dataset).
+  Limit: a staged new process is not in the project yet, so another staged process
+  cannot take it as an input.
+- **Rebuilding** an open database: the model is built beside the old one,
+  which keeps being served until it is replaced (`reopen`).
 - **Search** for the exchanges reads the project's SQLite file directly
   (`sources.search_nodes`): processes with SQL `LIKE` on name, product and
   location (a word equal to a location ranks that location first), flows from

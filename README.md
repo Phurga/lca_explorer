@@ -387,10 +387,10 @@ with its progress in the dialog.
 
 ## Creating a dataset
 
-**Create dataset** (top bar) enters a new process as in SimaPro, and writes
+**New process** (*Edit* mode, in the top bar) enters a new process as in SimaPro, and writes
 it into a Brightway project:
 
-- **Save into**: a folder, a project and a database of it, or a new database.
+- **Save into**: a database of the project being edited, or a new database.
 - **Process**: name, location, comment, and the documentation fields
   (technology, time period, geography, data sources, collection method, data
   treatment, allocation rules, verification, data entry by).
@@ -405,11 +405,34 @@ it into a Brightway project:
   each one its amount (for the product amounts above), an optional lognormal
   uncertainty (SD², as in SimaPro) and a comment.
 
-*Save to Brightway*, then *Build and open* to explore it. The form is kept
+*Stage the new process*, then *Apply and rebuild* to explore it. The form is kept
 in the browser until you *Clear* it, so a dataset can be entered in several
 sittings. A dataset with co-products goes into a database made by this panel
 (Brightway's `multifunctional` backend); a single-output one can go into any
 database of the project.
+
+**View and Edit modes.** The switch in the top bar sets what the right panel is.
+*View* is the explorer on the model built from the database: fast, precalculated.
+*Edit* replaces the right panel with the edit panel for the project the open database
+was built from. Nothing there writes to Brightway at once: each change is *staged*,
+and *Apply and rebuild* makes them all in one transaction, then builds the open model again
+(it keeps being served until the new one is ready) and goes back to View. The
+number of staged changes shows on the Edit button; they are kept by the server
+(`data/pending`), so they survive a reload.
+
+- **New process** opens the form, empty, or filled from a copy of any process of
+  the project (ecoinvent included): its products, exchanges, lognormal uncertainties and
+  documentation. Negative technosphere inputs are read as waste to treatment when what
+  supplies them treats waste (negative production, as in ecoinvent), else as avoided products.
+- **Edit**, **Copy as new** and **Delete** act on the focused tab's process. Only processes
+  written from the app can be edited or deleted; imported ones (ecoinvent…) are copied.
+- Edited processes keep their products' identity, so the datasets using them stay linked
+  and their results follow. Co-products can be added to a process with one product, and
+  removed (down to one) when no other dataset of the project uses them; a used product
+  cannot be removed, nor a dataset deleted while another one uses a product of it (unless
+  that one is staged for deletion, earlier in the list). The error names the datasets.
+- A failed apply makes nothing: the error says which change, and they stay staged.
+  A staged process cannot yet be used as an input by another staged one.
 
 ## Adding Agribalyse (or another SimaPro CSV database)
 

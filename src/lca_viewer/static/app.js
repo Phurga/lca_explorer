@@ -899,7 +899,7 @@ function LoadDatabase({ onClose, missing, onDatabases }) {
           ${!projects.projects.length && html`<p class="muted">No project in this folder yet: create one with <i>New project</i>.</p>`}`}
       </section>
       <p class="muted small">ecoSpold2 releases, SimaPro CSV exports and ecoinvent releases are imported into a project first
-        (<i>+ New project</i>, then <i>+ Add database</i>), then opened from it like any Brightway database. Your own datasets: <i>Create dataset</i> in the top bar.</p>`}`;
+        (<i>+ New project</i>, then <i>+ Add database</i>), then opened from it like any Brightway database. Your own datasets: <i>Edit</i> in the top bar (new processes, copies, changes: staged, then applied together).</p>`}`;
 
   if (!onClose) return html`<div class="load-page"><h2>Load a database</h2>${content}</div>`;
   return html`
@@ -981,42 +981,65 @@ function NodePicker({ folder, project, kind, placeholder, onPick }) {
     </div>`;
 }
 
-function CreateDataset({ onClose }) {
-  const [dirs, setDirs] = useState(null);
-  const [folder, setFolder] = useState(() => loadPreference("brightwayFolder", ""));
+// The form of a process: a new one (empty, or a copy of any process of the project) or, with ``edit``
+// { database, code }, a dataset written by this app. Saving *stages* the change (``onStage``): nothing
+// reaches Brightway until the staged changes are applied from the edit panel.
+// ``current``: { folder, project, database } the open database was built from; ``initial``: a change staged
+// before ({ id, form }) to open again; ``copyFrom``: { database, code } a process to start from;
+// ``deleted``: Set of "database/code" of the datasets staged for deletion (they stop using what they use).
+function DatasetForm({ onClose, current, edit, initial, copyFrom: start, deleted, onStage }) {
+  const folder = current.folder;
   const [projects, setProjects] = useState(null);
   const [error, setError] = useState(null);
+  const fresh = !edit && !initial && !start;  // a new process from scratch: the form is a draft kept in the browser
   const [draft, setDraft] = useState(() => {
-    try { return { ...emptyDraft(), ...JSON.parse(localStorage.getItem(DRAFT_KEY) || "null") }; } catch { return emptyDraft(); }
+    const base = { ...emptyDraft(), project: current.project, ...(edit ? { database: edit.database } : {}) };
+    if (initial?.form) return { ...base, ...initial.form, project: current.project };
+    if (!fresh) return base;
+    try { return { ...base, ...JSON.parse(localStorage.getItem(DRAFT_KEY) || "null"), project: current.project }; } catch { return base; }
   });
-  const [job, setJob] = useState(null);
-  const [showLog, setShowLog] = useState(false);
-  useEffect(() => { try { localStorage.setItem(DRAFT_KEY, JSON.stringify(draft)); } catch { /* storage unavailable */ } }, [draft]);
+  const [original, setOriginal] = useState(null);  // edit: the dataset as read, with what uses it
+  const [template, setTemplate] = useState(null);  // new: the process the form was filled from
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { if (fresh) try { localStorage.setItem(DRAFT_KEY, JSON.stringify(draft)); } catch { /* storage unavailable */ } }, [draft]);
   useEffect(() => {
-    serverRequest("/api/sources").then((s) => {
-      setDirs(s.brightway);
-      if (!folder && s.brightway.length) setFolder(s.brightway[0].path);
-    }).catch((e) => setError(e.message));
+    serverRequest(`/api/brightway?folder=${encodeURIComponent(folder)}`).then(setProjects).catch((e) => setError(e.message));
     const onKey = (e) => e.key === "Escape" && !e.target.closest?.(".node-picker") && onClose();
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, []);
+
+  const datasetUrl = (database, code) => `/api/brightway/dataset?folder=${encodeURIComponent(folder)}&project=${encodeURIComponent(current.project)}`
+    + `&database=${encodeURIComponent(database)}&code=${encodeURIComponent(code)}`;
+  // A dataset as the form holds it: amounts are text. A copy has no identity: no product codes
+  const formOf = (read, copy) => ({
+    process: { name: copy ? `${read.process.name} (copy)` : read.process.name, location: read.process.location || "GLO",
+      comment: read.process.comment || "", documentation: read.process.documentation || {} },
+    products: read.products.map((p) => ({ ...(copy ? {} : { code: p.code }), name: p.name, amount: String(p.amount),
+      unit: p.unit, allocation: String(p.allocation), comment: p.comment || "" })),
+    exchanges: read.exchanges.map((e) => ({ section: e.section, node: e.node, amount: String(e.amount), comment: e.comment || "",
+      sd2: e.sd2 ? String(e.sd2) : "" })),
+  });
+  function copyFrom(node) {
+    setError(null);
+    serverRequest(datasetUrl(node.database, node.code)).then((read) => {
+      setDraft((d) => ({ ...d, ...formOf(read, true) }));
+      setTemplate({ name: read.process.name, database: read.database, warnings: read.warnings });
+    }).catch((e) => setError(e.message));
+  }
   useEffect(() => {
-    setProjects(null);
-    if (folder) serverRequest(`/api/brightway?folder=${encodeURIComponent(folder)}`).then(setProjects).catch((e) => setError(e.message));
-  }, [folder]);
-  // Follow the save, then the build and load of the database when asked
-  useEffect(() => {
-    if (!job || job.status !== "running") return;
-    const timer = setTimeout(() => serverRequest(`/api/jobs/${job.id}`).then((j) => {
-      setJob(j);
-      if (j.status === "done" && j.key) openDatabase(j.key);
-    }).catch((e) => setJob({ ...job, status: "failed", error: e.message })), 700);
-    return () => clearTimeout(timer);
-  }, [job]);
+    if (edit) {
+      serverRequest(datasetUrl(edit.database, edit.code)).then((read) => {
+        if (!read.editable) throw new Error(`${read.process.name} was not written by this app: copy it instead`);
+        setOriginal(read);
+        // a change staged before: its form, not what is in the project
+        if (!initial?.form) setDraft((d) => ({ ...d, ...formOf(read, false), database: read.database }));
+      }).catch((e) => setError(e.message));
+    } else if (start) copyFrom(start);
+  }, []);
 
   const usable = (projects?.projects || []).filter((p) => p.twofive);
-  const project = usable.find((p) => p.name === draft.project);
+  const project = usable.find((p) => p.name === current.project);
   const writable = (project?.databases || []).filter((d) => d.processes || d.backend === "multifunctional");
   const set = (changes) => setDraft((d) => ({ ...d, ...changes }));
   const setProcess = (changes) => set({ process: { ...draft.process, ...changes } });
@@ -1026,67 +1049,86 @@ function CreateDataset({ onClose }) {
   const shares = draft.products.reduce((s, p) => s + (Number(p.allocation) || 0), 0);
   const target = draft.database === "__new__" ? draft.newDatabase.trim() : draft.database;
   const targetDb = writable.find((d) => d.name === draft.database);
+  // What uses the dataset, apart from datasets staged for deletion; a product they use cannot be removed
+  const users = (original?.used_by || []).filter((u) => !deleted?.has(`${u.database}/${u.code}`));
+  const used = (p) => !!p.code && users.some((u) => u.uses[1] === p.code);
   const problems = [
-    !project && "choose a project",
+    !project && "the project is not available",
     !target && "choose a database",
+    edit && !original && "the dataset is not read yet",
     !draft.process.name.trim() && "name the process",
     draft.products.some((p) => !p.name.trim() || !Number(p.amount)) && "give each product a name and an amount",
     several && Math.abs(shares - 100) > 1e-6 && `the allocation percentages add up to ${shares}, not 100`,
-    several && targetDb && targetDb.backend !== "multifunctional" && `${targetDb.name} cannot hold co-products: write into a new database`,
+    several && targetDb && targetDb.backend !== "multifunctional" && (edit
+      ? `${targetDb.name} cannot hold co-products: copy this dataset into a new database instead`
+      : `${targetDb.name} cannot hold co-products: write into a new database`),
     draft.exchanges.some((e) => e.amount === "" || Number.isNaN(Number(e.amount))) && "give each exchange an amount",
     draft.exchanges.some((e) => e.sd2 && !(Number(e.sd2) > 1)) && "SD² must be greater than 1",
   ].filter(Boolean);
 
-  function save() {
+  function stage() {
     const spec = {
       database: target, new_database: draft.database === "__new__",
+      ...(edit && original ? { code: original.code } : {}),
       process: draft.process,
-      products: draft.products.map((p) => ({ ...p, amount: Number(p.amount), allocation: several ? Number(p.allocation) : 100 })),
+      products: draft.products.map((p) => ({ code: p.code, name: p.name, unit: p.unit, comment: p.comment,
+        amount: Number(p.amount), allocation: several ? Number(p.allocation) : 100 })),
       exchanges: draft.exchanges.map((e) => ({ section: e.section, database: e.node.database, code: e.node.code,
         amount: Number(e.amount), comment: e.comment, sd2: e.sd2 ? Number(e.sd2) : null })),
     };
-    setShowLog(false);
-    serverRequest("/api/brightway/dataset", { folder, project: draft.project, spec }).then(setJob)
-      .catch((e) => setJob({ status: "failed", error: e.message, log: [] }));
+    setBusy(true);
+    setError(null);
+    onStage({ id: initial?.id, kind: edit ? "edit" : "create", title: `${edit ? "Edit" : "New"} ${draft.process.name.trim()}`,
+      database: target, ...(edit && original ? { code: original.code } : {}), spec, form: draft })
+      .then(() => { if (fresh) try { localStorage.removeItem(DRAFT_KEY); } catch { /* storage unavailable */ } onClose(); })
+      .catch((e) => { setBusy(false); setError(e.message); });
   }
-  const openIt = () => serverRequest("/api/load", { brightway: folder, project: draft.project, database: job.result.database, rebuild: true })
-    .then(setJob).catch((e) => setJob({ status: "failed", error: e.message, log: [] }));
-  const saved = job?.status === "done" && job.result;
 
   return html`
     <div class="modal-backdrop" onMouseDown=${(e) => e.target === e.currentTarget && onClose()}>
-      <div class="load-dialog dataset-dialog" role="dialog" aria-label="Create a dataset">
+      <div class="load-dialog dataset-dialog" role="dialog" aria-label=${edit ? "Edit a dataset" : "New process"}>
         <div class="info-head">
-          <div class="info-title">Create a dataset <span class="muted">· written into a Brightway project</span></div>
+          <div class="info-title">${edit ? `Edit ${original ? original.process.name : "a dataset"}` : "New process"}${" "}
+            <span class="muted">· staged in ${current.project}, made when the changes are applied</span></div>
           <button onClick=${onClose} aria-label="Close">×</button>
         </div>
         <div class="load-body">
           ${error && html`<div class="error">${error}</div>`}
-          <section>
-            <h3>Save into</h3>
-            <div class="dataset-target">
-              <label>Folder
-                <select value=${folder} onChange=${(e) => { setFolder(e.target.value); set({ project: "", database: "" }); }}>
-                  ${(dirs || []).map((d) => html`<option value=${d.path}>${d.label}</option>`)}
-                  ${folder && dirs && !dirs.some((d) => d.path === folder) && html`<option value=${folder}>${folder}</option>`}
-                </select></label>
-              <label>Project
-                <select value=${draft.project} onChange=${(e) => set({ project: e.target.value, database: "" })}>
-                  <option value="">Choose…</option>
-                  ${usable.map((p) => html`<option value=${p.name}>${p.name}</option>`)}
-                </select></label>
-              <label>Database
-                <select value=${draft.database} onChange=${(e) => set({ database: e.target.value })} disabled=${!project}>
-                  <option value="">Choose…</option>
-                  ${writable.map((d) => html`<option value=${d.name}>${d.name}${d.backend === "multifunctional" ? "" : " (single-output only)"}</option>`)}
-                  <option value="__new__">New database…</option>
-                </select></label>
-              ${draft.database === "__new__" && html`
-                <label>Name of the new database <input value=${draft.newDatabase} placeholder="e.g. my datasets"
-                  onInput=${(e) => set({ newDatabase: e.target.value })} /></label>`}
-            </div>
-            <p class="muted small">Inputs and emissions are searched in this project, in all its databases.</p>
-          </section>
+          ${edit
+            ? html`
+              <section>
+                <p class="muted small">Applying the change replaces the dataset where it is: its products keep their identity, so the datasets that use them stay linked.${" "}
+                  ${users.length
+                    ? html`Used by <b>${[...new Set(users.map((u) => u.name))].join(", ")}</b>: the products they use cannot be removed.`
+                    : "No other dataset uses it: its co-products can be removed."}${" "}
+                  A co-product can be added to a process with one product.</p>
+              </section>`
+            : html`
+              <section>
+                <h3>Save into</h3>
+                <div class="dataset-target">
+                  <label>Database
+                    <select value=${draft.database} onChange=${(e) => set({ database: e.target.value })} disabled=${!project}>
+                      <option value="">Choose…</option>
+                      ${writable.map((d) => html`<option value=${d.name}>${d.name}${d.backend === "multifunctional" ? "" : " (single-output only)"}</option>`)}
+                      <option value="__new__">New database…</option>
+                    </select></label>
+                  ${draft.database === "__new__" && html`
+                    <label>Name of the new database <input value=${draft.newDatabase} placeholder="e.g. my datasets"
+                      onInput=${(e) => set({ newDatabase: e.target.value })} /></label>`}
+                </div>
+                <p class="muted small">Inputs and emissions are searched in project ${current.project}, in all its databases.</p>
+              </section>
+              <section>
+                <h3>Start from <span class="muted">an empty process, or a copy of a process of the project</span></h3>
+                <div class="dataset-template">
+                  <${NodePicker} folder=${folder} project=${current.project} kind="process"
+                    placeholder="Search a process to copy, ecoinvent included…" onPick=${copyFrom} />
+                </div>
+                ${template && html`
+                  <p class="muted small">Filled from <b>${template.name}</b> (${template.database}); that process is not changed, a new one is written.</p>
+                  ${template.warnings.length > 0 && html`<ul class="dataset-warnings">${template.warnings.map((w) => html`<li>${w}</li>`)}</ul>`}`}
+              </section>`}
           <section>
             <h3>Process</h3>
             <div class="dataset-process">
@@ -1111,13 +1153,15 @@ function CreateDataset({ onClose }) {
             <table class="dataset-table">
               <tr><th>Name</th><th class="num">Amount</th><th>Unit</th>${several && html`<th class="num">Allocation %</th>`}<th>Comment</th><th></th></tr>
               ${draft.products.map((p, i) => html`
-                <tr key=${i}>
+                <tr key=${p.code || `new${i}`}>
                   <td><input value=${p.name} onInput=${(e) => setProduct(i, { name: e.target.value })} placeholder=${i ? "co-product" : "e.g. raw milk"} /></td>
                   <td class="num"><input class="num" value=${p.amount} onInput=${(e) => setProduct(i, { amount: e.target.value })} /></td>
                   <td><input list="bw-units" value=${p.unit} onInput=${(e) => setProduct(i, { unit: e.target.value })} /></td>
                   ${several && html`<td class="num"><input class="num" value=${p.allocation} onInput=${(e) => setProduct(i, { allocation: e.target.value })} /></td>`}
                   <td><input value=${p.comment} onInput=${(e) => setProduct(i, { comment: e.target.value })} /></td>
-                  <td>${several && html`<button class="link" aria-label="Remove" onClick=${() => set({ products: draft.products.filter((_, k) => k !== i) })}>×</button>`}</td>
+                  <td>${several && html`<button class="link" disabled=${used(p)} aria-label="Remove"
+                    title=${used(p) ? "Another dataset uses this product: it cannot be removed" : "Remove this co-product"}
+                    onClick=${() => set({ products: draft.products.filter((_, k) => k !== i) })}>×</button>`}</td>
                 </tr>`)}
             </table>
             <datalist id="bw-units">${BW_UNITS.map((u) => html`<option value=${u} />`)}</datalist>
@@ -1144,28 +1188,113 @@ function CreateDataset({ onClose }) {
                         <td><button class="link" aria-label="Remove" onClick=${() => set({ exchanges: draft.exchanges.filter((_, k) => k !== i) })}>×</button></td>
                       </tr>`)}
                   </table>`}
-                <${NodePicker} folder=${folder} project=${draft.project} kind=${kind} placeholder=${draft.project ? placeholder : "Choose a project first"}
+                <${NodePicker} folder=${folder} project=${current.project} kind=${kind} placeholder=${placeholder}
                   onPick=${(node) => set({ exchanges: [...draft.exchanges, { section, node, amount: "", comment: "", sd2: "" }] })} />
               </section>`;
           })}
         </div>
         <div class="dataset-footer">
-          ${job && html`
-            <div class=${`load-job ${job.status}`}>
-              <div class="load-job-head">
-                ${job.status === "running" && html`<span class="spinner" aria-hidden="true"></span>`}
-                <span>${job.status === "failed" ? html`<b>${job.title || "It"} failed.</b> ${job.error}` : job.message}</span>
-                ${job.log?.length > 0 && html`<button class="link" onClick=${() => setShowLog(!showLog)}>${showLog ? "Hide details" : "Details"}</button>`}
-                ${saved && html`<button class="primary" onClick=${openIt} title="Build the model of this database (with the databases it uses) and open it">Build and open ${job.result.database}</button>`}
-              </div>
-              ${showLog && html`<pre class="load-log">${job.log.slice(-40).join("\n")}</pre>`}
-            </div>`}
           <div class="form-actions">
-            <span class="muted small">${problems.length ? `To save: ${problems.join(", ")}.` : "Ready to save."}</span>
+            <span class="muted small">${problems.length ? `To stage: ${problems.join(", ")}.` : "Ready to stage: nothing is written until you apply the changes."}</span>
             <span class="spacer"></span>
-            <button onClick=${() => { if (confirm("Clear this dataset (the form, not what was saved)?")) { setDraft({ ...emptyDraft(), project: draft.project, database: draft.database }); setJob(null); } }}>Clear</button>
-            <button class="primary" disabled=${problems.length > 0 || job?.status === "running"} onClick=${save}>Save to Brightway</button>
+            ${fresh && html`<button onClick=${() => { if (confirm("Clear this form?")) { setDraft({ ...emptyDraft(), project: current.project, database: draft.database }); setTemplate(null); } }}>Clear</button>`}
+            <button class="primary" disabled=${problems.length > 0 || busy} onClick=${stage}>${edit || initial ? "Stage the change" : "Stage the new process"}</button>
           </div>
+        </div>
+      </div>
+    </div>`;
+}
+
+// The right panel in edit mode: the focused process (edit, copy, delete), the staged changes, and
+// "Apply", which makes them together and builds the open database again
+function EditPanel({ origin, dataset, pending, onForm, stage, unstage, unstageAll }) {
+  const [job, setJob] = useState(null);
+  const [showLog, setShowLog] = useState(false);
+  const [error, setError] = useState(null);
+  useEffect(() => {
+    if (!job || job.status !== "running") return;
+    const timer = setTimeout(() => serverRequest(`/api/jobs/${job.id}`).then((j) => {
+      setJob(j);
+      if (j.status === "done" && j.key) { savePreference("mode", "view"); openDatabase(j.key); }  // back to the results
+    }).catch((e) => setJob({ ...job, status: "failed", error: e.message })), 700);
+    return () => clearTimeout(timer);
+  }, [job]);
+  const id = (d) => `${d.database}/${d.code}`;
+  const deleted = new Set(pending.filter((c) => c.kind === "delete").map(id));
+  const staged = dataset && pending.find((c) => c.kind !== "create" && id(c) === id(dataset));
+  const users = (dataset?.used_by || []).filter((u) => !deleted.has(id(u)));
+  const editable = !!dataset?.editable;
+  const attempt = (promise) => { setError(null); promise.catch((e) => setError(e.message)); };
+  const apply = () => {
+    setError(null);
+    setShowLog(false);
+    serverRequest("/api/brightway/apply", { folder: origin.folder, project: origin.project, database: origin.database })
+      .then(setJob).catch((e) => setJob({ status: "failed", error: e.message, log: [] }));
+  };
+  const KIND = { create: "New", edit: "Edit", delete: "Delete" };
+  const running = job?.status === "running";
+
+  return html`
+    <div class="edit-panel">
+      <h3>Edit mode <span class="muted">· project ${origin.project}</span></h3>
+      <p class="muted small">Changes are staged here and made together when you apply them. The results in the view are those of the
+        last build: they do not include staged changes until they are applied.</p>
+      ${error && html`<div class="error">${error}</div>`}
+      <section>
+        <h4>Focused process</h4>
+        ${!dataset
+          ? html`<p class="muted small">Select a process in the view to edit, copy or delete it.</p>`
+          : html`
+            <div class="edit-card">
+              <div><b>${dataset.process.name}</b> <span class="loc-chip">${dataset.process.location}</span></div>
+              <div class="muted small">${dataset.database} · ${editable ? "written by this app: can be edited" : "imported: can be copied, not changed"}
+                ${users.length > 0 && ` · used by ${[...new Set(users.map((u) => u.name))].join(", ")}`}</div>
+              ${staged && html`<div class="small">${KIND[staged.kind]} staged</div>`}
+              <div class="edit-actions">
+                <button disabled=${!editable || staged?.kind === "delete"}
+                  onClick=${() => onForm({ edit: { database: dataset.database, code: dataset.code }, initial: staged?.kind === "edit" ? staged : undefined })}>Edit</button>
+                <button onClick=${() => onForm({ copyFrom: { database: dataset.database, code: dataset.code } })}
+                  title="A new process that starts as a copy of this one">Copy as new</button>
+                ${staged?.kind === "delete"
+                  ? html`<button onClick=${() => attempt(unstage(staged.id))}>Undo delete</button>`
+                  : html`<button disabled=${!editable || users.length > 0}
+                      title=${!editable ? "Only processes written by this app can be deleted" : users.length ? "Other datasets use it" : "Stage the deletion of this process and its products"}
+                      onClick=${() => attempt(stage({ kind: "delete", title: `Delete ${dataset.process.name}`, database: dataset.database, code: dataset.code }))}>Delete</button>`}
+              </div>
+            </div>`}
+        <button onClick=${() => onForm({})}>+ New process</button>
+      </section>
+      <section>
+        <h4>Staged changes <span class="muted">${pending.length}</span></h4>
+        ${pending.length === 0 && html`<p class="muted small">Nothing staged.</p>`}
+        <ul class="pending-list">
+          ${pending.map((c) => html`
+            <li key=${c.id}>
+              <div class="pending-title"><span class=${`pending-kind ${c.kind}`}>${KIND[c.kind]}</span> ${c.title.replace(/^(New|Edit|Delete) /, "")}${" "}
+                <span class="muted small">${c.database}</span></div>
+              <div class="edit-actions">
+                ${c.kind !== "delete" && html`<button class="link" onClick=${() => onForm({ ...(c.kind === "edit" ? { edit: { database: c.database, code: c.code } } : {}), initial: c })}>Open</button>`}
+                <button class="link" onClick=${() => attempt(unstage(c.id))}>Remove</button>
+              </div>
+            </li>`)}
+        </ul>
+      </section>
+      <div class="edit-apply">
+        ${job && html`
+          <div class=${`load-job ${job.status}`}>
+            <div class="load-job-head">
+              ${running && html`<span class="spinner" aria-hidden="true"></span>`}
+              <span>${job.status === "failed" ? html`<b>It failed.</b> ${job.error}` : job.message}</span>
+              ${job.log?.length > 0 && html`<button class="link" onClick=${() => setShowLog(!showLog)}>${showLog ? "Hide details" : "Details"}</button>`}
+            </div>
+            ${showLog && html`<pre class="load-log">${job.log.slice(-40).join("\n")}</pre>`}
+          </div>`}
+        <div class="form-actions">
+          <button disabled=${!pending.length || running} onClick=${() => { if (confirm(`Discard the ${pending.length} staged change${pending.length > 1 ? "s" : ""}?`)) attempt(unstageAll()); }}>Discard all</button>
+          <span class="spacer"></span>
+          <button class="primary" disabled=${!pending.length || running} onClick=${apply}
+            title=${`Make the staged changes in the project in one go, then build ${origin.database} again (about a minute for ecoinvent) and show it`}>
+            Apply ${pending.length || ""} and rebuild</button>
         </div>
       </div>
     </div>`;
@@ -3842,7 +3971,12 @@ function App() {
   // Databases loaded in the server; null: a server without Load database (one model, plain URLs)
   const [databases, setDatabases] = useState(undefined);
   const [loadOpen, setLoadOpen] = useState(false);
-  const [datasetOpen, setDatasetOpen] = useState(false);
+  // The process form: null (closed), or what to open it on: {} (a new process), { edit } (a dataset written
+  // by the app), { copyFrom } (a process to start from), { initial } (a change staged before)
+  const [datasetOpen, setDatasetOpen] = useState(null);
+  // "view": the model built from the database; "edit": change processes, staged then applied together
+  const [mode, setMode] = useState(() => loadPreference("mode", "view"));
+  useEffect(() => savePreference("mode", mode), [mode]);
   const [layout, setLayout] = useState(null);
   const [focus, setFocus] = useState(null);
   const [titles, setTitles] = useState({});
@@ -3856,6 +3990,31 @@ function App() {
   const starts = useRef({});  // tab id → how a tab without a saved view starts
   const current = useRef({});
   current.current = { layout, focus };
+  // Where the open database was built from (Brightway): the project that is edited
+  const origin = databases?.find((d) => d.key === DATABASE)?.brightway || null;
+  const editing = mode === "edit" && !!origin;
+  const queryOf = (o) => `folder=${encodeURIComponent(o.folder)}&project=${encodeURIComponent(o.project)}`;
+  // The changes staged for the project (kept by the server), and the process of the focused tab as the form reads it
+  const [pending, setPending] = useState([]);
+  useEffect(() => {
+    setPending([]);
+    if (origin) serverRequest(`/api/brightway/pending?${queryOf(origin)}`).then((r) => setPending(r.changes)).catch(() => { /* none */ });
+  }, [origin?.folder, origin?.project]);
+  const stage = (change) => serverRequest("/api/brightway/pending", { folder: origin.folder, project: origin.project, change }).then((r) => setPending(r.changes));
+  const unstage = (id) => serverRequest("/api/brightway/pending/remove", { folder: origin.folder, project: origin.project, id }).then((r) => setPending(r.changes));
+  const unstageAll = () => serverRequest("/api/brightway/pending/remove", { folder: origin.folder, project: origin.project }).then((r) => setPending(r.changes));
+  const focusedRoot = layout && focus ? titles[panesOf(layout).find((p) => p.id === focus)?.active] : null;
+  const [dataset, setDataset] = useState(null);
+  useEffect(() => {
+    setDataset(null);
+    if (!editing || focusedRoot?.index == null) return;
+    let live = true;
+    request(`/api/activity/${focusedRoot.index}`)
+      .then((a) => serverRequest(`/api/brightway/dataset?${queryOf(origin)}&database=${encodeURIComponent(a.database)}&code=${encodeURIComponent(a.code)}`))
+      .then((d) => live && setDataset(d))
+      .catch(() => { /* not a Brightway process: nothing to edit */ });
+    return () => { live = false; };
+  }, [editing, origin?.folder, origin?.project, focusedRoot?.index]);
   const persist = () => current.current.layout && saveWorkspace({ layout: current.current.layout, focus: current.current.focus, tabs: states.current });
   useEffect(persist, [layout, focus]);
 
@@ -3871,7 +4030,7 @@ function App() {
       const saved = loadWorkspace();
       if (saved?.layout && panesOf(saved.layout).some((p) => p.tabs.length)) {
         states.current = saved.tabs || {};
-        setTitles(Object.fromEntries(Object.entries(states.current).map(([id, s]) => [id, s?.root ? { name: s.root.name, location: s.root.location } : null])));
+        setTitles(Object.fromEntries(Object.entries(states.current).map(([id, s]) => [id, s?.root ? { name: s.root.name, location: s.root.location, index: s.root.index } : null])));
         setLayout(saved.layout);
         setFocus(panesOf(saved.layout).some((p) => p.id === saved.focus) ? saved.focus : panesOf(saved.layout)[0].id);
       } else {
@@ -3889,7 +4048,7 @@ function App() {
   const initialOf = (id) => (states.current[id] ? { state: states.current[id] } : starts.current[id]);
   const activeTabOf = (paneId) => (layout ? panesOf(layout).find((p) => p.id === paneId)?.active : null);
   const onSave = (id, state) => { states.current[id] = state; persist(); };
-  const onTitle = (id, root) => setTitles((t) => ({ ...t, [id]: root ? { name: root.name, location: root.location } : null }));
+  const onTitle = (id, root) => setTitles((t) => ({ ...t, [id]: root ? { name: root.name, location: root.location, index: root.index } : null }));
   function openTab(paneId, start, zone = "center") {
     const id = newId("t");
     starts.current[id] = start;
@@ -3949,13 +4108,21 @@ function App() {
       <${DatabaseSelect} databases=${databases} />
       ${databases && html`<button onClick=${() => setLoadOpen(true)}
         title="Open another database: a model already built, or a database of your Brightway projects">Load database</button>`}
-      ${databases && html`<button onClick=${() => setDatasetOpen(true)}
-        title="Enter a new process, as in SimaPro, and save it into a Brightway project">Create dataset</button>`}
+      ${databases && html`
+        <span class="mode-switch" role="group" aria-label="Mode">
+          <button class=${!editing ? "primary" : ""} onClick=${() => setMode("view")}
+            title="Explore the results of the model built from the database">View</button>
+          <button class=${editing ? "primary" : ""} disabled=${!origin} onClick=${() => { setMode("edit"); setSideOpen(true); }}
+            title=${origin ? "Change processes: changes are staged, then made together and the model built again" : "Open a database of a Brightway project to edit it"}>
+            Edit${pending.length ? ` (${pending.length})` : ""}</button>
+        </span>`}
       <span class="spacer"></span>
       ${sidePanel}
     </header>
     ${loadOpen && html`<${LoadDatabase} onClose=${() => setLoadOpen(false)} onDatabases=${setDatabases} />`}
-    ${datasetOpen && html`<${CreateDataset} onClose=${() => setDatasetOpen(false)} />`}`;
+    ${datasetOpen && origin && html`<${DatasetForm} current=${origin} edit=${datasetOpen.edit} initial=${datasetOpen.initial}
+      copyFrom=${datasetOpen.copyFrom} deleted=${new Set(pending.filter((c) => c.kind === "delete").map((c) => `${c.database}/${c.code}`))}
+      onStage=${stage} onClose=${() => setDatasetOpen(null)} />`}`;
   if (databases && !databases.some((d) => d.key === DATABASE)) {
     // Nothing loaded yet, or the database of this address is not loaded any more
     return html`
@@ -3994,7 +4161,9 @@ function App() {
           ? html`<div class="side-resizer" onPointerDown=${startSideResize} title="Drag to resize"></div>`
           : html`<button class="side-reopen" onClick=${() => setSideOpen(true)} title="Show the side panel" aria-label="Show the side panel">«</button>`}
         <aside class="sidebar" style=${{ width: `${sideWidth}px`, display: sideOpen ? "" : "none" }}>
-          ${allTabs.map((id) => html`<div key=${id} id=${`side-${id}`} class="side-slot" style=${{ display: id === focusedTab ? "" : "none" }}></div>`)}
+          ${allTabs.map((id) => html`<div key=${id} id=${`side-${id}`} class="side-slot" style=${{ display: id === focusedTab && !editing ? "" : "none" }}></div>`)}
+          ${editing && html`<${EditPanel} origin=${origin} dataset=${dataset} pending=${pending} onForm=${setDatasetOpen}
+            stage=${stage} unstage=${unstage} unstageAll=${unstageAll} />`}
         </aside>
       </div>
     </div>`;

@@ -604,3 +604,23 @@ input.short { width: 70px; }
   table.dataset-table th:nth-child(4), table.dataset-table td:nth-child(4) { display: none; }
   table.dataset-table td.node { max-width: 140px; }
 }
+.dataset-template { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+.dataset-template .node-picker { flex: 1 1 360px; }
+.dataset-warnings { margin: 2px 0 6px; padding-left: 18px; color: var(--muted); font-size: 12px; }
+table.dataset-table td button.link:disabled { opacity: 0.35; cursor: not-allowed; }
+.mode-switch { display: inline-flex; gap: 0; }
+.mode-switch button:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.mode-switch button:last-child { border-top-left-radius: 0; border-bottom-left-radius: 0; margin-left: -1px; }
+.edit-panel { flex: 1; min-height: 0; overflow: auto; padding: 10px 14px; display: flex; flex-direction: column; gap: 4px; }
+.edit-panel h3 { margin: 0 0 2px; font-size: 14px; }
+.edit-panel h3 .muted { font-weight: 400; }
+.edit-panel h4 { margin: 10px 0 4px; font-size: 12px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .03em; }
+.edit-card { border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; margin-bottom: 6px; display: flex; flex-direction: column; gap: 4px; }
+.edit-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.pending-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.pending-list li { display: flex; justify-content: space-between; gap: 8px; align-items: center; padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px; }
+.pending-title { min-width: 0; overflow-wrap: anywhere; }
+.pending-kind { display: inline-block; font-size: 11px; padding: 0 6px; border-radius: 8px; background: var(--accent-soft); margin-right: 4px; }
+.pending-kind.delete { background: var(--selected); }
+.edit-apply { margin-top: auto; padding-top: 10px; border-top: 1px solid var(--border); position: sticky; bottom: 0; background: var(--panel); }
+.edit-apply .load-job { margin: 0 0 6px; }

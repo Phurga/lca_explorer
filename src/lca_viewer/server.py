@@ -179,7 +179,7 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
     default_method = _default_method(model)
     layout = _layout(model)
 
-    META_FIELDS = ["name", "reference_product", "location", "unit", "activity_type", "isic", "cpc", "database"]
+    META_FIELDS = ["name", "reference_product", "location", "unit", "activity_type", "isic", "cpc", "database", "code"]
     rows_by_product = model.A.tocsr()  # row j: the activities using product j
     supplies: dict[tuple[int, float], np.ndarray] = {}
 
@@ -583,7 +583,10 @@ class LoadRequest(BaseModel):
     project: str | None = None
     database: str | None = None
     rebuild: bool = False
-    """Build it again (after its project changed); refused while it is open."""
+    """Build it again (after its project changed); refused while it is open, unless ``reopen``."""
+    reopen: bool = False
+    """With ``rebuild`` of a database that is open: it keeps being served until the new build is
+    ready, then it is replaced by it (the page is reloaded for it)."""
 
 
 class UnloadRequest(BaseModel):
@@ -655,6 +658,37 @@ class DatasetRequest(BaseModel):
     """See :func:`lca_viewer.editing.write_dataset`."""
 
 
+class StageRequest(BaseModel):
+    folder: str
+    project: str
+    change: dict
+    """``{"id"?, "kind": "create" | "edit" | "delete", "title", "database", "code"?, "spec"?, "form"?}``:
+    ``spec`` as :func:`lca_viewer.editing.write_dataset` takes it; ``form`` is what the page needs to
+    open the change again."""
+
+
+class PendingRequest(BaseModel):
+    folder: str
+    project: str
+    id: str | None = None
+    """The change to take back; all of them when omitted."""
+
+
+class ApplyRequest(BaseModel):
+    folder: str
+    project: str
+    database: str | None = None
+    """The database whose model is built again and opened once the changes are made."""
+
+
+class DeleteDatasetRequest(BaseModel):
+    folder: str
+    project: str
+    database: str
+    code: str
+    """A process of the dataset to delete."""
+
+
 def model_key(path) -> str:
     """URL-safe name of a model directory, used in ``/db/<key>/``."""
     from .sources import slug
@@ -670,6 +704,7 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
     ``{"path", "title", "default_root"}`` models loaded before the server starts. ``/`` opens
     the first loaded database, or the page that asks which one to load.
     """
+    import gc
     import shutil
     import subprocess
     import sys
@@ -689,7 +724,14 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
     lock = threading.Lock()
 
     def listing() -> list[dict]:
-        return [{"key": m["key"], "title": m["title"], "activities": m["activities"]} for m in loaded.values()]
+        """The loaded databases; ``brightway``: the data folder, project and database a model was built from."""
+        origins = {Path(c["path"]).resolve(): built_from(c) for c in sources.catalog(data)}
+        out = []
+        for m in loaded.values():
+            origin = origins.get(m["path"])
+            out.append({"key": m["key"], "title": m["title"], "activities": m["activities"],
+                        "brightway": origin and dict(zip(("folder", "project", "database"), origin))})
+        return out
 
     def loaded_key(path) -> str | None:
         path = Path(path).resolve()
@@ -768,11 +810,12 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
             raise ValueError(lines[-1] if lines else "no output")
         return lines
 
-    def build(job: dict, folder: str, project: str, database: str, rebuild: bool) -> dict:
+    def build(job: dict, folder: str, project: str, database: str, rebuild: bool, reopen: bool = False) -> dict:
         """The catalog entry of a Brightway database's model, built (in a separate process) if
         there is none yet, or again with ``rebuild`` (the page asks for it when the project
-        changed since). A database that is open is not rebuilt: it would mix its old matrices
-        with the new metadata files."""
+        changed since). A database that is open is not rebuilt, unless ``reopen``: it would mix its
+        old matrices with the new metadata files. With ``reopen`` it keeps being served while the
+        new build is made, then is replaced by it (the caller opens it again)."""
         import importlib.util
 
         folder = str(Path(folder).expanduser().resolve())
@@ -782,7 +825,7 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
         output = Path(entry["path"]) if entry else sources.cache_dir(data, folder, project, database).resolve()
         if entry and not rebuild and (output / "A.npz").exists():
             return entry
-        if loaded_key(output):
+        if loaded_key(output) and not reopen:
             raise ValueError(f"{database} is open: close it first (Close, in the list of loaded databases), then rebuild it")
         if importlib.util.find_spec("bw2data") is None:
             raise ValueError("Brightway is not installed in the Python environment running lca_viewer: "
@@ -800,10 +843,16 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
             raise ValueError(f"The build failed: {e}") from None
         old = output.with_name(output.name + ".old")
         shutil.rmtree(old, ignore_errors=True)
+        closed, failure = None, None
         with lock:  # not while the database is being opened
-            if loaded_key(output):
+            key = loaded_key(output)
+            if key and not reopen:
                 shutil.rmtree(part, ignore_errors=True)
                 raise ValueError(f"{database} was opened during the build: close it, then rebuild it")
+            if key:  # served until now: its files are replaced
+                closed = loaded.pop(key)
+                app.router.routes.remove(closed["route"])
+                gc.collect()
             try:
                 if output.exists():
                     output.rename(old)  # fails, leaving the previous build whole, when a file in it is in use
@@ -812,7 +861,11 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
                 if old.exists() and not output.exists():
                     old.rename(output)
                 shutil.rmtree(part, ignore_errors=True)
-                raise ValueError(f"Could not replace the previous build in {output}: {e}") from None
+                failure = f"Could not replace the previous build in {output}: {e}"
+        if failure:
+            if closed:
+                mount(output, closed["title"], None)  # the previous build keeps being served
+            raise ValueError(failure)
         shutil.rmtree(old, ignore_errors=True)
         title = f"{database} ({project})"
         source = {"brightway": folder, "project": project, "database": database, **state}
@@ -821,7 +874,7 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
 
     def run(job: dict, req: LoadRequest) -> dict:
         if req.brightway:
-            entry = build(job, req.brightway, req.project, req.database, req.rebuild)
+            entry = build(job, req.brightway, req.project, req.database, req.rebuild, req.reopen)
         else:
             entry = next((m for m in sources.catalog(data) if Path(m["path"]) == Path(req.path).resolve()), None)
             if entry is None:
@@ -920,8 +973,6 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
     @app.post("/api/unload")
     def unload(req: UnloadRequest):
         """Stop serving a database, to free its memory."""
-        import gc
-
         with lock:
             m = loaded.pop(req.key, None)
             if m is None:
@@ -1223,9 +1274,135 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
         except (FileNotFoundError, ValueError) as e:
             raise HTTPException(404, str(e))
 
+    # ------------------------------------------------ staged changes: made together by "apply"
+
+    def pending_file(folder: str, project: str) -> Path:
+        import hashlib
+
+        digest = hashlib.sha1(f"{folder}\n{project}".encode("utf-8")).hexdigest()[:12]
+        return data / "pending" / f"{sources.slug(project)}-{digest}.json"
+
+    def pending_read(folder: str, project: str) -> list[dict]:
+        import json
+
+        path = pending_file(folder, project)
+        return json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+
+    def pending_write(folder: str, project: str, changes: list[dict]) -> list[dict]:
+        import json
+
+        path = pending_file(folder, project)
+        if not changes:
+            path.unlink(missing_ok=True)
+            return []
+        path.parent.mkdir(parents=True, exist_ok=True)
+        part = path.with_name(path.name + ".part")
+        part.write_text(json.dumps(changes), encoding="utf-8")
+        part.replace(path)
+        return changes
+
+    @app.get("/api/brightway/pending")
+    def pending(folder: str, project: str):
+        """The changes staged for a project, in the order they will be made."""
+        return {"changes": pending_read(folder_of(folder), project)}
+
+    @app.post("/api/brightway/pending")
+    def stage(req: StageRequest):
+        """Stage a change of a process (nothing is written to Brightway until it is applied). A
+        change of a process already staged takes its place."""
+        from . import editing
+
+        folder, change = folder_of(req.folder), dict(req.change)
+        if change.get("kind") not in ("create", "edit", "delete"):
+            raise HTTPException(400, f"Unknown change {change.get('kind')!r}")
+        if change["kind"] == "delete" and not (change.get("database") and change.get("code")):
+            raise HTTPException(400, "Say which dataset to delete")
+        if change["kind"] != "delete":
+            try:
+                editing.check_spec(change.get("spec") or {})
+            except (KeyError, ValueError, TypeError) as e:
+                raise HTTPException(400, str(e) if isinstance(e, ValueError) else f"Incomplete change: {e}")
+        change["id"] = change.get("id") or uuid.uuid4().hex[:10]
+        change["title"] = change.get("title") or change["kind"]
+        same = lambda c: c["id"] == change["id"] or (change["kind"] != "create" and c["kind"] != "create"
+                                                   and (c.get("database"), c.get("code")) == (change.get("database"), change.get("code")))
+        kept = [c for c in pending_read(folder, req.project) if not same(c)]
+        return {"changes": pending_write(folder, req.project, [*kept, change])}
+
+    @app.post("/api/brightway/pending/remove")
+    def unstage(req: PendingRequest):
+        folder = folder_of(req.folder)
+        kept = [c for c in pending_read(folder, req.project) if req.id and c["id"] != req.id]
+        return {"changes": pending_write(folder, req.project, kept)}
+
+    @app.post("/api/brightway/apply")
+    def apply_pending(req: ApplyRequest):
+        """Make the staged changes of a project in one transaction (``lca-viewer apply``), then build
+        the model of ``database`` again and open it."""
+        import json
+        import tempfile
+
+        folder = folder_of(req.folder)
+        if req.project not in project_names(folder):
+            raise HTTPException(404, f"No project {req.project!r} in {folder}")
+        changes = pending_read(folder, req.project)
+        if not changes:
+            raise HTTPException(400, "No change is staged")
+
+        def work(job):
+            with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as f:
+                json.dump(changes, f)
+            try:
+                job["message"] = f"Making {len(changes)} change{'s' if len(changes) > 1 else ''} in {req.project}"
+                cli(job, folder, ["apply", f.name, "--project", req.project], lambda line: None)
+            finally:
+                Path(f.name).unlink(missing_ok=True)
+            pending_write(folder, req.project, [c for c in pending_read(folder, req.project) if c not in changes])
+            done = {"applied": len(changes), "message": f"{len(changes)} change{'s' if len(changes) > 1 else ''} made"}
+            if req.database:
+                try:
+                    done.update(run(job, LoadRequest(brightway=folder, project=req.project, database=req.database,
+                                                     rebuild=True, reopen=True)))
+                except ValueError as e:
+                    raise ValueError(f"The changes were made, but building {req.database} failed: {e}") from None
+            return done
+
+        return start(f"{req.project}", ("apply", folder, req.project), work)
+
+    @app.get("/api/brightway/dataset")
+    def read_dataset(folder: str, project: str, database: str, code: str):
+        """A process as the form of *Create dataset* takes it, to copy it or, when it was written by
+        this app, to edit it (``editable``, with what uses it)."""
+        try:
+            return sources.read_dataset(folder_of(folder), project, database, code)
+        except (FileNotFoundError, ValueError) as e:
+            raise HTTPException(404, str(e))
+
+    @app.post("/api/brightway/dataset/delete")
+    def delete_dataset(req: DeleteDatasetRequest):
+        """Delete a dataset written by this app, if nothing uses it (``lca-viewer delete-dataset``)."""
+        import json
+
+        folder = folder_of(req.folder)
+        if req.project not in project_names(folder):
+            raise HTTPException(404, f"No project {req.project!r} in {folder}")
+        try:
+            sources.read_dataset(folder, req.project, req.database, req.code)
+        except ValueError as e:
+            raise HTTPException(404, str(e))
+
+        def work(job):
+            lines = cli(job, folder, ["delete-dataset", "--project", req.project, "--database", req.database, "--code", req.code],
+                        lambda line: None)
+            result = next((json.loads(line[7:]) for line in reversed(lines) if line.startswith("RESULT ")), {})
+            return {"result": result, "message": f"{result.get('deleted', 'The dataset')} deleted from {req.database}"}
+
+        return start(f"{req.database} / {req.code}", ("delete-dataset", folder, req.project, req.database, req.code), work)
+
     @app.post("/api/brightway/dataset")
     def write_dataset(req: DatasetRequest):
-        """Write a new dataset into a project (``lca-viewer dataset``)."""
+        """Write a new dataset into a project, or write one again in place when ``spec`` has its
+        ``code`` (``lca-viewer dataset``)."""
         import json
         import tempfile
 

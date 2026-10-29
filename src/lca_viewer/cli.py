@@ -195,7 +195,8 @@ def ecoinvent(args) -> None:
 
 
 def dataset(args) -> None:
-    """Write the dataset described in a JSON file (the Create dataset panel) into a project."""
+    """Write the dataset described in a JSON file (the Create dataset panel) into a project, or in
+    place of the dataset it names."""
     import json
 
     from .editing import write_dataset
@@ -206,6 +207,35 @@ def dataset(args) -> None:
     except ValueError as e:
         raise SystemExit(str(e)) from None
     print(f"Wrote {spec['process']['name']} into {result['database']}", flush=True)
+    print("RESULT " + json.dumps(result), flush=True)
+
+
+def apply(args) -> None:
+    """Make the changes staged in the app (a JSON file: a list of changes) in one transaction."""
+    import json
+
+    from .editing import apply_changes
+
+    changes = json.loads(Path(args.changes).read_text(encoding="utf-8"))
+    try:
+        result = apply_changes(args.project, changes)
+    except ValueError as e:
+        raise SystemExit(str(e)) from None
+    print(f"Applied {result['applied']} changes to {', '.join(result['databases'])}", flush=True)
+    print("RESULT " + json.dumps(result), flush=True)
+
+
+def delete_dataset(args) -> None:
+    """Delete a dataset written by the Create dataset panel, if nothing uses it."""
+    import json
+
+    from .editing import delete_dataset as delete
+
+    try:
+        result = delete(args.project, args.database, args.code)
+    except ValueError as e:
+        raise SystemExit(str(e)) from None
+    print(f"Deleted {result['deleted']} from {result['database']}", flush=True)
     print("RESULT " + json.dumps(result), flush=True)
 
 
@@ -270,6 +300,17 @@ def main(argv=None) -> None:
     p.add_argument("spec", help="JSON file: see lca_viewer.editing.write_dataset")
     p.add_argument("--project", required=True)
     p.set_defaults(func=dataset)
+
+    p = sub.add_parser("apply", help="Make the changes staged in the app (a JSON file) in one transaction")
+    p.add_argument("changes", help="JSON file: see lca_viewer.editing.apply_changes")
+    p.add_argument("--project", required=True)
+    p.set_defaults(func=apply)
+
+    p = sub.add_parser("delete-dataset", help="Delete a dataset written by the Create dataset panel, if nothing uses it")
+    p.add_argument("--project", required=True)
+    p.add_argument("--database", required=True)
+    p.add_argument("--code", required=True, help="Code of a process of the dataset")
+    p.set_defaults(func=delete_dataset)
 
     p = sub.add_parser("setup", help="First-time setup; optionally unpacks, imports and builds an ecoinvent ecoSpold2 release")
     p.add_argument("source", nargs="?", help="ecoSpold2 archive (.7z) or the folder it was unpacked to; asked when omitted (Enter skips ecoinvent)")

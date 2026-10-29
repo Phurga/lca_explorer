@@ -52,17 +52,30 @@ API in `src/lca_viewer/server.py`.
   each source (ecoinvent no longer makes its own project). These forms sit
   in the Load database dialog, next to the projects they change, rather than
   in a separate manager.
-- **Create dataset** (top bar, next to Load database): a wide dialog to enter
+- **Process form** (opened from the edit panel): a wide dialog to enter
   a process as in SimaPro: target (folder, project, database or new one),
   process and documentation, products (co-products with allocation %, their
   sum shown), then one section per exchange kind (technosphere, nature,
   emissions, waste to treatment, avoided products), each with a search box
   over the project (↑↓ Enter to add) and rows with amount, unit, SD² and
-  comment. The footer says what is missing before *Save to Brightway*; after
-  saving, *Build and open* loads the database. The form is a draft kept in
-  `localStorage` (per browser) until *Clear*. Decision: a dialog over the
+  comment. The footer says what is missing before *Stage*. A new process
+  is a draft kept in `localStorage` (per browser) until *Clear*. Decision: a dialog over the
   explorer rather than a page of its own, so that one can look up processes
   in the open database while entering a dataset.
+  *Start from* (same form) copies any process of the project into it
+  (`GET /api/brightway/dataset`, read from the SQLite file).
+- **View / Edit switch** (top bar). View is the explorer. Edit swaps the right
+  panel for the *edit panel* (the side panel's tabs stay mounted, hidden): the
+  focused tab's process with *Edit*, *Copy as new* and *Delete*, *+ New process*,
+  the list of staged changes (*Open*, *Remove*), and *Apply and rebuild*. Decision:
+  the results shown never change under the user's hands; edits are collected,
+  then made in one transaction and the model rebuilt once, instead of a rebuild per
+  save. The form (a dialog: its tables need the width) stages instead of writing:
+  the change goes to `POST /api/brightway/pending` with the form's state, which is
+  how a staged change is opened again. The process of the focused tab is found from the
+  activity's database and code. Switching to Edit needs a Brightway-built database.
+  *Apply* runs `lca-viewer apply` and `/api/load` with `reopen`: the old model is served
+  until the new one is ready, then the page reloads in View mode.
 - **Tabs and panes** (like a notes app such as Obsidian): each tab is one
   functional unit with its own tree, method, cut-off, rules and merges. Tabs
   sit on top of their pane: **+** opens an empty tab (the search box takes

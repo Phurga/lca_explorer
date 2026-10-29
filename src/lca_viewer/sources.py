@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import math
 import os
 import pickle
 import re
@@ -366,3 +367,190 @@ def remote_projects() -> dict[str, str]:
             return json.loads(response.read().decode("utf-8"))
     except (OSError, ValueError):
         return dict(REMOTE_PROJECTS)
+
+
+# ---------------------------------------------------------------- reading a dataset
+
+def _fetch(con, key):
+    return con.execute("SELECT database, code, name, product, location, type, data FROM activitydataset "
+                       "WHERE database = ? AND code = ?", tuple(key)).fetchone()
+
+
+def _exchanges_of(con, key) -> list[dict]:
+    rows = con.execute("SELECT type, input_database, input_code, data FROM exchangedataset "
+                       "WHERE output_database = ? AND output_code = ?", tuple(key)).fetchall()
+    return [{**_project_data(blob), "type": kind, "input": (db, code)} for kind, db, code, blob in rows]
+
+
+def dataset_parts(con, database: str, code: str) -> dict:
+    """The dataset of a process in a project's SQLite file: ``{"node", "data", "key", "exchanges",
+    "products", "own"}``.
+
+    A process allocated from a multi-output one (``readonly_process``) belongs to the dataset of its
+    parent: that is what is edited, copied or deleted. ``products`` are the keys of its products
+    (a process that is its own product: itself); ``own``, the keys of every node going with the
+    dataset: itself, its allocated processes and its products.
+    """
+    row = _fetch(con, (database, code))
+    if row is None:
+        raise ValueError(f"No process {code!r} in {database!r}")
+    if row[5] == "product":  # the product of a dataset stands for it (e.g. what a process was before it got co-products)
+        producer = con.execute("SELECT output_database, output_code FROM exchangedataset WHERE input_database = ? "
+                               "AND input_code = ? AND type = 'production' ORDER BY id", (database, code)).fetchone()
+        row = (producer and _fetch(con, producer)) or row
+    data = _project_data(row[6])
+    if row[5] == "readonly_process" and data.get("mf_parent_key"):
+        row = _fetch(con, data["mf_parent_key"])
+        if row is None:
+            raise ValueError(f"The parent of {code!r} is missing from {database!r}")
+        data = _project_data(row[6])
+    if row[5] in NON_PROCESS_TYPES:
+        raise ValueError(f"{row[2]} is not a process (it is a {row[5]})")
+    key = (row[0], row[1])
+    exchanges = _exchanges_of(con, key)
+    functional = [e for e in exchanges if e["type"] == "production" and e.get("functional")]
+    if not functional:  # ecoinvent: the production exchange of the process, linked to itself
+        functional = [e for e in exchanges if e["type"] == "production" and e["input"] == key and e.get("functional") is None]
+    own = {key}
+    for e in functional:
+        own.add(e["input"])
+        if e.get("mf_allocated_process_code"):
+            own.add((key[0], e["mf_allocated_process_code"]))
+    return {"node": _node(row), "data": data, "key": key, "exchanges": exchanges, "functional": functional,
+            "products": [e["input"] for e in functional], "own": own}
+
+
+def _users(con, parts: dict) -> list[dict]:
+    """The datasets, other than this one, whose exchanges take a product of it (or the process
+    itself) as input, an allocated process standing for its parent:
+    ``[{"database", "code", "name", "uses": key of the product}]``."""
+    out, seen = [], set()
+    for key in parts["products"]:
+        for db, code in con.execute("SELECT output_database, output_code FROM exchangedataset "
+                                    "WHERE input_database = ? AND input_code = ? AND type != 'biosphere'", key).fetchall():
+            if (db, code) in parts["own"] or (db, code) in seen:
+                continue
+            seen.add((db, code))
+            row = _fetch(con, (db, code))
+            data = _project_data(row[6]) if row else {}
+            if row and row[5] == "readonly_process" and data.get("mf_parent_key"):
+                if tuple(data["mf_parent_key"]) in parts["own"]:
+                    continue  # an allocated process of the dataset itself
+                row = _fetch(con, data["mf_parent_key"]) or row
+            if row:
+                out.append({"database": row[0], "code": row[1], "name": row[2], "uses": list(key)})
+    return out
+
+
+def dataset_users(base, project: str, database: str, code: str) -> list[dict]:
+    """Datasets of a project that use the products of the dataset of a process (read-only)."""
+    path = project_dir(base, project) / "lci" / "databases.db"
+    with closing(sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)) as con:
+        return _users(con, dataset_parts(con, database, code))
+
+
+def _treats_waste(con, key: tuple) -> bool:
+    """Whether the node ``key`` is a waste, or a process treating one: something produces it in a
+    negative amount (ecoinvent), or takes it as its functional input in a negative amount (SimaPro)."""
+    rows = con.execute("SELECT type, data FROM exchangedataset WHERE input_database = ? AND input_code = ? "
+                       "AND (type = 'production' OR (type = 'technosphere' AND output_code = ?))", (*key, key[1])).fetchall()
+    for kind, blob in rows:
+        data = _project_data(blob)
+        if (kind == "production" or data.get("functional")) and (data.get("amount") or 0) < 0:
+            return True
+    return False
+
+
+def _sd2(data: dict):
+    """SimaPro's SD² of a lognormal uncertainty; None for the other kinds."""
+    if data.get("uncertainty type") == 2 and data.get("scale") is not None:
+        return round(math.exp(2 * float(data["scale"])), 6)
+    return None
+
+
+def read_dataset(base, project: str, database: str, code: str) -> dict:
+    """A process as the *Create dataset* form takes it (read-only, without bw2data):
+
+    ``{"database", "code", "editable", "multifunctional", "process": {"name", "location", "comment",
+    "documentation"}, "products": [{"code", "name", "amount", "unit", "allocation", "comment", "used"}],
+    "exchanges": [{"section", "node", "amount", "comment", "sd2"}], "used_by": [{"database", "code",
+    "name", "uses"}], "warnings": [...]}``.
+
+    ``code`` can be any process; for one allocated from a multi-output process, the dataset is its
+    parent's. ``editable``: the dataset was written by lca_viewer, which can write it again in place
+    (``used_by`` and ``used`` are only given for those: they tell what keeps a product, or the whole
+    dataset, from being removed). Negative inputs from the technosphere are waste to treatment when
+    what supplies them treats waste, else avoided products; uncertainties other than lognormal are not kept.
+    """
+    path = project_dir(base, project) / "lci" / "databases.db"
+    with closing(sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)) as con:
+        parts = dataset_parts(con, database, code)
+        node, data, key = parts["node"], parts["data"], parts["key"]
+        editable = bool(data.get("lca_viewer"))
+        warnings: list[str] = []
+
+        products = []
+        for e in parts["functional"]:
+            if e["input"] == key:
+                name, unit, product_code = node["reference_product"] or node["name"], node["unit"], key[1]
+            else:
+                row = _fetch(con, e["input"])
+                if row is None:
+                    warnings.append(f"A product of the dataset is missing from {key[0]}")
+                    continue
+                product = _node(row)
+                name, unit, product_code = product["name"], product["unit"], product["code"]
+            shares = (e.get("properties") or {}).get("manual_allocation")
+            if shares is None and e.get("mf_allocation_factor") is not None:
+                shares = 100 * e["mf_allocation_factor"]
+            products.append({"code": product_code, "name": name, "amount": e.get("amount"), "unit": unit or node["unit"] or "unit",
+                             "allocation": shares, "comment": e.get("comment") or ""})
+        if not products:
+            raise ValueError(f"{node['name']} has no product")
+        if len(products) == 1:
+            products[0]["allocation"] = 100
+        elif any(p["allocation"] is None for p in products):
+            for p in products:
+                p["allocation"] = round(100 / len(products), 6)
+
+        exchanges = []
+        for e in parts["exchanges"]:
+            if e in parts["functional"] or (e["type"] == "production" and e["input"] == key):
+                continue
+            kind, amount = e["type"], e.get("amount")
+            row = _fetch(con, e["input"])
+            if row is None or amount is None:
+                warnings.append(f"An exchange whose input is missing ({e['input'][1]}) was left out")
+                continue
+            target = _node(row)
+            if kind == "biosphere":
+                section = "resource" if _resource(target) else "emission"
+            elif kind == "substitution":
+                section = "avoided"
+            elif kind == "production":  # SimaPro's "waste to treatment", produced in a non-functional exchange
+                section = "waste"
+            elif kind == "technosphere" and amount < 0:
+                section, amount = ("waste" if _treats_waste(con, e["input"]) else "avoided"), -amount
+            elif kind == "technosphere":
+                section = "technosphere"
+            else:
+                warnings.append(f"An exchange of type {kind!r} ({target['name']}) was not copied")
+                continue
+            if e.get("uncertainty type") not in (None, 0, 2):
+                warnings.append(f"The uncertainty of {target['name']} is not lognormal: it was not copied")
+            exchanges.append({"section": section, "node": target, "amount": amount, "comment": e.get("comment") or "",
+                              "sd2": _sd2(e)})
+
+        used_by = _users(con, parts) if editable else []
+        used = {tuple(u["uses"]) for u in used_by}
+        for p in products:
+            p["used"] = (key[0], p["code"]) in used
+    kept = (data.get("lca_viewer") or {}).get("comment")  # the comment as typed, without the documentation after it
+    return {
+        "database": key[0], "code": key[1], "editable": editable,
+        "multifunctional": node["type"] == "multifunctional" or any(p["code"] != key[1] for p in products),
+        "process": {"name": node["name"], "location": node["location"] or "",
+                    "comment": data.get("comment") or "" if kept is None else kept,
+                    "documentation": dict(data.get("documentation") or {})},
+        "products": products, "exchanges": exchanges, "used_by": used_by, "warnings": sorted(set(warnings)),
+    }
