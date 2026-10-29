@@ -722,6 +722,15 @@ class ApplyRequest(BaseModel):
     project: str
     database: str | None = None
     """The database whose model is built again and opened once the changes are made."""
+    rebuild: bool = True
+    """False: only make the changes. The models of the databases they affect then have to be built again."""
+
+
+class LockRequest(BaseModel):
+    folder: str
+    project: str
+    database: str
+    locked: bool
 
 
 class DeleteDatasetRequest(BaseModel):
@@ -768,13 +777,24 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
 
     def listing() -> list[dict]:
         """The loaded databases; ``brightway``: the data folder, project and database a model was built from."""
-        origins = {Path(c["path"]).resolve(): built_from(c) for c in sources.catalog(data)}
+        entries = {Path(c["path"]).resolve(): c for c in sources.catalog(data)}
         out = []
         for m in loaded.values():
-            origin = origins.get(m["path"])
+            entry = entries.get(m["path"])
+            origin = entry and built_from(entry)
             out.append({"key": m["key"], "title": m["title"], "activities": m["activities"],
-                        "brightway": origin and dict(zip(("folder", "project", "database"), origin))})
+                        "brightway": origin and dict(zip(("folder", "project", "database"), origin)),
+                        "outdated": origin and outdated(entry, *origin)})
         return out
+
+    def outdated(entry: dict, folder: str, project: str, database: str) -> str | None:
+        """What changed in the project since the model of a Brightway database was built (a rebuild is
+        required), or None."""
+        try:
+            p = next(p for p in sources.brightway_projects(folder) if p["name"] == project)
+            return sources.changes(entry["source"], sources.database_state(p, database))
+        except (StopIteration, KeyError, FileNotFoundError, ValueError):
+            return None
 
     def loaded_key(path) -> str | None:
         path = Path(path).resolve()
@@ -993,6 +1013,7 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
                 built[origin[1:]] = {"key": loaded_key(m["path"]), "source": m["source"]}
         for p in projects:
             for d in p["databases"]:
+                d["locked"] = d["name"] in locked_read(folder, p["name"])
                 b = built.get((p["name"], d["name"]))
                 # outdated: what changed in the project since the build (None: nothing)
                 d["model"] = b and {"key": b["key"], "outdated": sources.changes(b["source"], sources.database_state(p, d["name"]))}
@@ -1387,10 +1408,67 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
         part.replace(path)
         return changes
 
+    # Locked databases: what they contain cannot be changed, whichever database is open when it is reached.
+    # Kept here (not in the Brightway project): the server is what stages and applies the changes.
+
+    def locks_file() -> Path:
+        return data / "locks.json"
+
+    def locked_all() -> dict[str, list[str]]:
+        import json
+
+        try:
+            return json.loads(locks_file().read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+
+    def locked_read(folder: str, project: str) -> list[str]:
+        return locked_all().get(f"{folder}\n{project}", [])
+
+    def check_unlocked(folder: str, project: str, databases) -> None:
+        hit = sorted(set(databases) & set(locked_read(folder, project)))
+        if hit:
+            raise HTTPException(400, f"{', '.join(hit)} {'is' if len(hit) == 1 else 'are'} locked: unlock "
+                                     f"{'it' if len(hit) == 1 else 'them'} in Load database to change what it contains")
+
+    def touched_by(change: dict) -> set[str]:
+        return {d for d in (change.get("database"), (change.get("spec") or {}).get("database")) if d}
+
+    @app.post("/api/brightway/lock")
+    def lock_database(req: LockRequest):
+        """Lock or unlock a database of a project: what it contains cannot be edited, deleted or added to."""
+        import json
+
+        folder = folder_of(req.folder)
+        if req.project not in project_names(folder):
+            raise HTTPException(404, f"No project {req.project!r} in {folder}")
+        everything = locked_all()
+        names = set(everything.get(f"{folder}\n{req.project}", []))
+        (names.add if req.locked else names.discard)(req.database)
+        if names:
+            everything[f"{folder}\n{req.project}"] = sorted(names)
+        else:
+            everything.pop(f"{folder}\n{req.project}", None)
+        locks_file().parent.mkdir(parents=True, exist_ok=True)
+        locks_file().write_text(json.dumps(everything, indent=1), encoding="utf-8")
+        return {"locked": sorted(names)}
+
+    def pending_view(folder: str, project: str, changes: list[dict] | None = None) -> dict:
+        """The staged changes, with the databases they affect (theirs, and those using them: their models
+        are out of date once the changes are made) and the locked ones."""
+        changes = pending_read(folder, project) if changes is None else changes
+        touched = sorted({d for c in changes for d in touched_by(c)})
+        try:
+            p = next(p for p in sources.brightway_projects(folder) if p["name"] == project)
+            affected = sources.affected_databases(p, touched)
+        except (StopIteration, FileNotFoundError):
+            affected = touched
+        return {"changes": changes, "affected": affected, "locked": locked_read(folder, project)}
+
     @app.get("/api/brightway/pending")
     def pending(folder: str, project: str):
         """The changes staged for a project, in the order they will be made."""
-        return {"changes": pending_read(folder_of(folder), project)}
+        return pending_view(folder_of(folder), project)
 
     @app.post("/api/brightway/pending")
     def stage(req: StageRequest):
@@ -1401,6 +1479,7 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
         folder, change = folder_of(req.folder), dict(req.change)
         if change.get("kind") not in ("create", "edit", "delete"):
             raise HTTPException(400, f"Unknown change {change.get('kind')!r}")
+        check_unlocked(folder, req.project, touched_by(change))
         if change["kind"] == "delete" and not (change.get("database") and change.get("code")):
             raise HTTPException(400, "Say which dataset to delete")
         if change["kind"] != "delete":
@@ -1413,13 +1492,13 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
         same = lambda c: c["id"] == change["id"] or (change["kind"] != "create" and c["kind"] != "create"
                                                    and (c.get("database"), c.get("code")) == (change.get("database"), change.get("code")))
         kept = [c for c in pending_read(folder, req.project) if not same(c)]
-        return {"changes": pending_write(folder, req.project, [*kept, change])}
+        return pending_view(folder, req.project, pending_write(folder, req.project, [*kept, change]))
 
     @app.post("/api/brightway/pending/remove")
     def unstage(req: PendingRequest):
         folder = folder_of(req.folder)
         kept = [c for c in pending_read(folder, req.project) if req.id and c["id"] != req.id]
-        return {"changes": pending_write(folder, req.project, kept)}
+        return pending_view(folder, req.project, pending_write(folder, req.project, kept))
 
     @app.post("/api/brightway/apply")
     def apply_pending(req: ApplyRequest):
@@ -1434,6 +1513,7 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
         changes = pending_read(folder, req.project)
         if not changes:
             raise HTTPException(400, "No change is staged")
+        check_unlocked(folder, req.project, {d for c in changes for d in touched_by(c)})  # locked since they were staged
 
         def work(job):
             with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as f:
@@ -1445,7 +1525,11 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
                 Path(f.name).unlink(missing_ok=True)
             pending_write(folder, req.project, [c for c in pending_read(folder, req.project) if c not in changes])
             done = {"applied": len(changes), "message": f"{len(changes)} change{'s' if len(changes) > 1 else ''} made"}
-            if req.database:
+            affected = pending_view(folder, req.project, changes)["affected"]
+            done["affected"] = affected
+            if req.database and req.database in affected and not req.rebuild:
+                done["message"] += f"; {req.database} has to be built again to show them"
+            if req.database and req.database in affected and req.rebuild:
                 try:
                     done.update(run(job, LoadRequest(brightway=folder, project=req.project, database=req.database,
                                                      rebuild=True, reopen=True)))
@@ -1457,12 +1541,14 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
 
     @app.get("/api/brightway/dataset")
     def read_dataset(folder: str, project: str, database: str, code: str):
-        """A process as the form of *Create dataset* takes it, to copy it or, when it was written by
-        this app, to edit it (``editable``, with what uses it)."""
+        """A process as the form takes it, to copy it or edit it (with what uses it); ``locked``: its
+        database is locked, so it cannot be changed."""
+        folder = folder_of(folder)
         try:
-            return sources.read_dataset(folder_of(folder), project, database, code)
+            read = sources.read_dataset(folder, project, database, code)
         except (FileNotFoundError, ValueError) as e:
             raise HTTPException(404, str(e))
+        return {**read, "locked": read["database"] in locked_read(folder, project)}
 
     @app.post("/api/brightway/dataset/delete")
     def delete_dataset(req: DeleteDatasetRequest):
@@ -1472,6 +1558,7 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
         folder = folder_of(req.folder)
         if req.project not in project_names(folder):
             raise HTTPException(404, f"No project {req.project!r} in {folder}")
+        check_unlocked(folder, req.project, {req.database})
         try:
             sources.read_dataset(folder, req.project, req.database, req.code)
         except ValueError as e:
@@ -1495,6 +1582,7 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
         folder = folder_of(req.folder)
         if req.project not in project_names(folder):
             raise HTTPException(404, f"No project {req.project!r} in {folder}")
+        check_unlocked(folder, req.project, touched_by({"spec": req.spec}))
 
         def work(job):
             with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as f:

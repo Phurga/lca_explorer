@@ -12,12 +12,14 @@ the process documentation. A dataset with co-products is a multifunctional proce
 Brightway's ``multifunctional`` library, allocated with its ``manual_allocation`` strategy into
 read-only single-output processes, one per product, as for an imported SimaPro CSV.
 
-A dataset written here can be written again in place (``write_dataset`` with ``code``) and deleted
+A dataset can be written again in place (``write_dataset`` with ``code``) and deleted
 (``delete_dataset``), changing the products down to one or up to several: the nodes of the products keep
 their codes, so the datasets using them stay linked, and a product that is used elsewhere cannot be
 removed, nor a dataset with a product used elsewhere. Each change is one SQLite transaction, and the
 database is processed again before it ends, so the matrices a model is built from are never out of step with
-the data. Datasets that were not written here (ecoinvent…) are not changed, only read (copied).
+the data. Any dataset can be edited, ecoinvent's included: its exchanges are changed one by one, by
+id, so that what the form cannot show (pedigree, formulas, other uncertainties) stays. Datasets that other
+databases use are then to be built again: the databases that use the edited one see their results change.
 """
 
 from __future__ import annotations
@@ -179,12 +181,20 @@ def _dataset_node(bd, database: str, code: str):
     return node
 
 
+def _functional_edges(node) -> list:
+    """The edges that make the products of a process: the functional ones or, as in ecoinvent, its
+    production edge to itself."""
+    edges = list(node.exchanges())
+    functional = [e for e in edges if e.get("functional")]
+    return functional or [e for e in edges if e["type"] == "production" and e["input"] == node.key
+                          and e.get("functional") is None]
+
+
 def _own_keys(node) -> set:
     """The nodes that go with a dataset: itself, its allocated processes and its products."""
     own = {node.key}
-    for e in node.exchanges():
-        if e.get("functional"):
-            own.add(e.input.key)
+    for e in _functional_edges(node):
+        own.add(e.input.key)
         if e.get("mf_allocated_process_code"):
             own.add((node["database"], e["mf_allocated_process_code"]))
     return own
@@ -200,7 +210,7 @@ def _used_by(bd, keys, own: set) -> dict:
     users = {}
     for key in keys:
         query = ED.select(ED.output_database, ED.output_code).where(
-            ED.input_database == key[0], ED.input_code == key[1], ED.type != "biosphere")
+            ED.input_database == key[0], ED.input_code == key[1], ED.type != "biosphere").limit(60)
         for user in {(e.output_database, e.output_code) for e in query}:
             if user in own:
                 continue
@@ -220,17 +230,60 @@ def _refuse(what: str, users: dict) -> None:
         raise ValueError(f"{what} is used by {listed}: remove it from {'them' if len(names) > 1 else 'it'} first")
 
 
+def _stored(section: str, amount: float, edge=None) -> float:
+    """The amount to store for an exchange of the form. A new one takes the sign of its section (waste to
+    treatment is negative); one that exists keeps its own convention: a negative input of the technosphere
+    is shown positive in the form, in waste or avoided products."""
+    if edge is not None:
+        return -amount if edge["type"] == "technosphere" and section in ("waste", "avoided") and float(edge["amount"]) < 0 else amount
+    return SECTIONS[section][1] * amount
+
+
 def _write_exchanges(bd, node, exchanges: list[dict]) -> None:
     for e in exchanges:
         if e["section"] not in SECTIONS:
             raise ValueError(f"Unknown exchange section {e['section']!r}")
-        kind, sign = SECTIONS[e["section"]]
+        kind, _ = SECTIONS[e["section"]]
         other = bd.get_node(database=e["database"], code=e["code"])
         if kind != "biosphere":
             other = _supplier(other)
-        amount = sign * float(e["amount"])
+        amount = _stored(e["section"], float(e["amount"]))
         node.new_edge(input=other, type=kind, amount=amount, comment=e.get("comment") or "",
                       **_lognormal(amount, e.get("sd2"))).save()
+
+
+def _sd2_of(edge):
+    if edge.get("uncertainty type") == 2 and edge.get("scale") is not None:
+        return round(math.exp(2 * float(edge["scale"])), 6)
+    return None
+
+
+def _update_exchange(edge, e: dict) -> None:
+    """Change an exchange to what the form says, touching nothing else: its pedigree, formulas,
+    properties and uncertainties of other kinds stay as they are. A lognormal uncertainty follows the amount."""
+    amount = _stored(e["section"], float(e["amount"]), edge)
+    comment = e.get("comment") or ""
+    sd2 = float(e["sd2"]) if e.get("sd2") else None
+    before = _sd2_of(edge)
+    changed = False
+    if amount != float(edge["amount"]):
+        edge["amount"] = amount
+        changed = True
+        if edge.get("uncertainty type") == 2 and amount:
+            edge["loc"], edge["negative"] = math.log(abs(amount)), amount < 0
+    if comment != (edge.get("comment") or ""):
+        edge["comment"] = comment
+        changed = True
+    if sd2 is not None and (before is None or abs(sd2 - before) > 1e-6 * sd2):
+        for k, v in _lognormal(amount, sd2).items():
+            edge[k] = v
+        changed = True
+    elif sd2 is None and before is not None:  # the lognormal uncertainty was taken away
+        for k in ("uncertainty type", "loc", "scale", "negative", "scale without pedigree", "pedigree"):
+            edge._data.pop(k, None)
+        changed = True
+    if changed:
+        edge.save()
 
 
 def _new_product(db, p: dict, location: str):
@@ -355,8 +408,9 @@ def _write(bd, project: str, spec: dict, created: list | None = None, processed:
         return _finish(db, node, several, processed)
 
 
-def _node_data(process: dict, location: str, created: str | None = None) -> dict:
-    """What a dataset's node holds of the process fields of the form, and when it was written."""
+def _node_data(process: dict, location: str, created: str | None = None, existing: bool = False) -> dict:
+    """What a dataset's node holds of the process fields of the form, and when it was written
+    (``existing``: it is written again, and may be one that was imported)."""
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     return {
         "name": process["name"].strip(),
@@ -365,7 +419,7 @@ def _node_data(process: dict, location: str, created: str | None = None) -> dict
         "documentation": {k: v for k, v in (process.get("documentation") or {}).items() if v},
         # the comment as typed: ``comment`` has the documentation after it, as in the process pop-up
         "lca_viewer": {"created": created or now, "comment": process.get("comment") or "",
-                       **({"modified": now} if created else {})},
+                       **({"modified": now} if existing else {})},
     }
 
 
@@ -375,14 +429,12 @@ def _product_data(p: dict) -> dict:
 
 
 def _replace(bd, db, code: str, process: dict, products: list[dict], exchanges: list[dict], processed: bool = True) -> dict:
-    """:func:`write_dataset` of a dataset already written (inside its transaction)."""
+    """:func:`write_dataset` of a dataset already there (inside its transaction)."""
     from bw2data.errors import UnknownObject
 
     node = _dataset_node(bd, db.name, code)
-    if not node.get("lca_viewer"):
-        raise ValueError(f"{node['name']} was not written by lca_viewer: it cannot be edited, copy it instead")
     key = node.key
-    functional = [e for e in node.exchanges() if e.get("functional")]
+    functional = _functional_edges(node)
     self_linked = len(functional) == 1 and functional[0].input.key == key  # the process is its own product
     existing = {e.input["code"]: e for e in functional}  # code of the product -> its exchange
     rows = [dict(p) for p in products]
@@ -414,7 +466,10 @@ def _replace(bd, db, code: str, process: dict, products: list[dict], exchanges: 
 
     location = (process.get("location") or "").strip() or "GLO"
     first = rows[0]
-    if self_linked and several:  # the process becomes a product, and a multi-output process takes its place
+    converting = self_linked and several
+    previous = (node.get("lca_viewer") or {}).get("created")
+    functional_ids = {e.id for e in functional}
+    if converting:  # the process becomes a product, and a multi-output process takes its place
         product0 = node
         node.exchanges().delete()
         for field in ("reference product", "production amount", "comment", "documentation", "lca_viewer"):
@@ -426,32 +481,63 @@ def _replace(bd, db, code: str, process: dict, products: list[dict], exchanges: 
         node = db.new_node(code=uuid4().hex, type="multifunctional", default_allocation="manual_allocation",
                            **_node_data(process, location))
         node.save()
+        others = []
     else:
-        previous = node["lca_viewer"].get("created")
-        node._data.update(_node_data(process, location, previous))
+        node._data.update(_node_data(process, location, previous, existing=True))
         if several:
             for field in ("reference product", "production amount", "unit"):
                 node._data.pop(field, None)
         else:
             node._data.update(_product_data(first))
-        node.exchanges().delete()
+        others = [e for e in node.exchanges() if e.id not in functional_ids]
+
+    # The other exchanges are changed one by one: what the form cannot show stays as it is. The form's
+    # exchanges are found by their id, then (an id changes when a multi-output process is allocated again,
+    # and a form staged by an older version has none) by what they are linked to; the others are new, and
+    # the ones nothing in the form stands for are deleted.
+    pool = {e.id: e for e in others}
+    left = []
+    for e in exchanges:
+        edge = pool.pop(e["id"], None) if e.get("id") else None
+        if edge is not None:
+            _update_exchange(edge, e)
+        else:
+            left.append(e)
+    fresh = []
+    for e in left:
+        biosphere = SECTIONS.get(e["section"], ("",))[0] == "biosphere"
+        same = next((i for i, edge in pool.items() if edge["input"] == (e["database"], e["code"])
+                     and (edge["type"] == "biosphere") == biosphere), None)
+        if same is None:
+            fresh.append(e)
+        else:
+            _update_exchange(pool.pop(same), e)
+    for edge in pool.values():
+        edge.delete()
 
     if self_linked and not several:
-        node.new_edge(input=node, type="production", amount=float(first["amount"]), functional=True,
-                      comment=first.get("comment") or "").save()
+        edge = functional[0]
+        amount = float(first["amount"])
+        if amount != float(edge["amount"]):
+            edge["amount"] = amount
+        edge["comment"] = first.get("comment") or ""
+        edge.save()
     else:
+        if not converting:
+            for e in functional:
+                e.delete()
         for r in rows:
             c = r.get("code")
             if self_linked and c == key[1]:
-                product, kept = product0, {}
+                product, kept_flags = product0, {}
             elif c:
-                product, kept = existing[c].input, flags[c]
+                product, kept_flags = existing[c].input, flags[c]
                 product._data.update(name=r["name"].strip(), unit=r.get("unit") or "unit", location=location)
                 product.save()
             else:
-                product, kept = _new_product(db, r, location), {}
-            _functional_edge(node, product, r, kept)
-    _write_exchanges(bd, node, exchanges)
+                product, kept_flags = _new_product(db, r, location), {}
+            _functional_edge(node, product, r, kept_flags)
+    _write_exchanges(bd, node, fresh)
     return _finish(db, node, several, processed)
 
 
@@ -476,8 +562,6 @@ def _delete(bd, database: str, code: str, processed: bool = True) -> dict:
         raise ValueError(f"No database {database!r}")
     with _atomic():
         node = _dataset_node(bd, database, code)
-        if not node.get("lca_viewer"):
-            raise ValueError(f"{node['name']} was not written by lca_viewer: it cannot be deleted from here")
         own = _own_keys(node)
         _refuse(node["name"], _used_by(bd, own, own))
         children = [bd.get_node(database=d, code=c) for d, c in own if (d, c) != node.key

@@ -211,6 +211,19 @@ builds do: the server itself never imports bw2data.
     datasets and change their results.
   - Checked in `tests/test_editing.py` on models built the way the app builds
     them, for the edited database and for one that uses it.
+- **Any process is editable**: the mark `lca_viewer` is no longer needed (it is kept as a record
+  of when it was written or changed). Exchanges are changed by id, so an imported process keeps what the
+  form cannot show; a form that has no ids, or whose ids went stale (a multi-output process gets new
+  exchange ids each time it is allocated again), finds them by what they link to. A lognormal
+  uncertainty follows the amount (`loc`), and is rewritten only when the SD² changes. Deleting
+  and removing products still refuse what other datasets use: Brightway would delete those
+  exchanges too, silently changing their results.
+- **Affected databases** (`sources.affected_databases`): the edited ones and those that use
+  them, directly or not, from the databases' `depends`. Their models are out of date once the
+  changes are made (`sources.changes` compares the `modified` stamps), so the page asks for a
+  rebuild; editing ecoinvent affects every database that uses it.
+- **Locks** are the server's (`data/locks.json`), not Brightway's: they are checked when
+  changes are staged, applied, or written directly, not by `lca-viewer apply` run by hand.
 - **Staged changes** (`editing.apply_changes`): the page stages creates, edits and
   deletes (`data/pending/<project>.json`, one file per Brightway folder and project);
   applying them runs all in order inside one `atomic()`, processes each touched database

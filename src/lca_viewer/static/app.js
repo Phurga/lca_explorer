@@ -1,5 +1,5 @@
-import { h, render, Fragment } from "preact";
-import { useState, useEffect, useMemo, useRef } from "preact/hooks";
+import { h, render, Fragment, createContext } from "preact";
+import { useState, useEffect, useMemo, useRef, useContext } from "preact/hooks";
 import htm from "htm";
 
 const html = htm.bind(h);
@@ -794,7 +794,7 @@ ${" "}Databases imported afterwards can link to them.</p>
 // in seconds; a database of a Brightway project is first built into a model (once, kept in
 // data/cache). Loads run on the server, the dialog follows them and opens the database when ready.
 // The Brightway projects can also be changed here (new, deleted, restored, databases imported).
-function LoadDatabase({ onClose, missing, onDatabases }) {
+function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
   const [sources, setSources] = useState(null);
   const [error, setError] = useState(null);
   const [job, setJob] = useState(null);
@@ -860,6 +860,9 @@ function LoadDatabase({ onClose, missing, onDatabases }) {
     listProjects(folder);
   }).catch((e) => setError(e.message));
 
+  // A locked database cannot be edited, whichever database is open when one of its processes is reached
+  const lockDatabase = (p, d) => serverRequest("/api/brightway/lock", { folder: projects.folder, project: p.name, database: d.name, locked: !d.locked })
+    .then(() => { listProjects(folder); onLocks?.(); }).catch((e) => setError(e.message));
   const known = sources?.brightway || [];
   const isKnown = known.some((d) => d.path === folder);
   const dbAction = (p, d) => {
@@ -981,10 +984,12 @@ function LoadDatabase({ onClose, missing, onDatabases }) {
               ${form?.project === p.name && html`<tr class="form-row" key=${`f:${p.name}`}><td colspan="3">${projectForm}</td></tr>`}
               ${p.databases.map((d) => html`
                 <tr key=${`d:${p.name}/${d.name}`} class=${p.twofive && d.processes ? "" : "muted"}>
-                  <td class="indent">${d.name}${d.model?.outdated && html`<div class="muted small">${d.model.outdated}${d.model.key ? ": close it to rebuild it" : ""}</div>`}</td>
+                  <td class="indent">${d.name}${d.locked && html` <span class="loc-chip" title="What this database contains cannot be edited">🔒 locked</span>`}${d.model?.outdated && html`<div class="muted small">${d.model.outdated}${d.model.key ? ": close it to rebuild it" : ""}</div>`}</td>
                   <td class="num muted">${d.processes ? `${count(d.processes)} processes` : `${count(d.flows)} flows`}</td>
                   <td class="actions">${dbAction(p, d)}
-                    ${p.twofive && html`<button class="link danger" disabled=${busy} onClick=${() => setForm({ kind: "removeDb", project: p.name, database: d.name })}
+                    ${p.twofive && html`<button class="link" onClick=${() => lockDatabase(p, d)}
+                      title=${d.locked ? "Unlock: its processes can be edited again" : "Lock: nothing in this database can be edited, deleted or added to, from any database"}>${d.locked ? "Unlock" : "Lock"}</button>`}
+                    ${p.twofive && html`<button class="link danger" disabled=${busy || d.locked} onClick=${() => setForm({ kind: "removeDb", project: p.name, database: d.name })}
                       title="Delete this database from the project">Remove</button>`}</td>
                 </tr>`)}`)}
           </table>
@@ -1073,13 +1078,117 @@ function NodePicker({ folder, project, kind, placeholder, onPick }) {
     </div>`;
 }
 
+// ---------------------------------------------------------------- editing: shared pieces
+// What the pop-ups, the tree and the edit panel need of edit mode: { editing, origin, pending, locked, stale,
+// stage(change), openForm(what) }. Outside edit mode only ``editing`` (false) is there.
+const EditorContext = createContext({ editing: false, pending: [], locked: [] });
+const bwQuery = (o) => `folder=${encodeURIComponent(o.folder)}&project=${encodeURIComponent(o.project)}`;
+const datasetUrl = (o, database, code) => `/api/brightway/dataset?${bwQuery(o)}&database=${encodeURIComponent(database)}&code=${encodeURIComponent(code)}`;
+
+// A dataset as the form holds it: amounts are text. A copy has no identity: no ids, no product codes.
+// ``id`` (of an exchange, of a product's exchange) lets the server change what is there instead of rewriting it.
+function formOf(read, copy = false) {
+  return {
+    process: { name: copy ? `${read.process.name} (copy)` : read.process.name, location: read.process.location || "GLO",
+      comment: read.process.comment || "", documentation: read.process.documentation || {} },
+    products: read.products.map((p) => ({ ...(copy ? {} : { code: p.code, id: p.id, processCode: p.process_code }), name: p.name,
+      amount: String(p.amount), unit: p.unit, allocation: String(p.allocation), comment: p.comment || "" })),
+    exchanges: read.exchanges.map((e) => ({ ...(copy ? {} : { id: e.id }), section: e.section, node: e.node, amount: String(e.amount),
+      comment: e.comment || "", sd2: e.sd2 ? String(e.sd2) : "" })),
+  };
+}
+
+// What the server writes for a form (``code``: the dataset it replaces, if any)
+function specOf(draft, target, code) {
+  const several = draft.products.length > 1;
+  return {
+    database: target, new_database: draft.database === "__new__", ...(code ? { code } : {}),
+    process: draft.process,
+    products: draft.products.map((p) => ({ code: p.code, name: p.name, unit: p.unit, comment: p.comment,
+      amount: Number(p.amount), allocation: several ? Number(p.allocation) : 100 })),
+    exchanges: draft.exchanges.map((e) => ({ id: e.id, section: e.section, database: e.node.database, code: e.node.code,
+      amount: Number(e.amount), comment: e.comment, sd2: e.sd2 ? Number(e.sd2) : null })),
+  };
+}
+
+// Change one thing in a dataset (any process of it): what is staged for it, or else what the project holds, is
+// changed by ``patch(draft, read)`` and staged again. Rejects when the database is locked.
+async function quickEdit(ctx, database, code, patch) {
+  const read = await serverRequest(datasetUrl(ctx.origin, database, code));
+  if (read.locked) throw new Error(`${read.database} is locked: unlock it in Load database to change what it contains`);
+  const staged = ctx.pending.find((c) => c.kind === "edit" && c.database === read.database && c.code === read.code);
+  const draft = structuredClone(staged?.form || { ...emptyDraft(), project: ctx.origin.project, database: read.database, ...formOf(read) });
+  patch(draft, read);
+  await ctx.stage({ id: staged?.id, kind: "edit", title: `Edit ${draft.process.name}`, database: read.database, code: read.code,
+    spec: specOf(draft, read.database, read.code), form: draft });
+}
+
+// The exchange of a dataset's form that a row of a pop-up stands for: the one linked to the same node
+// (``input``: [database, code]). ``shown`` is the amount the pop-up shows, which for a process allocated from a
+// multi-output one is its share of the dataset's: the ratio of the two is kept when the amount is changed.
+function patchExchange(input, shown, text) {
+  return (draft) => {
+    const value = Number(text);
+    if (!Number.isFinite(value)) throw new Error("Give a number");
+    const found = draft.exchanges.filter((x) => x.node.database === input[0] && x.node.code === input[1]);
+    if (!found.length) throw new Error("This exchange is not in the dataset any more: reopen it");
+    const exchange = found.reduce((best, x) => (Math.abs(Math.abs(Number(x.amount)) - Math.abs(shown)) < Math.abs(Math.abs(Number(best.amount)) - Math.abs(shown)) ? x : best));
+    const ratio = Math.abs(shown) / (Math.abs(Number(exchange.amount)) || Math.abs(shown) || 1);
+    exchange.amount = String((Number(exchange.amount) < 0 ? -1 : 1) * Math.abs(value) / ratio);
+  };
+}
+const productOfProcess = (draft, code) => draft.products.find((p) => p.processCode === code || p.code === code) || draft.products[0];
+
+// A value that can be changed by double-clicking it in edit mode: ``onCommit(text)`` returns a promise.
+// ``edit``: what the input starts with when that differs from what is shown; ``load``: the same, fetched when needed.
+function Editable({ value, display, edit, multiline, load, onCommit, disabled, title, className = "" }) {
+  const ctx = useContext(EditorContext);
+  const [text, setText] = useState(null);  // null: not being edited
+  const [shown, setShown] = useState(null);  // what was just staged, until the model is built again
+  const input = useRef(null);
+  const closing = useRef(false);
+  useEffect(() => setShown(null), [value]);
+  useEffect(() => { if (text !== null) input.current?.focus(); }, [text === null]);
+  if (!ctx.editing) return html`<span class=${className}>${display ?? value}</span>`;
+  if (disabled) return html`<span class=${`${className} locked`} title=${title || "Locked: unlock its database in Load database to change it"}>${display ?? value}</span>`;
+  const begin = async (e) => {
+    e.stopPropagation();
+    closing.current = false;
+    try { setText(load ? await load() : edit ?? String(value ?? "")); } catch (err) { window.alert(err.message); }
+  };
+  const finish = (commit) => {
+    if (closing.current) return;  // Enter or Escape came first: the blur that follows is not a second answer
+    closing.current = true;
+    const typed = text;
+    setText(null);
+    if (!commit || typed === null || typed === (edit ?? String(value ?? ""))) return;
+    onCommit(typed).then(() => setShown(typed)).catch((err) => window.alert(err.message));
+  };
+  if (text !== null) {
+    const keys = (e) => {
+      if (e.key === "Escape") { e.stopPropagation(); finish(false); }
+      else if (e.key === "Enter" && (!multiline || e.ctrlKey || e.metaKey)) { e.preventDefault(); e.stopPropagation(); finish(true); }
+      e.stopPropagation();
+    };
+    const props = { ref: input, value: text, onInput: (e) => setText(e.target.value), onKeyDown: keys, onBlur: () => finish(true),
+      onClick: (e) => e.stopPropagation(), onDblClick: (e) => e.stopPropagation() };
+    return multiline
+      ? html`<textarea class="editing" rows="4" ...${props}></textarea>`
+      : html`<input class="editing" size=${Math.max(4, Math.min(40, text.length + 2))} ...${props} />`;
+  }
+  return html`<span class=${`${className} editable ${shown !== null ? "staged" : ""}`} title=${title || "Double-click to change it"}
+    onClick=${(e) => e.detail > 1 && e.stopPropagation()} onDblClick=${begin}>${shown !== null ? shown : (display ?? value)}</span>`;
+}
+
+// ---------------------------------------------------------------- the process form (staged, not written)
 // The form of a process: a new one (empty, or a copy of any process of the project) or, with ``edit``
-// { database, code }, a dataset written by this app. Saving *stages* the change (``onStage``): nothing
+// { database, code }, any dataset of the project. Saving *stages* the change (``onStage``): nothing
 // reaches Brightway until the staged changes are applied from the edit panel.
 // ``current``: { folder, project, database } the open database was built from; ``initial``: a change staged
 // before ({ id, form }) to open again; ``copyFrom``: { database, code } a process to start from;
-// ``deleted``: Set of "database/code" of the datasets staged for deletion (they stop using what they use).
-function DatasetForm({ onClose, current, edit, initial, copyFrom: start, deleted, onStage }) {
+// ``deleted``: Set of "database/code" of the datasets staged for deletion (they stop using what they use);
+// ``staged``: the staged changes (an edit of the same dataset is opened again); ``locked``: locked databases.
+function DatasetForm({ onClose, current, edit, initial, copyFrom: start, deleted, staged, locked = [], onStage }) {
   const folder = current.folder;
   const [projects, setProjects] = useState(null);
   const [error, setError] = useState(null);
@@ -1096,43 +1205,33 @@ function DatasetForm({ onClose, current, edit, initial, copyFrom: start, deleted
   useEffect(() => { if (fresh) try { localStorage.setItem(DRAFT_KEY, JSON.stringify(draft)); } catch { /* storage unavailable */ } }, [draft]);
   useEffect(() => {
     serverRequest(`/api/brightway?folder=${encodeURIComponent(folder)}`).then(setProjects).catch((e) => setError(e.message));
-    const onKey = (e) => e.key === "Escape" && !e.target.closest?.(".node-picker") && onClose();
+    const onKey = (e) => e.key === "Escape" && !e.target.closest?.(".node-picker, .editing") && onClose();
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, []);
 
-  const datasetUrl = (database, code) => `/api/brightway/dataset?folder=${encodeURIComponent(folder)}&project=${encodeURIComponent(current.project)}`
-    + `&database=${encodeURIComponent(database)}&code=${encodeURIComponent(code)}`;
-  // A dataset as the form holds it: amounts are text. A copy has no identity: no product codes
-  const formOf = (read, copy) => ({
-    process: { name: copy ? `${read.process.name} (copy)` : read.process.name, location: read.process.location || "GLO",
-      comment: read.process.comment || "", documentation: read.process.documentation || {} },
-    products: read.products.map((p) => ({ ...(copy ? {} : { code: p.code }), name: p.name, amount: String(p.amount),
-      unit: p.unit, allocation: String(p.allocation), comment: p.comment || "" })),
-    exchanges: read.exchanges.map((e) => ({ section: e.section, node: e.node, amount: String(e.amount), comment: e.comment || "",
-      sd2: e.sd2 ? String(e.sd2) : "" })),
-  });
   function copyFrom(node) {
     setError(null);
-    serverRequest(datasetUrl(node.database, node.code)).then((read) => {
+    serverRequest(datasetUrl(current, node.database, node.code)).then((read) => {
       setDraft((d) => ({ ...d, ...formOf(read, true) }));
       setTemplate({ name: read.process.name, database: read.database, warnings: read.warnings });
     }).catch((e) => setError(e.message));
   }
   useEffect(() => {
     if (edit) {
-      serverRequest(datasetUrl(edit.database, edit.code)).then((read) => {
-        if (!read.editable) throw new Error(`${read.process.name} was not written by this app: copy it instead`);
+      serverRequest(datasetUrl(current, edit.database, edit.code)).then((read) => {
+        if (read.locked) throw new Error(`${read.database} is locked: unlock it in Load database to change what it contains`);
         setOriginal(read);
-        // a change staged before: its form, not what is in the project
-        if (!initial?.form) setDraft((d) => ({ ...d, ...formOf(read, false), database: read.database }));
+        // a change staged before (this one, or an edit of the same dataset): its form, not what is in the project
+        const before = initial?.form ? initial : (staged || []).find((c) => c.kind === "edit" && c.database === read.database && c.code === read.code);
+        setDraft((d) => ({ ...d, ...(before?.form || formOf(read, false)), database: read.database, project: current.project }));
       }).catch((e) => setError(e.message));
     } else if (start) copyFrom(start);
   }, []);
 
   const usable = (projects?.projects || []).filter((p) => p.twofive);
   const project = usable.find((p) => p.name === current.project);
-  const writable = (project?.databases || []).filter((d) => d.processes || d.backend === "multifunctional");
+  const writable = (project?.databases || []).filter((d) => (d.processes || d.backend === "multifunctional") && !locked.includes(d.name));
   const set = (changes) => setDraft((d) => ({ ...d, ...changes }));
   const setProcess = (changes) => set({ process: { ...draft.process, ...changes } });
   const setProduct = (i, changes) => set({ products: draft.products.map((p, k) => (k === i ? { ...p, ...changes } : p)) });
@@ -1140,13 +1239,14 @@ function DatasetForm({ onClose, current, edit, initial, copyFrom: start, deleted
   const several = draft.products.length > 1;
   const shares = draft.products.reduce((s, p) => s + (Number(p.allocation) || 0), 0);
   const target = draft.database === "__new__" ? draft.newDatabase.trim() : draft.database;
-  const targetDb = writable.find((d) => d.name === draft.database);
+  const targetDb = (project?.databases || []).find((d) => d.name === draft.database);
   // What uses the dataset, apart from datasets staged for deletion; a product they use cannot be removed
   const users = (original?.used_by || []).filter((u) => !deleted?.has(`${u.database}/${u.code}`));
   const used = (p) => !!p.code && users.some((u) => u.uses[1] === p.code);
   const problems = [
     !project && "the project is not available",
     !target && "choose a database",
+    locked.includes(target) && `${target} is locked`,
     edit && !original && "the dataset is not read yet",
     !draft.process.name.trim() && "name the process",
     draft.products.some((p) => !p.name.trim() || !Number(p.amount)) && "give each product a name and an amount",
@@ -1159,19 +1259,11 @@ function DatasetForm({ onClose, current, edit, initial, copyFrom: start, deleted
   ].filter(Boolean);
 
   function stage() {
-    const spec = {
-      database: target, new_database: draft.database === "__new__",
-      ...(edit && original ? { code: original.code } : {}),
-      process: draft.process,
-      products: draft.products.map((p) => ({ code: p.code, name: p.name, unit: p.unit, comment: p.comment,
-        amount: Number(p.amount), allocation: several ? Number(p.allocation) : 100 })),
-      exchanges: draft.exchanges.map((e) => ({ section: e.section, database: e.node.database, code: e.node.code,
-        amount: Number(e.amount), comment: e.comment, sd2: e.sd2 ? Number(e.sd2) : null })),
-    };
     setBusy(true);
     setError(null);
     onStage({ id: initial?.id, kind: edit ? "edit" : "create", title: `${edit ? "Edit" : "New"} ${draft.process.name.trim()}`,
-      database: target, ...(edit && original ? { code: original.code } : {}), spec, form: draft })
+      database: target, ...(edit && original ? { code: original.code } : {}),
+      spec: specOf(draft, target, edit && original ? original.code : null), form: draft })
       .then(() => { if (fresh) try { localStorage.removeItem(DRAFT_KEY); } catch { /* storage unavailable */ } onClose(); })
       .catch((e) => { setBusy(false); setError(e.message); });
   }
@@ -1191,9 +1283,10 @@ function DatasetForm({ onClose, current, edit, initial, copyFrom: start, deleted
               <section>
                 <p class="muted small">Applying the change replaces the dataset where it is: its products keep their identity, so the datasets that use them stay linked.${" "}
                   ${users.length
-                    ? html`Used by <b>${[...new Set(users.map((u) => u.name))].join(", ")}</b>: the products they use cannot be removed.`
+                    ? html`Used by <b>${[...new Set(users.map((u) => u.name))].join(", ")}</b>${original?.used_by.length >= 30 ? " and more" : ""}: the products they use cannot be removed.`
                     : "No other dataset uses it: its co-products can be removed."}${" "}
-                  A co-product can be added to a process with one product.</p>
+                  A co-product can be added to a process with one product.${" "}
+                  ${original && html`The databases that use ${original.database} have to be built again once it is changed.`}</p>
               </section>`
             : html`
               <section>
@@ -1270,7 +1363,7 @@ function DatasetForm({ onClose, current, edit, initial, copyFrom: start, deleted
                     <tr><th>${kind === "process" ? "Process" : "Flow"}</th><th class="num">Amount</th><th>Unit</th>
                       <th class="num" title="Lognormal uncertainty: squared geometric standard deviation, as in SimaPro (empty: none)">SD²</th><th>Comment</th><th></th></tr>
                     ${rows.map(([e, i]) => html`
-                      <tr key=${i}>
+                      <tr key=${e.id || `n${i}`}>
                         <td class="node" title=${`${e.node.name} | ${nodeLabel(e.node)} | ${e.node.database}`}>
                           ${e.node.name} <span class="loc-chip">${nodeLabel(e.node)}</span></td>
                         <td class="num"><input class="num" value=${e.amount} onInput=${(ev) => setExchange(i, { amount: ev.target.value })} /></td>
@@ -1298,8 +1391,8 @@ function DatasetForm({ onClose, current, edit, initial, copyFrom: start, deleted
 }
 
 // The right panel in edit mode: the focused process (edit, copy, delete), the staged changes, and
-// "Apply", which makes them together and builds the open database again
-function EditPanel({ origin, dataset, pending, onForm, stage, unstage, unstageAll }) {
+// "Apply", which makes them together (and builds the open database again if it is affected)
+function EditPanel({ origin, dataset, pending, affected, locked, outdated, onForm, stage, unstage, unstageAll, onApplied, onRebuild }) {
   const [job, setJob] = useState(null);
   const [showLog, setShowLog] = useState(false);
   const [error, setError] = useState(null);
@@ -1308,6 +1401,7 @@ function EditPanel({ origin, dataset, pending, onForm, stage, unstage, unstageAl
     const timer = setTimeout(() => serverRequest(`/api/jobs/${job.id}`).then((j) => {
       setJob(j);
       if (j.status === "done" && j.key) { savePreference("mode", "view"); openDatabase(j.key); }  // back to the results
+      else if (j.status !== "running") onApplied();  // made, not rebuilt: what is out of date now shows
     }).catch((e) => setJob({ ...job, status: "failed", error: e.message })), 700);
     return () => clearTimeout(timer);
   }, [job]);
@@ -1315,23 +1409,29 @@ function EditPanel({ origin, dataset, pending, onForm, stage, unstage, unstageAl
   const deleted = new Set(pending.filter((c) => c.kind === "delete").map(id));
   const staged = dataset && pending.find((c) => c.kind !== "create" && id(c) === id(dataset));
   const users = (dataset?.used_by || []).filter((u) => !deleted.has(id(u)));
-  const editable = !!dataset?.editable;
+  const isLocked = !!dataset && (dataset.locked || locked.includes(dataset.database));
   const attempt = (promise) => { setError(null); promise.catch((e) => setError(e.message)); };
-  const apply = () => {
+  const apply = (rebuild) => {
     setError(null);
     setShowLog(false);
-    serverRequest("/api/brightway/apply", { folder: origin.folder, project: origin.project, database: origin.database })
+    serverRequest("/api/brightway/apply", { folder: origin.folder, project: origin.project, database: origin.database, rebuild })
       .then(setJob).catch((e) => setJob({ status: "failed", error: e.message, log: [] }));
   };
   const KIND = { create: "New", edit: "Edit", delete: "Delete" };
   const running = job?.status === "running";
+  const hit = affected.includes(origin.database);
 
   return html`
     <div class="edit-panel">
       <h3>Edit mode <span class="muted">· project ${origin.project}</span></h3>
-      <p class="muted small">Changes are staged here and made together when you apply them. The results in the view are those of the
-        last build: they do not include staged changes until they are applied.</p>
+      <p class="muted small">Changes are staged here and made together when you apply them. Double-click a value in the view or in a pop-up to change it.
+        The impacts shown are those of the last build: they are greyed out once what they come from has changed.</p>
       ${error && html`<div class="error">${error}</div>`}
+      ${outdated && html`
+        <div class="edit-warning">
+          <b>Rebuild required.</b> ${outdated}: the results shown may be wrong.
+          <button class="primary" onClick=${onRebuild}>Rebuild and reopen</button>
+        </div>`}
       <section>
         <h4>Focused process</h4>
         ${!dataset
@@ -1339,18 +1439,18 @@ function EditPanel({ origin, dataset, pending, onForm, stage, unstage, unstageAl
           : html`
             <div class="edit-card">
               <div><b>${dataset.process.name}</b> <span class="loc-chip">${dataset.process.location}</span></div>
-              <div class="muted small">${dataset.database} · ${editable ? "written by this app: can be edited" : "imported: can be copied, not changed"}
-                ${users.length > 0 && ` · used by ${[...new Set(users.map((u) => u.name))].join(", ")}`}</div>
+              <div class="muted small">${dataset.database}${isLocked ? " · 🔒 locked: unlock it in Load database to change it" : ""}
+                ${users.length > 0 && ` · used by ${[...new Set(users.map((u) => u.name))].join(", ")}${dataset.used_by.length >= 30 ? " and more" : ""}`}</div>
               ${staged && html`<div class="small">${KIND[staged.kind]} staged</div>`}
               <div class="edit-actions">
-                <button disabled=${!editable || staged?.kind === "delete"}
+                <button disabled=${isLocked || staged?.kind === "delete"}
                   onClick=${() => onForm({ edit: { database: dataset.database, code: dataset.code }, initial: staged?.kind === "edit" ? staged : undefined })}>Edit</button>
                 <button onClick=${() => onForm({ copyFrom: { database: dataset.database, code: dataset.code } })}
                   title="A new process that starts as a copy of this one">Copy as new</button>
                 ${staged?.kind === "delete"
                   ? html`<button onClick=${() => attempt(unstage(staged.id))}>Undo delete</button>`
-                  : html`<button disabled=${!editable || users.length > 0}
-                      title=${!editable ? "Only processes written by this app can be deleted" : users.length ? "Other datasets use it" : "Stage the deletion of this process and its products"}
+                  : html`<button disabled=${isLocked || users.length > 0}
+                      title=${isLocked ? "Its database is locked" : users.length ? "Other datasets use it" : "Stage the deletion of this process and its products"}
                       onClick=${() => attempt(stage({ kind: "delete", title: `Delete ${dataset.process.name}`, database: dataset.database, code: dataset.code }))}>Delete</button>`}
               </div>
             </div>`}
@@ -1370,6 +1470,7 @@ function EditPanel({ origin, dataset, pending, onForm, stage, unstage, unstageAl
               </div>
             </li>`)}
         </ul>
+        ${affected.length > 0 && html`<p class="muted small">Models to build again once these are applied: ${affected.join(", ")}.${hit ? "" : ` ${origin.database} is not one of them.`}</p>`}
       </section>
       <div class="edit-apply">
         ${job && html`
@@ -1384,8 +1485,10 @@ function EditPanel({ origin, dataset, pending, onForm, stage, unstage, unstageAl
         <div class="form-actions">
           <button disabled=${!pending.length || running} onClick=${() => { if (confirm(`Discard the ${pending.length} staged change${pending.length > 1 ? "s" : ""}?`)) attempt(unstageAll()); }}>Discard all</button>
           <span class="spacer"></span>
-          <button class="primary" disabled=${!pending.length || running} onClick=${apply}
-            title=${`Make the staged changes in the project in one go, then build ${origin.database} again (about a minute for ecoinvent) and show it`}>
+          <button disabled=${!pending.length || running} onClick=${() => apply(false)}
+            title="Make the staged changes in the project. The models of the databases they affect are then out of date: build them again when you want to see the new results">Apply</button>
+          <button class="primary" disabled=${!pending.length || running} onClick=${() => apply(true)}
+            title=${`Make the staged changes in the project in one go, then build ${origin.database} again if they affect it (about a minute for ecoinvent) and show it`}>
             Apply ${pending.length || ""} and rebuild</button>
         </div>
       </div>
@@ -1414,6 +1517,9 @@ function MethodSelect({ methods, value, onChange }) {
 function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onUngroup, onRegroup, ungroupable, onMergeGroup, onUnpin, onPin, onMoveToOthers, onInfo, onUnmerge, onRevert, view, focus, renaming, onStartRename, onRename }) {
   const byId = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
   const colors = useMemo(() => groupColors(rows), [rows]);
+  const ctx = useContext(EditorContext);
+  const editing = ctx.editing;
+  const links = {};  // row id -> the exchange its amount stands for, fetched when the amount is edited
   const box = useRef(null);
   const scrolledTo = useRef(null);
   // Scroll once to a row found from elsewhere ("Go to in tree"), when it has been rendered
@@ -1447,13 +1553,21 @@ function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onU
                     ${renaming === r.id
                       ? html`<${RenameInput} value=${rowNames(r, byId, view).main} renamed=${!!r.custom} onDone=${(name) => onRename(r, name)} />`
                       : html`<span class="label" title=${r.custom ? `${r.custom} — renamed from ${r.label}` : r.label}>
-                          ${(() => { const n = rowNames(r, byId, view); return html`${n.main}${n.qual && html` <span class="loc">${n.qual}</span>`}`; })()}
+                          ${(() => {
+                            const n = rowNames(r, byId, view);
+                            const main = editing && r.kind === "process" && r.meta
+                              ? html`<${Editable} value=${r.meta.name} display=${n.main} title=${`Double-click to rename the process in the project (${r.meta.name})`}
+                                  disabled=${ctx.locked.includes(r.meta.database)}
+                                  onCommit=${(text) => quickEdit(ctx, r.meta.database, r.meta.code, (d) => { d.process.name = text; })} />`
+                              : n.main;
+                            return html`${main}${n.qual && html` <span class="loc">${n.qual}</span>`}`;
+                          })()}
                         </span>`}
                     <span class=${`row-actions ${renaming === r.id ? "renaming" : ""}`}>
                       ${hasDetails(r) && html`
                         <button class="info-btn" title="Details (or right-click, or Space)" aria-label="Details"
                           onClick=${(e) => { e.stopPropagation(); onInfo(r, e); }}>i</button>`}
-                      ${labelKey(r) && html`
+                      ${labelKey(r) && !editing && html`
                         <button class="rename-btn" title="Rename in this view (r) — the database is not changed" aria-label="Rename"
                           onClick=${(e) => { e.stopPropagation(); onStartRename(r); }}>✎</button>`}
                       ${r.kind === "group" && ungroupable(r) && html`
@@ -1461,10 +1575,10 @@ function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onU
                       ${r.regroup && html`
                         <button class="chip" title="Put back in the group by product it was ungrouped from"
                           onClick=${(e) => { e.stopPropagation(); onRegroup(r.regroup); }}>regroup</button>`}
-                      ${r.kind === "group" && r.products && html`
+                      ${r.kind === "group" && r.products && !editing && html`
                         <button class="chip merge" title="Merge into one process whose inventory is the union of the members'"
                           onClick=${(e) => { e.stopPropagation(); onMergeGroup(r); }}>merge</button>`}
-                      ${r.kind === "merged" && (r.by_rule
+                      ${r.kind === "merged" && !editing && (r.by_rule
                         ? html`<span class="chip merge" title="Merged by a grouping rule (see the Grouping tab)">merged</span>`
                         : html`<button class="chip merge" title="Split back into the original processes"
                             onClick=${(e) => { e.stopPropagation(); onUnmerge(r); }}>merged ×</button>`)}
@@ -1482,9 +1596,23 @@ function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onU
                     </span>
                   </div>
                 </td>
-                <td class="num" title=${amount}>${amount}</td>
-                <td class="num">${fmt(r.impacts[0])}</td>
-                <td>
+                <td class="num" title=${amount}>${editing && r.kind === "process" && r.meta && r.depth > 0 && suppliedTo(r, byId).length === 1
+                  ? html`<${Editable} value=${amount} title="Double-click to change this input in the dataset of the process above (not the amount in this tree)"
+                      disabled=${ctx.locked.includes(suppliedTo(r, byId)[0].database)}
+                      load=${async () => {
+                        const parent = suppliedTo(r, byId)[0];
+                        const found = await request(`/api/activity/${parent.index}/exchanges?product=${r.meta.index}`);
+                        const e = found.inputs[0];
+                        if (!e) throw new Error("This input is not in the dataset of the process above");
+                        if (!e.input) throw new Error("Build this database again once, to edit amounts here");
+                        links[r.id] = e;
+                        return String(Math.abs(e.amount));
+                      }}
+                      onCommit=${(text) => { const parent = suppliedTo(r, byId)[0]; const e = links[r.id];
+                        return quickEdit(ctx, parent.database, parent.code, patchExchange(e.input, e.amount, text)); }} />`
+                  : amount}</td>
+                <td class="num impact">${fmt(r.impacts[0])}</td>
+                <td class="impact">
                   <div class="share">
                     <div class="track"><div class="fill ${share < 0 ? "neg" : ""}"
                       style=${{ width: `${Math.min(100, Math.abs(share) * 100)}%` }}></div></div>
@@ -1721,6 +1849,7 @@ function sankeyMarks({ graph, byId, view, selection, focus, onSelect, onToggle, 
 }
 
 function TreeGraph({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onUngroup, onRegroup, ungroupable, onMergeGroup, onUnpin, onPin, onMoveToOthers, onInfo, onUnmerge, view, orientation: chosenOrientation, setOrientation, cycles: chosenCycles, setCycles, sankey, focus }) {
+  const { editing } = useContext(EditorContext);
   // The Sankey is a tree drawn left to right
   const orientation = sankey ? "horizontal" : chosenOrientation;
   const cycles = chosenCycles && !sankey;
@@ -1847,10 +1976,10 @@ function TreeGraph({ rows, rootImpact, shareBasis, selection, onToggle, onSelect
                 ${r.regroup && html`
                   <text x=${x + BOX.w - 10} y=${y + 17} class="ungroup" text-anchor="end"
                         onClick=${(e) => { e.stopPropagation(); onRegroup(r.regroup); }}>regroup</text>`}
-                ${r.kind === "group" && r.products && html`
+                ${r.kind === "group" && r.products && !editing && html`
                   <text x=${x + BOX.w - (ungroupable(r) ? 62 : 10)} y=${y + 17} class="unmerge" text-anchor="end"
                         onClick=${(e) => { e.stopPropagation(); onMergeGroup(r); }}>merge</text>`}
-                ${r.kind === "merged" && !r.by_rule && html`
+                ${r.kind === "merged" && !r.by_rule && !editing && html`
                   <text x=${x + BOX.w - 10} y=${y + 17} class="unmerge" text-anchor="end"
                         onClick=${(e) => { e.stopPropagation(); onUnmerge(r); }}>unmerge</text>`}
                 ${r.pinned && html`
@@ -2069,7 +2198,7 @@ function ExchangeMeta({ e }) {
 // Inputs or elementary flows of an activity as in its dataset; click a row for its comment and uncertainty
 // ``onOpen(index)``: items are products (technosphere), their (i) and name open the activity's
 // pop-up; ``onFlow(index, event)``: items are elementary flows, their (i) opens the flow pop-up
-function ExchangeTable({ title, items, cumulative, unitPer, onOpen, onFlow, limit = 10 }) {
+function ExchangeTable({ title, items, cumulative, unitPer, onOpen, onFlow, onAmount, locked, limit = 10 }) {
   const [open, setOpen] = useState(() => new Set());
   const [all, setAll] = useState(false);
   const toggle = (i) => setOpen((s) => { const next = new Set(s); next.has(i) ? next.delete(i) : next.add(i); return next; });
@@ -2093,9 +2222,11 @@ function ExchangeTable({ title, items, cumulative, unitPer, onOpen, onFlow, limi
                   ? html`<a href="#" title=${`${e.name} | ${e.location}`} onClick=${(ev) => { ev.preventDefault(); ev.stopPropagation(); onOpen(e.index); }}>${e.reference_product}</a>
                       <span class="loc-chip">${e.location}</span>`
                   : html`<span title=${`${e.name} | ${e.categories.join(" / ")}`}>${e.name} <span class="muted">${e.categories.join(" / ")}</span></span>`}</td>
-              <td class="num">${fmt(Math.abs(e.amount))} ${unit(e.unit)}</td>
-              <td class="num">${e.impact ? fmt(e.impact) : "–"}</td>
-              <td class="num">${e.impact && cumulative ? pct(e.impact / cumulative) : ""}</td>
+              <td class="num"><${Editable} value=${Math.abs(e.amount)} format=${fmt} disabled=${locked || !onAmount || !e.input}
+                  title=${locked ? undefined : !e.input ? "Build this database again once, to edit amounts here" : "Double-click to change this amount in the dataset"}
+                  onCommit=${(text) => onAmount(e, text)} /> ${unit(e.unit)}</td>
+              <td class="num impact">${e.impact ? fmt(e.impact) : "–"}</td>
+              <td class="num impact">${e.impact && cumulative ? pct(e.impact / cumulative) : ""}</td>
             </tr>
             ${open.has(i) && html`<tr class="exchange-detail"><td colspan="4"><${ExchangeMeta} e=${e} /></td></tr>`}`;
         })}
@@ -2354,6 +2485,20 @@ function InfoPopup({ target, method, methodInfo, rootImpact, rowsById, onClose, 
     request(`/api/activity/${target.index}/alternatives?method=${method}`)
       .then(setAlternatives).catch(() => setAlternatives(null));
   }, [target.index, method]);
+  // Edit mode: the dataset as the project holds it (what the fields stand for), and what can be changed in place
+  const ctx = useContext(EditorContext);
+  const [ds, setDs] = useState(null);
+  useEffect(() => {
+    setDs(null);
+    if (!ctx.editing || !info) return;
+    let live = true;
+    serverRequest(datasetUrl(ctx.origin, info.database, info.code)).then((r) => live && setDs(r)).catch(() => { /* not a Brightway process */ });
+    return () => { live = false; };
+  }, [ctx.editing, info?.database, info?.code, ctx.pending]);
+  const locked = !!info && (ctx.locked.includes(info.database) || !!ds?.locked);
+  const stagedHere = !!ds && ctx.pending.some((c) => c.kind === "edit" && c.database === ds.database && c.code === ds.code);
+  const own = (patch) => quickEdit(ctx, info.database, info.code, patch);
+  const inDataset = (meta) => ({ locked: ctx.locked.includes(meta.database), change: (patch) => quickEdit(ctx, meta.database, meta.code, patch) });
   usePopupKeys(box, onClose, onBack);
 
   const width = Math.min(560, window.innerWidth - 24);
@@ -2376,7 +2521,7 @@ function InfoPopup({ target, method, methodInfo, rootImpact, rowsById, onClose, 
   let node = replaceable ? rowsById.get(row.parent) : null;
   while (node && (node.kind === "group" || node.kind === "rest")) node = rowsById.get(node.parent);
   const takenBy = (index) => !!node && rowsById.has(`${node.id}/${index}`);
-  const hasDescription = DETAIL_SECTIONS.some(([k]) => d[k])
+  const hasDescription = ctx.editing || DETAIL_SECTIONS.some(([k]) => d[k])
     || (production && (production.comment || production.properties || production["production volume"]));
   const tabs = info ? [
     inTree && { id: "tree", label: parentMetas.length ? "Exchange" : "In this tree" },
@@ -2397,7 +2542,7 @@ function InfoPopup({ target, method, methodInfo, rootImpact, rowsById, onClose, 
     const resource = (f) => (f.categories[0] || "").toLowerCase().includes("resource");
     const technosphere = exchanges.inputs.filter((e) => !isProduct(e));
     const products = [
-      ...(production ? [{ ...production, index: target.index, name: info.name, reference_product: info.reference_product,
+      ...(production ? [{ ...production, own: true, index: target.index, name: info.name, reference_product: info.reference_product,
         location: info.location, unit: production.unit || info.unit, impact: 0 }] : []),
       ...exchanges.inputs.filter(isProduct),
     ];
@@ -2417,9 +2562,16 @@ function InfoPopup({ target, method, methodInfo, rootImpact, rowsById, onClose, 
          role="dialog" aria-label="Activity information">
       <div class="info-head">
         <div>
-          <div class="info-title">${target.direct ? "Direct emissions of " : ""}${(target.direct ? rowsById.get(row?.parent)?.custom : row?.custom) || (info?.name ?? "…")} ${info && html`<span class="loc-chip">${info.location}</span>`}</div>
+          <div class="info-title">${target.direct ? "Direct emissions of " : ""}${(target.direct ? rowsById.get(row?.parent)?.custom : row?.custom)
+            || (info ? html`<${Editable} value=${info.name} disabled=${locked} onCommit=${(t) => own((dr) => { dr.process.name = t; })} />` : "…")}${" "}
+            ${info && html`<${Editable} className="loc-chip" value=${info.location} disabled=${locked} onCommit=${(t) => own((dr) => { dr.process.location = t; })} />`}
+            ${stagedHere && html` <span class="chip staged" title="A change of this process is staged: the values below are those of the last build">changes staged</span>`}
+            ${ctx.editing && locked && html` <span class="chip" title="Its database is locked">🔒 locked</span>`}</div>
           ${info && (target.direct ? rowsById.get(row?.parent)?.custom : row?.custom) && html`<div class="muted">renamed in this view · ${info.name}</div>`}
-          ${info && html`<div class="muted">${info.reference_product} · ${unit(info.unit)} · ${info.activity_type}</div>`}
+          ${info && html`<div class="muted"><${Editable} value=${info.reference_product} disabled=${locked}
+            onCommit=${(t) => own((dr) => { productOfProcess(dr, info.code).name = t; })} /> ·${" "}
+            <${Editable} value=${info.unit} display=${unit(info.unit)} disabled=${locked}
+              onCommit=${(t) => own((dr) => { productOfProcess(dr, info.code).unit = t; })} /> · ${info.activity_type}</div>`}
         </div>
         <span class="info-head-actions"><${BackButton} onBack=${onBack} /><button onClick=${onClose} aria-label="Close">×</button></span>
       </div>
@@ -2439,7 +2591,9 @@ function InfoPopup({ target, method, methodInfo, rootImpact, rowsById, onClose, 
                 ${row && html`<tr><th>Impact</th><td>${fmt(row.impacts[0])} ${methodInfo.unit} (${pct(rootImpact ? row.impacts[0] / rootImpact : 0)} of the total)</td></tr>`}
                 ${row && html`<tr><th>Path</th><td>${path.join(" → ")}</td></tr>`}
                 ${link?.map(({ meta, inputs }) => inputs.map((e) => html`
-                  <tr><th>Input</th><td>${fmt(e.amount)} ${unit(e.unit)} in the dataset of ${meta.name}
+                  <tr><th>Input</th><td><${Editable} value=${Math.abs(e.amount)} format=${fmt} disabled=${inDataset(meta).locked || !e.input}
+                    title=${e.input ? undefined : "Build this database again once, to edit amounts here"}
+                    onCommit=${(t) => inDataset(meta).change(patchExchange(e.input, e.amount, t))} /> ${unit(e.unit)} in the dataset of ${meta.name}
                     <span class="loc-chip">${meta.location}</span>${e.type !== "technosphere" ? html` <span class="muted">(${e.type})</span>` : ""}</td></tr>`))}
               </table>
               ${link?.map(({ meta, inputs }) => inputs.filter(hasExchangeMeta).map((e) => html`
@@ -2452,8 +2606,8 @@ function InfoPopup({ target, method, methodInfo, rootImpact, rowsById, onClose, 
           <section>
             <h4>Per ${unit(info.unit)} of ${info.reference_product}</h4>
             <table class="kv">
-              <tr><th>Cumulative</th><td>${fmt(info.cumulative_per_unit)} ${unitPer}</td></tr>
-              <tr><th>Direct</th><td>${fmt(info.direct_per_unit)} ${unitPer}${info.cumulative_per_unit ? ` (${pct(info.direct_per_unit / info.cumulative_per_unit)} of cumulative)` : ""}</td></tr>
+              <tr><th>Cumulative</th><td class="impact">${fmt(info.cumulative_per_unit)} ${unitPer}</td></tr>
+              <tr><th>Direct</th><td class="impact">${fmt(info.direct_per_unit)} ${unitPer}${info.cumulative_per_unit ? ` (${pct(info.direct_per_unit / info.cumulative_per_unit)} of cumulative)` : ""}</td></tr>
             </table>
             ${!exchanges?.available && info.direct_flows.length > 0 && html`
               <table class="flows">
@@ -2467,7 +2621,8 @@ function InfoPopup({ target, method, methodInfo, rootImpact, rowsById, onClose, 
           ${shown === "exchanges" && sections.map(([key, title, items, products]) => html`
             <${ExchangeTable} key=${`${key}-${target.index}`} title=${title} items=${items}
               cumulative=${info.cumulative_per_unit} unitPer=${unitPer}
-              onOpen=${products ? onOpen : null} onFlow=${products ? null : (flow, ev) => onFlow(flow, target.index, ev)} />`)}
+              onOpen=${products ? onOpen : null} onFlow=${products ? null : (flow, ev) => onFlow(flow, target.index, ev)}
+              locked=${locked} onAmount=${(e, text) => (e.own ? own((dr) => { productOfProcess(dr, info.code).amount = text; }) : own(patchExchange(e.input, e.amount, text)))} />`)}
           ${shown === "users" && users && html`
             <section>
               <h4>${users.waste ? "Treats the waste of" : "Used by"} · ${users.count} ${users.count === 1 ? "activity" : "activities"}${root ? `, ${users.in_supply_chain} in this supply chain` : ""}</h4>
@@ -2523,7 +2678,10 @@ function InfoPopup({ target, method, methodInfo, rootImpact, rowsById, onClose, 
               <p class="muted">+ ${alternatives.count - alternatives.alternatives.length} more, not listed</p>`}
           </section>`}
           ${shown === "description" && html`
-          ${DETAIL_SECTIONS.filter(([k]) => d[k]).map(([k, title]) => html`
+          ${ctx.editing && html`<section><h4>Description</h4><p class="text"><${Editable} multiline value=${d.comment || ""} display=${d.comment ? String(d.comment).trim() : "(none: double-click to add one)"}
+            edit=${ds ? ds.process.comment : d.comment || ""} disabled=${locked} title="Double-click to change the description (Ctrl+Enter to stage it)"
+            onCommit=${(t) => own((dr) => { dr.process.comment = t; })} /></p></section>`}
+          ${DETAIL_SECTIONS.filter(([k]) => d[k] && !(ctx.editing && k === "comment")).map(([k, title]) => html`
             <section><h4>${title}</h4><p class="text">${String(d[k]).split("\n").filter((line) => line.trim() !== "None").join("\n").trim()}</p></section>`)}
           ${production && (production.comment || production.properties || production["production volume"]) && html`
             <section>
@@ -2556,6 +2714,9 @@ function InfoPopup({ target, method, methodInfo, rootImpact, rowsById, onClose, 
           ${alternatives && !target.direct && html`<button onClick=${() => setTab("alternatives")}
             title="Other activities producing the same product, with their impact per unit: use one in place of this input in the tree">Alternative suppliers</button>`}
           ${row && movable(row) && html`<button onClick=${() => { onMoveToOthers([row.id]); onClose(); }}>Move to others</button>`}
+          ${ctx.editing && ctx.origin && html`<button class="primary" disabled=${locked}
+            title=${locked ? "Its database is locked: unlock it in Load database" : "Open the form of this process: the change is staged, then applied with the others"}
+            onClick=${() => { ctx.openForm({ edit: { database: info.database, code: info.code } }); onClose(); }}>Edit</button>`}
         </div>`}
     </div>`;
 }
@@ -2930,6 +3091,7 @@ const FLOW_PRESETS = [
 ];
 
 function GroupPanel({ info, rules, setRules, selectedRow }) {
+  const { editing } = useContext(EditorContext);
   const [kind, setKind] = useState("named");
   const [name, setName] = useState("");
   const [by, setBy] = useState("location");
@@ -2999,7 +3161,7 @@ function GroupPanel({ info, rules, setRules, selectedRow }) {
                 ${r.target === "flows" && "flows: "}${r.by ? html`<b>group by ${r.by === "name" && r.target === "flows" ? "substance" : r.by}</b>` : html`<b>${r.name}</b> <small>← ${describePredicate(r.predicate)}</small>`}
                 <br /><small>${r.scope === "*" ? "everywhere in the tree" : `under ${r.scope}`}${r.merge ? " · merged" : ""}${r.disabled ? " · disabled" : ""}</small>
               </span>
-              ${r.target !== "flows" && html`
+              ${r.target !== "flows" && !editing && html`
                 <button class=${r.merge ? "primary" : ""} aria-pressed=${!!r.merge} onClick=${() => toggle(i, "merge")}
                   title=${r.merge ? "Show this rule's groups as groups again" : "Turn each group of this rule into one merged process (inventories added, common inputs summed)"}>merge</button>`}
               <button onClick=${() => toggle(i, "disabled")}
@@ -3380,6 +3542,9 @@ let keyboardOwner = null;
 // ``initial``: { state } a saved view, { inherit, root? } settings taken from another tab,
 // or { defaultRoot: true } (first start: the model's default functional unit)
 function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onCollapseSide }) {
+  // Edit mode: merges, custom names and replaced suppliers only change how the view looks, not the data: they are
+  // left out (and kept in the tab, for the view mode); pins, cut-off and groups stay
+  const editing = useContext(EditorContext).editing;
   const box = useRef(null);
   const treeSection = useRef(null);
   // Keyboard navigation: the row the arrows move from (and its position, kept when it
@@ -3442,7 +3607,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
   // so that the tree, the pop-ups and the chart all read them
   const [labels, setLabels] = useState({});
   const [renaming, setRenaming] = useState(null);
-  const data = useMemo(() => ({ ...rawData, rows: withLabels(rawData.rows, labels) }), [rawData, labels]);
+  const data = useMemo(() => ({ ...rawData, rows: withLabels(rawData.rows, editing ? {} : labels) }), [rawData, labels, editing]);
   const [error, setError] = useState(null);
   const [tab, setTab] = useState("chart");
   const [groupName, setGroupName] = useState("");
@@ -3604,8 +3769,9 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
   }
 
   const viewState = (exp = expanded) => ({
-    root: [root.index], amount, expanded: [...exp], rules, cutoff: cutoffValue(cutoff, cutoffBasis), cutoff_basis: cutoffBasis, method, methods: chartMethods,
-    pinned: [...pinned], others: [...others], merges, ungrouped: [...ungrouped], substitutions, group_products: view.groupProducts,
+    root: [root.index], amount, expanded: [...exp], rules: editing ? rules.map((r) => ({ ...r, merge: false })) : rules, cutoff: cutoffValue(cutoff, cutoffBasis), cutoff_basis: cutoffBasis, method, methods: chartMethods,
+    pinned: [...pinned], others: [...others], merges: editing ? [] : merges, ungrouped: [...ungrouped],
+    substitutions: editing ? {} : substitutions, group_products: view.groupProducts,
   });
 
   useEffect(() => {
@@ -3615,7 +3781,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
       .then((d) => { if (!cancelled) { setData(d); setError(null); } })
       .catch((e) => !cancelled && setError(e.message));
     return () => { cancelled = true; };
-  }, [root, amount, method, cutoff, cutoffBasis, expanded, rules, chartMethods, pinned, others, merges, ungrouped, substitutions, view.groupProducts, info]);
+  }, [root, amount, method, cutoff, cutoffBasis, expanded, rules, chartMethods, pinned, others, merges, ungrouped, substitutions, view.groupProducts, info, editing]);
   // The tab's state is kept for the next visit (renaming does not reload the rows)
   useEffect(() => {
     if (!root || !info) return;
@@ -3623,7 +3789,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
       layout: info.layout, methodName: info.methods[method]?.name, chartMethodNames: chartMethods.map((k) => info.methods[k]?.name) });
   }, [root, amount, method, cutoff, cutoffBasis, expanded, rules, chartMethods, pinned, others, merges, ungrouped, substitutions, labels, info]);
   function startRename(row) {
-    if (!labelKey(row)) return;
+    if (editing || !labelKey(row)) return;
     // The tree and Sankey views have no inline editor: ask
     if (display !== "list") {
       const name = window.prompt("Rename (empty: original name)", rowNames(row, rowsById, view).main);
@@ -3921,13 +4087,14 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
         else if (movableSelection.length) { followCursor.current = true; moveToOthers(movableSelection.filter((r) => !inOthers(r)).map((r) => r.id)); }
         return true;
       case "m":
+        if (editing) return true;
         followCursor.current = true;
         if (selectedRows.length === 1 && row.kind === "merged" && !row.by_rule) unmerge(row);
         else if (canMerge) selectNew(mergeSelected());
         else followCursor.current = false;
         return true;
       case "r":
-        if (selectedRows.length === 1) startRename(row);
+        if (!editing && selectedRows.length === 1) startRename(row);
         return true;
       case "g":
         followCursor.current = true;
@@ -4009,8 +4176,8 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
               <input placeholder="group name" value=${groupName} onInput=${(e) => setGroupName(e.target.value)} aria-label="New group name" />
               <button disabled=${!canGroup} onClick=${groupSelected}
                 title="Bundle the selected sibling rows under one row; expanding it shows them">Group</button>
-              <button disabled=${!canMerge} onClick=${mergeSelected}
-                title="Combine the selected sibling processes (or the processes of a selected group) into one process: inventories added, common inputs summed">Merge</button>
+              ${!editing && html`<button disabled=${!canMerge} onClick=${mergeSelected}
+                title="Combine the selected sibling processes (or the processes of a selected group) into one process: inventories added, common inputs summed">Merge</button>`}
               ${movableSelection.length && movableSelection.every(inOthers)
                 ? html`<button onClick=${() => pin(movableSelection.map((r) => r.id))}
                     title="Take the selected rows out of others: shown in the tree and the chart despite the cut-off">Pin</button>`
@@ -4038,9 +4205,9 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
           ${bundle && bundle.kind !== "rest" && bundle.parts && html`<${BundlePopup} target=${infoTarget} row=${bundle}
               methodInfo=${methodInfo} rootImpact=${rootImpact} onClose=${() => setInfoTarget(null)} onBack=${backInfo}
               actions=${bundle.kind === "merged"
-                ? !bundle.by_rule && html`<button onClick=${() => unmerge(bundle)} title="Split back into the original processes">Unmerge</button>`
+                ? !bundle.by_rule && !editing && html`<button onClick=${() => unmerge(bundle)} title="Split back into the original processes">Unmerge</button>`
                 : html`
-                  ${bundle.products && html`<button onClick=${() => mergeRows([bundle])} title="Merge into one process whose inventory is the union of the members'">Merge</button>`}
+                  ${bundle.products && !editing && html`<button onClick=${() => mergeRows([bundle])} title="Merge into one process whose inventory is the union of the members'">Merge</button>`}
                   ${ungroupable(bundle) && html`<button onClick=${() => ungroup(bundle)}>Ungroup</button>`}`}
               onPart=${(p) => followInfo(p.flow !== undefined
                 ? { flow: p.flow, activities: (bundle.emitters || []).map((m) => m.index) }
@@ -4048,7 +4215,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
           ${infoTarget?.flow !== undefined && html`<${FlowInfoPopup} target=${infoTarget} method=${method} methods=${info.methods}
               onClose=${() => setInfoTarget(null)} onOpen=${(index) => followInfo({ index, row: null })} onBack=${backInfo} />`}
           ${infoTarget && infoTarget.flow === undefined && !infoTarget.bundle && html`<${InfoPopup} target=${infoTarget} method=${method} methodInfo=${methodInfo}
-              rootImpact=${rootImpact} rowsById=${rowsById} onClose=${() => setInfoTarget(null)} onReplace=${replaceInput}
+              rootImpact=${rootImpact} rowsById=${rowsById} onClose=${() => setInfoTarget(null)} onReplace=${editing ? null : replaceInput}
               onUseAsRoot=${selectRoot} onOpenTab=${(r) => onOpenTab(id, r)} onMoveToOthers=${moveToOthers} root=${root} amount=${amount}
               onOpen=${(index) => followInfo({ ...infoTarget, index, row: null, direct: false, parents: null })} onGoTo=${(index) => goTo(index)}
               onFlow=${(flow, activity) => followInfo({ flow, activities: [activity] })} onBack=${backInfo} />`}
@@ -4276,16 +4443,33 @@ function App() {
   // Where the open database was built from (Brightway): the project that is edited
   const origin = databases?.find((d) => d.key === DATABASE)?.brightway || null;
   const editing = mode === "edit" && !!origin;
-  const queryOf = (o) => `folder=${encodeURIComponent(o.folder)}&project=${encodeURIComponent(o.project)}`;
-  // The changes staged for the project (kept by the server), and the process of the focused tab as the form reads it
-  const [pending, setPending] = useState([]);
+  // The changes staged for the project (kept by the server) with the databases they affect and the locked ones
+  const [pendingView, setPendingView] = useState({ changes: [], affected: [], locked: [] });
+  const pending = pendingView.changes;
+  const refreshEditor = () => origin && serverRequest(`/api/brightway/pending?${bwQuery(origin)}`).then(setPendingView).catch(() => { /* none */ });
+  const refreshDatabases = () => serverRequest("/api/databases").then(setDatabases).catch(() => { /* kept as it was */ });
   useEffect(() => {
-    setPending([]);
-    if (origin) serverRequest(`/api/brightway/pending?${queryOf(origin)}`).then((r) => setPending(r.changes)).catch(() => { /* none */ });
+    setPendingView({ changes: [], affected: [], locked: [] });
+    refreshEditor();
   }, [origin?.folder, origin?.project]);
-  const stage = (change) => serverRequest("/api/brightway/pending", { folder: origin.folder, project: origin.project, change }).then((r) => setPending(r.changes));
-  const unstage = (id) => serverRequest("/api/brightway/pending/remove", { folder: origin.folder, project: origin.project, id }).then((r) => setPending(r.changes));
-  const unstageAll = () => serverRequest("/api/brightway/pending/remove", { folder: origin.folder, project: origin.project }).then((r) => setPending(r.changes));
+  const stage = (change) => serverRequest("/api/brightway/pending", { folder: origin.folder, project: origin.project, change }).then(setPendingView);
+  const unstage = (id) => serverRequest("/api/brightway/pending/remove", { folder: origin.folder, project: origin.project, id }).then(setPendingView);
+  const unstageAll = () => serverRequest("/api/brightway/pending/remove", { folder: origin.folder, project: origin.project }).then(setPendingView);
+  // What the open model shows may be wrong: the project changed since it was built (a rebuild is required), or, in
+  // edit mode, staged changes affect it. Its impacts are greyed out.
+  const outdated = databases?.find((d) => d.key === DATABASE)?.outdated || null;
+  const stale = !!outdated || (editing && !!origin && pendingView.affected.includes(origin.database));
+  const [rebuilding, setRebuilding] = useState(null);
+  const rebuild = () => serverRequest("/api/load", { brightway: origin.folder, project: origin.project, database: origin.database, rebuild: true, reopen: true })
+    .then(setRebuilding).catch((e) => setRebuilding({ status: "failed", error: e.message }));
+  useEffect(() => {
+    if (rebuilding?.status !== "running") return;
+    const timer = setTimeout(() => serverRequest(`/api/jobs/${rebuilding.id}`).then((j) => {
+      setRebuilding(j);
+      if (j.status === "done" && j.key) openDatabase(j.key);
+    }).catch((e) => setRebuilding({ status: "failed", error: e.message })), 700);
+    return () => clearTimeout(timer);
+  }, [rebuilding]);
   const focusedRoot = layout && focus ? titles[panesOf(layout).find((p) => p.id === focus)?.active] : null;
   const [dataset, setDataset] = useState(null);
   useEffect(() => {
@@ -4293,11 +4477,12 @@ function App() {
     if (!editing || focusedRoot?.index == null) return;
     let live = true;
     request(`/api/activity/${focusedRoot.index}`)
-      .then((a) => serverRequest(`/api/brightway/dataset?${queryOf(origin)}&database=${encodeURIComponent(a.database)}&code=${encodeURIComponent(a.code)}`))
+      .then((a) => serverRequest(datasetUrl(origin, a.database, a.code)))
       .then((d) => live && setDataset(d))
       .catch(() => { /* not a Brightway process: nothing to edit */ });
     return () => { live = false; };
-  }, [editing, origin?.folder, origin?.project, focusedRoot?.index]);
+  }, [editing, origin?.folder, origin?.project, focusedRoot?.index, pendingView.locked.join("|")]);
+  const editor = { editing, origin, pending, locked: pendingView.locked, stale, stage, openForm: setDatasetOpen };
   const persist = () => current.current.layout && saveWorkspace({ layout: current.current.layout, focus: current.current.focus, tabs: states.current });
   useEffect(persist, [layout, focus]);
 
@@ -4399,13 +4584,17 @@ function App() {
             title=${origin ? "Change processes: changes are staged, then made together and the model built again" : "Open a database of a Brightway project to edit it"}>
             Edit${pending.length ? ` (${pending.length})` : ""}</button>
         </span>`}
+      ${outdated && html`<button class="primary" disabled=${rebuilding?.status === "running"} onClick=${rebuild}
+        title=${`${outdated}: the model has to be built again, and its impacts are greyed out until then`}>
+        ${rebuilding?.status === "running" ? "Rebuilding…" : "Rebuild required"}</button>`}
+      ${rebuilding?.status === "failed" && html`<span class="error-inline" title=${rebuilding.error}>Rebuild failed</span>`}
       <span class="spacer"></span>
       ${sidePanel}
     </header>
-    ${loadOpen && html`<${LoadDatabase} onClose=${() => setLoadOpen(false)} onDatabases=${setDatabases} />`}
+    ${loadOpen && html`<${LoadDatabase} onClose=${() => setLoadOpen(false)} onDatabases=${setDatabases} onLocks=${refreshEditor} />`}
     ${datasetOpen && origin && html`<${DatasetForm} current=${origin} edit=${datasetOpen.edit} initial=${datasetOpen.initial}
       copyFrom=${datasetOpen.copyFrom} deleted=${new Set(pending.filter((c) => c.kind === "delete").map((c) => `${c.database}/${c.code}`))}
-      onStage=${stage} onClose=${() => setDatasetOpen(null)} />`}`;
+      staged=${pending} locked=${pendingView.locked} onStage=${stage} onClose=${() => setDatasetOpen(null)} />`}`;
   if (databases && !databases.some((d) => d.key === DATABASE)) {
     // Nothing loaded yet, or the database of this address is not loaded any more
     return html`
@@ -4434,7 +4623,8 @@ function App() {
           onOpenTab=${(from, root) => openTab(paneOfTab(layout, from).id, { inherit: states.current[from], root })} />`)}
     <//>`;
   return html`
-    <div class="app">
+    <${EditorContext.Provider} value=${editor}>
+    <div class=${`app ${stale ? "stale" : ""}`}>
       ${topBar(html`<button class=${sideOpen ? "primary" : ""} onClick=${() => setSideOpen(!sideOpen)}
           title="Show or hide the side panel (process and flow contribution, grouping, whole supply chain)">Side panel</button>`)}
       <div class="body">
@@ -4445,11 +4635,13 @@ function App() {
           : html`<button class="side-reopen" onClick=${() => setSideOpen(true)} title="Show the side panel" aria-label="Show the side panel">«</button>`}
         <aside class="sidebar" style=${{ width: `${sideWidth}px`, display: sideOpen ? "" : "none" }}>
           ${allTabs.map((id) => html`<div key=${id} id=${`side-${id}`} class="side-slot" style=${{ display: id === focusedTab && !editing ? "" : "none" }}></div>`)}
-          ${editing && html`<${EditPanel} origin=${origin} dataset=${dataset} pending=${pending} onForm=${setDatasetOpen}
-            stage=${stage} unstage=${unstage} unstageAll=${unstageAll} />`}
+          ${editing && html`<${EditPanel} origin=${origin} dataset=${dataset} pending=${pending} affected=${pendingView.affected}
+            locked=${pendingView.locked} outdated=${outdated} onForm=${setDatasetOpen} stage=${stage} unstage=${unstage} unstageAll=${unstageAll}
+            onApplied=${() => { refreshEditor(); refreshDatabases(); }} onRebuild=${rebuild} />`}
         </aside>
       </div>
-    </div>`;
+    </div>
+    <//>`;
 }
 
 render(html`<${App} />`, document.getElementById("app"));

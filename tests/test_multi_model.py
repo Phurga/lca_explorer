@@ -34,8 +34,8 @@ def wait(client, job):
 def test_each_model_has_its_own_api(two_models, tmp_path):
     client = TestClient(app_for(two_models, tmp_path))
     assert client.get("/api/databases").json() == [
-        {"key": "bread", "title": "Bread", "activities": 3, "brightway": None},
-        {"key": "energy-system", "title": "Energy", "activities": 2, "brightway": None},
+        {"key": "bread", "title": "Bread", "activities": 3, "brightway": None, "outdated": None},
+        {"key": "energy-system", "title": "Energy", "activities": 2, "brightway": None, "outdated": None},
     ]
     root = client.get("/", follow_redirects=False)
     assert root.status_code in (302, 307) and root.headers["location"] == "/db/bread/"

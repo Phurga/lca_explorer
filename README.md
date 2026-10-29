@@ -415,17 +415,37 @@ database of the project.
 *View* is the explorer on the model built from the database: fast, precalculated.
 *Edit* replaces the right panel with the edit panel for the project the open database
 was built from. Nothing there writes to Brightway at once: each change is *staged*,
-and *Apply and rebuild* makes them all in one transaction, then builds the open model again
-(it keeps being served until the new one is ready) and goes back to View. The
-number of staged changes shows on the Edit button; they are kept by the server
+and *Apply* makes them all in one transaction. *Apply and rebuild* then builds the open model
+again if the changes affect it (it keeps being served until the new one is ready) and goes back
+to View. The number of staged changes shows on the Edit button; they are kept by the server
 (`data/pending`), so they survive a reload.
+
+- **Impacts that may be wrong are greyed out**: in Edit mode once staged changes affect the open
+  database (theirs, and the databases using them), and in either mode when the project changed
+  since the model was built. The top bar then shows **Rebuild required**, and the same goes for
+  the other models listed in *Load database* (*outdated*).
+- **View-only features are left out in Edit mode**: merging, custom names and replacing a
+  supplier by an alternative only change how the view looks, not the data, so they are hidden
+  and not applied (a grouping rule's *merge* shows as a plain group); they come back in View.
+  Pins, cut-off and groups stay; they act on the impacts of the last build.
+- **Double-click a value to change it** (the process's name or location, its reference product,
+  its unit, an input's amount, the description…), in the tree or in a pop-up. It is staged
+  like any other change. In the tree, the name is the process's own name (the label shown may
+  be its product), and the amount is the input in the dataset of the process above, not the
+  amount of this supply chain. The pop-up has an **Edit** button for the whole form.
+- **Lock a database** (*Load database*, next to each database of a project): nothing in it can be
+  edited, deleted or added to, whichever database is open when one of its processes is reached.
+  The lock is kept by the server (`data/locks.json`) and enforced when changes are staged and
+  again when they are applied. Copying from a locked database is fine.
 
 - **New process** opens the form, empty, or filled from a copy of any process of
   the project (ecoinvent included): its products, exchanges, lognormal uncertainties and
   documentation. Negative technosphere inputs are read as waste to treatment when what
   supplies them treats waste (negative production, as in ecoinvent), else as avoided products.
-- **Edit**, **Copy as new** and **Delete** act on the focused tab's process. Only processes
-  written from the app can be edited or deleted; imported ones (ecoinvent…) are copied.
+- **Edit**, **Copy as new** and **Delete** act on the focused tab's process. Any process can
+  be edited, ecoinvent's included (lock the databases you want to keep as they are). What the
+  form cannot show (pedigree, formulas, uncertainties other than lognormal) is left as it is:
+  exchanges are changed one by one.
 - Edited processes keep their products' identity, so the datasets using them stay linked
   and their results follow. Co-products can be added to a process with one product, and
   removed (down to one) when no other dataset of the project uses them; a used product

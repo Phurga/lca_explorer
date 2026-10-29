@@ -632,3 +632,16 @@ table.dataset-table td button.link:disabled { opacity: 0.35; cursor: not-allowed
 .pending-kind.delete { background: var(--selected); }
 .edit-apply { margin-top: auto; padding-top: 10px; border-top: 1px solid var(--border); position: sticky; bottom: 0; background: var(--panel); }
 .edit-apply .load-job { margin: 0 0 6px; }
+/* Edit mode: values that can be changed in place, impacts that may be wrong */
+.editable { cursor: text; border-bottom: 1px dotted var(--muted); }
+.editable:hover { background: var(--accent-soft); }
+.editable.staged { border-bottom: 1px solid var(--accent, #4a9); background: var(--accent-soft); }
+.locked { cursor: not-allowed; }
+input.editing, textarea.editing { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--accent, #4a9); border-radius: 4px; padding: 0 4px; max-width: 100%; }
+textarea.editing { width: 100%; box-sizing: border-box; }
+.chip.staged { background: var(--accent-soft); }
+.edit-warning { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; margin: 4px 0; background: var(--selected); display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.error-inline { color: var(--danger, #c55); font-size: 12px; }
+.app.stale .impact, .app.stale .tree td:nth-child(3), .app.stale .tree td:nth-child(4), .app.stale .chart, .app.stale svg g .edge, .app.stale .share {
+  opacity: 0.4; filter: grayscale(1); }
+.app.stale .impact:hover { opacity: 0.4; }

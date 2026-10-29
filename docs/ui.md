@@ -78,8 +78,25 @@ API in `src/lca_viewer/server.py`.
   the change goes to `POST /api/brightway/pending` with the form's state, which is
   how a staged change is opened again. The process of the focused tab is found from the
   activity's database and code. Switching to Edit needs a Brightway-built database.
-  *Apply* runs `lca-viewer apply` and `/api/load` with `reopen`: the old model is served
-  until the new one is ready, then the page reloads in View mode.
+  *Apply* runs `lca-viewer apply`; with *and rebuild* and when the open database is
+  affected, `/api/load` with `reopen`: the old model is served until the new one is ready, then
+  the page reloads in View mode.
+- **Edit mode and the view.** `EditorContext` carries what the pop-ups and the tree need
+  (mode, project, staged changes, locked databases, whether the impacts are stale). In Edit mode
+  `FUView` sends `merges: []`, `substitutions: {}`, rules with `merge` off, and applies no custom
+  names (they stay in the tab, for View). Conflicts found: a grouping rule's *merge* and the
+  alternative supplier *use instead* act on the tree, not the data, so they are off too; pins,
+  cut-off and groups stay but act on impacts that may be stale (greyed: `.app.stale .impact`).
+  `Editable` is a value that turns into an input on double-click (Enter or blur stages, Escape
+  cancels); `quickEdit` patches the form of the dataset (its staged form if there is one) and stages
+  it again; exchanges are found by what they link to (`input`, recorded by the build, so models
+  built before need one rebuild for amounts to be editable), and an allocated process's share of
+  an exchange is scaled back to the dataset's.
+- **Rebuild required**: `/api/databases` gives each Brightway-built model's `outdated` (what
+  changed in the project since: `sources.changes`); the top bar shows the button when it is set.
+- **Locks**: *Lock* in *Load database* (`POST /api/brightway/lock`, kept in `data/locks.json`);
+  `/api/brightway` lists `locked` per database and `/api/brightway/dataset` says whether a process is
+  locked, which disables its fields, Edit and Delete.
 - **Tabs and panes** (like a notes app such as Obsidian): each tab is one
   functional unit with its own tree, method, cut-off, rules and merges. Tabs
   sit on top of their pane: **+** opens an empty tab (the search box takes

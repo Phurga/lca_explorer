@@ -232,6 +232,20 @@ def database_state(project: dict, database: str) -> dict:
     return {"modified": by_name[database]["modified"], "depends": depends, "methods": project.get("methods_stamp")}
 
 
+def affected_databases(project: dict, names) -> list[str]:
+    """``names`` and the databases of the project that use them, directly or through others: those
+    whose results change when something in ``names`` is edited, and whose models must be built again."""
+    out = set(names)
+    grew = True
+    while grew:
+        grew = False
+        for d in project["databases"]:
+            if d["name"] not in out and out & set(d["depends"]):
+                out.add(d["name"])
+                grew = True
+    return sorted(out)
+
+
 def changes(source: dict, state: dict) -> str | None:
     """What changed in the project since a model was built (``source``: as registered with the
     build; ``state``: :func:`database_state` now), or None. Builds registered before the linked
@@ -377,9 +391,9 @@ def _fetch(con, key):
 
 
 def _exchanges_of(con, key) -> list[dict]:
-    rows = con.execute("SELECT type, input_database, input_code, data FROM exchangedataset "
+    rows = con.execute("SELECT id, type, input_database, input_code, data FROM exchangedataset "
                        "WHERE output_database = ? AND output_code = ?", tuple(key)).fetchall()
-    return [{**_project_data(blob), "type": kind, "input": (db, code)} for kind, db, code, blob in rows]
+    return [{**_project_data(blob), "id": i, "type": kind, "input": (db, code)} for i, kind, db, code, blob in rows]
 
 
 def dataset_parts(con, database: str, code: str) -> dict:
@@ -420,14 +434,18 @@ def dataset_parts(con, database: str, code: str) -> dict:
             "products": [e["input"] for e in functional], "own": own}
 
 
+USERS_SHOWN = 30  # a popular ecoinvent process has thousands of users: only the first are listed
+
+
 def _users(con, parts: dict) -> list[dict]:
     """The datasets, other than this one, whose exchanges take a product of it (or the process
-    itself) as input, an allocated process standing for its parent:
-    ``[{"database", "code", "name", "uses": key of the product}]``."""
+    itself) as input, an allocated process standing for its parent (the first ``USERS_SHOWN`` of
+    each product): ``[{"database", "code", "name", "uses": key of the product}]``."""
     out, seen = [], set()
     for key in parts["products"]:
         for db, code in con.execute("SELECT output_database, output_code FROM exchangedataset "
-                                    "WHERE input_database = ? AND input_code = ? AND type != 'biosphere'", key).fetchall():
+                                    "WHERE input_database = ? AND input_code = ? AND type != 'biosphere' LIMIT ?",
+                                    (*key, USERS_SHOWN + len(parts["own"]) + 5)).fetchall():
             if (db, code) in parts["own"] or (db, code) in seen:
                 continue
             seen.add((db, code))
@@ -437,7 +455,7 @@ def _users(con, parts: dict) -> list[dict]:
                 if tuple(data["mf_parent_key"]) in parts["own"]:
                     continue  # an allocated process of the dataset itself
                 row = _fetch(con, data["mf_parent_key"]) or row
-            if row:
+            if row and not any((u["database"], u["code"], tuple(u["uses"])) == (row[0], row[1], key) for u in out):
                 out.append({"database": row[0], "code": row[1], "name": row[2], "uses": list(key)})
     return out
 
@@ -477,16 +495,17 @@ def read_dataset(base, project: str, database: str, code: str) -> dict:
     "name", "uses"}], "warnings": [...]}``.
 
     ``code`` can be any process; for one allocated from a multi-output process, the dataset is its
-    parent's. ``editable``: the dataset was written by lca_viewer, which can write it again in place
-    (``used_by`` and ``used`` are only given for those: they tell what keeps a product, or the whole
-    dataset, from being removed). Negative inputs from the technosphere are waste to treatment when
-    what supplies them treats waste, else avoided products; uncertainties other than lognormal are not kept.
+    parent's. Any dataset can be written again in place, ecoinvent's included: each exchange and
+    product carries its ``id``, so that what the form cannot show (pedigree, other uncertainties,
+    formulas) is left as it is. ``used_by`` (the first ones) and ``used`` tell what keeps a product,
+    or the whole dataset, from being removed. Negative inputs from the technosphere are waste to
+    treatment when what supplies them treats waste, else avoided products; uncertainties other than
+    lognormal are not copied.
     """
     path = project_dir(base, project) / "lci" / "databases.db"
     with closing(sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)) as con:
         parts = dataset_parts(con, database, code)
         node, data, key = parts["node"], parts["data"], parts["key"]
-        editable = bool(data.get("lca_viewer"))
         warnings: list[str] = []
 
         products = []
@@ -504,7 +523,8 @@ def read_dataset(base, project: str, database: str, code: str) -> dict:
             if shares is None and e.get("mf_allocation_factor") is not None:
                 shares = 100 * e["mf_allocation_factor"]
             products.append({"code": product_code, "name": name, "amount": e.get("amount"), "unit": unit or node["unit"] or "unit",
-                             "allocation": shares, "comment": e.get("comment") or ""})
+                             "allocation": shares, "comment": e.get("comment") or "", "id": e["id"],
+                             "process_code": e.get("mf_allocated_process_code") or key[1]})
         if not products:
             raise ValueError(f"{node['name']} has no product")
         if len(products) == 1:
@@ -539,15 +559,15 @@ def read_dataset(base, project: str, database: str, code: str) -> dict:
             if e.get("uncertainty type") not in (None, 0, 2):
                 warnings.append(f"The uncertainty of {target['name']} is not lognormal: it was not copied")
             exchanges.append({"section": section, "node": target, "amount": amount, "comment": e.get("comment") or "",
-                              "sd2": _sd2(e)})
+                              "sd2": _sd2(e), "id": e["id"]})
 
-        used_by = _users(con, parts) if editable else []
+        used_by = _users(con, parts)
         used = {tuple(u["uses"]) for u in used_by}
         for p in products:
             p["used"] = (key[0], p["code"]) in used
     kept = (data.get("lca_viewer") or {}).get("comment")  # the comment as typed, without the documentation after it
     return {
-        "database": key[0], "code": key[1], "editable": editable,
+        "database": key[0], "code": key[1], "editable": True,
         "multifunctional": node["type"] == "multifunctional" or any(p["code"] != key[1] for p in products),
         "process": {"name": node["name"], "location": node["location"] or "",
                     "comment": data.get("comment") or "" if kept is None else kept,

@@ -119,7 +119,7 @@ def as_spec(read: dict, **changes) -> dict:
         "database": read["database"], "new_database": False, "code": read["code"], "process": read["process"],
         "products": [{k: v for k, v in p.items() if k != "used"} for p in read["products"]],
         "exchanges": [{"section": e["section"], "database": e["node"]["database"], "code": e["node"]["code"],
-                       "amount": e["amount"], "comment": e["comment"], "sd2": e["sd2"]} for e in read["exchanges"]],
+                       "amount": e["amount"], "comment": e["comment"], "sd2": e["sd2"], "id": e["id"]} for e in read["exchanges"]],
     }
     out.update(changes)
     return out
@@ -130,6 +130,12 @@ def as_new(read: dict, **changes) -> dict:
     out = as_spec(read, code=None, **changes)
     out["products"] = [{k: v for k, v in p.items() if k != "code"} for p in out["products"]]
     return out
+
+
+def without_ids(read: dict) -> dict:
+    """A dataset as read, without the ids of its exchanges: they change when a multi-output process is allocated again."""
+    return {k: ([{i: x for i, x in e.items() if i != "id"} for e in v] if k in ("products", "exchanges") else v)
+            for k, v in read.items()}
 
 
 def scores(database: str) -> dict:
@@ -174,8 +180,8 @@ def test_a_dataset_is_read_back_as_the_form_takes_it(project, farm):
                              ("emission", "Carbon dioxide, fossil"), ("resource", "Water, river")}
     assert sections[("waste", "manure treatment")]["amount"] == 3 and sections[("technosphere", "electricity")]["sd2"] == 1.21
     assert [u["name"] for u in read["used_by"]] == ["cheese dairy"]
-    background = sources.read_dataset(project, "toy", "bg", "elec")  # not written by the app: can be copied, not edited
-    assert not background["editable"] and background["used_by"] == []
+    background = sources.read_dataset(project, "toy", "bg", "elec")  # not written by the app: it can be edited too
+    assert background["editable"] and sorted(u["name"] for u in background["used_by"]) == ["cheese dairy", "dairy farm"]
     assert [(p["name"], p["amount"]) for p in background["products"]] == [("electricity", 1)]
     assert background["exchanges"][0]["section"] == "emission"
     assert sources.read_dataset(project, "toy", "bg", "manure")["products"][0]["amount"] == -1
@@ -223,10 +229,10 @@ def test_a_failed_edit_leaves_the_dataset_as_it_was(project, farm):
     exchanges = as_spec(before)["exchanges"] + [{"section": "technosphere", "database": "bg", "code": "nothing", "amount": 1}]
     with pytest.raises(Exception):
         editing.write_dataset("toy", as_spec(before, exchanges=exchanges, process={**before["process"], "name": "changed"}))
-    assert sources.read_dataset(project, "toy", "my datasets", farm["farm"]) == before
+    assert without_ids(sources.read_dataset(project, "toy", "my datasets", farm["farm"])) == without_ids(before)
     assert scores("downstream")["cheese"] == pytest.approx(CHEESE)
-    with pytest.raises(ValueError, match="not written by lca_viewer"):
-        editing.write_dataset("toy", spec(database="bg", new_database=False, code="elec", products=[{"name": "x", "amount": 1}]))
+    with pytest.raises(ValueError, match="No process"):
+        editing.write_dataset("toy", spec(database="bg", new_database=False, code="nothing", products=[{"name": "x", "amount": 1}]))
 
 
 def test_co_products_can_be_added_to_a_process_that_is_used(project, farm):
@@ -287,7 +293,7 @@ def test_deleting_a_dataset(project, farm):
     with pytest.raises(ValueError, match="dairy farm is used by cheese dairy"):
         editing.delete_dataset("toy", "my datasets", farm["farm"])  # the cheese dairy uses its milk
     assert scores("downstream")["cheese"] == pytest.approx(CHEESE)
-    with pytest.raises(ValueError, match="not written by lca_viewer"):
+    with pytest.raises(ValueError, match="electricity is used by"):  # any dataset can be deleted, if nothing uses it
         editing.delete_dataset("toy", "bg", "elec")
 
     pasta = editing.write_dataset("toy", {
@@ -325,12 +331,13 @@ def test_staged_changes_are_applied_together_or_not_at_all(project, farm):
     wrong = [changes[0], changes[4], changes[3]]
     with pytest.raises(ValueError, match="delete the farm: dairy farm is used by cheese dairy"):
         editing.apply_changes("toy", wrong)
-    assert sources.read_dataset(project, "toy", "my datasets", farm["farm"]) == read
+    assert without_ids(sources.read_dataset(project, "toy", "my datasets", farm["farm"])) == without_ids(read)
     assert scores("downstream")["cheese"] == pytest.approx(CHEESE)
 
     with pytest.raises(ValueError, match="another compost"):  # fails last: the database made for the first one goes too
         editing.apply_changes("toy", [changes[0], changes[1], {**changes[2], "spec": {**more, "products": []}}])
-    assert "scratch" not in bd.databases and sources.read_dataset(project, "toy", "my datasets", farm["farm"]) == read
+    assert "scratch" not in bd.databases
+    assert without_ids(sources.read_dataset(project, "toy", "my datasets", farm["farm"])) == without_ids(read)
 
     result = editing.apply_changes("toy", changes[:3])
     assert result["applied"] == 3 and result["databases"] == ["my datasets", "scratch"]
@@ -342,6 +349,70 @@ def test_staged_changes_are_applied_together_or_not_at_all(project, farm):
 
     editing.apply_changes("toy", changes[3:])
     assert not [n for n in bd.Database("my datasets")] and not [n for n in bd.Database("downstream")]
+
+
+def test_any_process_can_be_edited_and_what_the_form_cannot_show_stays(project, farm):
+    """An imported process (no mark of the app): its exchanges are changed one by one, by id."""
+    import bw2data as bd
+
+    pedigree = {"reliability": 1, "completeness": 2, "temporal correlation": 3, "geographical correlation": 1, "further technological correlation": 4}
+    co2 = next(iter(bd.get_node(database="bg", code="elec").biosphere()))
+    for k, v in {"uncertainty type": 2, "loc": math.log(0.1), "scale": 0.2, "pedigree": pedigree, "formula": "0.1 * x"}.items():
+        co2[k] = v
+    co2.save()
+
+    read = sources.read_dataset(project, "toy", "bg", "elec")
+    assert read["editable"] and sorted(u["name"] for u in read["used_by"]) == ["cheese dairy", "dairy farm"]
+    assert read["exchanges"][0]["sd2"] == pytest.approx(math.exp(0.4), abs=1e-6)
+    edited = as_spec(read, process={**read["process"], "name": "electricity, edited"})
+    edited["exchanges"][0]["amount"] = 0.3
+    edited["exchanges"].append({"section": "emission", "database": "bio", "code": "co2", "amount": 0.05, "comment": "new"})
+    result = editing.write_dataset("toy", edited)
+    assert result["code"] == "elec" and result["codes"] == ["elec"]
+
+    node = bd.get_node(database="bg", code="elec")
+    assert node["name"] == "electricity, edited" and node["lca_viewer"]["modified"]
+    first = next(e for e in node.biosphere() if e["amount"] == 0.3)
+    assert first["scale"] == 0.2 and first["pedigree"] == pedigree and first["formula"] == "0.1 * x"  # not shown by the form: kept
+    assert first["loc"] == pytest.approx(math.log(0.3)) and first["uncertainty type"] == 2  # follows the amount
+    assert sorted(e["amount"] for e in node.biosphere()) == [0.05, 0.3]
+    # What uses it is still linked and follows: the farm takes 5 kWh of it
+    assert scores("bg")["electricity"] == pytest.approx(0.35)
+    shared = 5 * 0.35 + 4 * 0.5 + 3 * 0.2 + 3
+    assert scores("my datasets")["milk"] == pytest.approx(0.8 * shared / 10)
+    assert scores("downstream")["cheese"] == pytest.approx(2 * 0.8 * shared / 10 + 0.35)
+
+    # An exchange left out of the form is deleted; a lognormal uncertainty can be taken away
+    again = sources.read_dataset(project, "toy", "bg", "elec")
+    spec_ = as_spec(again)
+    spec_["exchanges"] = [dict(e, sd2=None) for e in spec_["exchanges"] if e["amount"] == 0.3]
+    editing.write_dataset("toy", spec_)
+    left = list(bd.get_node(database="bg", code="elec").biosphere())
+    assert [e["amount"] for e in left] == [0.3] and left[0].get("uncertainty type", 0) == 0 and "pedigree" not in left[0]._data
+    # Used by others: it cannot be deleted
+    with pytest.raises(ValueError, match="electricity, edited is used by"):
+        editing.delete_dataset("toy", "bg", "elec")
+
+
+def test_a_form_without_ids_rewrites_the_exchanges(project, farm):
+    """A change staged by an older version has no exchange ids: its exchanges are written again from the form."""
+    read = sources.read_dataset(project, "toy", "my datasets", farm["farm"])
+    spec_ = as_spec(read)
+    for e in spec_["exchanges"]:
+        del e["id"]
+        if e["code"] == "feed":
+            e["amount"] = 6
+    editing.write_dataset("toy", spec_)
+    shared = 5 * 0.1 + 6 * 0.5 + 3 * 0.2 + 3
+    assert scores("my datasets")["milk"] == pytest.approx(0.8 * shared / 10)
+    assert len(sources.read_dataset(project, "toy", "my datasets", farm["farm"])["exchanges"]) == len(read["exchanges"])
+
+
+def test_databases_that_use_an_edited_one_are_affected(project, farm):
+    projects = sources.brightway_projects(project)
+    toy = next(p for p in projects if p["name"] == "toy")
+    assert sources.affected_databases(toy, ["bg"]) == ["bg", "downstream", "my datasets"]
+    assert sources.affected_databases(toy, ["downstream"]) == ["downstream"]
 
 
 def test_search_reads_the_project_files(project):
@@ -438,7 +509,7 @@ def test_edit_copy_and_delete_through_the_api(project, tmp_path):
     read = client.get("/api/brightway/dataset", params={**where, "database": "my datasets", "code": code}).json()
     assert read["editable"] and read["products"][0]["name"] == "milk" and read["used_by"] == []
     assert client.get("/api/brightway/dataset", params={**where, "database": "my datasets", "code": "nothing"}).status_code == 404
-    assert client.get("/api/brightway/dataset", params={**where, "database": "bg", "code": "elec"}).json()["editable"] is False
+    assert client.get("/api/brightway/dataset", params={**where, "database": "bg", "code": "elec"}).json()["editable"] is True
 
     opened = wait(client.post("/api/load", json={"brightway": folder, "project": "toy", "database": "my datasets"}).json())
     assert opened["status"] == "done", opened
@@ -517,7 +588,7 @@ def test_staged_changes_through_the_api(project, tmp_path):
     next(e for e in edited["exchanges"] if e["code"] == "feed")["amount"] = 6
     change = {"kind": "edit", "title": "Edit dairy farm", "database": "my datasets", "code": read["code"], "spec": edited,
               "form": {"anything": "the page needs"}}
-    assert client.get("/api/brightway/pending", params=where).json() == {"changes": []}
+    assert client.get("/api/brightway/pending", params=where).json()["changes"] == []
     staged = client.post("/api/brightway/pending", json={**where, "change": change}).json()["changes"]
     assert len(staged) == 1 and staged[0]["id"] and staged[0]["form"] == {"anything": "the page needs"}
     # Nothing is written: the open model and the dataset are as they were
@@ -542,7 +613,7 @@ def test_staged_changes_through_the_api(project, tmp_path):
 
     job = wait(client.post("/api/brightway/apply", json={**where, "database": "my datasets"}).json())
     assert job["status"] == "done" and job["applied"] == 2 and job["key"] == key, job
-    assert client.get("/api/brightway/pending", params=where).json() == {"changes": []}
+    assert client.get("/api/brightway/pending", params=where).json()["changes"] == []
     assert client.post("/api/brightway/apply", json=where).status_code == 400  # nothing staged any more
     shared = 5 * 0.1 + 6 * 0.5 + 3 * 0.2 + 3
     found = client.post(f"/db/{key}/api/search", json={"predicate": {"all": [
@@ -558,6 +629,66 @@ def test_staged_changes_through_the_api(project, tmp_path):
     assert failed["status"] == "failed" and "Create compost 2" in failed["error"]
     assert len(client.get("/api/brightway/pending", params=where).json()["changes"]) == 2
     assert sources.read_dataset(project, "toy", "my datasets", read["code"])["editable"]
+
+
+def test_locked_databases_and_the_rebuild_they_require(project, tmp_path):
+    """A locked database cannot be changed, from any database; a change made without rebuilding says which models are out of date."""
+    import time
+
+    from fastapi.testclient import TestClient
+
+    from lca_viewer.server import create_library
+
+    def wait(job):
+        for _ in range(900):
+            if job["status"] != "running":
+                return job
+            time.sleep(0.1)
+            job = client.get(f"/api/jobs/{job['id']}").json()
+        raise AssertionError("job still running")
+
+    client = TestClient(create_library(tmp_path / "data"))
+    folder, where = str(project), {"folder": str(project), "project": "toy"}
+    first = wait(client.post("/api/brightway/dataset", json={**where, "spec": spec(products=[{"name": "milk", "amount": 1, "unit": "kilogram"}])}).json())
+    key = wait(client.post("/api/load", json={"brightway": folder, "project": "toy", "database": "my datasets"}).json())["key"]
+    assert client.get("/api/databases").json()[0]["outdated"] is None
+
+    def listed():
+        databases = client.get("/api/brightway", params={"folder": folder}).json()["projects"]
+        return {d["name"]: d["locked"] for d in next(p for p in databases if p["name"] == "toy")["databases"]}
+
+    assert listed() == {"bg": False, "bio": False, "my datasets": False}
+    assert client.post("/api/brightway/lock", json={**where, "database": "bg", "locked": True}).json() == {"locked": ["bg"]}
+    assert listed()["bg"] is True
+    # bg is locked: its processes are read as locked, and no change to them is staged, applied or written
+    read = client.get("/api/brightway/dataset", params={**where, "database": "bg", "code": "elec"}).json()
+    assert read["locked"] is True and read["editable"] is True
+    assert client.get("/api/brightway/dataset", params={**where, "database": "my datasets", "code": first["result"]["code"]}).json()["locked"] is False
+    edit_bg = {"kind": "edit", "title": "Edit electricity", "database": "bg", "code": "elec", "spec": as_spec(read)}
+    refused = client.post("/api/brightway/pending", json={**where, "change": edit_bg})
+    assert refused.status_code == 400 and "bg is locked" in refused.json()["detail"]
+    assert client.post("/api/brightway/dataset/delete", json={**where, "database": "bg", "code": "elec"}).status_code == 400
+    into_bg = client.post("/api/brightway/dataset", json={**where, "spec": spec(database="bg", new_database=False)})
+    assert into_bg.status_code == 400
+
+    # Unlocked, it can be edited; locked again before the changes are applied, they are refused
+    client.post("/api/brightway/lock", json={**where, "database": "bg", "locked": False})
+    staged = client.post("/api/brightway/pending", json={**where, "change": edit_bg}).json()
+    assert staged["affected"] == ["bg", "my datasets"] and staged["locked"] == []
+    client.post("/api/brightway/lock", json={**where, "database": "bg", "locked": True})
+    assert client.get("/api/brightway/pending", params=where).json()["locked"] == ["bg"]
+    assert client.post("/api/brightway/apply", json=where).status_code == 400
+    client.post("/api/brightway/lock", json={**where, "database": "bg", "locked": False})
+
+    # Applied without rebuilding: the open model is out of date, and the apply says so
+    done = wait(client.post("/api/brightway/apply", json={**where, "database": "my datasets", "rebuild": False}).json())
+    assert done["status"] == "done" and done["affected"] == ["bg", "my datasets"] and "has to be built again" in done["message"], done
+    assert "key" not in done
+    assert "changed since the model was built" in client.get("/api/databases").json()[0]["outdated"]
+    rebuilt = wait(client.post("/api/load", json={"brightway": folder, "project": "toy", "database": "my datasets",
+                                                  "rebuild": True, "reopen": True}).json())
+    assert rebuilt["status"] == "done" and rebuilt["key"] == key
+    assert client.get("/api/databases").json()[0]["outdated"] is None
 
 
 def test_import_without_the_default_biosphere(tmp_path, monkeypatch):

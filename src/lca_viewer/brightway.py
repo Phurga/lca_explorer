@@ -72,7 +72,8 @@ def _exchanges(lca, rows: np.ndarray, activity_ids: np.ndarray) -> list[tuple]:
             row = lca.dicts.product.get(source)
             row = None if row is None else int(product_of_row[row])
         if activity is not None and row is not None:
-            out.append((activity, kind, row, _exchange_data(data)))
+            # ``input``: what the exchange is linked to, to find it again in the project when it is edited
+            out.append((activity, kind, row, {**_exchange_data(data), "input": [in_db, in_code]}))
     return out
 
 
