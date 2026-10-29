@@ -187,6 +187,8 @@ section { display: flex; flex-direction: column; min-height: 0; border-right: 1p
 .tree .label { overflow: hidden; text-overflow: ellipsis; }
 .tree .loc { color: var(--muted); margin-left: 4px; }
 .tree tr.group .label { color: var(--group); font-weight: 500; }
+/* A group's colour (set per row) runs down the left of the group and of the rows in it */
+.tree tr.in-group td:first-child { box-shadow: inset 3px 0 0 var(--group-color); }
 .tree tr.direct .label, .tree tr.rest .label { color: var(--muted); font-style: italic; }
 .tree .chip {
   font-size: 11px; color: var(--group); border: 1px solid var(--group); border-radius: 10px;
@@ -461,6 +463,12 @@ table.results tr.selected td { background: var(--selected); }
 .info-body table.users th:nth-child(5), .info-body table.users td:nth-child(5) { width: 52px; text-align: right; }
 .info-body table.users a { color: var(--text); text-decoration: none; }
 .info-body table.users a:hover { color: var(--accent); text-decoration: underline; }
+.info-body table.users .user-cell { gap: 4px; }
+.info-body table.users .toggle { flex: none; width: 14px; padding: 0; border: 0; background: none; color: var(--muted); cursor: pointer; }
+.info-body table.users .toggle.muted { cursor: default; }
+.info-body table.users tr.more td { font-size: 12px; }
+.info-body table.alternatives tr.current td { color: var(--muted); }
+.info-body table.alternatives .chip:disabled { opacity: 0.4; cursor: default; }
 .info-body table.users .chip { font-size: 11px; padding: 0 6px; border-radius: 9px; }
 /* Merged / group panel: members with their amounts and impacts */
 .bundle-details .details-list td:first-child, .bundle-details .details-list th:first-child { width: auto; }

@@ -159,6 +159,7 @@ class LCAModel:
         if np.any(self.diagonal == 0):
             raise ValueError("A has zero entries on its diagonal")
         self._G = None
+        self._solve_A = None
         self._U = None
         self._CF = None
         self._details_path = None
@@ -199,7 +200,10 @@ class LCAModel:
         """Activity operation levels needed for ``amount`` of ``product``."""
         demand = np.zeros(self.size)
         demand[product] = amount
-        return _factorized_solver(self.A)(demand)
+        # Factorised once: each functional unit is then one solve, not a new factorisation
+        if self._solve_A is None:
+            self._solve_A = _factorized_solver(self.A)
+        return self._solve_A(demand)
 
     def method_index(self, name) -> int:
         name = tuple(name)
