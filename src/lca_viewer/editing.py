@@ -1,5 +1,5 @@
-"""Changes to Brightway projects made from the app: create, delete and restore projects, and
-write new datasets (the *Create dataset* panel).
+"""Changes to Brightway projects made from the app: create, delete and restore projects, delete
+their databases, and write new datasets (the *Create dataset* panel).
 
 These use bw2data on the Brightway data folder of ``BRIGHTWAY2_DIR``: the server runs them
 in a separate ``lca-viewer`` process (``lca-viewer project …``, ``lca-viewer dataset …``),
@@ -79,6 +79,22 @@ def delete_project(name: str) -> None:
     bd.projects.set_current(others[0], update=False)
     bd.projects.delete_project(name, delete_dir=True)
     print(f"Deleted project {name}", flush=True)
+
+
+def delete_database(project: str, name: str) -> None:
+    """Delete a database from a project, unless another database of the project links to it."""
+    import bw2data as bd
+
+    if project not in bd.projects:
+        raise SystemExit(f"No project {project!r}")
+    bd.projects.set_current(project)
+    if name not in bd.databases:
+        raise SystemExit(f"No database {name!r} in project {project!r}")
+    users = sorted(d for d, meta in bd.databases.items() if d != name and name in meta.get("depends", []))
+    if users:
+        raise SystemExit(f"{name} is used by {', '.join(users)}: remove {'it' if len(users) == 1 else 'them'} first")
+    del bd.databases[name]
+    print(f"Deleted database {name} from project {project}", flush=True)
 
 
 def restore_project(path, name: str | None = None) -> str:

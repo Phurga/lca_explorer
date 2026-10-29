@@ -13,6 +13,7 @@ built from a database with dangling inputs would silently miss part of the suppl
 
 from __future__ import annotations
 
+import collections
 import csv
 import json
 import math
@@ -268,6 +269,68 @@ def replace_aggregated_copies(data: list[dict], link_to, labels, log=print) -> l
     return data
 
 
+# Unit -> (base unit, its size in the base unit), to convert inputs to the unit of the process they
+# link to: SimaPro gives some ecoinvent processes in other units than ecoinvent (combine harvesting
+# in m2, ecoinvent in hectare; electricity often in MJ) and Pré's correspondence maps names only
+UNIT_SIZES = {
+    "joule": ("joule", 1.0), "kilojoule": ("joule", 1e3), "megajoule": ("joule", 1e6), "gigajoule": ("joule", 1e9),
+    "watt hour": ("joule", 3.6e3), "kilowatt hour": ("joule", 3.6e6), "megawatt hour": ("joule", 3.6e9),
+    "square meter": ("square meter", 1.0), "hectare": ("square meter", 1e4), "square kilometer": ("square meter", 1e6),
+    "cubic meter": ("cubic meter", 1.0), "litre": ("cubic meter", 1e-3),
+    "meter": ("meter", 1.0), "kilometer": ("meter", 1e3),
+    "gram": ("kilogram", 1e-3), "kilogram": ("kilogram", 1.0), "ton": ("kilogram", 1e3),
+    "second": ("second", 1.0), "s": ("second", 1.0), "minute": ("second", 60.0), "hour": ("second", 3600.0),
+    "day": ("second", 86400.0), "year": ("second", 365 * 86400.0),
+    "kilogram day": ("kilogram second", 86400.0), "kgy": ("kilogram second", 365 * 86400.0),
+    "kilogram year": ("kilogram second", 365 * 86400.0),
+    "ton kilometer": ("kilogram meter", 1e6), "kilogram kilometer": ("kilogram meter", 1e3),
+    "square meter-year": ("square meter year", 1.0), "hectare year": ("square meter year", 1e4),
+    "cubic meter-year": ("cubic meter year", 1.0),
+    "person kilometer": ("person meter", 1e3), "vehicle kilometer": ("vehicle meter", 1e3),
+}
+
+
+def unit_factor(source: str, target: str) -> float | None:
+    """Amount in ``target`` per amount in ``source`` (normalised unit names), or None."""
+    s, t = UNIT_SIZES.get(source), UNIT_SIZES.get(target)
+    return s[1] / t[1] if s and t and s[0] == t[0] else None
+
+
+def convert_to_linked_units(data: list[dict], databases, log=print) -> list[dict]:
+    """Inputs linked to a process of ``databases`` in another unit than the process's are converted
+    to it (1.25 m2 of combine harvesting -> 1.25e-4 hectare); without a known conversion, they are
+    unlinked again, so that they are reported rather than wrong by a factor."""
+    from bw2data.backends import ActivityDataset as AD
+    from bw2io.units import normalize_units
+    from bw2io.utils import rescale_exchange
+
+    unit_of = {(db, code): d.get("unit") for db in databases
+               for code, d in AD.select(AD.code, AD.data).where(AD.database == db).tuples()}
+    converted, unlinked = collections.Counter(), collections.Counter()
+    for ds in data:
+        for e in ds.get("exchanges", []):
+            key = tuple(e["input"]) if e.get("input") and e.get("type") != "biosphere" else None
+            if key not in unit_of or not unit_of[key]:
+                continue
+            source, target = normalize_units(e.get("unit") or ""), unit_of[key]
+            if source == target:
+                continue
+            factor = unit_factor(source, target)
+            if factor is None:
+                e.pop("input")
+                unlinked[(source, target)] += 1
+            else:
+                rescale_exchange(e, factor)
+                e["unit"] = target
+                converted[(source, target)] += 1
+    if converted:
+        log("Converted inputs to the unit of the process they link to: "
+            + ", ".join(f"{n} {s} -> {t}" for (s, t), n in converted.most_common()))
+    if unlinked:
+        log("Not linked, units that don't convert: " + ", ".join(f"{n} {s} -> {t}" for (s, t), n in unlinked.most_common()))
+    return data
+
+
 def drop_non_elementary(data: list[dict], log=print) -> list[dict]:
     """Leave out SimaPro's final waste flows, non material emissions, social and economic issues:
     ecoinvent's biosphere has no such flows."""
@@ -482,6 +545,31 @@ def split_name_geography(data: list[dict]) -> list[dict]:
     return data
 
 
+def name_allocated_processes(data: list[dict]) -> list[dict]:
+    """Allocated (read-only) processes take their product's name, as ``multifunctional`` names them
+    when it allocates a SimaPro database (``products_as_process``)."""
+    for ds in data:
+        if ds.get("type") == "readonly_process":
+            functional = [e for e in ds.get("exchanges", []) if e.get("functional")]
+            if len(functional) == 1 and functional[0].get("name"):
+                ds["name"] = functional[0]["name"]
+    return data
+
+
+def _allocated_database(name: str, requested_backend: str = "sqlite"):
+    """The database class bw2io writes with, for data allocated before writing (bw_simapro_csv
+    does it): ``multifunctional``'s, without allocating again when processed. That second allocation
+    saves every allocated process and its exchanges one by one, each in its own transaction: about
+    20 minutes for Agribalyse, for the same result."""
+    from multifunctional import MultifunctionalDatabase
+
+    class AllocatedDatabase(MultifunctionalDatabase):
+        def process(self, csv: bool = False, allocate: bool = False) -> None:
+            super().process(csv=csv, allocate=allocate)
+
+    return AllocatedDatabase(name)
+
+
 def unlinked_exchanges(data: list[dict]) -> list[dict]:
     """One row per distinct unlinked exchange (zero-amount placeholders excluded)."""
     rows = {}
@@ -560,8 +648,11 @@ def import_simapro_csv(
                 "--unlinked drop to write the database without these exchanges."
             )
         importer.apply_strategy(drop_unlinked)
+    importer.apply_strategy(name_allocated_processes)
     importer.apply_strategy(split_name_geography)
     print(f"Writing {database}", flush=True)
+    if importer.needs_multifunctional_database:
+        importer.database_class = _allocated_database
     importer.write_database()
     processes = sum(1 for ds in importer.data if ds.get("type") in bd.labels.process_node_types)
     return {"processes": processes, "unlinked": len(rows), "report": str(report) if rows else None}
@@ -599,6 +690,7 @@ def link_simapro(importer, link_to, migrations, biosphere: str, log=None) -> Non
             s.link_iterable_by_fields, other=bd.Database(db), edge_kinds=["technosphere", "substitution", "production"],
             fields=("name", "reference product", "location"),
         ))
+    convert_to_linked_units(importer.data, link_to, log=log)
     log("Linking the elementary flows")
     link_biosphere_by_correspondence(importer.data, biosphere, log=log)
     rename_biosphere_flows(importer.data, log=log)

@@ -76,6 +76,11 @@ class Row:
     """For "merged" rows: the sibling processes whose inventories are combined."""
     by_rule: bool = False
     """For "merged" rows: made by a grouping rule with ``merge`` (not by ``View.merges``)."""
+    by_product: bool = False
+    """For "group" rows: made by ``View.group_products`` (not by a rule)."""
+    regroup: str | None = None
+    """For process rows: the "group by product" row the user ungrouped them from (its id),
+    so that they can be put back in it."""
     sources: list[tuple[int, float]] | None = None
     """For direct rows and every row below them (flows, groups of flows, others):
     the (activity, operation level) pairs whose own emissions they are part of."""
@@ -102,6 +107,8 @@ class View:
     merges: list[dict] = field(default_factory=list)
     """``{"scope": parent row id, "products": [...]}``: sibling processes merged into one
     process whose inventory is the union of theirs (common inputs summed)."""
+    ungrouped: set[str] = field(default_factory=set)
+    """Ids of "group by product" rows the user ungrouped: their members stay separate rows."""
 
     def __post_init__(self):
         self._activities = derived_activities(self.tree.model)
@@ -130,6 +137,7 @@ class View:
             "pinned": sorted(self.pinned),
             "others": sorted(self.others),
             "merges": self.merges,
+            "ungrouped": sorted(self.ungrouped),
             "group_products": self.group_products,
         }
 
@@ -146,6 +154,7 @@ class View:
             pinned=set(data.get("pinned", [])),
             others=set(data.get("others", [])),
             merges=list(data.get("merges", [])),
+            ungrouped=set(data.get("ungrouped", [])),
             group_products=bool(data.get("group_products", False)),
         )
 
@@ -289,6 +298,7 @@ class View:
                         rows.append(bundle(name, members, parent, depth))
                     else:
                         free.extend(members)
+        regroup: dict = {}  # member node id -> the product group it was ungrouped from
         if self.group_products and not flows and len(free) > 1:
             products = self._activities["reference_product"]
             buckets = {}
@@ -296,11 +306,19 @@ class View:
                 buckets.setdefault(str(products.iat[c.product]), []).append(c)
             free = []
             for product, members in buckets.items():
-                if len(members) > 1:
-                    rows.append(self._group_row(f"product:{product}", members, parent, depth, label=product))
+                group_id = f"{parent.id}/g:product:{product}"
+                if len(members) > 1 and group_id not in self.ungrouped:
+                    group = self._group_row(f"product:{product}", members, parent, depth, label=product)
+                    group.by_product = True
+                    rows.append(group)
                 else:
                     free.extend(members)
-        rows.extend(self._process_row(c, parent.id, depth) for c in free)
+                    if len(members) > 1:
+                        regroup.update((m.id, group_id) for m in members)
+        for c in free:
+            row = self._process_row(c, parent.id, depth)
+            row.regroup = regroup.get(c.id)
+            rows.append(row)
         if flows:
             for r in rows:
                 r.sources = parent.sources

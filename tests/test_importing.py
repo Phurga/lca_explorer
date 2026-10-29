@@ -304,3 +304,18 @@ def test_default_biosphere_of_a_version(toy_project, tmp_path, monkeypatch, caps
     assert "already in" in capsys.readouterr().out
     with pytest.raises(SystemExit, match="no biosphere for ecoinvent 3.7"):
         importing.install_defaults(toy_project, "3.7", downloads)
+
+
+def test_inputs_take_the_unit_of_the_process_they_link_to(toy_project):
+    # SimaPro gives some ecoinvent processes in other units (electricity in MJ, harvesting in m2)
+    data = [{"type": "process", "name": "Crop", "exchanges": [
+        {"type": "technosphere", "name": "Electricity", "unit": "MJ", "amount": 3.6, "input": (EI, "elec")},
+        {"type": "technosphere", "name": "Diesel", "unit": "m2", "amount": 2, "input": (EI, "diesel")},
+        {"type": "technosphere", "name": "Water", "unit": "kg", "amount": 5, "input": (EI, "water")},
+    ]}]
+    importing.convert_to_linked_units(data, [EI], log=lambda m: None)
+    elec, diesel, water = data[0]["exchanges"]
+    assert elec["amount"] == pytest.approx(1.0) and elec["unit"] == "kilowatt hour"
+    assert "input" not in diesel  # m2 -> kilogram: reported as unlinked, not linked with a wrong amount
+    assert water["amount"] == 5 and water["input"] == (EI, "water")
+    assert importing.unit_factor("square meter", "hectare") == pytest.approx(1e-4)
