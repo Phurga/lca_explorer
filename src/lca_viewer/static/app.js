@@ -102,23 +102,30 @@ function rowAmount(r) {
   if (r.kind !== "process") return "";
   return r.waste ? `${fmt(-r.amount)} ${unit(r.unit)} treated` : `${fmt(r.amount)} ${unit(r.unit)}`;
 }
-// Status bar totals of the selected processes: amounts per unit (waste as treated, as in the
-// Amount column; units are not added together) and the summed impact. A process inside
-// another selected process is left out: its impact is already in that process's cumulative one.
+// Rows made of processes: a process, a merged process, a group of processes (not of flows)
+const ofProcesses = (r) => r.kind === "process" || r.kind === "merged" || (r.kind === "group" && !!r.products);
+// Status bar totals of the selected processes, merged processes and groups of processes
+// included (a group or merged row counts its member processes): amounts per unit (waste as
+// treated, as in the Amount column; units are not added together) and the summed impact. A row
+// inside another selected row is left out: its impact is already in that row's cumulative one.
 function selectedProcessTotals(byId, selection) {
-  const inSelectedProcess = (r) => {
-    for (let p = byId.get(r.parent); p; p = byId.get(p.parent)) if (p.kind === "process" && selection.has(p.id)) return true;
+  const inSelectedRow = (r) => {
+    for (let p = byId.get(r.parent); p; p = byId.get(p.parent)) if (ofProcesses(p) && selection.has(p.id)) return true;
     return false;
   };
   const counted = [...selection].map((id) => byId.get(id))
-    .filter((r) => r?.kind === "process" && !inSelectedProcess(r));
+    .filter((r) => r && ofProcesses(r) && !inSelectedRow(r));
   const amounts = new Map();
+  let count = 0;
   for (const r of counted) {
-    const key = r.waste ? `${unit(r.unit)} treated` : unit(r.unit);
-    amounts.set(key, (amounts.get(key) || 0) + (r.waste ? -r.amount : r.amount));
+    for (const p of r.parts || [r]) {
+      const key = p.waste ? `${unit(p.unit)} treated` : unit(p.unit);
+      amounts.set(key, (amounts.get(key) || 0) + (p.waste ? -p.amount : p.amount));
+      count++;
+    }
   }
   return {
-    count: counted.length,
+    count,
     amounts: [...amounts].map(([u, n]) => `${fmt(n)} ${u}`).join(" + "),
     impact: counted.reduce((sum, r) => sum + r.impacts[0], 0),
   };
@@ -3757,7 +3764,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
           </span>
             ${selectedTotals.count > 0 && html`
               <span class="spacer"></span>
-              <span class="hint selected-total" title="Selected processes: a process inside another selected one is not counted again">
+              <span class="hint selected-total" title="Selected processes, merged processes and groups of processes: a row inside another selected one is not counted again">
                 Selected (${selectedTotals.count} ${selectedTotals.count === 1 ? "process" : "processes"}): ${selectedTotals.amounts} · impact ${fmt(selectedTotals.impact)} ${methodInfo.unit}
               </span>`}
           </div>
