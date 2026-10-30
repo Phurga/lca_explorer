@@ -182,6 +182,17 @@ def defaults(args) -> None:
     print(f"{name} and its impact methods are ready in project {args.project}", flush=True)
 
 
+def add_remote(args) -> None:
+    """Add a project of files.brightway.dev (e.g. BAFU) to a project."""
+    from .importing import install_remote_project
+    from .sources import brightway_dir
+
+    print(f"Brightway data folder: {brightway_dir()}", flush=True)
+    t = time.perf_counter()
+    names = install_remote_project(args.project, args.remote, Path(args.data) / "downloads")
+    print(f"{', '.join(names)} and its impact methods are ready in project {args.project} ({time.perf_counter() - t:.0f}s)", flush=True)
+
+
 def ecoinvent(args) -> None:
     """ecoinvent account (kept in the system's credential store) and release downloads."""
     from . import credentials
@@ -314,6 +325,13 @@ def main(argv=None) -> None:
     p.add_argument("--project", required=True)
     p.add_argument("--data", default="data", help="Folder where the download is kept (default: data)")
     p.set_defaults(func=defaults)
+
+    p = sub.add_parser("add-remote", help="Add the databases and impact methods of a project of files.brightway.dev "
+                                          "to a project (in BRIGHTWAY2_DIR)")
+    p.add_argument("remote", help="e.g. BAFU-2025-v2")
+    p.add_argument("--project", required=True)
+    p.add_argument("--data", default="data", help="Folder where the download is kept (default: data)")
+    p.set_defaults(func=add_remote)
 
     p = sub.add_parser("ecoinvent", help="Download an ecoinvent release into a project (in BRIGHTWAY2_DIR) "
                                          "with your ecoinvent account")

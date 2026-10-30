@@ -311,6 +311,8 @@ def biosphere_archive(path, version="3.10"):
     db_file = path.parent / "databases.db"
     con = sqlite3.connect(db_file)
     con.execute("CREATE TABLE activitydataset (id INTEGER PRIMARY KEY, data BLOB, code TEXT, database TEXT)")
+    con.execute("CREATE TABLE exchangedataset (id INTEGER PRIMARY KEY, data BLOB, input_code TEXT, input_database TEXT, "
+                "output_code TEXT, output_database TEXT, type TEXT)")
     for i, (code, name) in enumerate([("co2", "Carbon dioxide, fossil"), ("ch4", "Methane, fossil")], start=7):
         flow = {"name": name, "categories": ("air",), "unit": "kilogram", "type": "emission", "code": code, "database": database}
         con.execute("INSERT INTO activitydataset VALUES (?, ?, ?, ?)", (i, pickle.dumps(flow), code, database))
@@ -357,6 +359,102 @@ def test_default_biosphere_of_a_version(toy_project, tmp_path, monkeypatch, caps
     assert "already in" in capsys.readouterr().out
     with pytest.raises(SystemExit, match="no biosphere for ecoinvent 3.7"):
         importing.install_defaults(toy_project, "3.7", downloads)
+
+
+def bafu_archive(path):
+    """A Brightway project archive shaped like files.brightway.dev's BAFU: a process database linked
+    to its own biosphere, exchanges holding numpy numbers, and methods keyed by node id, one empty."""
+    import io
+    import json
+    import pickle
+    import sqlite3
+    import tarfile
+
+    import numpy as np
+
+    db_file = path.parent / "bafu.db"
+    con = sqlite3.connect(db_file)
+    con.execute("CREATE TABLE activitydataset (id INTEGER PRIMARY KEY, data BLOB, code TEXT, database TEXT, type TEXT)")
+    con.execute("CREATE TABLE exchangedataset (id INTEGER PRIMARY KEY, data BLOB, input_code TEXT, input_database TEXT, "
+                "output_code TEXT, output_database TEXT, type TEXT)")
+    bio, proc = "BAFU-biosphere", "BAFU"
+    flow = {"name": "Carbon dioxide", "categories": ("emissions to air",), "unit": "kilogram", "type": "emission",
+            "code": "co2", "database": bio}
+    nodes = [(3, flow, "co2", bio, "emission")]
+    for i, code in ((4, "elec"), (5, "steel")):
+        nodes.append((i, {"name": code, "location": "CH", "unit": "kilogram", "type": "processwithreferenceproduct",
+                          "reference product": code, "code": code, "database": proc}, code, proc, "processwithreferenceproduct"))
+    for i, data, code, db, kind in nodes:
+        con.execute("INSERT INTO activitydataset VALUES (?, ?, ?, ?, ?)", (i, pickle.dumps(data), code, db, kind))
+    edges = [("steel", (proc, "steel"), "production", 1.0), ("elec", (proc, "elec"), "production", 1.0),
+             ("steel", (proc, "elec"), "technosphere", 2.0), ("elec", (bio, "co2"), "biosphere", 0.5)]
+    for output, source, kind, amount in edges:
+        exchange = {"input": source, "output": (proc, output), "type": kind, "amount": amount, "unit": "kilogram",
+                    "loc": np.float64(amount), "uncertainty type": 0}
+        con.execute("INSERT INTO exchangedataset (data, input_code, input_database, output_code, output_database, type) "
+                    "VALUES (?, ?, ?, ?, ?, ?)", (pickle.dumps(exchange), source[1], source[0], output, proc, kind))
+    con.commit()
+    con.close()
+    files = {
+        "databases.json": json.dumps({bio: {"backend": "sqlite", "format": "Ecospold1", "depends": []},
+                                      proc: {"backend": "sqlite", "format": "Ecospold1", "depends": [bio]}}).encode(),
+        "methods.json": json.dumps([[["Ecological Scarcity 2021", "Global warming"], {"unit": "Pt", "abbreviation": "gw.1"}],
+                                    [["Ecological Scarcity 2021", "Noise"], {"unit": "Pt", "abbreviation": "noise.1"}]]).encode(),
+        "intermediate/gw.1.pickle": pickle.dumps([(3, 40.0)]),
+        "intermediate/noise.1.pickle": pickle.dumps([]),
+        "lci/databases.db": db_file.read_bytes(),
+    }
+    with tarfile.open(path, "w:gz") as tar:
+        for name, data in files.items():
+            info = tarfile.TarInfo(f"BAFU-2025-v2.4bb5b387/{name}")
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+    return path
+
+
+def test_a_remote_project_into_a_project(toy_project, tmp_path, monkeypatch, capsys):
+    """BAFU added to a project that has its own databases and methods: both stay, BAFU's methods
+    have their own name, and its scores are those of the archive."""
+    import bw2calc as bc
+    import bw2data as bd
+
+    from lca_viewer import sources
+
+    downloads = tmp_path / "downloads"
+    downloads.mkdir()
+    bafu_archive(downloads / "bafu.tar.gz")
+    monkeypatch.setattr(sources, "remote_projects", lambda: {"BAFU-2025-v2": "bafu.tar.gz"})
+    before = set(bd.databases), set(bd.methods)
+
+    assert importing.install_remote_project(toy_project, "BAFU-2025-v2", downloads) == ["BAFU-biosphere", "BAFU"]
+    assert before[0] < set(bd.databases) and before[1] < set(bd.methods)
+    assert bd.databases["BAFU"]["format"] == "Ecospold1" and bd.databases["BAFU"]["depends"] == ["BAFU-biosphere"]
+    assert bd.get_node(database="BAFU", code="steel")["type"] == "processwithreferenceproduct"
+    assert not bd.Method(("BAFU-2025-v2", "Ecological Scarcity 2021", "Noise")).load()
+
+    lca = bc.LCA({bd.get_node(database="BAFU", code="steel"): 1}, method=("BAFU-2025-v2", "Ecological Scarcity 2021", "Global warming"))
+    lca.lci()
+    lca.lcia()
+    assert lca.score == pytest.approx(2 * 0.5 * 40)
+
+    capsys.readouterr()
+    importing.install_remote_project(toy_project, "BAFU-2025-v2", downloads)  # already there: nothing written
+    assert "already in" in capsys.readouterr().out
+    with pytest.raises(SystemExit, match="No project 'nothing'"):
+        importing.install_remote_project(toy_project, "nothing", downloads)
+
+
+def test_a_project_archive_runs_no_code(tmp_path):
+    import io
+    import os
+    import pickle
+
+    class Payload:
+        def __reduce__(self):
+            return os.system, ("echo no",)
+
+    with pytest.raises(pickle.UnpicklingError, match="not allowed"):
+        importing._PlainUnpickler(io.BytesIO(pickle.dumps(Payload()))).load()
 
 
 def test_inputs_take_the_unit_of_the_process_they_link_to(toy_project):

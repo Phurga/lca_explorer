@@ -94,7 +94,7 @@ projects Brightway and Activity Browser use, so changes show there too:
   Swiss LCI database of BAFU/UVEK, 60 MB, with the Ecological Scarcity 2021
   methods; USEEIO, forwast, the ecoinvent biospheres), or a backup file
   (`.tar.gz`) you downloaded or made with `bw2io.backup_project_directory`.
-- **+ Add database** on a project, from one of three sources:
+- **+ Add database** on a project, from one of these sources:
   - **ecoSpold2**: an ecoSpold2 release (the ecoinvent `.7z` archive or the
     folder it was unpacked to; about 10 minutes for ecoinvent).
   - **SimaPro CSV**: a SimaPro CSV export (e.g. Agribalyse), linked to the
@@ -105,6 +105,11 @@ projects Brightway and Activity Browser use, so changes show there too:
     own (a JSON file in randonneur's format). If some inputs or flows can't
     be linked, nothing is written and they are listed, unless you chose
     *Import without them*.
+  - **BAFU**: the Swiss LCI database of BAFU/UVEK, downloaded from
+    [files.brightway.dev](https://files.brightway.dev) (60 MB) into the project,
+    with its 21 Ecological Scarcity 2021 methods, named `BAFU-2025-v2, …`. It
+    has its own elementary flows, so the project's other methods score nothing
+    on it, and its methods score nothing on the other databases.
   - **ecoinvent**: a release downloaded with your ecoinvent account (log in
     once; kept in the system's credential store if you tick *Remember*).
 
