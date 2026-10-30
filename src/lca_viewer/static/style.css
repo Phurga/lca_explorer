@@ -207,6 +207,11 @@ section { display: flex; flex-direction: column; min-height: 0; border-right: 1p
 }
 .tree .toggle:hover { color: var(--accent); }
 .tree .label { overflow: hidden; text-overflow: ellipsis; }
+/* M: a process allocated from a multi-output one (a co-product) */
+.mf-badge {
+  flex: none; font: 600 10px/14px system-ui, sans-serif; min-width: 14px; height: 14px; padding: 0 2px; text-align: center;
+  border: 1px solid var(--accent); border-radius: 3px; color: var(--accent); cursor: help;
+}
 .tree .loc { color: var(--muted); margin-left: 4px; }
 .tree tr.group .label { color: var(--group); font-weight: 500; }
 /* A group's colour (set per row) runs down the left of the group and of the rows in it */

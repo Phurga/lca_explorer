@@ -191,6 +191,8 @@ def from_brightway(project: str, database: str, methods: list[tuple], log=None) 
             "unit": [records[i].get("unit") for i in activity_ids],
             "isic": [_classification(records[i].get("classifications"), "ISIC") for i in activity_ids],
             "cpc": [_classification(records[i].get("classifications"), "CPC") for i in activity_ids],
+            # allocated from a multi-output process (a co-product), as multifunctional's allocation makes them
+            "multifunctional": [bool(records[i].get("mf_parent_key")) for i in activity_ids],
         }
     )
 

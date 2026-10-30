@@ -84,6 +84,7 @@ def test_dataset_with_coproducts_is_allocated_and_builds(project):
     shared = 5 * 0.1 + 4 * 0.5 + 3 * 0.2 + 3  # electricity, feed, manure treatment, direct CO2
     milk = acts.index[(acts["database"] == "my datasets") & (acts["reference_product"] == "milk")][0]
     meat = acts.index[(acts["database"] == "my datasets") & (acts["reference_product"] == "meat")][0]
+    assert acts.loc[[milk, meat], "multifunctional"].all() and not acts.loc[acts["database"] == "bg", "multifunctional"].any()
     assert np.isclose(model.score(milk)[0], 0.8 * shared / 10)
     assert np.isclose(model.score(meat)[0], 0.2 * shared / 2)
 
