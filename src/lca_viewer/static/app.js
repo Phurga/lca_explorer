@@ -5235,7 +5235,52 @@ function CompareDifference({ results, base, target, setTarget, unitLabel, names,
     </table>`;
 }
 
-function CompareMethods({ results, base, info, methods, setMethods, family, setFamily, sorted, setSorted }) {
+// The impact methods of the comparison, in one list nested by family: a tick for each method (or the whole family) shown in
+// the *Impact categories* heat map, and a round mark for the one method of *Compare contribution* and *Difference*
+function MethodTree({ info, main, setMain, selected, setSelected }) {
+  const [text, setText] = useState("");
+  const [open, setOpen] = useState(() => new Set([info.methods[main].name[0]]));
+  const families = useMemo(() => {
+    const map = new Map();
+    info.methods.forEach((m, i) => map.set(m.name[0], [...(map.get(m.name[0]) || []), i]));
+    return [...map];
+  }, [info]);
+  const words = text.toLowerCase().split(/\s+/).filter(Boolean);
+  const matches = (i) => !words.length || words.every((w) => info.methods[i].name.join(" ").toLowerCase().includes(w));
+  const ticked = new Set(selected);
+  const toggleOpen = (family) => setOpen((o) => { const next = new Set(o); next.has(family) ? next.delete(family) : next.add(family); return next; });
+  const tick = (indices, on) => setSelected(on ? [...new Set([...selected, ...indices])] : selected.filter((i) => !indices.includes(i)));
+  return html`
+    <input class="method-filter" placeholder="Filter the methods" value=${text} onInput=${(e) => setText(e.target.value)} aria-label="Filter the methods" />
+    <div class="method-tree">
+      ${families.map(([family, indices]) => {
+        const shown = indices.filter(matches);
+        if (!shown.length) return null;
+        const expanded = open.has(family) || words.length > 0;
+        const n = shown.filter((i) => ticked.has(i)).length;
+        return html`
+          <div class="method-family" key=${family}>
+            <div class="method-head">
+              <button class="caret" onClick=${() => toggleOpen(family)} aria-expanded=${expanded} aria-label=${`${expanded ? "Fold" : "Unfold"} ${family}`}>${expanded ? "▾" : "▸"}</button>
+              <input type="checkbox" checked=${n === shown.length} ref=${(el) => el && (el.indeterminate = n > 0 && n < shown.length)}
+                onChange=${(e) => tick(shown, e.target.checked)} aria-label=${`All of ${family}`} title="The whole family in Impact categories" />
+              <span class="name" onClick=${() => toggleOpen(family)}>${family}</span>
+              <span class="muted count">${n}/${shown.length}</span>
+            </div>
+            ${expanded && shown.map((i) => html`
+              <div class="method-row" key=${i}>
+                <input type="checkbox" checked=${ticked.has(i)} onChange=${(e) => tick([i], e.target.checked)}
+                  aria-label=${`${methodLabel(info.methods[i])} in Impact categories`} title="Shown in Impact categories" />
+                <span class="name" title=${methodLabel(info.methods[i])} onClick=${() => tick([i], !ticked.has(i))}>${info.methods[i].name.slice(1).join(" | ") || family}</span>
+                <input type="radio" class="main" name="main-method" checked=${i === main} onChange=${() => setMain(i)}
+                  aria-label=${`${methodLabel(info.methods[i])}: the method of Compare contribution and Difference`} title="The method of Compare contribution and Difference" />
+              </div>`)}
+          </div>`;
+      })}
+    </div>`;
+}
+
+function CompareMethods({ results, base, info, methods, sorted, setSorted }) {
   const rows = useMemo(() => {
     const list = methods.map((k, j) => {
       const changes = results.map((r) => relative(r.totals[j], results[base].totals[j]));
@@ -5273,14 +5318,13 @@ function CompareMethods({ results, base, info, methods, setMethods, family, setF
     download("comparison-methods.csv", [header, ...lines].join("\n"), "text/csv");
   };
   return html`
-    <${MethodChoice} info=${info} family=${family} setFamily=${setFamily} selected=${methods} setSelected=${setMethods} />
     <div class="row">
       <label><input type="checkbox" checked=${sorted} onChange=${(e) => setSorted(e.target.checked)} /> Largest difference first</label>
       <span style="flex:1"></span>
       <button onClick=${exportCsv}>Export CSV</button>
     </div>
     ${methods.length === 0
-      ? html`<div class="empty">Select methods to compare.</div>`
+      ? html`<div class="empty">Tick the methods to show in the list on the left, by family or one by one.</div>`
       : html`
         <p class="note">Total score of each functional unit in the ${methods.length} impact categories chosen, as a change against the baseline
           (orange: higher, green: lower; the colour stops at ±100 %). The values are in the tooltip and the CSV.</p>
@@ -5297,7 +5341,6 @@ function ComparisonView({ info, tabs, compare, setCompare }) {
   const method = compare.method ?? baseline?.state.method ?? info.default_method;
   const rule = compare.rule || "direct";
   const groupsFrom = compare.groupsFrom === undefined ? baseline?.id : compare.groupsFrom;
-  const family = compare.family ?? info.methods[method].name[0];
   const panel = compare.panel || "groups";
   const toggle = (id) => set({ chosen: chosen.some((t) => t.id === id) ? chosen.filter((t) => t.id !== id).map((t) => t.id) : [...chosen.map((t) => t.id), id] });
 
@@ -5305,8 +5348,8 @@ function ComparisonView({ info, tabs, compare, setCompare }) {
   // as flow groups, as in the Group contributions tab); they are changed in the Group rules panel here
   const rules = tabs.find((t) => t.id === groupsFrom)?.state.rules;
   const { groups, flowGroups, order } = useMemo(() => namedGroups(rules || []), [rules]);
-  // The methods of the heat map: those ticked, from the family of the method to begin with
-  const heatMethods = compare.methodsSel ?? info.methods.flatMap((m, i) => (m.name[0] === family ? [i] : []));
+  // The methods of the heat map: those ticked, the family of the method to begin with
+  const heatMethods = compare.methodsSel ?? info.methods.flatMap((m, i) => (m.name[0] === info.methods[method].name[0] ? [i] : []));
   // What the bars are split into: groups, the tabs' displayed trees (asked of /api/rows tab by tab; /api/compare then
   // only gives the totals) or elementary flows
   const basis = compare.basis || "groups";
@@ -5366,8 +5409,10 @@ function ComparisonView({ info, tabs, compare, setCompare }) {
             </div>`;
           })}
         </div>
-        <h3>Impact method</h3>
-        <${MethodSelect} methods=${info.methods} value=${method} onChange=${(m) => set({ method: m })} />
+        <h3>Impact methods</h3>
+        <p class="method-legend muted"><input type="checkbox" checked disabled aria-hidden="true" /> in <i>Impact categories</i>
+          <input type="radio" class="main" checked disabled aria-hidden="true" /> in <i>Compare contribution</i> and <i>Difference</i></p>
+        <${MethodTree} info=${info} main=${method} setMain=${(m) => set({ method: m })} selected=${heatMethods} setSelected=${(m) => set({ methodsSel: m })} />
         ${basis === "groups" && html`
           <h3>Groups</h3>
           <label class="compare-field">Rules of
@@ -5414,8 +5459,8 @@ function ComparisonView({ info, tabs, compare, setCompare }) {
             : panel === "difference" ? html`<${CompareDifference} results=${results} base=${base} target=${target} setTarget=${(t) => set({ target: t })}
                 unitLabel=${unitLabel} names=${names} zoom=${compare.zoom} setZoom=${(zoom) => set({ zoom })}
                 basis=${basis} setBasis=${(b) => set({ basis: b })} limit=${limit} setLimit=${(n) => set({ limit: n })} />`
-            : html`<${CompareMethods} results=${results} base=${base} info=${info} methods=${heatMethods} setMethods=${(m) => set({ methodsSel: m })} family=${family}
-                setFamily=${(f) => set({ family: f })} sorted=${!!compare.sorted} setSorted=${(sorted) => set({ sorted })} />`}
+            : html`<${CompareMethods} results=${results} base=${base} info=${info} methods=${heatMethods}
+                sorted=${!!compare.sorted} setSorted=${(sorted) => set({ sorted })} />`}
         </div>`}
       </div>
     </div>`;

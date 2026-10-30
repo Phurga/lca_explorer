@@ -106,9 +106,11 @@ API in `src/lca_viewer/server.py`.
     group, row or flow (largest first; orange adds, green takes away; the steps add up to the
     difference exactly). *Zoom on the steps* (on by default when the difference is
     under 25 % of the totals) starts the axis near the steps; the totals are then cut.
-  - *Impact categories*: a heat map of tabs × the methods chosen as in *Several methods*
-    of *Process contribution* (a family, *All of family* / *None*, each method ticked or
-    not; the 25 EF categories to begin with), each cell the change against the baseline
+  - *Impact categories*: a heat map of tabs × the methods ticked in the **method list on
+    the left**, the one place where methods are chosen: nested by family (fold, tick a
+    whole family or single methods; a filter box searches them). A tick means "in this
+    heat map" (the family of the first method to begin with); the round orange mark is
+    the one method of *Compare contribution* and *Difference*. Each cell is the change against the baseline
     (the colour stops at ±100 %; values in the tooltip), optionally with the largest
     difference first.
   - *Group rules*: the rules of the tab chosen in *Rules of*, to edit (see *By groups*).

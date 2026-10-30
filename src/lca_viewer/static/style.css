@@ -273,6 +273,19 @@ section { display: flex; flex-direction: column; min-height: 0; border-right: 1p
 .rules li input.swatch::-webkit-color-swatch { border: none; border-radius: 4px; }
 .rules li input.swatch::-moz-color-swatch { border: none; border-radius: 4px; }
 /* Discreet switch of the group colours, in the side panel's tab bar */
+/* The methods of the comparison, nested by family: a tick (heat map) and a round orange mark (the single method) each */
+.method-filter { width: 100%; box-sizing: border-box; margin-bottom: 4px; }
+.method-legend { font-size: 11px; margin: 0 0 4px; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; }
+.method-tree { max-height: 46vh; overflow: auto; border: 1px solid var(--border); border-radius: 6px; padding: 2px 4px; font-size: 12px; }
+.method-head, .method-row { display: flex; align-items: center; gap: 5px; padding: 1px 2px; }
+.method-head { font-weight: 600; position: sticky; top: 0; background: var(--panel); z-index: 1; }
+.method-head .name, .method-row .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.method-row { padding-left: 24px; }
+.method-row:hover { background: var(--hover); }
+.method-head .caret { border: none; background: none; padding: 0 3px; color: var(--muted); }
+.method-head .count { font-weight: 400; font-size: 11px; }
+.method-tree input[type=checkbox], .method-legend input[type=checkbox] { accent-color: var(--accent); }
+.method-tree input.main, .method-legend input.main { accent-color: var(--bar-negative); }
 .compare-rules-note { padding: 8px 16px 0; background: var(--panel); font-size: 12px; }
 .rules li.dragging { opacity: 0.4; }
 .rules li button.icon-btn { display: inline-flex; align-items: center; padding: 3px 6px; }
