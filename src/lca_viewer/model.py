@@ -17,6 +17,7 @@ and lets the tree be expanded lazily, node by node, at no extra cost.
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -24,24 +25,36 @@ import pandas as pd
 import scipy.sparse as sp
 
 
+# The server answers requests in several threads, and a Pardiso solver (also a second one, for
+# another matrix) is not safe to use from two at once: overlapping solves return wrong numbers.
+_SOLVER_LOCK = threading.RLock()
+
+
 def _factorized_solver(matrix: sp.csc_matrix):
-    """Return ``solve(rhs)`` for ``matrix @ x = rhs``, with ``rhs`` 1D or 2D."""
+    """Return ``solve(rhs)`` for ``matrix @ x = rhs``, with ``rhs`` 1D or 2D (safe to call from threads)."""
     try:
         from pypardiso import PyPardisoSolver
 
         solver = PyPardisoSolver()
         csr = sp.csr_matrix(matrix)
-        solver.factorize(csr)
+        with _SOLVER_LOCK:
+            solver.factorize(csr)
 
         def solve(rhs):
-            return solver.solve(csr, np.asarray(rhs, dtype=float))
+            with _SOLVER_LOCK:
+                return solver.solve(csr, np.asarray(rhs, dtype=float))
 
         return solve
     except ImportError:
         from scipy.sparse.linalg import splu
 
         lu = splu(sp.csc_matrix(matrix))
-        return lambda rhs: lu.solve(np.asarray(rhs, dtype=float))
+
+        def solve(rhs):
+            with _SOLVER_LOCK:
+                return lu.solve(np.asarray(rhs, dtype=float))
+
+        return solve
 
 
 # Exchange cache (SQLite): one column per common field, named as in Brightway, other fields in
