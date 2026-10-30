@@ -156,6 +156,42 @@ def _normalise(text: pd.Series) -> pd.Series:
     return text.str.lower().str.replace(r"[,;:()\[\]/]", " ", regex=True).str.split().str.join(" ")
 
 
+CODE_FIELDS = ("location", "isic", "isic_division", "cpc", "cpc_section")
+
+
+def field_options(frame: pd.DataFrame, field: str, text: str = "", limit: int = 200) -> dict:
+    """The distinct values of ``field`` with how many rows have each, for the helper of the filter
+    builder. Code fields carry what the code stands for (``name``): a location's country, the name of an
+    ISIC or CPC class (written in the data after the code, which is the ``value``; ``full`` is the
+    whole text) or division or section. ``total`` counts all the matches of ``text`` (in the value or
+    the name), ``items`` the first ``limit``."""
+    from .codes import CPC_SECTIONS, ISIC_DIVISIONS, location_name
+
+    counts = frame[field].dropna().astype(str).value_counts()
+    counts = counts[counts.index.str.strip() != ""]  # activities without a classification have a blank division
+    items = []
+    for value, n in counts.items():
+        if field in ("isic", "cpc"):
+            code, _, name = value.partition(":")
+            items.append({"value": code.strip(), "name": name.strip(), "count": int(n), "full": value})
+        elif field in CODE_FIELDS:
+            name = {"location": location_name, "isic_division": ISIC_DIVISIONS.get, "cpc_section": CPC_SECTIONS.get}[field](value)
+            items.append({"value": value, "name": name or "", "count": int(n)})
+        else:
+            items.append({"value": value, "count": int(n)})
+    if text:
+        t = text.lower()
+        items = [it for it in items if t in it["value"].lower() or t in it.get("name", "").lower()]
+        items.sort(key=lambda it: (not it["value"].lower().startswith(t), it["value"].lower() != t, it.get("name", "") or it["value"]))
+    elif field == "location":
+        items.sort(key=lambda it: (it["name"] or it["value"]).lower())
+    elif field in CODE_FIELDS:
+        items.sort(key=lambda it: it["value"])
+    else:
+        items.sort(key=lambda it: (-it["count"], it["value"]))
+    return {"field": field, "named": field in CODE_FIELDS, "total": len(items), "items": items[:limit]}
+
+
 def suggest_values(activities: pd.DataFrame, field: str, text: str = "", limit: int = 100) -> list[str]:
     """Distinct values of ``field`` containing ``text``, prefix matches first."""
     values = pd.Series(activities[field].dropna().astype(str).unique())

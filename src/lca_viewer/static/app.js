@@ -385,11 +385,113 @@ function useValues(field, text, flows) {
   return values;
 }
 
+// The (i) of a filter condition: what its field can hold. Locations come with the country or region (to find the
+// code of a country), ISIC and CPC with the names of their codes, the others with their values and how many
+// activities have each. A short list (unit, activity type, …) also shows when the pointer rests on the button;
+// a click keeps any list open, with a box to search it, and a click on a row fills the value in.
+// Children drawn in a box of the page itself (not clipped or moved by a transformed parent such as the search
+// panel). Mouse presses in it stay in it, so that the panels closing on a press elsewhere keep their place.
+function BodyPortal({ children }) {
+  const host = useRef(null);
+  if (!host.current) {
+    host.current = document.createElement("div");
+    host.current.addEventListener("mousedown", (e) => e.stopPropagation());
+  }
+  useEffect(() => {
+    document.body.appendChild(host.current);
+    return () => { render(null, host.current); host.current.remove(); };
+  }, []);
+  useEffect(() => { render(children, host.current); });
+  return null;
+}
+
+const SHORT_FIELDS = new Set(["unit", "activity_type", "flow_type", "database", "compartment"]);
+// ISIC and CPC classes are written "code:name" in the data, so a code is matched on the start of it
+const CLASS_FIELDS = new Set(["isic", "cpc"]);
+
+function FieldHelp({ condition, flows, onPick }) {
+  const { field } = condition;
+  const [pinned, setPinned] = useState(false);
+  const [hover, setHover] = useState(false);
+  const [text, setText] = useState("");
+  const [found, setFound] = useState(null);
+  const [at, setAt] = useState(null);
+  const button = useRef(null), leave = useRef(null), focusInput = useRef((el) => el && el.focus());
+  const short = SHORT_FIELDS.has(field);
+  const shown = pinned || (short && hover);
+  useEffect(() => { setFound(null); setText(""); setPinned(false); setHover(false); }, [field]);
+  useEffect(() => {
+    if (!shown) return;
+    const box = button.current.getBoundingClientRect();
+    const width = Math.min(400, window.innerWidth - 16), top = box.bottom + 4;
+    setAt({ left: Math.max(8, Math.min(box.left, window.innerWidth - width - 8)), top, width, maxHeight: Math.max(160, window.innerHeight - top - 12) });
+  }, [shown]);
+  useEffect(() => {
+    if (!shown) return;
+    const timer = setTimeout(() => {
+      request(`/api/options/${field}?q=${encodeURIComponent(text)}&limit=300${flows ? "&target=flows" : ""}`)
+        .then(setFound).catch(() => setFound({ items: [], total: 0, named: false }));
+    }, found ? 150 : 0);
+    return () => clearTimeout(timer);
+  }, [shown, field, text, flows]);
+  useEffect(() => {
+    if (!pinned) return;
+    const away = (e) => { if (!button.current?.parentElement.contains(e.target)) setPinned(false); };  // presses in the menu do not get here
+    const esc = (e) => { if (e.key === "Escape") { e.stopPropagation(); setPinned(false); } };
+    document.addEventListener("mousedown", away);
+    document.addEventListener("keydown", esc, true);
+    return () => { document.removeEventListener("mousedown", away); document.removeEventListener("keydown", esc, true); };
+  }, [pinned]);
+  const pick = (item) => {
+    onPick(item);
+    setPinned(false);
+    setHover(false);
+  };
+  const items = found?.items || [];
+  return html`
+    <span class="help" onMouseEnter=${() => { clearTimeout(leave.current); setHover(true); }}
+          onMouseLeave=${() => { clearTimeout(leave.current); leave.current = setTimeout(() => setHover(false), 200); }}>
+      <button ref=${button} class=${`help-btn ${pinned ? "on" : ""}`} aria-label=${`Values of ${fieldLabel(field, flows)}`} aria-expanded=${shown}
+        title=${CLASS_FIELDS.has(field) || field === "location" || field.endsWith("division") || field.endsWith("section") ? "Codes and what they stand for" : "The values of this field"}
+        onClick=${() => setPinned(!pinned)}>i</button>
+      ${shown && at && html`<${BodyPortal}>
+        <div class="help-menu" role="dialog" aria-label=${`Values of ${fieldLabel(field, flows)}`}
+             onMouseEnter=${() => { clearTimeout(leave.current); setHover(true); }}
+             onMouseLeave=${() => { clearTimeout(leave.current); leave.current = setTimeout(() => setHover(false), 200); }}
+             style=${{ left: `${at.left}px`, top: `${at.top}px`, width: `${at.width}px`, maxHeight: `${at.maxHeight}px` }}>
+          ${!short && html`<input ref=${focusInput.current} placeholder=${found?.named ? "Search a code or a name" : "Search"} value=${text} onInput=${(e) => setText(e.target.value)} aria-label="Search the values" />`}
+          <div class="help-list">
+            ${!found ? html`<div class="muted help-note">…</div>`
+              : !items.length ? html`<div class="muted help-note">No value${text ? " matches" : ""}.</div>`
+              : html`<table>${items.map((it) => html`
+                  <tr key=${it.value} onClick=${() => pick(it)} title=${it.full || it.value}>
+                    <td class="code">${it.value}</td>
+                    ${found.named && html`<td class="what">${it.name}</td>`}
+                    <td class="num muted">${it.count}</td>
+                  </tr>`)}</table>`}
+          </div>
+          ${found && found.total > items.length && html`<div class="muted help-note">${items.length} of ${found.total}: search to narrow the list.</div>`}
+        </div><//>`}
+    </span>`;
+}
+
 function Condition({ condition, fields, flows, onChange, onRemove }) {
   const listId = useMemo(() => `values-${++conditionIds}`, []);
   // For "is one of", suggest values for the item being typed
   const typed = condition.op === "in" ? condition.value.split(",").pop().trim() : condition.value;
   const values = useValues(condition.field, typed, flows);
+  // A value chosen in the (i): added to the list of "is one of"; for ISIC and CPC the code, matched on its start
+  // (the data reads "0111:Growing of …"; "is not" has to be given the whole text)
+  const pick = (item) => {
+    const { field, op, value } = condition;
+    if (CLASS_FIELDS.has(field)) {
+      if (op === "ne") onChange({ ...condition, value: item.full });
+      else onChange({ ...condition, value: item.value, op: op === "contains" || op === "regex" ? op : "startswith" });
+    } else if (op === "in") {
+      const list = value.split(",").map((v) => v.trim()).filter(Boolean);
+      onChange({ ...condition, value: (list.includes(item.value) ? list : [...list, item.value]).join(", ") });
+    } else onChange({ ...condition, value: item.value });
+  };
   return html`
     <div class="row condition">
       <select value=${condition.field} onChange=${(e) => onChange({ ...condition, field: e.target.value })} aria-label="Field">
@@ -403,6 +505,7 @@ function Condition({ condition, fields, flows, onChange, onRemove }) {
       <datalist id=${listId}>
         ${values.map((v) => html`<option value=${condition.op === "in" ? condition.value.replace(/[^,]*$/, (condition.value.includes(",") ? " " : "") + v) : v} />`)}
       </datalist>
+      <${FieldHelp} condition=${condition} flows=${flows} onPick=${pick} />
       <button onClick=${onRemove} aria-label="Remove condition">×</button>
     </div>`;
 }

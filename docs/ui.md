@@ -180,7 +180,20 @@ API in `src/lca_viewer/server.py`.
   the location: `electricity low voltage fr`) and/or **filters** built with
   the same query builder as grouping rules (location, activity type, ISIC,
   CPC, product, …, with value suggestions). Filters alone browse the
-  database (e.g. all `RER` market groups). Results show the match count,
+  database (e.g. all `RER` market groups). The **(i)** after the value of a
+  condition (search filters and group rules alike, for processes and flows) opens the
+  values of its field with how many activities have each (`GET /api/options/{field}`):
+  for a *location*, the country or region of each code (`codes.py`: ISO 3166 countries,
+  ecoinvent regions such as `RER`, states and provinces of the US, Canada, Brazil and
+  China, searched by code or name: type "brazil" to find `BR`); for *ISIC* and *CPC*
+  classes the names that the data writes after the code, for an *ISIC division* and a
+  *CPC section* their standard names; for the others the values (product, activity
+  name: with a box to search them). A short list (unit, activity type, product /
+  waste, database, compartment) also shows when the pointer rests on the (i). A click
+  on a row fills the value in (added to the list of *is one of*; for ISIC and CPC
+  the code with *starts with*, since the data reads `0111:Growing of cereals …`).
+  The menu is drawn on the page itself, outside the filter panel, which stays open.
+  Results show the match count,
   highlighted words, location chips; ↑/↓/Enter to choose (Ctrl/⌘+Enter or
   Ctrl/⌘-click: in a new tab), Esc to close.
   Ranking (`query.search`, punctuation ignored): exact name, exact product,

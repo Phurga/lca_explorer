@@ -21,7 +21,7 @@ from pydantic import BaseModel
 from .analysis import (OTHER, flow_contribution, flow_contributors, group_contributors, main_path, matched,
                        supply_chain_contribution)
 from .model import LCAModel
-from .query import derived_activities, derived_flows, evaluate, search, suggest_values
+from .query import derived_activities, derived_flows, evaluate, field_options, search, suggest_values
 from .tree import Tree
 from .view import View
 
@@ -293,6 +293,14 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
         if field not in (FLOW_FIELDS if target == "flows" else QUERY_FIELDS):
             raise HTTPException(404, f"Unknown field {field}")
         return suggest_values(flows if target == "flows" else activities, field, q, limit)
+
+    @app.get("/api/options/{field}")
+    def options(field: str, q: str = "", limit: int = 200, target: str | None = None):
+        """The values of a filter field with how many activities (flows) have each and, for codes
+        (location, ISIC, CPC), what they stand for: the helper of the filter builder."""
+        if field not in (FLOW_FIELDS if target == "flows" else QUERY_FIELDS):
+            raise HTTPException(404, f"Unknown field {field}")
+        return field_options(flows if target == "flows" else activities, field, q, limit)
 
     @app.post("/api/rows")
     def rows(state: ViewState):
