@@ -18,8 +18,8 @@ configuration to keep in sync.
   absolute impact, all in one colour (groups and merged rows are not told
   apart by colour: the label says what they are); negative contributions in
   orange.
-- **Several methods (100 %)**: one 100 % stacked bar per selected method
-  (default: the current method's family, e.g. the 25 EF 3.1 categories). The
+- **Several methods (100 %)**: one 100 % stacked bar per method shown together
+  (ticked in the Methods menu; default: the current method's family, e.g. the 25 EF 3.1 categories). The
   frontier is the same for all methods; segments are the 11 largest rows for
   the current method plus "n others", to keep the legend readable.
 
@@ -72,7 +72,7 @@ rich-text labels with `containLabel`).
 
 ## Next
 
-- Compare several functional units: first version done as the *Compare* mode
+- Compare several processes: first version done as the *Compare* mode
   ([ui.md](ui.md)), by grouping rules rather than node ids. Still to do: the
   aligned tree diff, flow-level differences, uncertainty.
 - Regional chart / map: supply × direct impacts by location (phase 5).

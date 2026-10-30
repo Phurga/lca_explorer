@@ -70,21 +70,25 @@ API in `src/lca_viewer/server.py`.
   (`GET /api/brightway/dataset`, read from the SQLite file).
 - **Mode switch** (top bar, at the right: **View / Compare / Edit**; keys v, c, e).
 - **Compare mode** (the middle button): the workspace and the side
-  panel give way to a comparison of the functional units of the open tabs (the
-  tabs stay mounted, so nothing is lost when going back). Left: the tabs to
-  compare (tick them; the radio marks the **baseline**, the others are read against
-  it) and the impact method. Tabs are named by what tells them apart (the place when
+  panel give way to a comparison of the processes of the open tabs (the
+  tabs stay mounted, so nothing is lost when going back). The tabs to
+  compare are ticked in the **Processes** tab of the left panel, the first one (the radio
+  marks the **baseline**, the others are read against it; all tabs by default); the impact
+  methods and the group rules are those of the workspace (see **Methods and Groups**
+  below). Decision: a *Compared* column of its own in this mode was a third place for
+  settings that the panel already holds, so the panel lists the tabs, and a strip over the
+  panels keeps the attribution and the notes. Tabs are named by what tells them apart (the place when
   they share the process). Three panels, each with CSV export. The first two split the
   bars the same way, chosen with the switch **By groups / By tree / By flows** (shared
   by both):
-  - *By groups*: the named rules of one tab's *Group rules* (process rules as groups,
+  - *By groups*: the named rules of the workspace's rule set (process rules as groups,
     flow rules as flow groups, as in *Group contributions*), and the attribution (*own
     emissions of each group*, or *whole supply chain below the first match*, see
-    [grouping.md](grouping.md)). The rules are edited in the fourth panel, *Group rules*
-    (link under the groups on the left): it is the *Group rules* tab of the tab chosen
-    in *Rules of*, the same rules, so a change there is seen in its tab and the other way
-    round, without leaving Compare mode. A tab counts by
-    its functional unit and amount; its cut-off, expansion, merges and substitutions do
+    [grouping.md](grouping.md)). The rules are edited in the *Groups* panel on the left (link under
+    the groups): the same rule set as in the tabs that follow it, so a change there is seen in
+    them and the other way round, without leaving Compare mode; a tab with rules of its own is not read (the
+    page says so). A tab counts by
+    its process and amount; its cut-off, expansion, merges and substitutions do
     not enter (`POST /api/compare` works on the matrices, each entry split exactly into
     the groups and *other*; the page warns when a tab has substitutions, or when the
     units differ).
@@ -92,7 +96,7 @@ API in `src/lca_viewer/server.py`.
     own view: expansion, groups, merges, restored rows, substitutions, cut-off, at the
     comparison's method): its expanded rows are split, the others are bars. Bars are
     lined up by process (wherever it is in the tree; its direct emissions, flows and
-    others row go with it); the functional unit of each tab is the same bar whatever
+    others row go with it); the process of each tab is the same bar whatever
     process it is. A process expanded in one tab and collapsed in another shows as its
     inputs on one side and as one bar on the other, so shape the trees alike.
   - *By flows*: the elementary flows of the whole inventory (`basis: "flows"`), one per
@@ -106,14 +110,11 @@ API in `src/lca_viewer/server.py`.
     group, row or flow (largest first; orange adds, green takes away; the steps add up to the
     difference exactly). *Zoom on the steps* (on by default when the difference is
     under 25 % of the totals) starts the axis near the steps; the totals are then cut.
-  - *Impact categories*: a heat map of tabs × the methods ticked in the **method list on
-    the left**, the one place where methods are chosen: nested by family (fold, tick a
-    whole family or single methods; a filter box searches them). A tick means "in this
-    heat map" (the family of the first method to begin with); the round orange mark is
-    the one method of *Compare contribution* and *Difference*. Each cell is the change against the baseline
+  - *Impact categories*: a heat map of tabs × the methods ticked in the *Methods* panel
+    (the methods shown together; the family of the first method to begin with); the
+    active method is the one of *Compare contribution* and *Difference*. Each cell is the change against the baseline
     (the colour stops at ±100 %; values in the tooltip), optionally with the largest
     difference first.
-  - *Group rules*: the rules of the tab chosen in *Rules of*, to edit (see *By groups*).
   Decision: a mode of its own, not a panel of the side panel: the side panel shows
   one tab, and a comparison needs several. Tabs, not a new kind of object, so that
   a comparison is made of what is already open. Groups instead of tree rows so that
@@ -159,7 +160,7 @@ API in `src/lca_viewer/server.py`.
   `/api/brightway` lists `locked` per database and `/api/brightway/dataset` says whether a process is
   locked, which disables its fields, Edit and Delete.
 - **Tabs and panes** (like a notes app such as Obsidian): each tab is one
-  functional unit with its own tree, method, cut-off, rules and merges. Tabs
+  process with its own tree, method, cut-off, rules and merges. Tabs
   sit on top of their pane: **+** opens an empty tab (the search box takes
   the focus; method, cut-off and tree-wide rules come from the tab it was
   opened from), × or middle-click closes, drag to reorder. Drag a tab onto
@@ -167,8 +168,8 @@ API in `src/lca_viewer/server.py`.
   quarter to split it (side by side or one above the other); the dividers
   between panes can be dragged. The two buttons at the right of a tab bar
   split right / down with a *copy* of the active tab, e.g. to compare one
-  functional unit under two methods. *Open in new tab* in the right-click
-  pop-up opens a process as the functional unit of a new tab.
+  process under two methods. *Open in new tab* in the right-click
+  pop-up opens a process as the process of a new tab.
   Decision: one shared **side panel** on the right (process and flow
   contribution, group rules, group contributions), showing the active tab of the pane clicked
   last, as in Obsidian's sidebars, rather than one per pane: panes stay wide
@@ -179,19 +180,58 @@ API in `src/lca_viewer/server.py`.
   renders its panels into its own slot of the side panel (a small portal), so
   a tab keeps its panel state (current tab, chart choices) when hidden.
 - **Top bar**: in the middle, the **search** of a process, like a command palette
-  (Ctrl/⌘ + K focuses it; Enter makes the result the functional unit of the tab in
-  focus, Ctrl/⌘ + Enter opens it in a new tab), and the **View options** switch.
-  View options shows or folds away, in all tabs and pop-ups at once, the options of
-  the views: the header (amount, impact method (all 762 ecoinvent methods, grouped by
-  family), display cut-off), the toolbar (List / Tree / Sankey, Collapse, Reset view) and
-  the view bar. The switch is common (and remembered); the options are those of each tab
-  or pop-up, which have their own.
-- **Header** (per tab, with View options): amount, impact method, display cut-off.
-- **Search**: free words (each must appear in the name or product, or equal
-  the location: `electricity low voltage fr`) and/or **filters** built with
+  (Ctrl/⌘ + K focuses it; Enter makes the result the process of the tab in
+  focus, Ctrl/⌘ + Enter opens it in a new tab); the mode switch is at the right.
+- **Status bar** (bottom of the page). Decision: the **View options** and **Shortcuts**
+  buttons took room in the top bar for what one rarely changes; they are icons at the right
+  of the status bar. *View options* (sliders; key v in View mode) opens a **pane above the
+  status bar** with the options of **the tab in focus**, the one of the window (split pane)
+  used last (the pane names it, and its window): *Display* (List / Tree / Sankey, Collapse,
+  Reset view), *Cut-off*, *View file* (Save, Load, Copy) and *Rows* (group by product, split
+  by flow type, hide others, names, colours, columns). Each tab has its own options, so in a
+  split the windows can show the same process in a list and as a Sankey; the pane follows the
+  window clicked. The options of the last tab changed are what a new tab starts with. The
+  pane is not shown in Compare mode, stays open until hidden (× or the same key), and is
+  remembered. The tabs have no header any more: the options were above each tree, and now
+  are in one place. *Shortcuts* (keyboard) lists the keys. At the left, the icon that shows
+  or hides the left panel, and the active method and the rule set in use, which open it.
+- **Left panel: Processes, Methods and Groups** (hidden and shown with its icon, the
+  status bar's, the edge of the page or Ctrl/⌘ + ←; the right panel with Ctrl/⌘ + →;
+  resizable, in every mode). *Processes* lists the tabs open: the **amount** of the
+  process of each (it was in the tab's header), the tick for the ones compared in
+  Compare mode, the round mark for the baseline and a × that closes the tab. The tabs are grouped
+  in a frame for each window (split pane), the one used last in the accent colour, a click on a
+  name shows the tab in its window. Decision: the impact
+  methods and the group rules are chosen once for the workspace and **shared by all
+  tabs**, not per tab and per panel as before (a method list in the header, another in the
+  *Process contribution* panel and a third in Compare mode; rules copied from tab to tab,
+  which then drifted apart). A first version let a tab have its own (a link in its header);
+  it is dropped for now, which keeps the page simpler, and can come back. *Methods* is one
+  list nested by family (fold, filter box): the round mark is the
+  **active method** (tree, charts, totals, comparison), the ticks the methods **shown
+  together** (the *Several methods* chart, the *Impact categories* heat map; default: the
+  family of the method). *Groups* lists the **rule sets** (*New*, *Copy*, *Rename*,
+  *Delete*); one is in use, and its rules are built below the list (the form that was in
+  the side panel's *Group rules* tab, now here: it shows the rules of the tab in focus, and
+  those of the workspace's set in Compare mode). The **Rule set** header and
+  **Active rules** carry an (i) with what the texts said; a rule shows one line of its text, the whole
+  rule in a tooltip. Rules under one row of a tree (*Only under the selected row*) mean
+  nothing to other trees, so they stay in their tab (marked *this tab only*). *Reset view*
+  clears a tab's own groups, merges and names, not the shared set. Loading a view file
+  applies its tree, not its method or its set of rules (a notice says so). The explorer
+  inside a pop-up takes the method of its tab, with rules of its own.
+  Kept per database in `localStorage` (by method name, so a rebuilt model finds them);
+  a workspace saved before takes the method and rules of its first tab; rules that other
+  tabs had of their own are dropped.
+- **Search**: the box of the top bar is the value of the first **filter**, which starts
+  as *activity name* *contains* (what is typed fills it in, and editing it in the panel
+  changes the box; its field and operator can be changed), built with
   the same query builder as grouping rules (location, activity type, ISIC,
-  CPC, product, …, with value suggestions). Filters alone browse the
-  database (e.g. all `RER` market groups). The **(i)** after the value of a
+  CPC, product, …, with value suggestions), to which more filters are added. Filters alone browse the
+  database (e.g. all `RER` market groups). Decision: one way to search instead of free
+  words next to the filters; free words matched the name, the product or a location
+  code together (`electricity low voltage fr`), which is now a name filter and a
+  location filter. The **(i)** after the value of a
   condition (search filters and group rules alike, for processes and flows) opens the
   values of its field with how many activities have each (`GET /api/options/{field}`):
   for a *location*, the country or region of each code (`codes.py`: ISO 3166 countries,
@@ -284,12 +324,12 @@ API in `src/lca_viewer/server.py`.
   product*), no merges and no custom names. Changing the cut-off clears pins and moved rows.
   Both show a notice saying what they removed; Ctrl/⌘+Z brings it back.
 - **Keyboard** (the tree clicked last; not while typing in a field). The
-  **Shortcuts** button of the top bar lists these keys, those of the pop-ups
+  **Shortcuts** icon of the status bar lists these keys, those of the pop-ups
   and those of the search fields (`SHORTCUTS` in `app.js`); the panels
   themselves carry no key hints (what a tab of the side panel shows is in a popup on its
   name). Four keys work anywhere (not while typing, in a
   pop-up or in a dialog): **v** goes to View mode, and in View mode
-  shows or hides the view options; **e** goes to Edit mode (a Brightway-built database;
+  shows or hides the view options pane; **Ctrl/⌘ + ←** and **→** hide or show the left and the right panel; **e** goes to Edit mode (a Brightway-built database;
   once in Edit mode, **e** is the tree's, below); **c** goes to Compare mode; **s** goes to
   the search of the top bar (as Ctrl/⌘ + K). The key of the
   exchange pop-up is **i** (info), which was **c** before.
@@ -307,10 +347,10 @@ API in `src/lca_viewer/server.py`.
   | m | merge the selection, or unmerge a selected merged row |
   | g | one group: ungroup it (a "group by product" becomes an exception, put back by its regroup chip or by g on one of its processes); one process: put back its ungrouped product group, else group its same-named siblings under the product name, else nothing; several rows: group them (named after the product when they all deliver one, else "group N") |
   | r | rename the selected row (display name only) |
-  | Enter | make the selected process the functional unit of the tab |
+  | Enter | make the selected process the process of the tab |
   | e | in Edit mode: open the form of the selected process (outside Edit mode: switch to it, see below) |
   | t / w | open a new tab like this one / close this tab |
-  | Ctrl/⌘ + Enter | open the selected process as the functional unit of a new tab |
+  | Ctrl/⌘ + Enter | open the selected process as the process of a new tab |
   | Ctrl/⌘ + Z | undo the last change to the tree |
   | Esc | clear the selection |
   | Backspace | in a pop-up: back to the previous one |
@@ -384,7 +424,7 @@ API in `src/lca_viewer/server.py`.
   → expands a row (or goes to its first child), ← collapses it (or goes to the row it
   hangs from; where a row does not use ←/→ they switch panel), Space opens the
   process's pop-up, **i** the pop-up of the exchange the row stands for, and **Enter**
-  makes it the functional unit of the tab (the pop-up closes), **Ctrl/⌘+Enter** the one of a new tab. Expanding an
+  makes it the process of the tab (the pop-up closes), **Ctrl/⌘+Enter** the one of a new tab. Expanding an
   exchange or an alternative lists its own inputs; expanding a user, the activities
   using it. Esc or Space with no row selected closes the pop-up; Backspace goes back.
   **Used by** (the activities consuming its product — or, for a waste
@@ -392,7 +432,7 @@ API in `src/lca_viewer/server.py`.
   product and, largest first, the amount each takes in this functional
   unit's supply chain and its share; *go to*
   to open the tree at it), the ecoinvent description, included activities, time period, classifications,
-  authors and file; actions "Use as functional unit" and "Open in new tab".
+  authors and file; actions "Use as process" and "Open in new tab".
   **Alternatives** lists the other activities producing the same product
   with their cumulative impact per unit, lowest first (rows like the others;
   below an expanded one, its inputs with their impact and share of it).
@@ -405,11 +445,11 @@ API in `src/lca_viewer/server.py`.
   every input is listed), method, groups, merges, pins and names are not shared with
   the tab, nor with another pop-up, and are kept while the pop-up stays on the
   process. Its defaults differ from the tab's: full names, *Split by flow type* on, every input
-  listed (cut-off); its options (with *View options*) are the header, Collapse, Reset view, *Group
+  listed (cut-off); its options (above its list) are the header, Collapse, Reset view, *Group
   by product* and *Split by flow type* only. Space, **i** and the **(i)** of a
   process or flow row replace the pop-up with that process's, that exchange's or
   that flow's pop-up (←/Backspace comes back, the explorer then starts afresh);
-  **Enter** makes the process the functional unit of the tab, **Ctrl/⌘+Enter** of a new tab. *Reference product exchange* (production
+  **Enter** makes the process the process of the tab, **Ctrl/⌘+Enter** of a new tab. *Reference product exchange* (production
   volume, price, carbon and water content, dry mass, …) is in *Description*; comments,
   uncertainty (distribution, σ with and without pedigree), pedigree scores, formula
   and variable name of an exchange are in its exchange pop-up. Exchanges are stored in the cached
@@ -445,7 +485,7 @@ API in `src/lca_viewer/server.py`.
     bars, or several methods as 100 % stacked bars; CSV export. See
     [charts.md](charts.md).
   - *Flow contribution*: the score split by elementary flow: the whole
-    inventory of the functional unit (B·s) times the current method's
+    inventory of the process (B·s) times the current method's
     characterisation factors, so it sums to the total. *By substance*
     sums the compartments of a substance (one row per name and unit), *By
     flow* keeps them apart. Bar chart of the 25 largest |impacts| (the rest
@@ -457,7 +497,7 @@ API in `src/lca_viewer/server.py`.
     Right-click a substance or flow for its pop-up (below). API:
     `/api/flows`, `/api/flows/contributors` (`analysis.flow_contribution`,
     `flow_contributors`).
-  - *Group rules*: active rules (reorder, **edit** — the form below is filled in with
+  - *Group rules* (in the **left panel**, *Groups*, not in the side panel): active rules (reorder, **edit** — the form below is filled in with
     the rule, with *Save rule* and *Cancel*; a group made from selected rows or a nested
     query can only be renamed —, remove; the eye switches a rule off and on without losing
     it, crossed out while it is off; what rules do is in the **(i)** next to *Active rules*;
@@ -504,7 +544,7 @@ Decision: own tidy-tree layout and SVG rendering instead of a graph library
 (ECharts `tree` series, d3-hierarchy, …). The layout is ~40 lines (a parent
 is centred on its children, depth sets the other axis), and owning the SVG gives full control over boxes with impact
 bars, per-edge widths, selection and grouping interactions — which the
-ECharts tree series does not offer. Opening a functional unit zooms to a
+ECharts tree series does not offer. Opening a process zooms to a
 readable 60 % centred on the root rather than fitting a large tree into an
 unreadable thumbnail; "Fit" shows everything. The view does not re-fit on
 each expansion, so the user keeps their place.
@@ -547,7 +587,7 @@ so tabs and splits come back on reload; a view saved before tabs existed
 opens as the first tab. A tab moved to another pane is rebuilt from its
 saved state (selection and undo are not kept).
 
-**Save ▾** (in the toolbar, hidden with the view options) downloads the view as JSON; the arrow menu offers *Load view…*
+**Save ▾** (in the view options pane) downloads the view as JSON; the arrow menu offers *Load view…*
 and *Copy view as JSON*. Files are `version` 2: `cutoff` is a fraction, as in
 `/api/rows` (0.05 for the 5 % shown in the page); version 1 files stored the
 percentage and still load. The `labels` of a file (`p:<activity>`, `f:<flow>`,
@@ -555,19 +595,19 @@ percentage and still load. The `labels` of a file (`p:<activity>`, `f:<flow>`,
 the name as `custom`. `GET /api/lookup?name=&location=` says whether an
 activity exists, and lists the same name in other places or the closest names
 (`matches`, `same_name`, `similar`). Saved files record the model (title, size), the
-functional unit's name and location, method names and the naming settings,
+process's name and location, method names and the naming settings,
 besides positions. Node ids are positions in the model, so on load, if the
-functional unit is not at the same position (view saved from another model
+process is not at the same position (view saved from another model
 or database version), it is found by name and location and only the
-position-free parts are applied (functional unit, amount, method, cut-off,
+position-free parts are applied (process, amount, method, cut-off,
 rules scoped everywhere, names); expansions, pins, moved rows and merges are
 dropped, and the notice says so. Loading can be undone with Ctrl/⌘+Z.
 
 **Undo** (Ctrl/⌘+Z): each change of the tree — groups,
 ungroups, merges, pins, moved rows, names, cut-off, amount, method, display
-settings and a functional unit change — is a step, and undo goes back one step
+settings and a process change — is a step, and undo goes back one step
 at a time. Expanding and collapsing are not steps of their own: they are kept
-with the step they fall in. A tab's first functional unit has nothing to go
+with the step they fall in. A tab's first process has nothing to go
 back to. Steps are kept per tab and not saved.
 
 Expansion semantics: a group that hides an expanded member opens by itself,

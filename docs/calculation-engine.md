@@ -64,7 +64,8 @@ persisted (TODO, phase 4).
 `LCAModel` only holds `A`, `B`, characterisation vectors and metadata
 dataframes. It does not depend on Brightway: importers (Brightway now,
 direct ecoSpold2 / openLCA later) produce an `LCAModel`. The model can be
-cached to disk (`save` / `load`, npz + pickle) — loading ecoinvent from the
+cached to disk (`save` / `load`, npz + pickle; `G`, whose 762 solves take about 10 s on ecoinvent, is kept as
+`G.npy` with a `G.json` of the files it was made from, and computed again when they change) — loading ecoinvent from the
 Brightway project takes ~4 s.
 
 Restrictions (for now):

@@ -14,7 +14,7 @@
 1. Feedback from use on real projects (foreground databases on top of
    ecoinvent): label/amount display, grouping presets that practitioners want.
 2. Saved views keyed on activity codes instead of matrix indices.
-3. ~~Compare several functional units in one chart~~: first version done (*Compare*
+3. ~~Compare several processes in one chart~~: first version done (*Compare*
    mode: contribution by group, difference, impact categories). Next: aligned
    tree diff, flow-level diff, what-ifs (substitutions) in a comparison.
 4. "Transparent markets" option.

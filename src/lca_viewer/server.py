@@ -217,7 +217,14 @@ def _layout(model: LCAModel) -> str:
 def create_app(model: LCAModel, title: str = "", default_root: str | None = None) -> FastAPI:
     """``default_root`` is ``"activity name|location"``."""
     app = FastAPI(title="lca_viewer")
-    model.G  # factorise at start-up rather than on the first request
+    # G is read from its cache, or computed (10 s on ecoinvent), before the first tree is asked for. A model loaded from
+    # disk does it in a thread, so that the page opens meanwhile; a model in memory (tests) at once.
+    if model._directory is not None:
+        import threading
+
+        threading.Thread(target=lambda: model.G, daemon=True).start()
+    else:
+        model.G
     activities = derived_activities(model)
     flows = derived_flows(model)
     root = _find(activities, *default_root.split("|", 1)) if default_root else None
@@ -714,7 +721,7 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
             path = main_path(model, start, req.product, req.method, blocked=matched(model, req.groups))
         path = path or main_path(model, start, req.product, req.method)
         if path is None:
-            raise HTTPException(404, f"{describe(req.product)['name']} is not in the supply chain of the functional unit")
+            raise HTTPException(404, f"{describe(req.product)['name']} is not in the supply chain of the process")
         try:
             view = View.from_dict(model, req.model_dump())
             target = view.reveal("/".join(map(str, path)))

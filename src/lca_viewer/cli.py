@@ -375,7 +375,7 @@ def main(argv=None) -> None:
     p.add_argument("--title", action="append",
                    help="Title shown in the UI; repeat for each --model, in the same order (default: directory name)")
     p.add_argument("--default-root", action="append",
-                   help='Functional unit shown at start, as "activity name|location"; once, or once per --model')
+                   help='Process shown at start, as "activity name|location"; once, or once per --model')
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8765)
     p.add_argument("--reload", action="store_true", help="Restart automatically when the Python code changes (development)")

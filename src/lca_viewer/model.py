@@ -17,8 +17,11 @@ and lets the tree be expanded lazily, node by node, at no extra cost.
 
 from __future__ import annotations
 
+import json
+import os
 import threading
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -56,6 +59,9 @@ def _factorized_solver(matrix: sp.csc_matrix):
 
         return solve
 
+
+# The files of the model that ``G`` is made from: if one changes (the model was built again), the cached ``G`` is not used
+G_SOURCES = ("A.npz", "B.npz", "methods.pkl")
 
 # Exchange cache (SQLite): one column per common field, named as in Brightway, other fields in
 # ``extra`` (JSON). Comments repeat a lot (ecoinvent 3.9: 100 MB, 8 MB distinct), so are stored once;
@@ -172,6 +178,8 @@ class LCAModel:
         if np.any(self.diagonal == 0):
             raise ValueError("A has zero entries on its diagonal")
         self._G = None
+        self._g_lock = threading.Lock()
+        self._directory = None  # where the model was loaded from: G is kept there too
         self._solve_A = None
         self._solve_AT = None
         self._U = None
@@ -199,12 +207,54 @@ class LCAModel:
 
     @property
     def G(self) -> np.ndarray:
-        """Cumulative impacts per unit of product (products x methods)."""
+        """Cumulative impacts per unit of product (products x methods). Read from the cache next to the model
+        files when it was made from them, else computed (about 10 s for ecoinvent with 762 methods: the solves,
+        not the reading, are what takes time) and cached."""
         if self._G is None:
-            solve = _factorized_solver(self.A.T.tocsc())
-            G = solve(self.U.T)
-            self._G = G.reshape(self.size, -1)
+            with self._g_lock:
+                if self._G is None:
+                    G = self._read_cached_G()
+                    if G is None:
+                        solve = _factorized_solver(self.A.T.tocsc())
+                        G = solve(self.U.T).reshape(self.size, -1)
+                        self._write_cached_G(G)
+                    self._G = G
         return self._G
+
+    def _g_meta(self) -> dict | None:
+        """What the cached ``G`` is made from: the files of the model (size and time) and its shape."""
+        if self._directory is None:
+            return None
+        try:
+            sources = {name: [(self._directory / name).stat().st_size, (self._directory / name).stat().st_mtime_ns]
+                       for name in G_SOURCES}
+        except OSError:
+            return None
+        return {"sources": sources, "shape": [self.size, len(self.methods)]}
+
+    def _read_cached_G(self) -> np.ndarray | None:
+        meta = self._g_meta()
+        if meta is None:
+            return None
+        try:
+            if json.loads((self._directory / "G.json").read_text()) != meta:
+                return None
+            G = np.load(self._directory / "G.npy")
+        except (OSError, ValueError):
+            return None
+        return G if G.shape == tuple(meta["shape"]) else None
+
+    def _write_cached_G(self, G: np.ndarray) -> None:
+        meta = self._g_meta()
+        if meta is None:
+            return
+        try:
+            tmp = self._directory / "G.tmp.npy"
+            np.save(tmp, G)
+            os.replace(tmp, self._directory / "G.npy")
+            (self._directory / "G.json").write_text(json.dumps(meta))
+        except OSError:
+            pass  # a folder that cannot be written: it is computed again next time
 
     def score(self, product: int, amount: float = 1.0) -> np.ndarray:
         """LCIA scores (one per method) for ``amount`` of ``product``."""
@@ -273,6 +323,7 @@ class LCAModel:
             model._details_path = directory / "details.pkl"
         if (directory / "exchanges.sqlite").exists():
             model._exchanges_path = directory / "exchanges.sqlite"
+        model._directory = directory
         return model
 
     @property

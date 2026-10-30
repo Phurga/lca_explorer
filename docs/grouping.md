@@ -62,14 +62,14 @@ still gets an others row. An others row expands like a group: its members
 are rendered under it (parent = the others row) and replace it on the
 frontier, so the chart breaks it down too; merges and group rules on them
 are still scoped to the real parent. Pins and moved rows are part of the saved view and
-are cleared when the functional unit changes.
+are cleared when the process changes.
 
 Decision: **changing the cut-off clears pins and moved rows** (with an Undo
 notice that also restores the previous cut-off). Pins are exceptions to one
 particular cut-off; kept across changes they made a raised cut-off look
 ignored ("Show all" pins every member), and moved rows mixed confusingly
 with a different set of cut-off rows. **Reset view** does the same plus
-collapsing the tree, keeping grouping rules, functional unit, method and
+collapsing the tree, keeping grouping rules, process, method and
 cut-off (also undoable).
 
 ![Cut-off exceptions](img/cutoff-exceptions.png)
@@ -88,7 +88,7 @@ same product in the same unit (e.g. wheat grain from FR + DE). Members
 sharing a name are listed once: "steel (RER + RoW)", "market for urea
 (RoW + CN)"; different names stay separate ("steel (RER) + iron (DE)"). Merges are
 kept by Reset view and cut-off changes, like groups, and cleared with the
-functional unit.
+process.
 
 A group of processes (named, group-by or by product) has a **merge** chip
 that turns it into a merged process with the same members under the same
@@ -180,7 +180,7 @@ Both rules are exact and sum to 100 % of the score:
 | rule | meaning | computation |
 |---|---|---|
 | `direct_contribution` | each activity's own emissions go to its group | supply vector × direct impacts |
-| `first_match_contribution` | walking down from the functional unit, the first matching activity takes its whole cumulative impact | cut the inputs of matched activities, one extra solve |
+| `first_match_contribution` | walking down from the process, the first matching activity takes its whole cumulative impact | cut the inputs of matched activities, one extra solve |
 
 The first-match rule is computed with linear algebra rather than traversal, so
 it is exact even through loops: with `A_cut` = `A` without the inputs of

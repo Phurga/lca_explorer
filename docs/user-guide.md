@@ -14,15 +14,20 @@ create datasets, add Agribalyse, run it on a shared server, set it up by hand an
 
 ## Using the explorer
 
-- **Tabs**: one functional unit per tab (**+** for a new one). Drag a tab
+- **Tabs**: one process per tab (**+** for a new one). Drag a tab
   onto the edge of a pane to compare side by side or one above the other,
   or use the split buttons at the right of the tab bar; the side panel
   (charts, grouping) follows the pane clicked last and is hidden and shown with
   the side-panel icon (the last button of its tab bar).
-- **Search** a functional unit at the top of the page (words of the name or product,
-  a location code like `fr`, or the filters shown under the box; the **(i)** of a
+- **Search** a process at the top of the page (what you type fills a first filter, *activity name contains*;
+  add filters for the location, product or classification under the box; the **(i)** of a
   filter lists its values and what codes stand for); ↑/↓ and Enter to choose.
-- Pick the **impact method** and a display **cut-off** next to it.
+- Pick the **impact method** in the *Methods* panel of the left panel (the round mark is the
+  active method, the ticks the ones shown together) and the group rules in its *Groups* tab (a rule
+  set shared by all tabs). The **amount** of each process is in its *Processes* tab. The
+  **cut-off** and the other options of the view (List / Tree, names, colours…) are in the pane that
+  the sliders icon of the status bar (or **v**) opens. **Ctrl/⌘ + ←** and **→** hide or show the left and the
+  right panel.
 - **List / Tree** switch the left panel between a table and a node-and-edge
   view. Expand with ▸ or ±.
 - **Group / Merge**: Ctrl/⌘-click sibling rows, then *Group* (bundle them

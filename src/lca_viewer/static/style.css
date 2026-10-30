@@ -56,8 +56,8 @@ input, select {
 }
 input:focus, select:focus, button:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
 
-.app.has-staged { grid-template-rows: auto auto 1fr; }
-.app { display: grid; grid-template-rows: auto 1fr; grid-template-columns: minmax(0, 1fr); height: 100vh; }
+.app.has-staged { grid-template-rows: auto auto 1fr auto; }
+.app { display: grid; grid-template-rows: auto 1fr auto; grid-template-columns: minmax(0, 1fr); height: 100vh; }
 header {
   display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
   padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--panel);
@@ -155,7 +155,6 @@ select.database { max-width: 220px; font-weight: 600; }
 .fu-view { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
 .fu-header { padding: 6px 10px; gap: 6px 10px; }
 .fu-header .fu { min-width: 200px; }
-.fu-header select.method { flex: 1 1 160px; min-width: 120px; }
 .fu-view .toolbar { padding: 5px 10px; }
 .fu-view .toolbar .hint { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .fu-view .view-bar { padding: 2px 10px; }
@@ -173,7 +172,7 @@ select.database { max-width: 220px; font-weight: 600; }
 .edit-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 @media (max-width: 900px) {
   .body { flex-direction: column; }
-  .sidebar { width: auto !important; height: 50vh; border-top: 1px solid var(--border); }
+  .sidebar, .leftbar { width: auto !important; height: 50vh; border-top: 1px solid var(--border); }
   .side-resizer { display: none; }
 }
 section { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--border); }
@@ -262,7 +261,8 @@ section { display: flex; flex-direction: column; min-height: 0; border-right: 1p
   display: flex; gap: 8px; align-items: center; padding: 6px 8px; border: 1px solid var(--border);
   border-radius: 6px; margin-bottom: 6px;
 }
-.rules li .desc { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.rules li .desc { flex: 1; min-width: 0; overflow: hidden; }
+.rules li .desc .line { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rules li small { color: var(--muted); }
 .rules li.disabled .desc { opacity: 0.5; }
 .rules li[draggable="true"] { cursor: grab; }
@@ -286,7 +286,6 @@ section { display: flex; flex-direction: column; min-height: 0; border-right: 1p
 .method-head .count { font-weight: 400; font-size: 11px; }
 .method-tree input[type=checkbox], .method-legend input[type=checkbox] { accent-color: var(--accent); }
 .method-tree input.main, .method-legend input.main { accent-color: var(--bar-negative); }
-.compare-rules-note { padding: 8px 16px 0; background: var(--panel); font-size: 12px; }
 .rules li.dragging { opacity: 0.4; }
 .rules li button.icon-btn { display: inline-flex; align-items: center; padding: 3px 6px; }
 .rules li.disabled button.icon-btn { color: var(--muted); }
@@ -514,6 +513,29 @@ header { gap: 10px; }
 }
 .menu button { border: none; text-align: left; padding: 6px 10px; border-radius: 4px; }
 .menu button:hover:not(:disabled) { background: var(--hover); }
+
+/* Impact methods and group rules: the menus of the top bar, and the chips of a tab's header that follow them */
+.lens-menu .note { margin: 0 0 6px; }
+/* The left panel: Methods and Groups (the group rules of the tab in focus, put in a slot by the tab) */
+.leftbar { flex: none; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--panel); }
+.leftbar .method-tree { max-height: none; border: none; padding: 0; }
+.groups-panel { flex: 1; min-height: 0; overflow: auto; }
+.groups-panel .panel { overflow: visible; flex: none; }
+.side-reopen.left { border-left: none; border-right: 1px solid var(--border); }
+/* The status bar: the panel and its summary at the left, the options of the views and the shortcuts at the right */
+.status-bar { display: flex; align-items: center; gap: 2px; min-width: 0; padding: 1px 8px; border-top: 1px solid var(--border); background: var(--panel); font-size: 12px; }
+.status-bar .spacer { flex: 1; }
+.status-bar button { border: none; background: none; color: var(--muted); border-radius: 4px; padding: 3px 6px; display: inline-flex; align-items: center; }
+.status-bar button:hover { color: var(--text); background: var(--hover); }
+.status-bar button.on { color: var(--accent); }
+.status-bar .status-text { max-width: 40vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+.lens-menu .method-tree { max-height: 50vh; }
+.rule-sets { list-style: none; margin: 0 0 6px; padding: 0; max-height: 30vh; overflow: auto; }
+.rule-sets label { display: flex; align-items: center; gap: 6px; padding: 3px 4px; border-radius: 4px; cursor: pointer; }
+.rule-sets label:hover { background: var(--hover); }
+.rule-sets .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rule-sets input { accent-color: var(--accent); }
+.rules-scope { margin: 0 0 8px; }
 
 /* Whole supply chain: what a group is made of, and "Go to in tree" */
 table.results tr.clickable { cursor: pointer; }
@@ -761,17 +783,15 @@ table.dataset-table td button.link:disabled { opacity: 0.35; cursor: not-allowed
 .app.comparing .top-bar { border-bottom: 3px solid var(--accent); }
 .compare { flex: 1; display: flex; min-width: 0; min-height: 0; }
 .compare > .empty { flex: 1; }
-.compare-side { flex: none; width: 320px; overflow: auto; padding: 12px 16px; background: var(--panel); border-right: 1px solid var(--border); }
-.compare-side h3 { font-size: 13px; margin: 16px 0 6px; }
-.compare-side h3:first-child { margin-top: 0; }
-.compare-side h3 .muted { font-weight: 400; }
-.compare-side select { width: 100%; }
+.compare-info { flex: none; padding: 8px 16px 4px; border-bottom: 1px solid var(--border); font-size: 12px; max-height: 34vh; overflow: auto; }
+.compare-info .note { margin: 0 0 6px; color: var(--muted); }
+.compare-info .compare-field { flex-direction: row; align-items: center; gap: 8px; }
+.compare-info .warning { color: var(--bar-negative); margin: 0 0 6px; }
+.compare-common { margin-bottom: 6px; }
 .compare-tab { display: flex; align-items: center; gap: 6px; padding: 3px 0; }
 .compare-tab.off .name { color: var(--muted); }
 .compare-tab .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .compare-field { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; color: var(--muted); font-size: 12px; }
-.compare-side .chips { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0; }
-.compare-side .warning { color: var(--bar-negative); margin: 8px 0 0; }
 .compare-main { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--panel); }
 .compare-main .panel > .row { margin-bottom: 8px; }
 .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; flex: none; }
@@ -819,3 +839,28 @@ textarea.editing { width: 100%; box-sizing: border-box; }
 .adapters .adapter-file { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 2px 0; }
 .adapters .adapter-add { display: flex; gap: 6px; align-items: flex-start; }
 .adapters .adapter-add .path-input { flex: 1; }
+
+/* Processes panel: the amount under each functional unit; View panel: the options of the tab in focus */
+.process-row { padding: 3px 0 6px; border-bottom: 1px solid var(--border); }
+.process-row .amount-line { display: flex; align-items: center; gap: 6px; padding-left: 22px; color: var(--muted); font-size: 12px; }
+.process-row.off .amount-line { opacity: .6; }
+/* The options of the view: a pane above the status bar */
+.bottom { display: flex; flex-direction: column; min-width: 0; }
+.bottom-pane { max-height: 42vh; overflow: auto; border-top: 1px solid var(--border); background: var(--panel); }
+.bottom-head { display: flex; align-items: center; gap: 8px; padding: 4px 12px 0; }
+.bottom-head .spacer { flex: 1; }
+.bottom-head button { border: none; background: none; padding: 0 6px; color: var(--muted); font-size: 16px; line-height: 1; }
+.view-options { display: flex; flex-wrap: wrap; gap: 4px 32px; padding: 0 16px 8px; align-items: flex-start; }
+.view-options h3 { font-size: 12px; margin: 8px 0 4px; color: var(--muted); font-weight: 600; }
+.view-options .row { margin-bottom: 4px; }
+.view-options .view-bar { padding: 0; }
+/* Processes panel: a frame for each window (pane) of the workspace, the one used last in the accent colour */
+.window-group { border: 2px solid var(--muted); border-radius: 8px; padding: 4px 10px 2px; margin-bottom: 12px; }
+.window-group.focused { border-color: var(--accent); }
+.window-head { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 2px 0 2px; }
+.window-group.focused .window-head { color: var(--accent); }
+.window-group .process-row:last-child { border-bottom: none; }
+.process-row.shown .compare-tab .name { font-weight: 600; }
+.compare-tab .name { cursor: pointer; }
+.compare-tab .close-tab { border: none; background: none; padding: 0 5px; color: var(--muted); font-size: 15px; line-height: 1; }
+.compare-tab .close-tab:hover { color: var(--bar-negative); }

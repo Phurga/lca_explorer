@@ -9,6 +9,22 @@ latest release, new work happens on `dev`.
 
 Changes on `dev`, not released yet.
 
+## 1.1.0 - 2026-10-30
+
+A new layout, and a much faster start.
+
+- **Left panel**: *Processes* (the processes open, grouped by window, with their amount, a close button, and
+  what to compare), *Methods* and *Groups*. The impact methods and the group rules are chosen once and shared by
+  all tabs, instead of per tab and per panel; the group rules are built there, in named rule sets.
+- **Status bar**: the view options (a pane of the tab in focus, also with the key `v`) and the shortcuts moved
+  from the top bar; Ctrl/⌘ + ← and → hide or show the left and the right panel.
+- **Search** is a filter: what is typed fills a first *activity name contains* filter, to which others are added.
+- **Compare mode** takes its processes, baseline, methods and rules from the left panel.
+- The tool speaks of **processes**, no longer of functional units.
+- **Faster start**: the cumulative impacts of every process (what took about 10 s at each start on ecoinvent) are
+  kept next to the model files and read back in a fraction of a second; they are computed in the background the
+  first time. The first start after updating still takes as long as before.
+
 ## 1.0.0 - 2026-10-30
 
 First stable release.

@@ -38,7 +38,7 @@ Each loaded model is mounted at `/db/<key>/` with the API of `create_app`;
   files): close it first. Saved tabs record the layout of their model (a
   hash of the activities, flows and methods in order, `/api/info`'s
   `layout`): restored on a rebuilt model whose positions moved, the
-  functional unit and methods are found again by name, and the expanded
+  process and methods are found again by name, and the expanded
   rows, pins, merges and names are dropped.
 - **Brightway projects** are listed by reading the files directly:
   `projects.db` (project names; the pickled metadata, read with an unpickler
