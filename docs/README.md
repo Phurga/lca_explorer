@@ -4,6 +4,7 @@ One file per theme; each records the decisions taken and why.
 
 | file | topic |
 |---|---|
+| [user-guide.md](user-guide.md) | using the explorer, databases, Agribalyse, shared server, manual setup, tests |
 | [roadmap.md](roadmap.md) | phases, status, next steps |
 | [architecture.md](architecture.md) | overall shape, local-first web app vs Activity Browser plugin |
 | [calculation-engine.md](calculation-engine.md) | cumulative-per-unit matrix `G`, lazy tree, validation results |

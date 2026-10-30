@@ -1,9 +1,9 @@
 """First-time setup, step 0: choose or create the Python environment, install lca_viewer in
-it, then run ``lca-viewer setup`` there (optional ecoinvent unpack, import and model build).
+it, then run ``lca-viewer setup`` there.
 
-Run by setup.cmd / setup.sh with whatever Python they find (conda's base one, or any
-Python 3.7+), so it uses the standard library only. Arguments are passed on to
-``lca-viewer setup`` (e.g. the path of the ecoinvent archive, ``--yes``).
+Run by launch.py (itself started by lca_explorer.cmd) with whatever Python was found (conda's
+base one, or any Python 3.7+), so it uses the standard library only. ``--yes`` takes the default answers; other
+arguments are passed on to ``lca-viewer setup``.
 """
 
 import json
@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parent.parent
 LAST = ROOT / "data" / "python.txt"  # written by lca-viewer setup
 ENV_NAME = "lca_viewer"
 WINDOWS = os.name == "nt"
-YES = "--yes" in sys.argv[1:]
+YES = False  # set by main() from --yes
 
 
 def env_python(prefix) -> Path:
@@ -27,7 +27,7 @@ def env_python(prefix) -> Path:
 
 def env_vars(python) -> dict:
     """Environment to run ``python`` with: a conda env on Windows needs its DLL folders on PATH
-    when it is not activated (same as start.cmd)."""
+    when it is not activated (same as lca_explorer.cmd)."""
     env = dict(os.environ)
     if WINDOWS:
         prefix = Path(python).parent
@@ -85,7 +85,9 @@ def choose(options, default: int) -> int:
         print(f"  Type a number from 1 to {len(options)}")
 
 
-def main() -> int:
+def main(argv) -> int:
+    global YES
+    YES = "--yes" in argv
     sys.stdout.reconfigure(line_buffering=True)  # keep the order with the subprocesses' output when piped
     print("lca_viewer setup\n")
     conda = find_conda()
@@ -160,12 +162,12 @@ def main() -> int:
               "environment usually fixes it.")
         return 1
 
-    return subprocess.run([str(python), "-m", "lca_viewer.cli", "setup", *sys.argv[1:]],
+    return subprocess.run([str(python), "-m", "lca_viewer.cli", "setup", *[a for a in argv if a != "--yes"]],
                           cwd=ROOT, env=env_vars(python)).returncode
 
 
 if __name__ == "__main__":
     try:
-        sys.exit(main())
+        sys.exit(main(sys.argv[1:]))
     except KeyboardInterrupt:
         sys.exit(130)

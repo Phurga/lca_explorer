@@ -1,5 +1,5 @@
 @echo off
-rem Install Miniforge (conda from conda-forge) for the current user, called by setup.cmd.
+rem Install Miniforge (conda from conda-forge) for the current user, called by lca_explorer.cmd.
 rem No admin rights needed; PATH and the default Python are left unchanged.
 rem Installs into %MINIFORGE_DIR%, or %USERPROFILE%\miniforge3.
 setlocal

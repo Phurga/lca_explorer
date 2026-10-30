@@ -1,21 +1,9 @@
 import argparse
 import json
+from pathlib import Path
 
-from lca_viewer.quickstart import Prompt, ask_source, clean_path, find_datasets, parse_release, run
+from lca_viewer.quickstart import find_datasets, run
 from lca_viewer.sources import catalog, register
-
-
-def test_parse_release():
-    assert parse_release("ecoinvent 3.9.1_cutoff_ecoSpold02.7z") == ("3.9.1", "cutoff")
-    assert parse_release("ecoinvent 3.10_apos_ecoSpold02.7z") == ("3.10", "apos")
-    assert parse_release("ecoinvent 3.9.1_consequential_ecoSpold02") == ("3.9.1", "consequential")
-    assert parse_release("Cut-off ecoinvent 3.8") == ("3.8", "cutoff")
-    assert parse_release("ei391_cutoff datasets") == (None, "cutoff")
-
-
-def test_clean_path():
-    assert clean_path('"C:/x y/a.7z"').name == "a.7z"
-    assert clean_path("& 'C:/x y/a.7z'").name == "a.7z"  # dragged onto PowerShell
 
 
 def test_find_datasets(tmp_path):
@@ -39,21 +27,42 @@ def test_register_and_catalog(tmp_path):
     assert catalog(tmp_path / "nothing") == []
 
 
-def test_ecoinvent_is_optional(tmp_path, monkeypatch):
-    assert ask_source(Prompt(yes=True), None) is None  # --yes without an archive: no ecoinvent
-    monkeypatch.setattr("builtins.input", lambda prompt="": "")
-    assert ask_source(Prompt(), None) is None  # Enter skips
-    archive = tmp_path / "ecoinvent 3.9.1_cutoff_ecoSpold02.7z"
-    archive.write_text("")
-    assert ask_source(Prompt(yes=True), str(archive)) == (archive, None)
-
-    # The setup then only records the Python for the start scripts, and offers to start the app
-    started = []
-    monkeypatch.setattr("lca_viewer.cli.main", lambda argv: started.append(argv))
-    run(argparse.Namespace(data=str(tmp_path / "data"), yes=True, source=None))
+def test_setup_only_records_the_python(tmp_path):
+    run(argparse.Namespace(data=str(tmp_path / "data")))
     assert (tmp_path / "data" / "python.txt").exists()
     assert not (tmp_path / "data" / "models.json").exists()
-    assert started == [["serve", "--data", str((tmp_path / "data").resolve()), "--open"]]
+
+
+def test_launcher_sets_up_only_when_needed(tmp_path, monkeypatch):
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+    import bootstrap
+    import launch
+
+    calls = []
+    python = tmp_path / "python"
+    python.write_text("")
+    monkeypatch.setattr(bootstrap, "LAST", tmp_path / "python.txt")
+
+    def fake_setup(args):
+        calls.append(("setup", args))
+        bootstrap.LAST.write_text(str(python), encoding="utf-8")
+        return 0
+
+    monkeypatch.setattr(bootstrap, "main", fake_setup)
+    monkeypatch.setattr(bootstrap, "probe", lambda p: ((3, 12), True))
+    monkeypatch.setattr(launch.subprocess, "run",
+                        lambda cmd, **kw: calls.append(("serve", cmd[3:])) or argparse.Namespace(returncode=0))
+
+    assert launch.main(["--port", "8800"]) == 0  # not set up: setup, then serve with the arguments
+    assert calls == [("setup", []), ("serve", ["serve", "--open", "--port", "8800"])]
+    calls.clear()
+    assert launch.main([]) == 0  # set up: serve only
+    assert calls == [("serve", ["serve", "--open"])]
+    calls.clear()
+    assert launch.main(["setup", "--yes"]) == 0  # again on request
+    assert calls == [("setup", ["--yes"]), ("serve", ["serve", "--open"])]
 
 
 def test_one_brightway_folder(tmp_path, monkeypatch):

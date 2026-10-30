@@ -1,3 +1,6 @@
 # Batch files need CRLF, shell scripts LF, whatever the checkout settings
 *.cmd text eol=crlf
 *.sh text eol=lf
+
+# The launcher is also a shell script (macOS, Linux): LF line endings
+lca_explorer.cmd text eol=lf

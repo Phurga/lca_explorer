@@ -1,21 +1,25 @@
 @echo off
-rem First-time setup on Windows: double-click this file (or drag your ecoinvent .7z onto it, optional).
-rem Finds conda (or offers to install Miniforge), then runs scripts\bootstrap.py, which sets
-rem up the Python environment and the data.
+rem Windows half of lca_explorer.cmd: finds a Python (the app's own once it is set up, else conda's,
+rem offering to install Miniforge), then scripts\launch.py sets up if needed and starts the app.
 setlocal
-cd /d "%~dp0"
+cd /d "%~dp0.."
 if not defined MINIFORGE_DIR set "MINIFORGE_DIR=%USERPROFILE%\miniforge3"
 set "BOOT_PY="
-call :find_conda_python
+if exist data\python.txt set /p BOOT_PY=<data\python.txt
+if defined BOOT_PY if not exist "%BOOT_PY%" set "BOOT_PY="
+if not defined BOOT_PY call :find_conda_python
 if not defined BOOT_PY call :offer_miniforge
 if not defined BOOT_PY call :find_any_python
 if not defined BOOT_PY (
   echo No Python found. Install Miniforge from https://conda-forge.org/download/
-  echo then run setup.cmd again.
+  echo then run lca_explorer.cmd again.
   pause
   exit /b 1
 )
-"%BOOT_PY%" scripts\bootstrap.py %*
+rem A conda environment that is not activated needs its DLL folders on PATH
+for %%i in ("%BOOT_PY%") do set "PREFIX=%%~dpi"
+set "PATH=%PREFIX%;%PREFIX%Library\bin;%PREFIX%Scripts;%PATH%"
+"%BOOT_PY%" scripts\launch.py %*
 if errorlevel 1 pause
 exit /b
 
@@ -27,7 +31,7 @@ for %%d in ("%MINIFORGE_DIR%" "%USERPROFILE%\miniconda3" "%USERPROFILE%\anaconda
 exit /b
 
 :offer_miniforge
-echo conda was not found on this computer. lca_viewer needs it to install Python and its packages.
+echo conda was not found on this computer. LCA Explorer needs it to install Python and its packages.
 echo The setup can install Miniforge (free; conda from conda-forge) in %MINIFORGE_DIR%.
 echo It needs no admin rights and leaves your other software as it is.
 echo.

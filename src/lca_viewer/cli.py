@@ -343,11 +343,8 @@ def main(argv=None) -> None:
     p.add_argument("--code", required=True, help="Code of a process of the dataset")
     p.set_defaults(func=delete_dataset)
 
-    p = sub.add_parser("setup", help="First-time setup; optionally unpacks, imports and builds an ecoinvent ecoSpold2 release")
-    p.add_argument("source", nargs="?", help="ecoSpold2 archive (.7z) or the folder it was unpacked to; asked when omitted (Enter skips ecoinvent)")
-    p.add_argument("--data", default="data", help="Folder for the models and models.json (default: data); "
-                                                  "ecoinvent goes into a project of BRIGHTWAY2_DIR")
-    p.add_argument("--yes", action="store_true", help="Take the default answer to every question (without a source: no ecoinvent)")
+    p = sub.add_parser("setup", help="First-time setup: records the Python that lca_explorer.cmd starts the app with")
+    p.add_argument("--data", default="data", help="Folder for the models and models.json (default: data)")
     p.set_defaults(func=setup)
 
     p = sub.add_parser("serve", help="Serve the explorer; databases are loaded from the page, or with --model")

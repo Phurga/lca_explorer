@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# Install Miniforge (conda from conda-forge) for the current user, called by setup.sh.
+# Install Miniforge (conda from conda-forge) for the current user, called by lca_explorer.cmd.
 # No admin rights needed; shell startup files and the default Python are left unchanged.
 # Installs into $MINIFORGE_DIR, or ~/miniforge3.
 dir="${MINIFORGE_DIR:-$HOME/miniforge3}"

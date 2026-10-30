@@ -1046,7 +1046,7 @@ ${" "}Databases imported afterwards can link to them.</p>
   return null;
 }
 
-// Load database: the models already built (data/models.json, e.g. ecoinvent from the setup) open
+// Load database: the models already built (data/models.json) open
 // in seconds; a database of a Brightway project is first built into a model (once, kept in
 // data/cache). Loads run on the server, the dialog follows them and opens the database when ready.
 // The Brightway projects can also be changed here (new, deleted, restored, databases imported).
@@ -1185,7 +1185,7 @@ function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
       <section>
         <h3>Built models <span class="muted">ready in a few seconds</span></h3>
         ${sources.models.length === 0
-          ? html`<p class="muted">None yet. The setup (lca_explorer.cmd) builds ecoinvent, and every Brightway database you load below is added here.</p>`
+          ? html`<p class="muted">None yet. Every Brightway database you load below is added here.</p>`
           : html`<table class="load-table">
               ${sources.models.map((m) => html`
                 <tr key=${m.path}>
