@@ -1687,7 +1687,9 @@ function ColumnMenu({ at, columns, onChange, onClose }) {
     </div>`;
 }
 
-function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onUngroup, onRegroup, ungroupable, onMergeGroup, onUnpin, onPin, onMoveToOthers, onInfo, onUnmerge, onRevert, view, focus, renaming, onStartRename, onRename, onColumns }) {
+const GROUP_LOCKED = "Grouped by a rule (Group rules tab): the group stays while the rule is active. Disable or remove the rule to ungroup.";
+
+function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onUngroup, onRegroup, ungroupable, groupLocked, onMergeGroup, onUnpin, onPin, onMoveToOthers, onInfo, onUnmerge, onRevert, view, focus, renaming, onStartRename, onRename, onColumns }) {
   const byId = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
   const [columnMenu, setColumnMenu] = useState(null);  // where the columns menu is open: { x, y }
   const shown = new Set(view.columns);
@@ -1757,6 +1759,8 @@ function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onU
                           onClick=${(e) => { e.stopPropagation(); onStartRename(r); }}>✎</button>`}
                       ${r.kind === "group" && ungroupable(r) && html`
                         <button class="chip" onClick=${(e) => { e.stopPropagation(); onUngroup(r); }}>ungroup</button>`}
+                      ${groupLocked(r) && html`
+                        <button class="chip locked" aria-disabled="true" title=${GROUP_LOCKED} onClick=${(e) => e.stopPropagation()}>ungroup</button>`}
                       ${r.regroup && html`
                         <button class="chip" title="Put back in the group by product it was ungrouped from"
                           onClick=${(e) => { e.stopPropagation(); onRegroup(r.regroup); }}>regroup</button>`}
@@ -2052,7 +2056,7 @@ function sankeyMarks({ graph, byId, view, colors, selection, focus, onSelect, on
     })}`;
 }
 
-function TreeGraph({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onUngroup, onRegroup, ungroupable, onMergeGroup, onUnpin, onPin, onMoveToOthers, onInfo, onUnmerge, view, orientation: chosenOrientation, setOrientation, cycles: chosenCycles, setCycles, sankey, focus }) {
+function TreeGraph({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onUngroup, onRegroup, ungroupable, groupLocked, onMergeGroup, onUnpin, onPin, onMoveToOthers, onInfo, onUnmerge, view, orientation: chosenOrientation, setOrientation, cycles: chosenCycles, setCycles, sankey, focus }) {
   const { editing } = useContext(EditorContext);
   // The Sankey is a tree drawn left to right
   const orientation = sankey ? "horizontal" : chosenOrientation;
@@ -2181,6 +2185,8 @@ function TreeGraph({ rows, rootImpact, shareBasis, selection, onToggle, onSelect
                 ${r.kind === "group" && ungroupable(r) && html`
                   <text x=${x + BOX.w - 10} y=${y + 17} class="ungroup" text-anchor="end"
                         onClick=${(e) => { e.stopPropagation(); onUngroup(r); }}>ungroup</text>`}
+                ${groupLocked(r) && html`
+                  <text x=${x + BOX.w - 10} y=${y + 17} class="ungroup locked" text-anchor="end"><title>${GROUP_LOCKED}</title>ungroup</text>`}
                 ${r.regroup && html`
                   <text x=${x + BOX.w - 10} y=${y + 17} class="ungroup" text-anchor="end"
                         onClick=${(e) => { e.stopPropagation(); onRegroup(r.regroup); }}>regroup</text>`}
@@ -4369,6 +4375,8 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
   const manualRuleFor = (groupRow) => rules.findIndex((r) => r.predicate && !r.disabled && r.scope === ownerOf(groupRow) && `${ownerOf(groupRow)}/g:${r.name}` === groupRow.id);
   // A group that can be ungrouped: one of a rule, or one of "group by product"
   const ungroupable = (groupRow) => !!groupRow.by_product || manualRuleFor(groupRow) >= 0;
+  // A group made by a rule that cannot be undone from the row ("group by" rules): it stays while the rule is active
+  const groupLocked = (groupRow) => groupRow.kind === "group" && !ungroupable(groupRow);
   function ungroup(groupRow) {
     if (groupRow.by_product) { setUngrouped(new Set([...ungrouped, groupRow.id])); return; }
     const i = manualRuleFor(groupRow);
@@ -4622,7 +4630,8 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
           ? !bundle.by_rule && !editing && html`<button onClick=${() => unmerge(bundle)} title="Split back into the original processes">Unmerge</button>`
           : html`
             ${bundle.products && !editing && html`<button onClick=${() => mergeRows([bundle])} title="Merge into one process whose inventory is the union of the members'">Merge</button>`}
-            ${ungroupable(bundle) && html`<button onClick=${() => ungroup(bundle)}>Ungroup</button>`}`}
+            ${ungroupable(bundle) && html`<button onClick=${() => ungroup(bundle)}>Ungroup</button>`}
+            ${groupLocked(bundle) && html`<button disabled title=${GROUP_LOCKED}>Ungroup</button>`}`}
         onPart=${(part) => follow(part.flow !== undefined
           ? { flow: part.flow, activities: (bundle.emitters || []).map((m) => m.index) }
           : { index: part.index, row: null, parents: suppliedTo(bundle, rowsById) })} />`;
@@ -4671,10 +4680,10 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
           ${display === "list"
             ? html`<${Tree} rows=${data.rows} rootImpact=${rootImpact} shareBasis=${shareBasisOf(cutoffBasis)} selection=${selection} onToggle=${toggle} onSelect=${select}
                 renaming=${renaming} onStartRename=${startRename} onRename=${rename}
-                onUngroup=${ungroup} onRegroup=${regroup} ungroupable=${ungroupable} onMergeGroup=${(r) => mergeRows([r])} onUnpin=${unpin} onPin=${pinSelected} onMoveToOthers=${moveSelectedToOthers} onInfo=${showInfo} onUnmerge=${unmerge} onRevert=${revertInput} view=${view} focus=${focus}
+                onUngroup=${ungroup} onRegroup=${regroup} ungroupable=${ungroupable} groupLocked=${groupLocked} onMergeGroup=${(r) => mergeRows([r])} onUnpin=${unpin} onPin=${pinSelected} onMoveToOthers=${moveSelectedToOthers} onInfo=${showInfo} onUnmerge=${unmerge} onRevert=${revertInput} view=${view} focus=${focus}
                 onColumns=${(columns) => setView({ ...view, columns })} />`
             : html`<${TreeGraph} rows=${data.rows} rootImpact=${rootImpact} shareBasis=${shareBasisOf(cutoffBasis)} selection=${selection} onToggle=${toggle} onSelect=${select}
-                onUngroup=${ungroup} onRegroup=${regroup} ungroupable=${ungroupable} onMergeGroup=${(r) => mergeRows([r])} onUnpin=${unpin} onPin=${pinSelected} onMoveToOthers=${moveSelectedToOthers} onInfo=${showInfo} onUnmerge=${unmerge} view=${view}
+                onUngroup=${ungroup} onRegroup=${regroup} ungroupable=${ungroupable} groupLocked=${groupLocked} onMergeGroup=${(r) => mergeRows([r])} onUnpin=${unpin} onPin=${pinSelected} onMoveToOthers=${moveSelectedToOthers} onInfo=${showInfo} onUnmerge=${unmerge} view=${view}
                 orientation=${orientation} setOrientation=${setOrientation} cycles=${cycles} setCycles=${setCycles} sankey=${display === "sankey"} focus=${focus} />`}
           ${popups.map(renderPopup)}
           ${selection.size > 1 && html`

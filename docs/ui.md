@@ -198,7 +198,9 @@ API in `src/lca_viewer/server.py`.
   "ungroup" chip to undo; a group of processes, from any rule or "Group by
   product" (whose "ungroup" chip splits just that group back into its
   members, each of which then has a "regroup" chip that bundles them again;
-  turning "Group by product" on again regroups all of them), has a "merge" chip — or select it and click Merge — to turn it into a
+  turning "Group by product" on again regroups all of them; a group made by a "group by"
+  rule, which only its rule can undo, shows the "ungroup" chip greyed and unusable, its
+  tooltip saying that the rule keeps the group), has a "merge" chip — or select it and click Merge — to turn it into a
   merged process), **Merge** (combine their inventories into one
   process, "merged ×" chip to undo — see [grouping.md](grouping.md)). The status bar under the tree sums the selected processes,
   merged processes and groups of processes (a group or merged row counts its

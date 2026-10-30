@@ -233,6 +233,9 @@ section { display: flex; flex-direction: column; min-height: 0; border-right: 1p
 /* not over the name being edited */
 .tree .row-actions.renaming { display: none !important; }
 .tree .row-actions .chip { margin-left: 4px; }
+/* A group made by a rule: the chip shows, but cannot be used (the reason is its tooltip) */
+.tree .chip.locked { color: var(--muted); border-color: var(--border); border-style: dashed; cursor: not-allowed; opacity: .75; }
+.graph .node .ungroup.locked, .graph .node:hover .ungroup.locked { fill: var(--muted); text-decoration: line-through; cursor: not-allowed; }
 .graph .node .ungroup, .graph .node .unmerge, .graph .node .unpin { opacity: 0; }
 .graph .node:hover .ungroup, .graph .node:hover .unmerge, .graph .node:hover .unpin,
 .graph .node.selected .ungroup, .graph .node.selected .unmerge, .graph .node.selected .unpin { opacity: 1; }
