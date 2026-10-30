@@ -6,6 +6,7 @@ base one, or any Python 3.7+), so it uses the standard library only. ``--yes`` t
 arguments are passed on to ``lca-viewer setup``.
 """
 
+import hashlib
 import json
 import os
 import platform
@@ -16,6 +17,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 LAST = ROOT / "data" / "python.txt"  # written by lca-viewer setup
+DEPS = ROOT / "data" / "pyproject.sha"  # hash of pyproject.toml when the packages were last installed
 ENV_NAME = "lca_viewer"
 WINDOWS = os.name == "nt"
 YES = False  # set by main() from --yes
@@ -47,6 +49,27 @@ def probe(python):
         return None
     version, installed = out.stdout.split()
     return tuple(int(x) for x in version.split(".")), installed == "True"
+
+
+def deps_hash() -> str:
+    return hashlib.sha256((ROOT / "pyproject.toml").read_bytes()).hexdigest()
+
+
+def deps_outdated() -> bool:
+    """True when pyproject.toml changed (e.g. by a git pull) since the packages were last installed."""
+    return not DEPS.exists() or DEPS.read_text(encoding="utf-8").strip() != deps_hash()
+
+
+def install(python) -> int:
+    """pip install the app (editable) and its dependencies into ``python``; returns pip's exit code."""
+    # The fast solver (pypardiso) needs Intel MKL: x86-64 only
+    extras = "brightway,fast" if platform.machine().lower() in ("x86_64", "amd64") else "brightway"
+    done = subprocess.run([str(python), "-m", "pip", "install", "-e", f".[{extras}]", "fastapi", "uvicorn", "py7zr"],
+                          cwd=ROOT, env=env_vars(python))
+    if not done.returncode:
+        DEPS.parent.mkdir(exist_ok=True)
+        DEPS.write_text(deps_hash(), encoding="utf-8")
+    return done.returncode
 
 
 def find_conda():
@@ -152,12 +175,8 @@ def main(argv) -> int:
               "then run the setup again. Or type the path of a Python 3.10+ below.")
     python = Path(options[choose(options, default)][1]())
 
-    # The fast solver (pypardiso) needs Intel MKL: x86-64 only
-    extras = "brightway,fast" if platform.machine().lower() in ("x86_64", "amd64") else "brightway"
     print(f"\nInstalling lca_viewer and its dependencies into {python} (a few minutes the first time)...")
-    install = subprocess.run([str(python), "-m", "pip", "install", "-e", f".[{extras}]", "fastapi", "uvicorn", "py7zr"],
-                             cwd=ROOT, env=env_vars(python))
-    if install.returncode:
+    if install(python):
         print("\nThe installation failed (see above). Running the setup again and choosing a new "
               "environment usually fixes it.")
         return 1

@@ -40,6 +40,11 @@ def main(args) -> int:
         if python is None:
             print("\nThe setup did not finish: run lca_explorer again to resume it.")
             return 1
+    elif bootstrap.deps_outdated():
+        print("LCA Explorer was updated: installing its packages again.\n")
+        if bootstrap.install(python):
+            print("\nThe packages could not be updated (see above); starting anyway. "
+                  "lca_explorer setup tries again.")
     print("\nStarting LCA Explorer...")
     try:
         return subprocess.run([str(python), "-m", "lca_viewer.cli", "serve", "--open", *serve_args],

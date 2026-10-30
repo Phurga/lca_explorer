@@ -9,6 +9,8 @@ latest release, new work happens on `dev`.
 
 Changes on `dev`, not released yet.
 
+- Updating with `git pull` reinstalls the packages on the next launch when `pyproject.toml` changed.
+
 ## 1.0.0 - 2026-10-30
 
 First stable release.
