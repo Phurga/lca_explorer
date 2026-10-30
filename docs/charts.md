@@ -72,6 +72,7 @@ rich-text labels with `containLabel`).
 
 ## Next
 
-- Compare several functional units (one bar each, same frontier structure
-  by grouping rules rather than node ids).
+- Compare several functional units: first version done as the *Compare* mode
+  ([ui.md](ui.md)), by grouping rules rather than node ids. Still to do: the
+  aligned tree diff, flow-level differences, uncertainty.
 - Regional chart / map: supply × direct impacts by location (phase 5).

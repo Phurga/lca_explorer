@@ -2443,7 +2443,7 @@ function ProcessRow({ item, above, depth, ancestors, panel }) {
     const rows = () => [...row.closest(".info-body").querySelectorAll("[data-nav]")];
     const go = (to) => { to?.focus({ preventScroll: true }); to?.scrollIntoView({ block: "nearest" }); };
     if (e.key === " ") { used(); panel.onOpen(item); }
-    else if (e.key === "c") { used(); if (exchange) panel.onExchange(item, above); }
+    else if (e.key === "i") { used(); if (exchange) panel.onExchange(item, above); }
     else if (e.key === "Enter") { used(); panel.onUse(item, inTab); }
     else if (e.key === "ArrowRight" && expandable) {
       if (!open) { used(); setOpen(true); return; }
@@ -2649,7 +2649,7 @@ function popupKeys({ tabs, shown, setTab, body, onClose, exchange, explorerKeys 
       used();
       const next = tabs[tabs.findIndex((t) => t.id === shown) + (e.key === "ArrowRight" ? 1 : -1)];
       if (next) { box.focus(); setTab(next.id); }
-    } else if (e.key === " " || (exchange && e.key === "c")) {
+    } else if (e.key === " " || (exchange && e.key === "i")) {
       used();
       onClose();
     }
@@ -2766,7 +2766,7 @@ function suppliedTo(row, rowsById) {
 // processes it is an input of, for its exchange tab
 
 // Two pop-ups of a process: the activity's (Space, right-click: its exchanges, users, alternatives,
-// description, metadata) and the exchange's (c, (i): the amount in this tree and the comment and
+// description, metadata) and the exchange's (i, (i): the amount in this tree and the comment and
 // uncertainty of the input, ``target.exchange``). ``onFollow(target)`` opens another in place.
 function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsById, onClose, onUseAsRoot, onOpenTab, root, amount, onFollow, onGoTo, onBack }) {
   const exchange = !!target.exchange;
@@ -4514,11 +4514,11 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
         else if (rowsById.has(row.parent)) moveTo(rowsById.get(row.parent));
         return true;
       case " ":
-      case "c": {
-        // Space: the row's pop-up (the activity); c: its exchange (comment, uncertainty)
+      case "i": {
+        // Space: the row's pop-up (the activity); i: its exchange (info: comment, uncertainty)
         if (infoTarget) { closeInfo(); return true; }
         const el = treeSection.current?.querySelector(`[data-id="${CSS.escape(row.id)}"]`)?.getBoundingClientRect();
-        showInfo(row, { preventDefault() {}, clientX: el ? el.left + 40 : 200, clientY: el ? el.bottom : 200 }, key === "c");
+        showInfo(row, { preventDefault() {}, clientX: el ? el.left + 40 : 200, clientY: el ? el.bottom : 200 }, key === "i");
         return true;
       }
       case "o":
@@ -4717,6 +4717,359 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
     </div>`;
 }
 
+// ---------------------------------------------------------------- comparison mode
+// The functional units of several tabs side by side: their contribution by group (bars), what
+// makes the difference between two of them (waterfall) and every impact category at once (heat
+// map). All three come from /api/compare, computed on the matrices: the cut-off, expansion,
+// merges and substitutions of a tab do not enter into it, only its functional unit and amount.
+const COMPARE_PANELS = [["groups", "Contribution by group"], ["difference", "Difference"], ["methods", "Impact categories"]];
+const compareColor = (i) => PALETTE[i % PALETTE.length];
+const OTHER_GROUP = "other";
+const relative = (value, base) => (base ? (value - base) / Math.abs(base) : value ? null : 0);
+const signed = (x) => `${x > 0 ? "+" : x < 0 ? "−" : ""}${fmt(Math.abs(x))}`;
+const signedPct = (r) => (r == null ? "n/a" : `${r > 0 ? "+" : r < 0 ? "−" : ""}${Math.abs(r * 100).toFixed(Math.abs(r) < 0.1 ? 1 : 0)} %`);
+const csvQuote = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+
+// Names of the compared tabs: what tells them apart (the place when they share the process, the
+// process when they share the place), with the amount when it is not 1, and a number when two tabs
+// would still read the same. ``full`` always has the process and the place; ``common`` is the name
+// every tab shares, if there is one.
+function compareLabels(tabs) {
+  const roots = tabs.map((t) => t.state.root);
+  const sameName = roots.length > 1 && roots.every((r) => r.name === roots[0].name);
+  const sameLocation = roots.length > 1 && roots.every((r) => r.location === roots[0].location);
+  const amountOf = (t) => (t.state.amount !== 1 ? ` × ${fmtAmount(t.state.amount)}` : "");
+  const base = tabs.map((t, i) => (sameName ? roots[i].location : sameLocation ? roots[i].name : `${roots[i].name} (${roots[i].location})`) + amountOf(t));
+  const seen = new Map();
+  const numbered = (list, i) => {
+    const n = (seen.get(list[i]) || 0) + 1;
+    seen.set(list[i], n);
+    return list.filter((b) => b === list[i]).length > 1 ? `${list[i]} #${n}` : list[i];
+  };
+  const short = Object.fromEntries(tabs.map((t, i) => [t.id, numbered(base, i)]));
+  const full = Object.fromEntries(tabs.map((t, i) => [t.id, `${roots[i].name} (${roots[i].location})${amountOf(t)}`]));
+  return { short, full, common: sameName ? roots[0].name : null };
+}
+
+// The steps from one total to another: the first total, what each group adds or removes (largest
+// first), the second total. A step floats between the running total before and after it.
+function waterfallRows(from, to, names) {
+  const scale = Math.max(Math.abs(from.total), Math.abs(to.total));
+  const steps = names.map((name) => ({ name, delta: (to.groups[name] || 0) - (from.groups[name] || 0) }))
+    .filter((s) => Math.abs(s.delta) > scale * 1e-9)
+    .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
+  const total = (r) => ({ name: r.label, lo: Math.min(0, r.total), hi: Math.max(0, r.total), total: r.total, color: r.color });
+  const rows = [total(from)];
+  let running = from.total;
+  for (const s of steps) {
+    rows.push({ name: s.name, lo: Math.min(running, running + s.delta), hi: Math.max(running, running + s.delta), delta: s.delta });
+    running += s.delta;
+  }
+  rows.push(total(to));
+  return rows;
+}
+
+function CompareBars({ results, base, unitLabel, names, groupColor, mode, setMode }) {
+  const baseTotal = Math.abs(results[base].total);
+  const value = (r, g) => {
+    const v = r.groups[g] || 0;
+    if (mode === "baseline") return baseTotal ? (100 * v) / baseTotal : 0;
+    if (mode === "own") return r.total ? (100 * v) / Math.abs(r.total) : 0;
+    return v;
+  };
+  const option = useMemo(() => {
+    const o = baseOption();
+    o.grid = { ...o.grid, top: 12, bottom: 56, right: 64 };
+    o.legend = { type: "scroll", bottom: 0, textStyle: { color: cssVar("--text") } };
+    o.yAxis = { ...o.yAxis, type: "category", inverse: true, data: results.map((r) => r.label),
+      axisLabel: { color: cssVar("--text"), width: 240, overflow: "truncate" } };
+    o.xAxis = { ...o.xAxis, type: "value", name: mode === "absolute" ? unitLabel : "%",
+      axisLabel: { color: cssVar("--muted"), formatter: mode === "absolute" ? undefined : (v) => `${v}%` } };
+    o.tooltip.formatter = (d) => {
+      const r = results[d.dataIndex], v = r.groups[d.seriesName] || 0;
+      return `${r.label}<br/>${d.marker}${d.seriesName}: <b>${fmt(v)} ${unitLabel}</b> (${pct(r.total ? v / r.total : 0)} of ${fmt(r.total)})`;
+    };
+    o.series = names.map((g) => ({ type: "bar", stack: "total", name: g, itemStyle: { color: groupColor(g) }, data: results.map((r) => value(r, g)) }));
+    return o;
+  }, [results, names, mode, unitLabel]);
+  const exportCsv = () => {
+    const header = ["group", ...results.flatMap((r) => [csvQuote(r.label), csvQuote(`${r.label}: share`)])].join(",");
+    const lines = [...names, "total"].map((g) => [csvQuote(g), ...results.flatMap((r) => {
+      const v = g === "total" ? r.total : r.groups[g] || 0;
+      return [v, r.total ? v / r.total : 0];
+    })].join(","));
+    download("comparison-groups.csv", [`# ${unitLabel}`, header, ...lines].join("\n"), "text/csv");
+  };
+  return html`
+    <div class="row">
+      ${[["absolute", unitLabel], ["baseline", "% of baseline"], ["own", "Each its own 100 %"]].map(([key, label]) => html`
+        <button class=${mode === key ? "primary" : ""} onClick=${() => setMode(key)}>${label}</button>`)}
+      <span style="flex:1"></span>
+      <button onClick=${exportCsv}>Export CSV</button>
+    </div>
+    <${Chart} option=${option} height=${Math.max(200, results.length * 54 + 90)} />
+    <table class="results compare-table">
+      <thead><tr><th>Group <span class="muted">· ${unitLabel}</span></th>
+        ${results.map((r) => html`<th class="num" title=${r.label}><span class="dot" style=${{ background: r.color }}></span>${truncate(r.label, 28)}</th>`)}</tr></thead>
+      <tbody>${names.map((g) => html`
+        <tr key=${g}><td><span class="dot" style=${{ background: groupColor(g) }}></span>${g}</td>
+          ${results.map((r) => html`<td class="num">${fmt(r.groups[g] || 0)} <span class="muted">${pct(r.total ? (r.groups[g] || 0) / r.total : 0)}</span></td>`)}</tr>`)}
+      </tbody>
+      <tfoot>
+        <tr><th>Total</th>${results.map((r) => html`<th class="num">${fmt(r.total)}</th>`)}</tr>
+        <tr><td class="muted">vs baseline</td>${results.map((r, i) => html`<td class="num muted">${i === base ? "baseline" : signedPct(relative(r.total, results[base].total))}</td>`)}</tr>
+      </tfoot>
+    </table>`;
+}
+
+function CompareDifference({ results, base, target, setTarget, unitLabel, names, zoom, setZoom }) {
+  const from = results[base], to = results[target];
+  const rows = useMemo(() => waterfallRows(from, to, names), [from, to, names]);
+  // A small difference is invisible against two totals drawn from zero: zoom on the steps (the totals are cut)
+  const steps = rows.slice(1, -1);
+  const zoomed = steps.length > 0 && (zoom ?? Math.abs(to.total - from.total) < 0.25 * Math.max(Math.abs(from.total), Math.abs(to.total)));
+  const option = useMemo(() => {
+    const o = baseOption();
+    const muted = cssVar("--muted"), up = cssVar("--bar-negative"), down = cssVar("--bar");
+    o.grid = { ...o.grid, top: 12, bottom: 28, right: 90 };
+    o.yAxis = { ...o.yAxis, type: "category", inverse: true, data: rows.map((r) => r.name),
+      axisLabel: { color: cssVar("--text"), width: 240, overflow: "truncate" } };
+    o.xAxis = { ...o.xAxis, type: "value", name: unitLabel };
+    if (zoomed) {
+      const lo = Math.min(...steps.map((s) => s.lo)), hi = Math.max(...steps.map((s) => s.hi)), pad = (hi - lo) * 0.3 || Math.abs(hi) * 0.1;
+      o.xAxis = { ...o.xAxis, min: lo - pad, max: hi + pad,
+        axisLabel: { color: muted, formatter: (v) => String(Number(v.toPrecision(4))) } };
+    }
+    o.tooltip.formatter = (d) => {
+      const r = rows[d.dataIndex];
+      if (r.total !== undefined) return `${r.name}<br/><b>${fmt(r.total)} ${unitLabel}</b>`;
+      const change = to.total - from.total;
+      return `${r.name}<br/><b>${signed(r.delta)} ${unitLabel}</b>${change ? ` (${pct(r.delta / change)} of the difference)` : ""}`;
+    };
+    o.series = [{
+      type: "custom", encode: { x: [1, 2], y: 0 },
+      data: rows.map((r, i) => ({ value: [i, r.lo, r.hi], itemStyle: { color: r.total !== undefined ? muted : r.delta > 0 ? up : down } })),
+      renderItem: (params, api) => {
+        const r = rows[api.value(0)], area = params.coordSys;
+        const a = api.coord([api.value(1), api.value(0)]), b = api.coord([api.value(2), api.value(0)]);
+        const height = api.size([0, 1])[1] * 0.6;
+        const x = Math.max(Math.min(a[0], b[0]), area.x), end = Math.min(Math.max(a[0], b[0]), area.x + area.width);
+        return { type: "group", children: [
+          { type: "rect", shape: { x, y: a[1] - height / 2, width: Math.max(end - x, 1), height }, style: api.style() },
+          { type: "text", style: { text: r.total !== undefined ? fmt(r.total) : signed(r.delta), x: end + 6, y: a[1], textVerticalAlign: "middle", fill: muted, fontSize: 12 } },
+        ] };
+      },
+    }];
+    return o;
+  }, [rows, unitLabel, zoomed]);
+  const change = to.total - from.total;
+  const lead = steps[0];
+  const exportCsv = () => {
+    const lines = steps.map((s) => [csvQuote(s.name), from.groups[s.name] || 0, to.groups[s.name] || 0, s.delta].join(","));
+    download("comparison-difference.csv", [`# ${unitLabel}`, ["group", csvQuote(from.label), csvQuote(to.label), "difference"].join(","),
+      ...lines, ["total", from.total, to.total, change].join(",")].join("\n"), "text/csv");
+  };
+  return html`
+    <div class="row">
+      <span class="muted">From the baseline</span><b title=${from.label}>${truncate(from.label, 40)}</b>
+      <span class="muted">to</span>
+      <select value=${target} onChange=${(e) => setTarget(Number(e.target.value))} aria-label="Compared with the baseline">
+        ${results.map((r, i) => i !== base && html`<option value=${i}>${r.label}</option>`)}
+      </select>
+      <label title="The axis starts near the steps, so that a small difference is visible; the two totals are then cut"><input type="checkbox" checked=${zoomed} disabled=${!steps.length}
+        onChange=${(e) => setZoom(e.target.checked)} /> Zoom on the steps</label>
+      <span style="flex:1"></span>
+      <button onClick=${exportCsv}>Export CSV</button>
+    </div>
+    <p class="note">
+      <b>${truncate(to.label, 50)}</b> is <b>${signedPct(relative(to.total, from.total))}</b> (${signed(change)} ${unitLabel}) against the baseline${lead
+        ? html`; the largest step is <b>${lead.name}</b> (${signed(lead.delta)} ${unitLabel})` : ""}.
+      Orange steps add to the score, green ones take away from it.
+      ${names.length < 2 && " Add groups (left) to see which parts of the supply chain make the difference."}
+    </p>
+    <${Chart} option=${option} height=${Math.max(200, rows.length * 34 + 60)} />
+    <table class="results compare-table">
+      <thead><tr><th>Group</th><th class="num">${truncate(from.label, 24)}</th><th class="num">${truncate(to.label, 24)}</th>
+        <th class="num">Difference</th><th class="num">Of the total difference</th></tr></thead>
+      <tbody>${steps.map((s) => html`
+        <tr key=${s.name}><td>${s.name}</td><td class="num">${fmt(from.groups[s.name] || 0)}</td><td class="num">${fmt(to.groups[s.name] || 0)}</td>
+          <td class="num">${signed(s.delta)}</td><td class="num muted">${change ? pct(s.delta / change) : ""}</td></tr>`)}
+      </tbody>
+      <tfoot><tr><th>Total</th><th class="num">${fmt(from.total)}</th><th class="num">${fmt(to.total)}</th><th class="num">${signed(change)}</th><th></th></tr></tfoot>
+    </table>`;
+}
+
+function CompareMethods({ results, base, info, methods, family, setFamily, sorted, setSorted }) {
+  const rows = useMemo(() => {
+    const list = methods.map((k, j) => {
+      const changes = results.map((r) => relative(r.totals[j], results[base].totals[j]));
+      return { k, j, changes, spread: Math.max(0, ...changes.map((c, i) => (i === base || c == null ? 0 : Math.abs(c)))) };
+    });
+    return sorted ? [...list].sort((a, b) => b.spread - a.spread) : list;
+  }, [results, base, methods, sorted]);
+  const families = [...new Set(info.methods.map((m) => m.name[0]))];
+  const option = useMemo(() => {
+    const o = baseOption();
+    const clip = (c) => (c == null ? 0 : Math.max(-1, Math.min(1, c)));
+    o.grid = { left: 8, right: 16, top: 70, bottom: 44, containLabel: true };
+    o.xAxis = { type: "category", position: "top", data: results.map((r) => r.label), splitArea: { show: false },
+      axisLabel: { color: cssVar("--text"), interval: 0, width: 150, overflow: "truncate" } };
+    o.yAxis = { type: "category", inverse: true, data: rows.map((r) => info.methods[r.k].name.slice(1).join(" | ") || info.methods[r.k].name[0]),
+      axisLabel: { color: cssVar("--text"), width: 320, overflow: "truncate" } };
+    o.visualMap = { min: -1, max: 1, calculable: false, orient: "horizontal", left: "center", bottom: 0, itemWidth: 12, itemHeight: 160,
+      textStyle: { color: cssVar("--muted") }, formatter: (v) => `${v > 0 ? "+" : ""}${Math.round(v * 100)} %`,
+      inRange: { color: [cssVar("--bar"), cssVar("--panel"), cssVar("--bar-negative")] } };
+    o.tooltip.formatter = (d) => {
+      const [c, y] = d.value, row = rows[y], m = info.methods[row.k];
+      const cell = (r, i) => `${i === c ? "<b>" : ""}${truncate(r.label, 40)}: ${fmt(r.totals[row.j])} ${m.unit}${i === base ? " (baseline)" : ` (${signedPct(row.changes[i])})`}${i === c ? "</b>" : ""}`;
+      return `${methodLabel(m)}<br/>${results.map(cell).join("<br/>")}`;
+    };
+    o.series = [{
+      type: "heatmap", itemStyle: { borderColor: cssVar("--panel"), borderWidth: 2 },
+      data: rows.flatMap((row, y) => results.map((_, c) => [c, y, clip(row.changes[c])])),
+      label: { show: true, color: cssVar("--text"), formatter: (d) => (d.value[0] === base ? "baseline" : signedPct(rows[d.value[1]].changes[d.value[0]])) },
+    }];
+    return o;
+  }, [rows, results, base, info]);
+  const exportCsv = () => {
+    const header = ["method", "unit", ...results.flatMap((r) => [csvQuote(r.label), csvQuote(`${r.label}: vs baseline`)])].join(",");
+    const lines = rows.map((row) => [csvQuote(methodLabel(info.methods[row.k])), csvQuote(info.methods[row.k].unit),
+      ...results.flatMap((r, i) => [r.totals[row.j], i === base ? "" : row.changes[i] ?? ""])].join(","));
+    download("comparison-methods.csv", [header, ...lines].join("\n"), "text/csv");
+  };
+  return html`
+    <div class="row">
+      <select value=${family} onChange=${(e) => setFamily(e.target.value)} aria-label="Method family">
+        ${families.map((f) => html`<option value=${f}>${f}</option>`)}
+      </select>
+      <label><input type="checkbox" checked=${sorted} onChange=${(e) => setSorted(e.target.checked)} /> Largest difference first</label>
+      <span style="flex:1"></span>
+      <button onClick=${exportCsv}>Export CSV</button>
+    </div>
+    <p class="note">Total score of each functional unit in the ${methods.length} impact categories of ${family}, as a change against the baseline
+      (orange: higher, green: lower; the colour stops at ±100 %). The values are in the tooltip and the CSV.</p>
+    <${Chart} option=${option} height=${Math.max(240, rows.length * 28 + 130)} />`;
+}
+
+function ComparisonView({ info, tabs, compare, setCompare }) {
+  keyboardOwner = null;  // the trees are out of sight: their keys stay off
+  const set = (patch) => setCompare((c) => ({ ...c, ...patch }));
+  const { short: labels, full: fullLabels, common } = compareLabels(tabs);
+  const chosen = (compare.chosen || tabs.map((t) => t.id)).map((id) => tabs.find((t) => t.id === id)).filter(Boolean);
+  const baseline = chosen.find((t) => t.id === compare.baseline) || chosen[0];
+  const base = Math.max(0, chosen.indexOf(baseline));
+  const method = compare.method ?? baseline?.state.method ?? info.default_method;
+  const rule = compare.rule || "direct";
+  const groupsFrom = compare.groupsFrom === undefined ? baseline?.id : compare.groupsFrom;
+  const quick = compare.quick || [];
+  const family = compare.family ?? info.methods[method].name[0];
+  const panel = compare.panel || "groups";
+  const toggle = (id) => set({ chosen: chosen.some((t) => t.id === id) ? chosen.filter((t) => t.id !== id).map((t) => t.id) : [...chosen.map((t) => t.id), id] });
+
+  // The groups of the comparison: the rules of one tab (named rules on processes, and on elementary flows
+  // as flow groups, as in the Group contributions tab), and the quick groups ticked here
+  const rules = tabs.find((t) => t.id === groupsFrom)?.state.rules;
+  const { groups, flowGroups } = useMemo(() => {
+    const active = (rules || []).filter((r) => r.predicate && !r.disabled);
+    const groups = Object.fromEntries(active.filter((r) => r.target !== "flows").map((r) => [r.name, r.predicate]));
+    for (const p of PRESETS) if (quick.includes(p.label) && p.rule.predicate && !(p.rule.name in groups)) groups[p.rule.name] = p.rule.predicate;
+    const flowGroups = Object.fromEntries(active.filter((r) => r.target === "flows").map((r) => [r.name in groups ? `${r.name} (flows)` : r.name, r.predicate]));
+    return { groups, flowGroups };
+  }, [rules, quick.join("|")]);
+  const heatMethods = useMemo(() => info.methods.flatMap((m, i) => (m.name[0] === family ? [i] : [])), [info, family]);
+  const body = { entries: chosen.map((t) => ({ root: t.state.root.index, amount: t.state.amount })), groups, flow_groups: flowGroups, rule, method, methods: heatMethods };
+  const key = JSON.stringify(body);
+  const [data, setData] = useState(null);
+  const [error, setError] = useState(null);
+  useEffect(() => {
+    if (body.entries.length < 2) return;
+    let cancelled = false;
+    setError(null);
+    request("/api/compare", body).then((d) => !cancelled && setData({ key, entries: d.entries })).catch((e) => !cancelled && setError(e.message));
+    return () => { cancelled = true; };
+  }, [key]);
+  const ready = data?.key === key ? data.entries : null;
+  const results = ready ? chosen.map((t, i) => ({ id: t.id, label: labels[t.id], color: compareColor(tabs.indexOf(t)), ...ready[i] })) : null;
+  const names = useMemo(() => {
+    if (!results) return [];
+    const all = [...new Set(results.flatMap((r) => Object.keys(r.groups)))].filter((g) => g !== OTHER_GROUP);
+    const size = (g) => results.reduce((s, r) => s + Math.abs(r.groups[g] || 0), 0);
+    const present = results.some((r) => OTHER_GROUP in r.groups);
+    return [...all.sort((a, b) => size(b) - size(a)), ...(present ? [OTHER_GROUP] : [])];
+  }, [results]);
+
+  const ruleColors = useMemo(() => { try { return JSON.parse(loadPreference("ruleColors", "{}")) || {}; } catch { return {}; } }, []);
+  const groupColor = (g) => (g === OTHER_GROUP ? cssVar("--muted") : colorOf(g.replace(/ \(flows\)$/, ""), ruleColors));
+  const target = chosen.length > 1 && compare.target !== base && compare.target < chosen.length ? compare.target : base === 0 ? 1 : 0;
+  const unitLabel = info.methods[method].unit;
+  const units = [...new Set(chosen.map((t) => unit(t.state.root.unit)).filter(Boolean))];
+  const substituted = chosen.filter((t) => Object.keys(t.state.substitutions || {}).length);
+
+  if (tabs.length < 2) {
+    return html`<div class="compare"><div class="empty">
+      Comparison needs two tabs with a functional unit. Open another process in a new tab (Ctrl/⌘ + Enter in the search), then come back.
+    </div></div>`;
+  }
+  return html`
+    <div class="compare">
+      <div class="compare-side">
+        <h3>Compared <span class="muted">· baseline</span></h3>
+        ${common && html`<div class="muted compare-common" title=${common}>${common}</div>`}
+        <div class="compare-tabs">
+          ${tabs.map((t, i) => {
+            const on = chosen.includes(t);
+            return html`<div key=${t.id} class="compare-tab ${on ? "" : "off"}">
+              <input type="checkbox" checked=${on} onChange=${() => toggle(t.id)} aria-label=${`Compare ${labels[t.id]}`} />
+              <span class="dot" style=${{ background: compareColor(i) }}></span>
+              <span class="name" title=${fullLabels[t.id]}>${labels[t.id]}</span>
+              <input type="radio" name="baseline" checked=${t === baseline} disabled=${!on} onChange=${() => set({ baseline: t.id })} aria-label="Baseline" title="Baseline" />
+            </div>`;
+          })}
+        </div>
+        <h3>Impact method</h3>
+        <${MethodSelect} methods=${info.methods} value=${method} onChange=${(m) => set({ method: m })} />
+        <h3>Groups</h3>
+        <label class="compare-field">Rules of
+          <select value=${groupsFrom ?? ""} onChange=${(e) => set({ groupsFrom: e.target.value })}>
+            <option value="">no tab</option>
+            ${chosen.map((t) => html`<option value=${t.id}>${labels[t.id]}</option>`)}
+          </select>
+        </label>
+        <label class="compare-field">Attribution
+          <select value=${rule} onChange=${(e) => set({ rule: e.target.value })}>
+            <option value="direct">Own emissions of each group</option>
+            <option value="first_match">Whole supply chain below the first match</option>
+          </select>
+        </label>
+        <div class="chips">${PRESETS.filter((p) => p.rule.predicate).map((p) => html`
+          <button class=${quick.includes(p.label) ? "primary" : ""} onClick=${() => setCompare((c) => {
+            const now = c.quick || [];
+            return { ...c, quick: now.includes(p.label) ? now.filter((q) => q !== p.label) : [...now, p.label] };
+          })}>${p.label}</button>`)}
+        </div>
+        <p class="note">${Object.keys(groups).length + Object.keys(flowGroups).length} groups. The rules are those of the tab's <i>Group rules</i>; quick groups are added to them.</p>
+        ${units.length > 1 && html`<p class="warning">The functional units are in ${units.join(", ")}: compare them only if they deliver an equivalent function.</p>`}
+        ${substituted.length > 0 && html`<p class="warning">Substitutions made in the tree of ${substituted.map((t) => labels[t.id]).join(", ")} are not applied here.</p>`}
+      </div>
+      <div class="compare-main">
+        <div class="tabs" role="tablist">
+          ${COMPARE_PANELS.map(([k, label]) => html`<button role="tab" class=${panel === k ? "active" : ""} onClick=${() => set({ panel: k })}>${label}</button>`)}
+        </div>
+        <div class="panel">
+          ${chosen.length < 2 ? html`<div class="empty">Tick at least two tabs to compare.</div>`
+            : error ? html`<div class="error">${error}</div>`
+            : !results ? html`<div class="empty">Computing…</div>`
+            : panel === "groups" ? html`<${CompareBars} results=${results} base=${base} unitLabel=${unitLabel} names=${names} groupColor=${groupColor}
+                mode=${compare.mode || "absolute"} setMode=${(mode) => set({ mode })} />`
+            : panel === "difference" ? html`<${CompareDifference} results=${results} base=${base} target=${target} setTarget=${(t) => set({ target: t })}
+                unitLabel=${unitLabel} names=${names} zoom=${compare.zoom} setZoom=${(zoom) => set({ zoom })} />`
+            : html`<${CompareMethods} results=${results} base=${base} info=${info} methods=${heatMethods} family=${family}
+                setFamily=${(f) => set({ family: f })} sorted=${!!compare.sorted} setSorted=${(sorted) => set({ sorted })} />`}
+        </div>
+      </div>
+    </div>`;
+}
+
 // ---------------------------------------------------------------- workspace: tabs and split panes
 // Like a notes app: each tab is one functional unit; panes hold tabs and can be split
 // left/right or top/bottom by dragging a tab onto a pane's edge. One side panel (chart,
@@ -4885,6 +5238,9 @@ function LayoutView({ node, renderPane, onResize }) {
 const SHORTCUTS = [
   ["Anywhere", [
     ["Ctrl/⌘ + K", "Search a process in the top bar: Enter makes it the functional unit of the tab, Ctrl/⌘ + Enter opens it in a new tab"],
+    ["v", "View mode; when already in View mode, show or hide the view options"],
+    ["e", "Edit mode (a Brightway-built database); when already in Edit mode, open the form of the selected process, as below"],
+    ["c", "Compare mode"],
   ]],
   ["Lists and trees (the one clicked last)", [
     ["↓ ↑", "Select the row below / above"],
@@ -4893,7 +5249,7 @@ const SHORTCUTS = [
     ["←", "Collapse the row; if already collapsed, go to its parent"],
     ["Tree view, root on top", "← → go across the processes (siblings), ↓ expands (then goes to the first child), ↑ collapses (then goes to the parent)"],
     ["Space", "Open (or close) the pop-up of the process"],
-    ["c", "Open (or close) the pop-up of its exchange: comment and uncertainty"],
+    ["i", "Open (or close) the pop-up of its exchange (info): comment and uncertainty"],
     ["Enter", "Use the process as the functional unit of the tab"],
     ["e", "In Edit mode: open the form of the process, to change it"],
     ["t / w", "A new tab like this one / close this tab"],
@@ -4909,7 +5265,7 @@ const SHORTCUTS = [
     ["← →", "Switch panel"],
     ["↓", "Enter the panel; then ↓ ↑ move between its rows, ↑ on the first goes back to the panels"],
     ["→ ←", "On a row of a list: expand, collapse (or go to the first child, the parent)"],
-    ["Space  c  Enter  Ctrl/⌘ + Enter", "On a row of a list: as in the main list"],
+    ["Space  i  Enter  Ctrl/⌘ + Enter", "On a row of a list: as in the main list"],
     ["Backspace", "Back to the previous pop-up"],
     ["Esc", "Close the pop-up (a pinned one only while the pointer is on it)"],
   ]],
@@ -4976,7 +5332,9 @@ function App() {
   const [datasetOpen, setDatasetOpen] = useState(null);
   // "view": the model built from the database; "edit": change processes, staged then applied together
   const [mode, setMode] = useState(() => loadPreference("mode", "view"));
-  useEffect(() => savePreference("mode", mode), [mode]);
+  useEffect(() => savePreference("mode", mode === "compare" ? "view" : mode), [mode]);  // the page opens on the explorer
+  const comparing = mode === "compare";
+  const [compare, setCompare] = useState({});  // the comparison's choices, kept while the mode is left
   const [layout, setLayout] = useState(null);
   const [focus, setFocus] = useState(null);
   const [titles, setTitles] = useState({});
@@ -4993,6 +5351,25 @@ function App() {
   // Where the open database was built from (Brightway): the project that is edited
   const origin = databases?.find((d) => d.key === DATABASE)?.brightway || null;
   const editing = mode === "edit" && !!origin;
+  // v: View mode, or in View mode the view options; e: Edit mode (in Edit mode the tree's e opens the form of the
+  // process); c: Compare mode. Not while typing, in a pop-up or in a dialog.
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || e.defaultPrevented) return;
+      if (e.target.closest?.("input, textarea, select, [contenteditable], .info-popup") || document.querySelector(".modal-backdrop")) return;
+      if (e.key === "v") {
+        if (mode === "view") setViewOptions((on) => !on); else setMode("view");
+      } else if (e.key === "e") {
+        if (editing || !origin) return;
+        setMode("edit");
+        setSideOpen(true);
+      } else if (e.key === "c") setMode("compare");
+      else return;
+      e.preventDefault();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [mode, editing, !!origin]);
   // The changes staged for the project (kept by the server) with the databases they affect and the locked ones
   const [pendingView, setPendingView] = useState({ changes: [], affected: [], locked: [] });
   const pending = pendingView.changes;
@@ -5130,8 +5507,10 @@ function App() {
         title="Open another database: a model already built, or a database of your Brightway projects">Load database</button>`}
       ${databases && html`
         <span class="mode-switch" role="group" aria-label="Mode">
-          <button class=${!editing ? "primary" : ""} onClick=${() => setMode("view")}
+          <button class=${!editing && !comparing ? "primary" : ""} onClick=${() => setMode("view")}
             title="Explore the results of the model built from the database">View</button>
+          <button class=${comparing ? "primary" : ""} onClick=${() => setMode("compare")}
+            title="Compare the functional units of several tabs: contribution by group, difference, impact categories">Compare</button>
           <button class=${editing ? "primary" : ""} disabled=${!origin} onClick=${() => { setMode("edit"); setSideOpen(true); }}
             title=${origin ? "Change processes: changes are staged, then made together and the model built again" : "Open a database of a Brightway project to edit it"}>
             Edit${pending.length ? ` (${pending.length} staged)` : ""}</button>
@@ -5190,9 +5569,9 @@ function App() {
   return html`
     <${EditorContext.Provider} value=${editor}>
     <${ViewOptionsContext.Provider} value=${viewOptions}>
-    <div class=${`app ${stale ? "stale" : ""} ${editing ? "editing" : ""} ${showStaged ? "has-staged" : ""}`}>
-      ${topBar(html`<button class=${sideOpen ? "primary" : ""} onClick=${() => setSideOpen(!sideOpen)}
-          title="Show or hide the side panel (process and flow contribution, grouping, whole supply chain)">Side panel</button>`, html`
+    <div class=${`app ${stale ? "stale" : ""} ${editing ? "editing" : ""} ${comparing ? "comparing" : ""} ${showStaged ? "has-staged" : ""}`}>
+      ${topBar(comparing ? null : html`<button class=${sideOpen ? "primary" : ""} onClick=${() => setSideOpen(!sideOpen)}
+          title="Show or hide the side panel (process and flow contribution, grouping, whole supply chain)">Side panel</button>`, comparing ? null : html`
         <${FunctionalUnit} root=${focusedRoot} fields=${info.query_fields} onSelect=${pickRoot} />
         <button class=${viewOptions ? "primary" : ""} onClick=${() => setViewOptions(!viewOptions)} aria-pressed=${viewOptions}
           title="Show or hide the options of the views: amount, impact method, cut-off, display, grouping, names and colours (each tab and pop-up has its own)">View options</button>`)}
@@ -5202,12 +5581,14 @@ function App() {
           <button onClick=${() => { setMode("edit"); setSideOpen(true); }}>Review and apply in Edit mode</button>
         </div>`}
       <div class="body">
-        <div class="workspace"><${LayoutView} node=${layout} renderPane=${renderPane}
+        <div class="workspace" style=${{ display: comparing ? "none" : "" }}><${LayoutView} node=${layout} renderPane=${renderPane}
           onResize=${(id, sizes) => setLayout((l) => resizeSplit(l, id, sizes))} /></div>
-        ${sideOpen
+        ${comparing && html`<${ComparisonView} info=${info} compare=${compare} setCompare=${setCompare}
+          tabs=${allTabs.filter((id) => states.current[id]?.root).map((id) => ({ id, state: states.current[id], title: titles[id] }))} />`}
+        ${!comparing && (sideOpen
           ? html`<div class="side-resizer" onPointerDown=${startSideResize} title="Drag to resize"></div>`
-          : html`<button class="side-reopen" onClick=${() => setSideOpen(true)} title="Show the side panel" aria-label="Show the side panel">«</button>`}
-        <aside class="sidebar" style=${{ width: `${sideWidth}px`, display: sideOpen ? "" : "none" }}>
+          : html`<button class="side-reopen" onClick=${() => setSideOpen(true)} title="Show the side panel" aria-label="Show the side panel">«</button>`)}
+        <aside class="sidebar" style=${{ width: `${sideWidth}px`, display: sideOpen && !comparing ? "" : "none" }}>
           ${allTabs.map((id) => html`<div key=${id} id=${`side-${id}`} class="side-slot" style=${{ display: id === focusedTab && !editing ? "" : "none" }}></div>`)}
           ${editing && html`<${EditPanel} origin=${origin} dataset=${dataset} pending=${pending} affected=${pendingView.affected}
             locked=${pendingView.locked} outdated=${outdated} onForm=${setDatasetOpen} stage=${stage} unstage=${unstage} unstageAll=${unstageAll}

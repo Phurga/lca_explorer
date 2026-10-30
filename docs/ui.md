@@ -68,6 +68,34 @@ API in `src/lca_viewer/server.py`.
   in the open database while entering a dataset.
   *Start from* (same form) copies any process of the project into it
   (`GET /api/brightway/dataset`, read from the SQLite file).
+- **Compare mode** (top bar, between View and Edit): the workspace and the side
+  panel give way to a comparison of the functional units of the open tabs (the
+  tabs stay mounted, so nothing is lost when going back). Left: the tabs to
+  compare (tick them; the radio marks the **baseline**, the others are read against
+  it), the impact method, and the **groups**: the named rules of one tab's *Group
+  rules* (process rules as groups, flow rules as flow groups, as in *Group
+  contributions*) plus the *quick groups* ticked here, and the attribution
+  (*own emissions of each group*, or *whole supply chain below the first match*, see
+  [grouping.md](grouping.md)). A tab counts by its functional unit and amount; its
+  cut-off, expansion, merges and substitutions do not enter (`POST /api/compare`
+  works on the matrices, each entry split exactly into the groups and *other*; the
+  page warns when a tab has substitutions, or when the units differ). Tabs are named
+  by what tells them apart (the place when they share the process). Three panels, each with CSV export:
+  - *Contribution by group*: one stacked bar per tab, in the unit, as % of the
+    baseline's total, or each as its own 100 %; the table under it has every group's
+    value and share, the totals and the change against the baseline.
+  - *Difference*: a waterfall from the baseline's total to another tab's, one step per
+    group (largest first; orange adds, green takes away; the steps add up to the
+    difference exactly). *Zoom on the steps* (on by default when the difference is
+    under 25 % of the totals) starts the axis near the steps; the totals are then cut.
+  - *Impact categories*: a heat map of tabs × the methods of a family (the 25 EF
+    categories, say), each cell the change against the baseline (the colour stops at
+    ±100 %; values in the tooltip), optionally with the largest difference first.
+  Decision: a mode of its own, not a panel of the side panel: the side panel shows
+  one tab, and a comparison needs several. Tabs, not a new kind of object, so that
+  a comparison is made of what is already open. Groups instead of tree rows so that
+  tabs with different supply chains line up (`charts.md` has the same reasoning).
+  The choices are kept while the page is open, not saved.
 - **View / Edit switch** (top bar). View is the explorer. Edit swaps the right
   panel for the *edit panel* (the side panel's tabs stay mounted, hidden): the
   focused tab's process with *Edit*, *Copy as new* and *Delete*, *+ New process*,
@@ -188,7 +216,7 @@ API in `src/lca_viewer/server.py`.
   members, a merged process into the union of its inputs, others into the
   rows it bundles — which then also replace it in the chart); click selects;
   right-click or Space opens its **pop-up** — the **(i)** shown on the hovered
-  row, or **c**, opens the pop-up of its *exchange* (comment and uncertainty)
+  row, or **i**, opens the pop-up of its *exchange* (comment and uncertainty)
   — whatever the kind: the activity pop-up below for a process or direct
   emissions, the flow pop-up for an elementary flow, and a **members pop-up**
   for a bundle (others, group, merged; nothing opens on hover or on a plain
@@ -211,7 +239,11 @@ API in `src/lca_viewer/server.py`.
 - **Keyboard** (the tree clicked last; not while typing in a field). The
   **Shortcuts** button of the top bar lists these keys, those of the pop-ups
   and those of the search fields (`SHORTCUTS` in `app.js`); the panels
-  themselves carry no key hints:
+  themselves carry no key hints. Three keys work anywhere (not while typing, in a
+  pop-up or in a dialog) and change the mode: **v** goes to View mode, and in View mode
+  shows or hides the view options; **e** goes to Edit mode (a Brightway-built database;
+  once in Edit mode, **e** is the tree's, below); **c** goes to Compare mode. The key of the
+  exchange pop-up is **i** (info), which was **c** before.
 
   | Key | Action |
   |---|---|
@@ -221,13 +253,13 @@ API in `src/lca_viewer/server.py`.
   | ← | collapse; if already collapsed, go to the parent |
   | ← → ↓ ↑ in the tree view with the root on top | the arrows are turned with the layout: ← → go across the processes (siblings), ↓ expands (then goes to the first child), ↑ collapses (then goes to the parent) |
   | Space | open (or close) the row's pop-up (members pop-up for a bundle) |
-  | c | open (or close) the pop-up of the row's exchange: comment and uncertainty |
+  | i | open (or close) the pop-up of the row's exchange (info): comment and uncertainty |
   | o | move the selection to others (inside an expanded others row: pin it out) |
   | m | merge the selection, or unmerge a selected merged row |
   | g | one group: ungroup it (a "group by product" becomes an exception, put back by its regroup chip or by g on one of its processes); one process: put back its ungrouped product group, else group its same-named siblings under the product name, else nothing; several rows: group them (named after the product when they all deliver one, else "group N") |
   | r | rename the selected row (display name only) |
   | Enter | make the selected process the functional unit of the tab |
-  | e | in Edit mode: open the form of the selected process |
+  | e | in Edit mode: open the form of the selected process (outside Edit mode: switch to it, see below) |
   | t / w | open a new tab like this one / close this tab |
   | Ctrl/⌘ + Enter | open the selected process as the functional unit of a new tab |
   | Ctrl/⌘ + Z | undo the last change to the tree |
@@ -281,7 +313,7 @@ API in `src/lca_viewer/server.py`.
   always there; remembered, saved with the view). *Amount*, *Impact* and *Share* are on by
   default; *Exchange data* columns, off by default, show what the exchange supplying
   each process records, in the dataset of the process above it (several datasets for a
-  merged one; the whole text in the tooltip or with **c**): *Comment*, *Uncertainty*
+  merged one; the whole text in the tooltip or with **i**): *Comment*, *Uncertainty*
   (distribution and parameters), *Pedigree* (the five scores), *Formula* and *Variable
   name*. `/api/rows` sends the comment as the row's `comment` and the rest as its `exchanges`.
 
@@ -293,7 +325,7 @@ API in `src/lca_viewer/server.py`.
   ![View settings](img/view-settings.png)
 - **Right-click a process** (list or tree view) or **Space**: the activity
   pop-up, with panels *Exchanges*, *Used by*, *Alternatives*, *Description*
-  and *Metadata*. **c**, or the **(i)** of a row, opens instead the **exchange
+  and *Metadata*. **i**, or the **(i)** of a row, opens instead the **exchange
   pop-up**: only the amount and impact in this tree, the path from the root,
   and the comment, uncertainty and pedigree of the parent's input of this
   product. Once open, a pop-up has the keyboard: ←/→ switch panel, ↓ enters
@@ -302,7 +334,7 @@ API in `src/lca_viewer/server.py`.
   (`ProcessRow`): ↑/↓ move between the rows (↑ on the first goes back to the panels),
   → expands a row (or goes to its first child), ← collapses it (or goes to the row it
   hangs from; where a row does not use ←/→ they switch panel), Space opens the
-  process's pop-up, **c** the pop-up of the exchange the row stands for, and **Enter**
+  process's pop-up, **i** the pop-up of the exchange the row stands for, and **Enter**
   makes it the functional unit of the tab (the pop-up closes), **Ctrl/⌘+Enter** the one of a new tab. Expanding an
   exchange or an alternative lists its own inputs; expanding a user, the activities
   using it. Esc or Space with no row selected closes the pop-up; Backspace goes back.
@@ -325,7 +357,7 @@ API in `src/lca_viewer/server.py`.
   the tab, nor with another pop-up, and are kept while the pop-up stays on the
   process. Its defaults differ from the tab's: full names, *Split by flow type* on, every input
   listed (cut-off); its options (with *View options*) are the header, Collapse, Reset view, *Group
-  by product* and *Split by flow type* only. Space, **c** and the **(i)** of a
+  by product* and *Split by flow type* only. Space, **i** and the **(i)** of a
   process or flow row replace the pop-up with that process's, that exchange's or
   that flow's pop-up (←/Backspace comes back, the explorer then starts afresh);
   **Enter** makes the process the functional unit of the tab, **Ctrl/⌘+Enter** of a new tab. *Reference product exchange* (production

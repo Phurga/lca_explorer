@@ -92,6 +92,22 @@ class GlobalRequest(BaseModel):
     """Only this method (faster with flow groups); all methods when omitted."""
 
 
+class CompareEntry(BaseModel):
+    root: int
+    amount: float = 1.0
+
+
+class CompareRequest(BaseModel):
+    entries: list[CompareEntry]
+    groups: dict[str, dict] = {}
+    flow_groups: dict[str, dict] = {}
+    rule: str = "first_match"
+    method: int
+    """The method the groups are split for."""
+    methods: list[int] = []
+    """Methods whose total score is returned for every entry (the heat map)."""
+
+
 class ContributorsRequest(GlobalRequest):
     group: str
     method: int = 0
@@ -540,6 +556,32 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
         methods = slice(None) if req.method is None else [req.method]
         result = supply_chain_contribution(model, req.root, req.groups, req.rule, req.amount, req.flow_groups, methods)
         return {name: _floats(v) for name, v in result.items()}
+
+    @app.post("/api/compare")
+    def compare(req: CompareRequest):
+        """Several functional units under the same groups, for the comparison mode: per entry its
+        groups (and *other*) for ``method``, which add up to its ``total``, and the total score of
+        each of ``methods``."""
+        if not req.entries:
+            raise HTTPException(400, "Nothing to compare")
+        if req.rule not in ("direct", "first_match"):
+            raise HTTPException(400, f"Unknown rule {req.rule!r}")
+        for k in [req.method, *req.methods]:
+            if not 0 <= k < len(model.methods):
+                raise HTTPException(404, f"No method {k}")
+        out = []
+        for entry in req.entries:
+            if not 0 <= entry.root < model.size:
+                raise HTTPException(404, f"No activity {entry.root}")
+            split = supply_chain_contribution(model, entry.root, req.groups, req.rule, entry.amount,
+                                              req.flow_groups, [req.method])
+            parts = {name: float(v[0]) for name, v in split.items()}
+            out.append({
+                "groups": parts,
+                "total": sum(parts.values()),
+                "totals": _floats(model.score(entry.root, entry.amount)[req.methods]),
+            })
+        return {"entries": out}
 
     @app.post("/api/global/contributors")
     def global_contributors(req: ContributorsRequest):
