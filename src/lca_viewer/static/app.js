@@ -1575,7 +1575,7 @@ function EditPanel({ origin, dataset, pending, affected, locked, outdated, onFor
   return html`
     <div class="edit-panel">
       <h3>Edit mode <span class="muted">· project ${origin.project}</span></h3>
-      <p class="muted small">Changes are staged here and made together when you apply them. Double-click a value in the view or in a pop-up to change it.
+      <p class="muted small">Changes are staged here and made together when you apply them. Press e on a process of the list (or use Edit below) to change it in its form; values of a pop-up can be changed by double-clicking them.
         The impacts shown are those of the last build: they are greyed out once what they come from has changed.</p>
       ${error && html`<div class="error">${error}</div>`}
       ${outdated && html`
@@ -1687,7 +1687,7 @@ function ColumnMenu({ at, columns, onChange, onClose }) {
     </div>`;
 }
 
-function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onUngroup, onRegroup, ungroupable, onMergeGroup, onUnpin, onPin, onMoveToOthers, onInfo, onUnmerge, onRevert, view, focus, renaming, onStartRename, onRename, nameEdit, onNameEdit, onColumns }) {
+function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onUngroup, onRegroup, ungroupable, onMergeGroup, onUnpin, onPin, onMoveToOthers, onInfo, onUnmerge, onRevert, view, focus, renaming, onStartRename, onRename, onColumns }) {
   const byId = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
   const [columnMenu, setColumnMenu] = useState(null);  // where the columns menu is open: { x, y }
   const shown = new Set(view.columns);
@@ -1698,7 +1698,6 @@ function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onU
   const colors = useMemo(() => groupColors(rows, view), [rows, view.groupColors, view.colorBy, view.ruleColors]);
   const ctx = useContext(EditorContext);
   const editing = ctx.editing;
-  const links = {};  // row id -> the exchange its amount stands for, fetched when the amount is edited
   const box = useRef(null);
   const scrolledTo = useRef(null);
   // Scroll once to a row found from elsewhere ("Go to in tree"), when it has been rendered
@@ -1744,13 +1743,7 @@ function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onU
                       : html`<span class="label" title=${r.custom ? `${r.custom} — renamed from ${r.label}` : r.label}>
                           ${(() => {
                             const n = rowNames(r, byId, view);
-                            const main = editing && r.kind === "process" && r.meta
-                              ? html`<${Editable} value=${r.meta.name} display=${n.main} title=${`Double-click to rename the process in the project (${r.meta.name})`}
-                                  disabled=${ctx.locked.includes(r.meta.database)}
-                                  start=${nameEdit?.id === r.id ? nameEdit : null} onStarted=${onNameEdit}
-                                  onCommit=${(text) => quickEdit(ctx, r.meta.database, r.meta.code, (d) => { d.process.name = text; })} />`
-                              : n.main;
-                            return html`${main}${n.qual && html` <span class="loc">${n.qual}</span>`}`;
+                            return html`${n.main}${n.qual && html` <span class="loc">${n.qual}</span>`}`;
                           })()}
                         </span>`}
                     <span class=${`row-actions ${renaming === r.id ? "renaming" : ""}`}>
@@ -1786,26 +1779,7 @@ function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onU
                     </span>
                   </div>
                 </td>
-                ${shown.has("amount") && html`<td class="num" title=${amount}>${editing && r.kind === "process" && r.meta
-                  ? html`
-                    ${r.depth > 0 && suppliedTo(r, byId).length === 1
-                      ? html`<${Editable} value=${r.waste ? -r.amount : r.amount} format=${fmtAmount} title="Double-click to change this input in the dataset of the process above (not the amount in this tree)"
-                          disabled=${ctx.locked.includes(suppliedTo(r, byId)[0].database)}
-                          load=${async () => {
-                            const parent = suppliedTo(r, byId)[0];
-                            const found = await request(`/api/activity/${parent.index}/exchanges?product=${r.meta.index}`);
-                            const e = found.inputs[0];
-                            if (!e) throw new Error("This input is not in the dataset of the process above");
-                            if (!e.input) throw new Error("Build this database again once, to edit amounts here");
-                            links[r.id] = e;
-                            return String(Math.abs(e.amount));
-                          }}
-                          onCommit=${(text) => { const parent = suppliedTo(r, byId)[0]; const e = links[r.id];
-                            return quickEdit(ctx, parent.database, parent.code, patchExchange(e.input, e.amount, text)); }} />`
-                      : fmtAmount(r.waste ? -r.amount : r.amount)}${" "}<${Editable} value=${r.unit} display=${unit(r.unit)} title="Double-click to change the unit of this process's product, in its own dataset"
-                      disabled=${ctx.locked.includes(r.meta.database)}
-                      onCommit=${(text) => quickEdit(ctx, r.meta.database, r.meta.code, (d) => { productOfProcess(d, r.meta.code).unit = text; })} />${r.waste ? " treated" : ""}`
-                  : amount}</td>`}
+                ${shown.has("amount") && html`<td class="num" title=${amount}>${amount}</td>`}
                 ${shown.has("impact") && html`<td class="num impact">${fmt(r.impacts[0])}</td>`}
                 ${shown.has("share") && html`<td class="impact">
                   <div class="share">
@@ -3942,10 +3916,11 @@ const ROOT_SETTERS = {};  // tab id -> the function that makes a process the fun
 // ``embedded``: the left panel alone (header, list and bars, without the side panel), inside the Exchanges tab of a
 // process pop-up, rooted at that process and with a state of its own: { onInfo(target): a process or flow opened from
 // a row replaces the content of the pop-up, onUse(meta): Enter on a process, keys: ref the pop-up asks first for its keys }
-function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onCollapseSide, embedded }) {
+function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewTab, onCloseTab, onCollapseSide, embedded }) {
   // Edit mode: merges, custom names and replaced suppliers only change how the view looks, not the data: they are
   // left out (and kept in the tab, for the view mode); pins, cut-off and groups stay
-  const editing = useContext(EditorContext).editing;
+  const editor = useContext(EditorContext);
+  const editing = editor.editing;
   const box = useRef(null);
   const treeSection = useRef(null);
   // Keyboard navigation: the row the arrows move from (and its position, kept when it
@@ -4011,7 +3986,6 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
     ruleColors: (() => { try { return JSON.parse(loadPreference("ruleColors", "{}")) || {}; } catch { return {}; } })(),
   }));
   const showOptions = useContext(ViewOptionsContext);
-  const [nameEdit, setNameEdit] = useState(null);  // { id }: the row whose process name is being edited (Enter, in edit mode)
   useEffect(() => {
     if (embedded) return;  // the preferences are the main view's
     savePreference("naming", view.naming);
@@ -4379,6 +4353,11 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
     setSelection(new Set());
   }
   const movableSelection = selectedRows.filter(movable);
+  // The × (move to others) or pin of one of several selected rows is the one of all of them
+  const ofSelection = (ids, keep) => (ids.length === 1 && selection.size > 1 && selection.has(ids[0])
+    ? movableSelection.filter(keep).map((r) => r.id) : ids);
+  const moveSelectedToOthers = (ids) => moveToOthers(ofSelection(ids, (r) => !inOthers(r)));
+  const pinSelected = (ids) => pin(ofSelection(ids, inOthers));
   // A bundle that disappeared (all its members shown, unmerged, ungrouped) closes its pop-up
   useEffect(() => {
     const live = (p) => !p.target.bundle || findRow(p.target.bundle);
@@ -4462,7 +4441,21 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
     if (visible && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "z") return undoLast();
     const inTab = (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key === "Enter";  // the process in a new tab
     if (!visible || !rows.length || ((e.ctrlKey || e.metaKey) && !inTab) || e.altKey) return false;
-    const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    const typed = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    // The tree view with the root on top: ←/→ go across the processes (the siblings), and ↑/↓ collapse/expand (↓ goes
+    // on to the first child, ↑ to the parent). They are handled as the keys of the list, which expands with → and
+    // collapses with ←, and moves with ↓/↑.
+    const vertical = display === "graph" && orientation === "vertical";
+    const across = vertical && (typed === "ArrowLeft" || typed === "ArrowRight");
+    const key = !vertical ? typed
+      : across ? (typed === "ArrowRight" ? "ArrowDown" : "ArrowUp")
+        : typed === "ArrowDown" ? "ArrowRight" : typed === "ArrowUp" ? "ArrowLeft" : typed;
+    // t: a new tab like this one; w: close this tab (the tabs of the workspace, not the pop-ups')
+    if ((key === "t" || key === "w") && !e.shiftKey) {
+      if (embedded) return false;
+      if (key === "t") onNewTab(id); else onCloseTab(id);
+      return true;
+    }
     const found = rows.findIndex((r) => r.id === cursor.current.id);
     const row = rows[found >= 0 ? found : Math.min(cursor.current.index, rows.length - 1)];
     const moveTo = (r) => {
@@ -4502,8 +4495,14 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
       return true;
     }
     switch (key) {
-      case "ArrowDown": if (rows[found + 1]) moveTo(rows[found + 1]); return true;
-      case "ArrowUp": if (found > 0) moveTo(rows[found - 1]); return true;
+      case "ArrowDown":
+      case "ArrowUp": {
+        const next = across
+          ? (() => { const siblings = rows.filter((r) => r.parent === row.parent); return siblings[siblings.indexOf(row) + (key === "ArrowDown" ? 1 : -1)]; })()
+          : rows[found + (key === "ArrowDown" ? 1 : -1)];
+        if (next) moveTo(next);
+        return true;
+      }
       case "ArrowRight":
         // Expand; if already open, go to the first child
         if (row.expandable && !row.expanded) toggle(row);
@@ -4537,12 +4536,15 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
       case "r":
         if (!editing && selectedRows.length === 1) startRename(row);
         return true;
+      case "e":
+        // Edit mode: the form of the process (its exchanges, products, documentation)
+        if (!editing || selectedRows.length !== 1 || row.kind !== "process" || !row.meta) return false;
+        editor.openForm({ edit: { database: row.meta.database, code: row.meta.code } });
+        return true;
       case "Enter":
-        // The process becomes the functional unit of the tab; in Edit mode, it is renamed in the database
-        // (as a double-click on its name does). With Ctrl/⌘ it opens in a new tab instead.
+        // The process becomes the functional unit of the tab; with Ctrl/⌘ it opens in a new tab instead.
         if (selectedRows.length !== 1 || row.kind !== "process" || !row.meta) return false;
         if (inTab) { if (embedded) embedded.onUse(row.meta, true); else onOpenTab(id, row.meta); }
-        else if (editing) setNameEdit({ id: row.id });
         else if (embedded) embedded.onUse(row.meta);
         else if (row.meta.index !== root?.index) { closeInfo(); selectRoot(row.meta); }
         return true;
@@ -4666,26 +4668,21 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
           ${error && html`<div class="error">${error}</div>`}
           ${display === "list"
             ? html`<${Tree} rows=${data.rows} rootImpact=${rootImpact} shareBasis=${shareBasisOf(cutoffBasis)} selection=${selection} onToggle=${toggle} onSelect=${select}
-                renaming=${renaming} onStartRename=${startRename} onRename=${rename} nameEdit=${nameEdit} onNameEdit=${() => setNameEdit(null)}
-                onUngroup=${ungroup} onRegroup=${regroup} ungroupable=${ungroupable} onMergeGroup=${(r) => mergeRows([r])} onUnpin=${unpin} onPin=${pin} onMoveToOthers=${moveToOthers} onInfo=${showInfo} onUnmerge=${unmerge} onRevert=${revertInput} view=${view} focus=${focus}
+                renaming=${renaming} onStartRename=${startRename} onRename=${rename}
+                onUngroup=${ungroup} onRegroup=${regroup} ungroupable=${ungroupable} onMergeGroup=${(r) => mergeRows([r])} onUnpin=${unpin} onPin=${pinSelected} onMoveToOthers=${moveSelectedToOthers} onInfo=${showInfo} onUnmerge=${unmerge} onRevert=${revertInput} view=${view} focus=${focus}
                 onColumns=${(columns) => setView({ ...view, columns })} />`
             : html`<${TreeGraph} rows=${data.rows} rootImpact=${rootImpact} shareBasis=${shareBasisOf(cutoffBasis)} selection=${selection} onToggle=${toggle} onSelect=${select}
-                onUngroup=${ungroup} onRegroup=${regroup} ungroupable=${ungroupable} onMergeGroup=${(r) => mergeRows([r])} onUnpin=${unpin} onPin=${pin} onMoveToOthers=${moveToOthers} onInfo=${showInfo} onUnmerge=${unmerge} view=${view}
+                onUngroup=${ungroup} onRegroup=${regroup} ungroupable=${ungroupable} onMergeGroup=${(r) => mergeRows([r])} onUnpin=${unpin} onPin=${pinSelected} onMoveToOthers=${moveSelectedToOthers} onInfo=${showInfo} onUnmerge=${unmerge} view=${view}
                 orientation=${orientation} setOrientation=${setOrientation} cycles=${cycles} setCycles=${setCycles} sankey=${display === "sankey"} focus=${focus} />`}
           ${popups.map(renderPopup)}
-          ${selection.size > 0 && html`
+          ${selection.size > 1 && html`
             <div class="selection-bar">
-              <span>${selection.size} selected${selection.size === 1 ? " · Ctrl/⌘-click to add siblings" : ""}</span>
+              <span>${selection.size} selected · o or × moves them to others</span>
               <input placeholder="group name" value=${groupName} onInput=${(e) => setGroupName(e.target.value)} aria-label="New group name" />
               <button disabled=${!canGroup} onClick=${groupSelected}
                 title="Bundle the selected sibling rows under one row; expanding it shows them">Group</button>
               ${!editing && html`<button disabled=${!canMerge} onClick=${mergeSelected}
                 title="Combine the selected sibling processes (or the processes of a selected group) into one process: inventories added, common inputs summed">Merge</button>`}
-              ${movableSelection.length && movableSelection.every(inOthers)
-                ? html`<button onClick=${() => pin(movableSelection.map((r) => r.id))}
-                    title="Take the selected rows out of others: shown in the tree and the chart despite the cut-off">Pin</button>`
-                : html`<button disabled=${!movableSelection.length} onClick=${() => moveToOthers(movableSelection.filter((r) => !inOthers(r)).map((r) => r.id))}
-                    title="Move the selected rows to their parent's others row">To others</button>`}
               <button onClick=${() => setSelection(new Set())} aria-label="Clear selection">×</button>
             </div>`}
           <div class="toolbar"><span class="hint">
@@ -4894,14 +4891,17 @@ const SHORTCUTS = [
     ["Shift + ↓ ↑", "Extend the selection over siblings (what Group and Merge act on)"],
     ["→", "Expand the row; if already expanded, go to its first child"],
     ["←", "Collapse the row; if already collapsed, go to its parent"],
+    ["Tree view, root on top", "← → go across the processes (siblings), ↓ expands (then goes to the first child), ↑ collapses (then goes to the parent)"],
     ["Space", "Open (or close) the pop-up of the process"],
     ["c", "Open (or close) the pop-up of its exchange: comment and uncertainty"],
-    ["Enter", "Use the process as the functional unit of the tab (in Edit mode: rename it in the database)"],
+    ["Enter", "Use the process as the functional unit of the tab"],
+    ["e", "In Edit mode: open the form of the process, to change it"],
+    ["t / w", "A new tab like this one / close this tab"],
     ["Ctrl/⌘ + Enter", "Open the process as the functional unit of a new tab"],
     ["r", "Rename the row in this view (the database is not changed)"],
     ["g", "Group the selected rows, or ungroup a group"],
     ["m", "Merge the selected rows, or unmerge a merged row"],
-    ["o", "Move the selection to others (inside an expanded others row: pin it out)"],
+    ["o", "Move the selection to others (inside an expanded others row: pin it out); × on one of several selected rows does the same"],
     ["Ctrl/⌘ + Z", "Undo the last change to the tree"],
     ["Esc", "Clear the selection"],
   ]],
@@ -5184,6 +5184,7 @@ function App() {
       ${pane.tabs.map((id) => html`
         <${FUView} key=${id} id=${id} info=${info} initial=${initialOf(id)} visible=${id === pane.active}
           onSave=${onSave} onTitle=${onTitle} onCollapseSide=${() => setSideOpen(false)}
+          onNewTab=${(from) => actions.add(paneOfTab(layout, from).id)} onCloseTab=${(from) => actions.close(from)}
           onOpenTab=${(from, root, place) => openTab(place?.pane ?? paneOfTab(layout, from).id, { inherit: states.current[from], root }, place?.zone)} />`)}
     <//>`;
   return html`

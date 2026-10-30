@@ -91,15 +91,14 @@ API in `src/lca_viewer/server.py`.
   View mode with changes staged, the Edit button reads *Edit (n staged)* and a warning under the top
   bar offers to review them (`.staged-warning`).
   `Editable` is a value that turns into an input on double-click (Enter or blur stages, Escape
-  cancels); its `start` prop (a new object each time) opens it without a double-click, which is
-  how Enter on the selected process of the tree renames it in the database; its `format` prop
+  cancels); its `start` prop (a new object each time) opens it without a double-click; its `format` prop
   (`fmtAmount` for amounts) is how the value reads when not edited, the input has it in full;
   `quickEdit` patches the form of the dataset (its staged form if there is one) and stages
   it again; exchanges are found by what they link to (`input`, recorded by the build, so models
   built before need one rebuild for amounts to be editable), and an allocated process's share of
-  an exchange is scaled back to the dataset's. In the list, double-clicking the amount of a process
-  row changes the input in the dataset of the process above, and its unit changes the unit of that
-  process's own product (in its dataset); an exchange's source is replaced in the process form
+  an exchange is scaled back to the dataset's. The list has no direct editing: **e** on the selected
+  process opens its form (`DatasetForm`), where everything is changed; the pop-ups' values are still
+  edited by double-click. An exchange's source is replaced in the process form
   (*replace* on its row: the exchange keeps its id, amount, comment and uncertainty; `editing._update_exchange`
   links it to the new process or flow) and, for a product, with *use instead* in the *Alternatives*
   panel of its pop-up, which stages that replacement in the dataset(s) of the process(es) above it.
@@ -153,23 +152,22 @@ API in `src/lca_viewer/server.py`.
   emitted), groupable by substance or compartment — see
   [grouping.md](grouping.md). Ctrl/⌘-click selects sibling
   rows; a selection bar at the bottom of the tree (so the rows
-  do not move) then offers **Group** (bundle them under one row,
+  do not move), shown when two or more rows are selected, offers **Group** (bundle them under one row,
   "ungroup" chip to undo; a group of processes, from any rule or "Group by
   product" (whose "ungroup" chip splits just that group back into its
   members, each of which then has a "regroup" chip that bundles them again;
   turning "Group by product" on again regroups all of them), has a "merge" chip — or select it and click Merge — to turn it into a
   merged process), **Merge** (combine their inventories into one
-  process, "merged ×" chip to undo — see [grouping.md](grouping.md)) and
-  **To others**. The status bar under the tree sums the selected processes,
+  process, "merged ×" chip to undo — see [grouping.md](grouping.md)). The status bar under the tree sums the selected processes,
   merged processes and groups of processes (a group or merged row counts its
   member processes): amounts per unit (units are not added together) and
   impact; a row inside another selected row is not counted again, its impact
   is in that one's.
   Every row has a **×** (on hover: at the right end of the name in the list,
   after the other row actions; at the box corner in the tree view) that moves
-  it to its parent's **others** row; "To others" does the same for a
-  selection. Rows shown inside an expanded others row have **pin** instead
-  (↑ in the tree view; "Pin" in the selection bar, **o** on the keyboard):
+  it to its parent's **others** row; with several rows selected, the × of one of
+  them (like **o**) moves all of them. Rows shown inside an expanded others row have **pin** instead
+  (↑ in the tree view, **o** on the keyboard; with several selected, all of them):
   it takes them out of others, shown despite the cut-off ("pinned ×" to
   undo), like ticking them in the others pop-up. Row actions ("(i)", "✎", "merge", "merged ×", "ungroup",
   "pinned ×", "×") show only on the hovered or selected row.
@@ -221,13 +219,16 @@ API in `src/lca_viewer/server.py`.
   | Shift + ↓ / ↑ | extend the selection over siblings (what Group and Merge act on) |
   | → | expand; if already expanded, go to the first child |
   | ← | collapse; if already collapsed, go to the parent |
+  | ← → ↓ ↑ in the tree view with the root on top | the arrows are turned with the layout: ← → go across the processes (siblings), ↓ expands (then goes to the first child), ↑ collapses (then goes to the parent) |
   | Space | open (or close) the row's pop-up (members pop-up for a bundle) |
   | c | open (or close) the pop-up of the row's exchange: comment and uncertainty |
   | o | move the selection to others (inside an expanded others row: pin it out) |
   | m | merge the selection, or unmerge a selected merged row |
   | g | one group: ungroup it (a "group by product" becomes an exception, put back by its regroup chip or by g on one of its processes); one process: put back its ungrouped product group, else group its same-named siblings under the product name, else nothing; several rows: group them (named after the product when they all deliver one, else "group N") |
   | r | rename the selected row (display name only) |
-  | Enter | make the selected process the functional unit of the tab; in Edit mode, rename it in the database instead (as a double-click on its name; Enter stages, Esc cancels) |
+  | Enter | make the selected process the functional unit of the tab |
+  | e | in Edit mode: open the form of the selected process |
+  | t / w | open a new tab like this one / close this tab |
   | Ctrl/⌘ + Enter | open the selected process as the functional unit of a new tab |
   | Ctrl/⌘ + Z | undo the last change to the tree |
   | Esc | clear the selection |
@@ -327,8 +328,7 @@ API in `src/lca_viewer/server.py`.
   by product* and *Split by flow type* only. Space, **c** and the **(i)** of a
   process or flow row replace the pop-up with that process's, that exchange's or
   that flow's pop-up (←/Backspace comes back, the explorer then starts afresh);
-  **Enter** makes the process the functional unit of the tab, **Ctrl/⌘+Enter** of a new tab. In Edit mode amounts and names
-  are edited as in the tree. *Reference product exchange* (production
+  **Enter** makes the process the functional unit of the tab, **Ctrl/⌘+Enter** of a new tab. *Reference product exchange* (production
   volume, price, carbon and water content, dry mass, …) is in *Description*; comments,
   uncertainty (distribution, σ with and without pedigree), pedigree scores, formula
   and variable name of an exchange are in its exchange pop-up. Exchanges are stored in the cached
