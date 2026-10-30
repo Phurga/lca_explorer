@@ -14,11 +14,13 @@ Two exact rules are provided; both sum to the total score.
   activities and solving once, so loops are handled without traversal.
 
 **Flow groups** (``flow_groups``: predicates over elementary flows, e.g. all
-"Dinitrogen monoxide") split what the activity groups leave: the direct
-emissions of activities outside any group (under first match: outside the
-supply chains of matched activities too). An activity group keeps every flow
-it reaches first, the N2O of a fertiliser's supply chain included; the parts
-still add up exactly to the total.
+"Dinitrogen monoxide") go with the activity groups by the order of the rules
+(``order``): an activity group listed before a flow group keeps every flow it
+reaches, the N2O of a fertiliser's supply chain included; a flow group listed
+before it takes its flows from the activity group (under first match, from its
+whole supply chain). What no activity group claims is split by the flow groups,
+else *other*. Without an order, activity groups come first. The parts still add
+up exactly to the total.
 
 :func:`group_contributors` lists the activities making up one group, and
 :func:`main_path` finds the supply path along which an activity weighs most,
@@ -107,26 +109,55 @@ def _activity_values(model: LCAModel, s: np.ndarray, assignment: np.ndarray, n_g
     )
 
 
+NEVER = np.iinfo(np.int64).max  # the position of what no activity group claims
+
+
+def _positions(groups: dict[str, dict], flow_groups: dict[str, dict], order: list[str] | None) -> tuple[list[int], list[int]]:
+    """Where each activity group and each flow group stands in the order of the rules: a group listed in ``order``
+    by its place there, the others after those, activity groups first (the order before there was one)."""
+    rank = {name: i for i, name in enumerate(order or [])}
+    base = len(rank)
+    names = [*groups, *flow_groups]
+    place = [rank.get(name, base + k) for k, name in enumerate(names)]
+    return place[: len(groups)], place[len(groups):]
+
+
 def _attribute(model: LCAModel, product: int, groups: dict[str, dict], rule: str, amount: float,
-               flow_groups: dict[str, dict], methods):
-    """Per activity (activities x methods): the impacts of each activity and flow group and of
-    *other*. Flow groups take their flows from the direct emissions of unmatched activities."""
+               flow_groups: dict[str, dict], methods, order: list[str] | None = None):
+    """Per activity (activities x methods): the impacts of each activity group, of each flow group and of *other*.
+
+    The groups go by the order of the rules (``order``: their names, first rule first): what an activity emits goes to
+    its activity group or to a flow group, whichever is first. A flow group before the group of an activity takes its
+    flows from it (under first match, from its whole supply chain: the cumulative impact of the flows of the group),
+    a flow group after it takes nothing from it; the flows of an activity no group claims go to the first flow group
+    that claims them, else to *other*. Without ``order``, activity groups come first.
+    """
+    n = len(groups)
     assignment = _assign(model, groups)
-    s = _supply(model, product, assignment, len(groups), rule, amount)
-    values = _activity_values(model, s, assignment, len(groups), rule, methods)
-    unmatched = (assignment == len(groups))[:, None]
+    s = _supply(model, product, assignment, n, rule, amount)
+    group_place, flow_place = _positions(groups, flow_groups, order)
+    place = np.array([*group_place, NEVER])[assignment]  # of the group each activity belongs to
+    matched = (assignment < n)[:, None]
+    total = _activity_values(model, s, assignment, n, rule, methods)
     flow_assignment = _flow_assign(model, flow_groups)
+    last = max(group_place, default=-1)
+    reaching = (s * model.diagonal)[:, None]  # amount of product reaching each activity
     flow_values = {}
-    for g, name in enumerate(flow_groups):
-        flow_values[name] = np.where(unmatched, s[:, None] * _direct_of(model, flow_assignment == g, methods).T, 0.0)
-    other = np.where(unmatched, values, 0.0) - sum(flow_values.values(), 0.0)
-    return assignment, values, flow_values, other
+    for h, name in enumerate(flow_groups):
+        direct = _direct_of(model, flow_assignment == h, methods)  # methods x activities
+        part = s[:, None] * direct.T
+        if rule == "first_match" and flow_place[h] < last:  # before some activity group: its flows in their supply chains
+            part = np.where(matched, reaching * model.cumulative(direct), part)
+        flow_values[name] = np.where((place > flow_place[h])[:, None], part, 0.0)
+    rest = total - sum(flow_values.values(), 0.0)
+    return assignment, np.where(matched, rest, 0.0), flow_values, np.where(matched, 0.0, rest)
 
 
 def supply_chain_contribution(model: LCAModel, product: int, groups: dict[str, dict], rule: str = "first_match",
-                              amount: float = 1.0, flow_groups: dict[str, dict] | None = None, methods=slice(None)):
+                              amount: float = 1.0, flow_groups: dict[str, dict] | None = None, methods=slice(None),
+                              order: list[str] | None = None):
     """Activity groups (``rule``), flow groups and *other*: name -> impacts (``methods``)."""
-    assignment, values, flow_values, other = _attribute(model, product, groups, rule, amount, flow_groups or {}, methods)
+    assignment, values, flow_values, other = _attribute(model, product, groups, rule, amount, flow_groups or {}, methods, order)
     result = _sum_by_group(values, assignment, groups)
     del result[OTHER]
     return {**result, **{name: v.sum(axis=0) for name, v in flow_values.items()}, OTHER: other.sum(axis=0)}
@@ -144,11 +175,11 @@ def first_match_contribution(model: LCAModel, product: int, groups: dict[str, di
 
 def group_contributors(model: LCAModel, product: int, groups: dict[str, dict], group: str,
                        rule: str = "first_match", amount: float = 1.0, flow_groups: dict[str, dict] | None = None,
-                       methods=slice(None)) -> tuple[np.ndarray, np.ndarray]:
+                       methods=slice(None), order: list[str] | None = None) -> tuple[np.ndarray, np.ndarray]:
     """Activities making up ``group`` (an activity or flow group, or ``OTHER``), in index
     order, and their impacts (activities x methods); the impacts sum to the group's total."""
     flow_groups = flow_groups or {}
-    assignment, values, flow_values, other = _attribute(model, product, groups, rule, amount, flow_groups, methods)
+    assignment, values, flow_values, other = _attribute(model, product, groups, rule, amount, flow_groups, methods, order)
     if group == OTHER:
         values = other
     elif group in groups:

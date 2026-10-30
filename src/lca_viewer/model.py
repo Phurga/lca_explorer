@@ -173,6 +173,7 @@ class LCAModel:
             raise ValueError("A has zero entries on its diagonal")
         self._G = None
         self._solve_A = None
+        self._solve_AT = None
         self._U = None
         self._CF = None
         self._details_path = None
@@ -217,6 +218,16 @@ class LCAModel:
         if self._solve_A is None:
             self._solve_A = _factorized_solver(self.A)
         return self._solve_A(demand)
+
+    def cumulative(self, direct: np.ndarray) -> np.ndarray:
+        """Cumulative impacts per unit of product (products x columns) of ``direct`` impacts per unit of
+        activity operation (columns x activities), as ``G`` is of ``U``: ``(A^T)^-1 direct^T``. Used for
+        part of an inventory (a group of flows), so ``G`` itself is not kept factorised: the factorisation
+        of ``A^T`` is made on the first call and kept after it."""
+        if self._solve_AT is None:
+            self._solve_AT = _factorized_solver(self.A.T.tocsc())
+        out = self._solve_AT(np.asarray(direct, dtype=float).T)
+        return out.reshape(self.size, -1)
 
     def method_index(self, name) -> int:
         name = tuple(name)

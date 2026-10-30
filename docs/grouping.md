@@ -203,16 +203,35 @@ The two readings differ a lot, so charts must always state which rule is used.
 
 `supply_chain_contribution(..., flow_groups=...)` also takes groups of
 **elementary flows** ("how much N2O, outside the process groups?").
-Decision: process groups come first and keep every flow they reach first —
-under first match, a fertiliser's supply chain with its N2O; under direct, a
-fertiliser process's own N2O. Flow groups then split what is left, *other*:
-the direct emissions `s_j · (CF_g B_g)_j` of the activities outside any group
-(under first match, `s` is the cut supply, so emissions inside matched supply
-chains are not counted again). A first version took the flows from the whole
-supply chain before the process groups; under first match that moved N2O
-reached through fertilisers out of the fertiliser group, which reads wrong.
-The parts still add up to the score, and no extra solve is needed; the API
-computes the current method only (`method`).
+Decision: **the order of the rules decides** (the API takes `order`, the names
+of the groups in the order of the Group rules tab; without it, process groups
+come first, as before). What an activity emits goes to its activity group or to
+a flow group, whichever is listed first:
+
+- a process group listed before a flow group keeps every flow it reaches —
+  under first match, a fertiliser's supply chain with its N2O; under direct, a
+  fertiliser process's own N2O;
+- a flow group listed before the process group takes its flows from it: under
+  direct, `s_j · (CF_g B_g)_j` of the activities concerned; under first match,
+  the flows of the group in the whole supply chain of a matched activity,
+  `x_j · G_g[j]` with `x_j` the amount of product reaching it and `G_g` the
+  cumulative impact of the flows of the group alone, `(Aᵀ)⁻¹ (CF_g B_g)ᵀ`;
+- what no process group claims is split by the flow groups, else *other*
+  (under first match, `s` is the cut supply, so emissions inside matched
+  supply chains are not counted again).
+
+Each flow then goes to one group only (a flow goes to the first flow group
+that claims it), so the parts add up to the score exactly, whatever the order.
+Cost: under direct, a few vector operations per flow group. Under first match,
+a flow group listed before some process group needs `G_g`: one solve per such
+flow group (one right-hand side per method asked for) with `Aᵀ`, factorised on
+the first such request and kept (about 0.7 s once on ecoinvent 3.9.1, then
+nothing noticeable); flow groups listed after all process groups need none.
+A first version took the flows from the whole supply chain before the process
+groups always; that moved N2O reached through fertilisers out of the fertiliser
+group, which reads wrong when the fertiliser rule is listed first, and is now
+what listing the flow rule first asks for. The API computes the current method
+only (`method`).
 
 Reference example (EF 3.1 climate change, wheat grain feed), with
 pesticides / fertilisers / agricultural machinery and a *Dinitrogen

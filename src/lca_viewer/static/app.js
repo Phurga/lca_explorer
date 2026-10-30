@@ -3438,8 +3438,8 @@ const PANEL_TIPS = {
   chart: "The contribution of each row of the tree as displayed: every visible row that is not expanded is a bar segment. Expand, collapse or group rows to change the breakdown.",
   flows: "The contribution of elementary flows to the score: everything the whole supply chain emits or takes from nature, times its characterisation factor in the current method.",
   groups: "The rules that bundle sibling rows of the tree into groups: quick groups, and a form for new rules.",
-  global: "Group contributions over the whole supply chain, using the named groups defined in the Group rules tab. Process groups come first: a group keeps every flow it reaches first. "
-    + "Flow groups (a substance, added from the Flow contribution tab) then take their flows from what is left, the emissions of processes outside the groups. "
+  global: "Group contributions over the whole supply chain, using the named groups defined in the Group rules tab, which go by the order of the rules: "
+    + "a group of processes listed before a group of flows keeps every flow it reaches, a group of flows (a substance, added from the Flow contribution tab) listed before it takes its flows from it. "
     + "Process groups nest (electricity uses transport, which uses electricity), so the attribution of impacts is chosen in the panel.",
 };
 
@@ -3836,6 +3836,16 @@ function useProcessMenu(goTo, onInfo, onExchange) {
   return { open, element };
 }
 
+// The named rules as the analyses take them: groups of processes, groups of flows (renamed when the name is taken by a
+// group of processes), and the names of all of them in the order of the rules
+function namedGroups(rules) {
+  const active = rules.filter((r) => r.predicate && !r.disabled);
+  const groups = Object.fromEntries(active.filter((r) => r.target !== "flows").map((r) => [r.name, r.predicate]));
+  const nameOf = (r) => (r.target === "flows" && r.name in groups ? `${r.name} (flows)` : r.name);
+  const flowGroups = Object.fromEntries(active.filter((r) => r.target === "flows").map((r) => [nameOf(r), r.predicate]));
+  return { groups, flowGroups, order: active.map(nameOf) };
+}
+
 function GlobalPanel({ info, root, amount, method, rules, view, onLocate, onInfo }) {
   const [rule, setRule] = useState("direct");
   const [result, setResult] = useState(null);
@@ -3843,32 +3853,28 @@ function GlobalPanel({ info, root, amount, method, rules, view, onLocate, onInfo
   const [group, setGroup] = useState(null);
   const [contributors, setContributors] = useState(null);
   const contributorsBox = useRef(null);
-  // Named rules on activities are activity groups; named rules on elementary flows are
-  // flow groups, which split what the activity groups leave (their flows emitted outside them)
-  const active = rules.filter((r) => r.predicate && !r.disabled);
-  const groups = useMemo(() => Object.fromEntries(active.filter((r) => r.target !== "flows").map((r) => [r.name, r.predicate])), [rules]);
-  const flowGroups = useMemo(() => Object.fromEntries(active.filter((r) => r.target === "flows")
-    .map((r) => [r.name in groups ? `${r.name} (flows)` : r.name, r.predicate])), [rules, groups]);
+  // Named rules on activities are activity groups, named rules on elementary flows flow groups; they go by the order of the rules
+  const { groups, flowGroups, order } = useMemo(() => namedGroups(rules), [rules]);
   const k = method;
 
   useEffect(() => {
     if (!root) return;
     let cancelled = false;
     setError(null);
-    request("/api/global", { root: root.index, amount, groups, flow_groups: flowGroups, rule, method: k })
+    request("/api/global", { root: root.index, amount, groups, flow_groups: flowGroups, order, rule, method: k })
       .then((d) => !cancelled && setResult(d)).catch((e) => !cancelled && setError(e.message));
     return () => { cancelled = true; };
-  }, [root, amount, groups, flowGroups, rule, k]);
+  }, [root, amount, groups, flowGroups, order, rule, k]);
   useEffect(() => { if (group && result && !(group in result)) setGroup(null); }, [result]);
   // Processes making up the chosen group
   useEffect(() => {
     setContributors(null);
     if (!root || !group) return;
     let cancelled = false;
-    request("/api/global/contributors", { root: root.index, amount, groups, flow_groups: flowGroups, rule, group, method: k, limit: 50 })
+    request("/api/global/contributors", { root: root.index, amount, groups, flow_groups: flowGroups, order, rule, group, method: k, limit: 50 })
       .then((d) => !cancelled && setContributors(d)).catch((e) => !cancelled && setError(e.message));
     return () => { cancelled = true; };
-  }, [root, amount, groups, flowGroups, rule, group, k]);
+  }, [root, amount, groups, flowGroups, order, rule, group, k]);
   useEffect(() => { contributorsBox.current?.scrollIntoView({ block: "nearest", behavior: "smooth" }); }, [group, !!contributors]);
 
   const unit = info.methods[k].unit;
@@ -3892,7 +3898,7 @@ function GlobalPanel({ info, root, amount, method, rules, view, onLocate, onInfo
   }
   function exportContributors() {
     // Every process of the group, not only those listed
-    request("/api/global/contributors", { root: root.index, amount, groups, flow_groups: flowGroups, rule, group, method: k, limit: 1000000 })
+    request("/api/global/contributors", { root: root.index, amount, groups, flow_groups: flowGroups, order, rule, group, method: k, limit: 1000000 })
       .then((d) => {
         const header = ["process", "reference product", "location", "database", quote(methodName), "share of group", "share of total"].join(",");
         const lines = d.contributors.map((c) => [quote(c.name), quote(c.reference_product), quote(c.location), quote(c.database),
@@ -5298,12 +5304,7 @@ function ComparisonView({ info, tabs, compare, setCompare }) {
   // The groups of the comparison: the rules of one tab (named rules on processes, and on elementary flows
   // as flow groups, as in the Group contributions tab); they are changed in the Group rules panel here
   const rules = tabs.find((t) => t.id === groupsFrom)?.state.rules;
-  const { groups, flowGroups } = useMemo(() => {
-    const active = (rules || []).filter((r) => r.predicate && !r.disabled);
-    const groups = Object.fromEntries(active.filter((r) => r.target !== "flows").map((r) => [r.name, r.predicate]));
-    const flowGroups = Object.fromEntries(active.filter((r) => r.target === "flows").map((r) => [r.name in groups ? `${r.name} (flows)` : r.name, r.predicate]));
-    return { groups, flowGroups };
-  }, [rules]);
+  const { groups, flowGroups, order } = useMemo(() => namedGroups(rules || []), [rules]);
   // The methods of the heat map: those ticked, from the family of the method to begin with
   const heatMethods = compare.methodsSel ?? info.methods.flatMap((m, i) => (m.name[0] === family ? [i] : []));
   // What the bars are split into: groups, the tabs' displayed trees (asked of /api/rows tab by tab; /api/compare then
@@ -5311,7 +5312,8 @@ function ComparisonView({ info, tabs, compare, setCompare }) {
   const basis = compare.basis || "groups";
   const limit = compare.limit || 15;
   const body = { entries: chosen.map((t) => ({ root: t.state.root.index, amount: t.state.amount })), method, methods: heatMethods, rule,
-    basis: basis === "flows" ? "flows" : "groups", limit, groups: basis === "groups" ? groups : {}, flow_groups: basis === "groups" ? flowGroups : {} };
+    basis: basis === "flows" ? "flows" : "groups", limit, groups: basis === "groups" ? groups : {}, flow_groups: basis === "groups" ? flowGroups : {},
+    order: basis === "groups" ? order : [] };
   const trees = basis === "tree" ? chosen.map((t) => treeBody(t.state, method)) : null;
   const key = JSON.stringify([body, trees]);
   const [data, setData] = useState(null);
