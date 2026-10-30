@@ -208,7 +208,9 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
         """Metadata of activity ``i`` used to name chart rows."""
         r = activities.iloc[i]
         values = {f: r.get(f) for f in META_FIELDS}  # importers may not provide every field
-        return {"index": int(i), **{f: (None if v is None or pd.isna(v) else str(v)) for f, v in values.items()}}
+        # models built before the column existed have none: not multifunctional as far as they know
+        return {"index": int(i), **{f: (None if v is None or pd.isna(v) else str(v)) for f, v in values.items()},
+                "multifunctional": bool(r.get("multifunctional", False))}
 
     def describe(i: int) -> dict:
         r = activities.iloc[i]

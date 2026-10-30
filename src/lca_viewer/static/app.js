@@ -1738,6 +1738,8 @@ function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onU
                       ? html`<button class="toggle" aria-label=${r.expanded ? "Collapse" : "Expand"}
                                onClick=${(e) => { e.stopPropagation(); onToggle(r); }}>${r.expanded ? "▾" : "▸"}</button>`
                       : html`<span class="toggle"></span>`}
+                    ${(r.meta?.multifunctional || r.metas?.some((m) => m.multifunctional)) && html`
+                      <span class="mf-badge" title="Co-product: allocated from a multi-output process (its inputs and emissions are a share of the dataset's)">M</span>`}
                     ${renaming === r.id
                       ? html`<${RenameInput} value=${rowNames(r, byId, view).main} renamed=${!!r.custom} onDone=${(name) => onRename(r, name)} />`
                       : html`<span class="label" title=${r.custom ? `${r.custom} — renamed from ${r.label}` : r.label}>
