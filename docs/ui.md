@@ -68,7 +68,8 @@ API in `src/lca_viewer/server.py`.
   in the open database while entering a dataset.
   *Start from* (same form) copies any process of the project into it
   (`GET /api/brightway/dataset`, read from the SQLite file).
-- **Compare mode** (top bar, between View and Edit): the workspace and the side
+- **Mode switch** (top bar, at the right: **View / Compare / Edit**; keys v, c, e).
+- **Compare mode** (the middle button): the workspace and the side
   panel give way to a comparison of the functional units of the open tabs (the
   tabs stay mounted, so nothing is lost when going back). Left: the tabs to
   compare (tick them; the radio marks the **baseline**, the others are read against
@@ -163,8 +164,10 @@ API in `src/lca_viewer/server.py`.
   Decision: one shared **side panel** on the right (process and flow
   contribution, group rules, group contributions), showing the active tab of the pane clicked
   last, as in Obsidian's sidebars, rather than one per pane: panes stay wide
-  enough for the tree. It is collapsed with » (or *Side panel* in the top
-  bar), reopened with «, and resized by dragging its left edge. Each tab
+  enough for the tree. It is hidden with the side-panel icon at the end of its tab bar
+  (a window with a filled panel on the right, as in VS Code and Obsidian; the edit panel
+  has it in its title), shown again with the same icon, empty, on the right edge of the
+  page, and resized by dragging its left edge. Each tab
   renders its panels into its own slot of the side panel (a small portal), so
   a tab keeps its panel state (current tab, chart choices) when hidden.
 - **Top bar**: in the middle, the **search** of a process, like a command palette
@@ -193,6 +196,13 @@ API in `src/lca_viewer/server.py`.
   on a row fills the value in (added to the list of *is one of*; for ISIC and CPC
   the code with *starts with*, since the data reads `0111:Growing of cereals …`).
   The menu is drawn on the page itself, outside the filter panel, which stays open.
+  The filters are always shown under the search box while it is open (there is no
+  *Filters* button). The search of processes and flows in the **process form** of Edit mode
+  (exchanges, *Start from*) has the same filters, on the fields it can read without opening
+  the datasets: location, reference product, name and database for processes;
+  compartment, subcompartment, substance, unit and database for flows
+  (`/api/brightway/search?filters=` takes a predicate as in [grouping.md](grouping.md),
+  `/api/brightway/options` the values for the (i), from the project rather than from the open model).
   Results show the match count,
   highlighted words, location chips; ↑/↓/Enter to choose (Ctrl/⌘+Enter or
   Ctrl/⌘-click: in a new tab), Esc to close.

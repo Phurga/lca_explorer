@@ -370,18 +370,23 @@ const FIELD_LABELS = {
 };
 // flow_type: "product" or "waste" (the sign of what the process produces), not a type of elementary flow
 FIELD_LABELS.flow_type = "product / waste";
-const FLOW_FIELD_LABELS = { name: "substance", compartment: "compartment", subcompartment: "subcompartment", unit: "unit" };
+const FLOW_FIELD_LABELS = { name: "substance", compartment: "compartment", subcompartment: "subcompartment", unit: "unit", database: "database" };
 const fieldLabel = (f, flows) => (flows ? FLOW_FIELD_LABELS[f] : FIELD_LABELS[f]) || f;
 let conditionIds = 0;
 
-function useValues(field, text, flows) {
+// ``source``: where the values of the fields come from, when not the open model: ``{ options(field, text, limit) }``
+// giving ``{ items: [{ value, name?, count }], named, total }`` (the edit-mode search reads its project)
+function useValues(field, text, flows, source) {
   const [values, setValues] = useState([]);
   useEffect(() => {
     const timer = setTimeout(() => {
-      request(`/api/values/${field}?q=${encodeURIComponent(text)}&limit=100${flows ? "&target=flows" : ""}`).then(setValues).catch(() => setValues([]));
+      (source
+        ? source.options(field, text, 100).then((r) => r.items.map((i) => i.value))
+        : request(`/api/values/${field}?q=${encodeURIComponent(text)}&limit=100${flows ? "&target=flows" : ""}`)
+      ).then(setValues).catch(() => setValues([]));
     }, 150);
     return () => clearTimeout(timer);
-  }, [field, text, flows]);
+  }, [field, text, flows, source]);
   return values;
 }
 
@@ -409,7 +414,7 @@ const SHORT_FIELDS = new Set(["unit", "activity_type", "flow_type", "database", 
 // ISIC and CPC classes are written "code:name" in the data, so a code is matched on the start of it
 const CLASS_FIELDS = new Set(["isic", "cpc"]);
 
-function FieldHelp({ condition, flows, onPick }) {
+function FieldHelp({ condition, flows, source, onPick }) {
   const { field } = condition;
   const [pinned, setPinned] = useState(false);
   const [hover, setHover] = useState(false);
@@ -429,11 +434,11 @@ function FieldHelp({ condition, flows, onPick }) {
   useEffect(() => {
     if (!shown) return;
     const timer = setTimeout(() => {
-      request(`/api/options/${field}?q=${encodeURIComponent(text)}&limit=300${flows ? "&target=flows" : ""}`)
+      (source ? source.options(field, text, 300) : request(`/api/options/${field}?q=${encodeURIComponent(text)}&limit=300${flows ? "&target=flows" : ""}`))
         .then(setFound).catch(() => setFound({ items: [], total: 0, named: false }));
     }, found ? 150 : 0);
     return () => clearTimeout(timer);
-  }, [shown, field, text, flows]);
+  }, [shown, field, text, flows, source]);
   useEffect(() => {
     if (!pinned) return;
     const away = (e) => { if (!button.current?.parentElement.contains(e.target)) setPinned(false); };  // presses in the menu do not get here
@@ -475,11 +480,11 @@ function FieldHelp({ condition, flows, onPick }) {
     </span>`;
 }
 
-function Condition({ condition, fields, flows, onChange, onRemove }) {
+function Condition({ condition, fields, flows, source, onChange, onRemove }) {
   const listId = useMemo(() => `values-${++conditionIds}`, []);
   // For "is one of", suggest values for the item being typed
   const typed = condition.op === "in" ? condition.value.split(",").pop().trim() : condition.value;
-  const values = useValues(condition.field, typed, flows);
+  const values = useValues(condition.field, typed, flows, source);
   // A value chosen in the (i): added to the list of "is one of"; for ISIC and CPC the code, matched on its start
   // (the data reads "0111:Growing of …"; "is not" has to be given the whole text)
   const pick = (item) => {
@@ -505,12 +510,12 @@ function Condition({ condition, fields, flows, onChange, onRemove }) {
       <datalist id=${listId}>
         ${values.map((v) => html`<option value=${condition.op === "in" ? condition.value.replace(/[^,]*$/, (condition.value.includes(",") ? " " : "") + v) : v} />`)}
       </datalist>
-      <${FieldHelp} condition=${condition} flows=${flows} onPick=${pick} />
+      <${FieldHelp} condition=${condition} flows=${flows} source=${source} onPick=${pick} />
       <button onClick=${onRemove} aria-label="Remove condition">×</button>
     </div>`;
 }
 
-function QueryBuilder({ query, setQuery, fields, flows }) {
+function QueryBuilder({ query, setQuery, fields, flows, source }) {
   const { conditions, combinator } = query;
   const update = (patch) => setQuery({ ...query, ...patch });
   return html`
@@ -521,7 +526,7 @@ function QueryBuilder({ query, setQuery, fields, flows }) {
             <option value="all">all conditions</option><option value="any">any condition</option>
           </select></div>`}
       ${conditions.map((c, i) => html`
-        <${Condition} key=${c.id} condition=${c} fields=${fields} flows=${flows}
+        <${Condition} key=${c.id} condition=${c} fields=${fields} flows=${flows} source=${source}
           onChange=${(next) => update({ conditions: conditions.map((x, j) => (j === i ? next : x)) })}
           onRemove=${() => update({ conditions: conditions.filter((_, j) => j !== i) })} />`)}
       <div class="row"><button onClick=${() => update({ conditions: [...conditions, newCondition(flows ? "compartment" : "location", "eq")] })}>+ condition</button></div>
@@ -551,7 +556,6 @@ function Highlight({ text, words }) {
 function FunctionalUnit({ root, onSelect, fields }) {
   const [text, setText] = useState("");
   const [filters, setFilters] = useState(() => emptyQuery("location", "eq"));
-  const [showFilters, setShowFilters] = useState(false);
   const [open, setOpen] = useState(false);
   const [found, setFound] = useState({ total: 0, results: [] });
   const [active, setActive] = useState(0);
@@ -602,16 +606,13 @@ function FunctionalUnit({ root, onSelect, fields }) {
         <input placeholder=${current || "Search a process: name, product, location…"} value=${text} title=${current}
                onInput=${(e) => { setText(e.target.value); setOpen(true); }} onFocus=${() => setOpen(true)}
                onKeyDown=${onKeyDown} aria-label="Functional unit" />
-        <button class=${activeFilters ? "primary" : ""} onClick=${() => { setShowFilters(!showFilters || !open); setOpen(true); }}
-          title="Filter by location, activity type, ISIC, …">Filters${activeFilters ? ` (${activeFilters})` : ""}</button>
       </div>
       ${open && html`
         <div class="search-panel">
-          ${showFilters && html`
-            <div class="search-filters">
-              <${QueryBuilder} query=${filters} setQuery=${setFilters} fields=${fields} />
-              ${activeFilters > 0 && html`<button onClick=${() => setFilters(emptyQuery("location", "eq"))}>Clear filters</button>`}
-            </div>`}
+          <div class="search-filters">
+            <${QueryBuilder} query=${filters} setQuery=${setFilters} fields=${fields} />
+            ${activeFilters > 0 && html`<button onClick=${() => setFilters(emptyQuery("location", "eq"))}>Clear filters</button>`}
+          </div>
           ${error && html`<div class="error">${error}</div>`}
           ${searching
             ? html`
@@ -624,7 +625,7 @@ function FunctionalUnit({ root, onSelect, fields }) {
                     <small><${Highlight} text=${r.reference_product} words=${words} /> · ${unit(r.unit)}</small>
                   </div>`)}
               </div>`
-            : html`<div class="search-meta">Type words of the activity name or product (a location code like "fr" or "glo" also works), or use filters.</div>`}
+            : html`<div class="search-meta">Type words of the activity name or product (a location code like "fr" or "glo" also works), or use the filters above.</div>`}
         </div>`}
     </div>`;
 }
@@ -1267,34 +1268,64 @@ const FLOW_NODE_TYPES = ["emission", "natural resource", "economic", "inventory 
 const nodeLabel = (n) => (FLOW_NODE_TYPES.includes(n.type) ? (n.categories || []).join(", ") : n.location);
 
 // Search box over the processes or flows of a project; picking one adds it as an exchange
+// The fields the filters of the search of a project can use (what /api/brightway/search reads without opening the datasets)
+const NODE_FILTER_FIELDS = { process: ["location", "reference_product", "name", "database"], flow: ["compartment", "subcompartment", "name", "unit", "database"] };
+
+// The search of a process or a flow of the project, for the exchanges of a dataset: words and filters (always shown while
+// it is open, as in the search of the top bar), the values of the filters read from the project
 function NodePicker({ folder, project, kind, placeholder, onPick }) {
+  const flows = kind !== "process";
   const [text, setText] = useState("");
+  const [filters, setFilters] = useState(() => emptyQuery(flows ? "compartment" : "location", "eq"));
+  const [open, setOpen] = useState(false);
   const [results, setResults] = useState(null);
   const [active, setActive] = useState(0);
+  const box = useRef(null);
+  const predicate = useMemo(() => toPredicate(filters), [filters]);
+  const activeFilters = filters.conditions.filter((c) => c.value.trim()).length;
+  const searching = Boolean(text.trim() || predicate);
+  const source = useMemo(() => ({
+    options: (field, q, limit) => serverRequest(`/api/brightway/options?folder=${encodeURIComponent(folder)}&project=${encodeURIComponent(project)}`
+      + `&kind=${kind}&field=${field}&q=${encodeURIComponent(q)}&limit=${limit}`),
+  }), [folder, project, kind]);
   useEffect(() => {
-    if (!text.trim()) { setResults(null); return; }
+    const away = (e) => box.current && !box.current.contains(e.target) && setOpen(false);
+    document.addEventListener("mousedown", away);
+    return () => document.removeEventListener("mousedown", away);
+  }, []);
+  useEffect(() => {
+    if (!open || !searching) { setResults(null); return; }
     let live = true;
-    const timer = setTimeout(() => serverRequest(`/api/brightway/search?folder=${encodeURIComponent(folder)}&project=${encodeURIComponent(project)}&kind=${kind}&q=${encodeURIComponent(text)}`)
+    const timer = setTimeout(() => serverRequest(`/api/brightway/search?folder=${encodeURIComponent(folder)}&project=${encodeURIComponent(project)}&kind=${kind}&q=${encodeURIComponent(text)}`
+        + (predicate ? `&filters=${encodeURIComponent(JSON.stringify(predicate))}` : ""))
       .then((r) => { if (live) { setResults(r); setActive(0); } }).catch(() => live && setResults([])), 200);
     return () => { live = false; clearTimeout(timer); };
-  }, [text, folder, project, kind]);
-  const pick = (n) => { onPick(n); setText(""); setResults(null); };
+  }, [text, predicate, open, folder, project, kind]);
+  useEffect(() => {
+    box.current?.querySelector(".search-results .active")?.scrollIntoView({ block: "nearest" });
+  }, [active]);
+  const pick = (n) => { onPick(n); setText(""); setResults(null); setOpen(false); };
   function onKey(e) {
+    if (e.key === "Escape") { setOpen(false); return; }
     if (!results?.length) return;
     if (e.key === "ArrowDown") { e.preventDefault(); setActive(Math.min(active + 1, results.length - 1)); }
     else if (e.key === "ArrowUp") { e.preventDefault(); setActive(Math.max(active - 1, 0)); }
     else if (e.key === "Enter") { e.preventDefault(); pick(results[active]); }
-    else if (e.key === "Escape") setResults(null);
   }
   return html`
-    <div class="node-picker">
-      <input value=${text} placeholder=${placeholder} onInput=${(e) => setText(e.target.value)} onKeyDown=${onKey}
-        onBlur=${() => setTimeout(() => setResults(null), 150)} disabled=${!project} />
-      ${results && html`
+    <div class="node-picker" ref=${box}>
+      <input value=${text} placeholder=${placeholder} onInput=${(e) => { setText(e.target.value); setOpen(true); }} onFocus=${() => setOpen(true)}
+        onKeyDown=${onKey} disabled=${!project} />
+      ${open && html`
         <div class="search-panel">
-          <div class="search-meta">${results.length ? `${results.length}${results.length === 40 ? "+" : ""} found · ↑↓ Enter` : "Nothing found"}</div>
+          <div class="search-filters">
+            <${QueryBuilder} query=${filters} setQuery=${setFilters} fields=${NODE_FILTER_FIELDS[flows ? "flow" : "process"]} flows=${flows} source=${source} />
+            ${activeFilters > 0 && html`<button onClick=${() => setFilters(emptyQuery(flows ? "compartment" : "location", "eq"))}>Clear filters</button>`}
+          </div>
+          <div class="search-meta">${!searching ? "Type words, or use the filters above."
+            : !results ? "…" : results.length ? `${results.length}${results.length === 40 ? "+" : ""} found · ↑↓ Enter` : "Nothing found"}</div>
           <div class="search-results">
-            ${results.map((n, i) => html`
+            ${(results || []).map((n, i) => html`
               <div key=${`${n.database}/${n.code}`} class=${i === active ? "active" : ""} onMouseEnter=${() => setActive(i)}
                    onMouseDown=${(e) => { e.preventDefault(); pick(n); }}>
                 <div><b>${n.name}</b> <span class="loc-chip">${nodeLabel(n)}</span></div>
@@ -1646,7 +1677,16 @@ function DatasetForm({ onClose, current, edit, initial, copyFrom: start, deleted
 
 // The right panel in edit mode: the focused process (edit, copy, delete), the staged changes, and
 // "Apply", which makes them together (and builds the open database again if it is affected)
-function EditPanel({ origin, dataset, pending, affected, locked, outdated, onForm, stage, unstage, unstageAll, onApplied, onRebuild }) {
+// A window with a panel on the right, as the buttons of VS Code and Obsidian: filled while the panel is shown
+function SidePanelIcon({ open }) {
+  return html`
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3">
+      <rect x="1.65" y="2.65" width="12.7" height="10.7" rx="1.6" /><path d="M10 2.9v10.2" />
+      ${open && html`<rect x="10" y="3.3" width="3.7" height="9.4" fill="currentColor" stroke="none" />`}
+    </svg>`;
+}
+
+function EditPanel({ origin, dataset, pending, affected, locked, outdated, onForm, stage, unstage, unstageAll, onApplied, onRebuild, onCollapse }) {
   const [job, setJob] = useState(null);
   const [showLog, setShowLog] = useState(false);
   const [error, setError] = useState(null);
@@ -1677,7 +1717,8 @@ function EditPanel({ origin, dataset, pending, affected, locked, outdated, onFor
 
   return html`
     <div class="edit-panel">
-      <h3>Edit mode <span class="muted">· project ${origin.project}</span></h3>
+      <h3 class="edit-title">Edit mode <span class="muted">· project ${origin.project}</span>
+        <button class="collapse-side" onClick=${onCollapse} title="Hide the side panel" aria-label="Hide the side panel"><${SidePanelIcon} open /></button></h3>
       <p class="muted small">Changes are staged here and made together when you apply them. Press e on a process of the list (or use Edit below) to change it in its form; values of a pop-up can be changed by double-clicking them.
         The impacts shown are those of the last build: they are greyed out once what they come from has changed.</p>
       ${error && html`<div class="error">${error}</div>`}
@@ -4815,7 +4856,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
             ${[["chart", "Process contribution"], ["flows", "Flow contribution"], ["groups", `Group rules${activeRules ? ` (${activeRules})` : ""}`], ["global", "Group contributions"]].map(([key, label]) => html`
               <button role="tab" class=${tab === key ? "active" : ""} onClick=${() => setTab(key)}>${label}</button>`)}
             <span class="spacer"></span>
-            <button class="collapse-side" onClick=${onCollapseSide} title="Hide the side panel" aria-label="Hide the side panel">»</button>
+            <button class="collapse-side" onClick=${onCollapseSide} title="Hide the side panel" aria-label="Hide the side panel"><${SidePanelIcon} open /></button>
           </div>
           ${tab === "chart" && allData.rows.length > 0 && html`<${ChartPanel} key=${editing ? "edit" : "view"} data=${allData} info=${info} method=${method}
               chartMethods=${chartMethods} setChartMethods=${setChartMethods} view=${view} />`}
@@ -5714,13 +5755,22 @@ function App() {
   };
 
   // ``centre``: the search of a process (a model is open), in the middle of the bar
-  const topBar = (sidePanel, centre) => html`
+  const topBar = (centre) => html`
     <header class="top-bar">
       <div class="top-left">
       <h1>LCA Explorer</h1>
       <${DatabaseSelect} databases=${databases} />
       ${databases && html`<button onClick=${() => setLoadOpen(true)}
         title="Open another database: a model already built, or a database of your Brightway projects">Load database</button>`}
+      ${editing && html`<span class="mode-badge" title="Edit mode: changes are staged, then made together in the project">Edit mode</span>`}
+      ${outdated && html`<button class="primary" disabled=${rebuilding?.status === "running"} onClick=${rebuild}
+        title=${`${outdated}: the model has to be built again, and its impacts are greyed out until then`}>
+        ${rebuilding?.status === "running" ? "Rebuilding…" : "Rebuild required"}</button>`}
+      ${rebuilding?.status === "failed" && html`<span class="error-inline" title=${rebuilding.error}>Rebuild failed</span>`}
+      </div>
+      <div class="top-centre">${centre}</div>
+      <div class="top-right">
+      <button onClick=${() => setShortcutsOpen(true)} title="Keyboard navigation of the lists and pop-ups">Shortcuts</button>
       ${databases && html`
         <span class="mode-switch" role="group" aria-label="Mode">
           <button class=${!editing && !comparing ? "primary" : ""} onClick=${() => setMode("view")}
@@ -5731,16 +5781,6 @@ function App() {
             title=${origin ? "Change processes: changes are staged, then made together and the model built again" : "Open a database of a Brightway project to edit it"}>
             Edit${pending.length ? ` (${pending.length} staged)` : ""}</button>
         </span>`}
-      ${editing && html`<span class="mode-badge" title="Edit mode: changes are staged, then made together in the project">Edit mode</span>`}
-      ${outdated && html`<button class="primary" disabled=${rebuilding?.status === "running"} onClick=${rebuild}
-        title=${`${outdated}: the model has to be built again, and its impacts are greyed out until then`}>
-        ${rebuilding?.status === "running" ? "Rebuilding…" : "Rebuild required"}</button>`}
-      ${rebuilding?.status === "failed" && html`<span class="error-inline" title=${rebuilding.error}>Rebuild failed</span>`}
-      </div>
-      <div class="top-centre">${centre}</div>
-      <div class="top-right">
-      <button onClick=${() => setShortcutsOpen(true)} title="Keyboard navigation of the lists and pop-ups">Shortcuts</button>
-      ${sidePanel}
       </div>
     </header>
     ${shortcutsOpen && html`<${ShortcutsDialog} onClose=${() => setShortcutsOpen(false)} />`}
@@ -5786,8 +5826,7 @@ function App() {
     <${EditorContext.Provider} value=${editor}>
     <${ViewOptionsContext.Provider} value=${viewOptions}>
     <div class=${`app ${stale ? "stale" : ""} ${editing ? "editing" : ""} ${comparing ? "comparing" : ""} ${showStaged ? "has-staged" : ""}`}>
-      ${topBar(comparing ? null : html`<button class=${sideOpen ? "primary" : ""} onClick=${() => setSideOpen(!sideOpen)}
-          title="Show or hide the side panel (process and flow contribution, grouping, whole supply chain)">Side panel</button>`, comparing ? null : html`
+      ${topBar(comparing ? null : html`
         <${FunctionalUnit} root=${focusedRoot} fields=${info.query_fields} onSelect=${pickRoot} />
         <button class=${viewOptions ? "primary" : ""} onClick=${() => setViewOptions(!viewOptions)} aria-pressed=${viewOptions}
           title="Show or hide the options of the views: amount, impact method, cut-off, display, grouping, names and colours (each tab and pop-up has its own)">View options</button>`)}
@@ -5803,12 +5842,12 @@ function App() {
           tabs=${allTabs.filter((id) => states.current[id]?.root).map((id) => ({ id, state: states.current[id], title: titles[id] }))} />`}
         ${!comparing && (sideOpen
           ? html`<div class="side-resizer" onPointerDown=${startSideResize} title="Drag to resize"></div>`
-          : html`<button class="side-reopen" onClick=${() => setSideOpen(true)} title="Show the side panel" aria-label="Show the side panel">«</button>`)}
+          : html`<button class="side-reopen" onClick=${() => setSideOpen(true)} title="Show the side panel" aria-label="Show the side panel"><${SidePanelIcon} /></button>`)}
         <aside class="sidebar" style=${{ width: `${sideWidth}px`, display: sideOpen && !comparing ? "" : "none" }}>
           ${allTabs.map((id) => html`<div key=${id} id=${`side-${id}`} class="side-slot" style=${{ display: id === focusedTab && !editing ? "" : "none" }}></div>`)}
           ${editing && html`<${EditPanel} origin=${origin} dataset=${dataset} pending=${pending} affected=${pendingView.affected}
             locked=${pendingView.locked} outdated=${outdated} onForm=${setDatasetOpen} stage=${stage} unstage=${unstage} unstageAll=${unstageAll}
-            onApplied=${() => { refreshEditor(); refreshDatabases(); }} onRebuild=${rebuild} />`}
+            onApplied=${() => { refreshEditor(); refreshDatabases(); }} onRebuild=${rebuild} onCollapse=${() => setSideOpen(false)} />`}
         </aside>
       </div>
     </div>

@@ -1522,14 +1522,37 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
 
     @app.get("/api/brightway/search")
     def search_nodes(folder: str, project: str, q: str = "", kind: str = "process", database: str | None = None,
-                     limit: int = 40):
-        """Processes, resources or emissions of a project, for the exchanges of a new dataset."""
+                     limit: int = 40, filters: str | None = None):
+        """Processes, resources or emissions of a project, for the exchanges of a new dataset. ``filters``:
+        a predicate as in ``query`` (JSON) on name, reference_product, location and database of processes;
+        name, compartment, subcompartment, unit and database of flows."""
+        import json
+
         if kind not in ("process", "resource", "emission"):
             raise HTTPException(400, f"Unknown kind {kind!r}")
         try:
-            return sources.search_nodes(folder_of(folder), project, q, kind, database, limit)
+            predicate = json.loads(filters) if filters else None
+        except ValueError as e:
+            raise HTTPException(400, f"Invalid filters: {e}")
+        try:
+            return sources.search_nodes(folder_of(folder), project, q, kind, database, limit, predicate)
+        except KeyError as e:
+            raise HTTPException(400, f"Invalid filters: unknown field {e}")
         except (FileNotFoundError, ValueError) as e:
             raise HTTPException(404, str(e))
+
+    @app.get("/api/brightway/options")
+    def node_options(folder: str, project: str, field: str, kind: str = "process", q: str = "", limit: int = 200,
+                     database: str | None = None):
+        """The values of a filter field of ``/api/brightway/search``, with counts and names of codes."""
+        if kind not in ("process", "resource", "emission"):
+            raise HTTPException(400, f"Unknown kind {kind!r}")
+        try:
+            return sources.node_options(folder_of(folder), project, kind, field, q, limit, database)
+        except FileNotFoundError as e:
+            raise HTTPException(404, str(e))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
 
     # ------------------------------------------------ staged changes: made together by "apply"
 

@@ -20,6 +20,11 @@ import unicodedata
 from contextlib import closing
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
+
+from .query import evaluate, field_options
+
 # Node types of bw2data that are not processes: elementary flows, and products of SimaPro-style imports
 NON_PROCESS_TYPES = {"emission", "natural resource", "economic", "inventory indicator", "social", "product", "waste"}
 
@@ -302,6 +307,48 @@ def _flows(path: Path) -> list[dict]:
     return flows
 
 
+_process_cache: dict[str, tuple[float, pd.DataFrame]] = {}
+
+
+def _process_frame(path: Path) -> pd.DataFrame:
+    """The processes of a project as a table (database, code, name, reference_product, location), without
+    reading their data: what the filters of the process search are evaluated on. Cached until the file changes."""
+    stamp = path.stat().st_mtime
+    cached = _process_cache.get(str(path))
+    if cached and cached[0] == stamp:
+        return cached[1]
+    with closing(sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)) as con:
+        rows = con.execute(f"SELECT database, code, name, COALESCE(product, ''), COALESCE(location, '') FROM activitydataset "
+                           f"WHERE COALESCE(type, 'process') NOT IN ({','.join('?' * len(NOT_SUPPLIERS))})",
+                           sorted(NOT_SUPPLIERS)).fetchall()
+    frame = pd.DataFrame(rows, columns=["database", "code", "name", "reference_product", "location"])
+    _process_cache[str(path)] = (stamp, frame)
+    return frame
+
+
+def _flow_frame(path: Path, kind: str, database: str | None = None) -> pd.DataFrame:
+    """The resources or the emissions of a project as a table (name, compartment, subcompartment, unit, database, code)."""
+    rows = [f for f in _flows(path) if _resource(f) == (kind == "resource") and (not database or f["database"] == database)]
+    return pd.DataFrame({
+        "database": [f["database"] for f in rows], "code": [f["code"] for f in rows], "name": [f["name"] or "" for f in rows],
+        "compartment": [f["categories"][0] if f["categories"] else "" for f in rows],
+        "subcompartment": [", ".join(f["categories"][1:]) for f in rows], "unit": [f["unit"] or "" for f in rows],
+    })
+
+
+def node_options(base, project: str, kind: str, field: str, text: str = "", limit: int = 200,
+                 database: str | None = None) -> dict:
+    """The values of a field of the nodes ``search_nodes`` looks through, as ``query.field_options`` gives them
+    for a model (with names for locations): the helper of the filters of the search."""
+    path = project_dir(base, project) / "lci" / "databases.db"
+    frame = _process_frame(path) if kind == "process" else _flow_frame(path, kind, database)
+    if field not in frame.columns or field == "code":
+        raise ValueError(f"Unknown field {field!r}")
+    if kind == "process" and database:
+        frame = frame[frame["database"] == database]
+    return field_options(frame, field, text, limit)
+
+
 RESOURCE_COMPARTMENTS = {"natural resource", "resources", "resource", "raw", "raw materials"}
 
 
@@ -312,16 +359,56 @@ def _resource(flow: dict) -> bool:
                                                    and flow["categories"][0].lower() in RESOURCE_COMPARTMENTS)
 
 
+def _filtered_nodes(path: Path, words: list[str], kind: str, database: str | None, limit: int, filters: dict) -> list[dict]:
+    """``search_nodes`` with ``filters`` (a predicate of ``query``, over name, reference_product, location and database
+    of processes; name, compartment, subcompartment, unit and database of flows) as well as the words."""
+    first = words[0] if words else ""
+    if kind == "process":
+        frame = _process_frame(path)
+        mask = evaluate(filters, frame).copy()
+        if database:
+            mask &= (frame["database"] == database).to_numpy()
+        name = frame["name"].str.lower()
+        for word in words:
+            mask &= np.asarray(name.str.contains(word, regex=False) | frame["reference_product"].str.lower().str.contains(word, regex=False)
+                               | (frame["location"].str.lower() == word))
+        hits = frame[mask]
+        order = np.lexsort([hits["name"].str.len().to_numpy(), ~hits["name"].str.lower().str.startswith(first).to_numpy(),
+                            ~hits["location"].str.lower().isin(words).to_numpy()])
+        hits = hits.iloc[order].head(limit)
+        found = []
+        with closing(sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)) as con:
+            for database_, code in zip(hits["database"], hits["code"]):  # the data (unit) of the few shown only
+                row = con.execute("SELECT database, code, name, product, location, type, data FROM activitydataset "
+                                  "WHERE database = ? AND code = ?", (database_, code)).fetchone()
+                if row:
+                    found.append(_node(row))
+        return found
+    frame = _flow_frame(path, kind, database)
+    mask = evaluate(filters, frame).copy()
+    text = (frame["name"] + " " + frame["compartment"] + " " + frame["subcompartment"]).str.lower()
+    for word in words:
+        mask &= np.asarray(text.str.contains(word, regex=False))
+    hits = frame[mask]
+    order = np.lexsort([hits["name"].str.len().to_numpy(), ~hits["name"].str.lower().str.startswith(first).to_numpy()])
+    shown = hits.iloc[order].head(limit)
+    by_key = {(f["database"], f["code"]): f for f in _flows(path)}
+    return [{k: v for k, v in by_key[key].items() if k != "_text"} for key in zip(shown["database"], shown["code"])]
+
+
 def search_nodes(base, project: str, text: str, kind: str = "process", database: str | None = None,
-                 limit: int = 40) -> list[dict]:
+                 limit: int = 40, filters: dict | None = None) -> list[dict]:
     """Processes (``kind="process"``), resources or emissions of a project matching the words of
-    ``text`` (in the name, product and location of processes; name and compartment of flows), read-only.
+    ``text`` (in the name, product and location of processes; name and compartment of flows) and the
+    ``filters`` (a predicate as in ``query``), read-only.
 
     Each: ``{"database", "code", "name", "reference_product", "location", "unit", "categories", "type"}``.
     """
     path = project_dir(base, project) / "lci" / "databases.db"
     words = [w for w in text.lower().split() if w]
     first = words[0] if words else ""
+    if filters:
+        return _filtered_nodes(path, words, kind, database, limit, filters)
     if kind != "process":
         found = [f for f in _flows(path)
                  if _resource(f) == (kind == "resource") and (not database or f["database"] == database)

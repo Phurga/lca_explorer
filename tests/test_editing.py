@@ -444,6 +444,34 @@ def test_search_reads_the_project_files(project):
     assert sources.search_nodes(project, "toy", "water", "emission") == []
 
 
+def test_search_filters(project):
+    def names(predicate, text="", kind="process"):
+        return [n["name"] for n in sources.search_nodes(project, "toy", text, kind, filters=predicate)]
+
+    where = lambda field, op, value: {"field": field, "op": op, "value": value}  # noqa: E731
+    assert names(where("name", "startswith", "m")) == ["manure treatment"]
+    assert sorted(names(where("location", "eq", "FR"))) == ["electricity", "feed", "manure treatment"]
+    assert names(where("location", "eq", "DE")) == []
+    assert names({"all": [where("database", "eq", "bg"), where("name", "contains", "feed")]}) == ["feed"]
+    assert names({"any": [where("name", "eq", "feed"), where("name", "eq", "electricity")]}, "") == ["feed", "electricity"]
+    assert names(where("name", "contains", "e"), "elec") == ["electricity"]  # the words and the filters together
+    assert {n["unit"] for n in sources.search_nodes(project, "toy", "", filters=where("location", "eq", "FR"))} == {"kilogram"}
+    assert names(where("compartment", "eq", "air"), kind="emission") == ["Carbon dioxide, fossil"]
+    assert names(where("compartment", "eq", "natural resource"), kind="resource") == ["Water, river"]
+    assert names(where("compartment", "eq", "natural resource"), kind="emission") == []
+    with pytest.raises(KeyError):
+        names(where("nope", "eq", "x"))
+
+
+def test_node_options(project):
+    assert sources.node_options(project, "toy", "process", "location")["items"] == [{"value": "FR", "name": "France", "count": 3}]
+    assert [i["value"] for i in sources.node_options(project, "toy", "process", "database")["items"]] == ["bg"]
+    assert [i["value"] for i in sources.node_options(project, "toy", "emission", "compartment")["items"]] == ["air"]
+    assert [i["value"] for i in sources.node_options(project, "toy", "process", "name", "man")["items"]] == ["manure treatment"]
+    with pytest.raises(ValueError):
+        sources.node_options(project, "toy", "process", "code")
+
+
 def test_create_and_delete_projects(project):
     import bw2data as bd
 
@@ -477,6 +505,14 @@ def test_through_the_api(project, tmp_path):
     folder = str(project)
     found = client.get("/api/brightway/search", params={"folder": folder, "project": "toy", "q": "feed"}).json()
     assert [n["code"] for n in found] == ["feed"]
+    import json
+    where = json.dumps({"field": "location", "op": "eq", "value": "FR"})
+    params = {"folder": folder, "project": "toy", "filters": where}
+    assert len(client.get("/api/brightway/search", params=params).json()) == 3
+    assert client.get("/api/brightway/search", params={**params, "filters": "not json"}).status_code == 400
+    assert client.get("/api/brightway/search", params={**params, "filters": where.replace("location", "nope")}).status_code == 400
+    options = client.get("/api/brightway/options", params={"folder": folder, "project": "toy", "field": "location"}).json()
+    assert options["items"][0]["name"] == "France"
 
     job = wait(client.post("/api/brightway/dataset", json={"folder": folder, "project": "toy", "spec": spec()}).json())
     assert job["status"] == "done", job

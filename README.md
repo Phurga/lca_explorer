@@ -276,9 +276,11 @@ The app opens in your browser after a few seconds, at
 - **Tabs**: one functional unit per tab (**+** for a new one). Drag a tab
   onto the edge of a pane to compare side by side or one above the other,
   or use the split buttons at the right of the tab bar; the side panel
-  (charts, grouping) follows the pane clicked last and collapses with ».
-- **Search** a functional unit at the top of the tab (words of the name or product,
-  a location code like `fr`, or *Filters*); ↑/↓ and Enter to choose.
+  (charts, grouping) follows the pane clicked last and is hidden and shown with
+  the side-panel icon (the last button of its tab bar).
+- **Search** a functional unit at the top of the page (words of the name or product,
+  a location code like `fr`, or the filters shown under the box; the **(i)** of a
+  filter lists its values and what codes stand for); ↑/↓ and Enter to choose.
 - Pick the **impact method** and a display **cut-off** next to it.
 - **List / Tree** switch the left panel between a table and a node-and-edge
   view. Expand with ▸ or ±.
