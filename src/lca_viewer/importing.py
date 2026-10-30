@@ -201,15 +201,70 @@ BIOSPHERE_CORRESPONDENCES = [
 ]
 
 
-def _replacements(labels) -> dict[str, dict]:
-    """SimaPro process name -> ecoinvent target (name, reference product, location) of the
-    randonneur_data migrations ``labels``."""
+def is_adapter_file(migration) -> bool:
+    """A migration that is a file of the user's (a randonneur datapackage, ``.json``) rather than the label of one
+    of randonneur_data's."""
+    return str(migration).lower().endswith(".json") or any(c in str(migration) for c in "/\\")
+
+
+def adapter_file(path) -> dict:
+    """The transformations of an adapter file: a randonneur datapackage (JSON) whose ``replace``, ``update`` and
+    ``disaggregate`` lists each hold ``{"source": {...}, "target": {...}}`` (fields as of the exchanges, e.g. name,
+    reference product, location, unit, categories)."""
+    import json
+
+    path = Path(path)
+    if not path.is_file():
+        raise SystemExit(f"Adapter file {path} not found")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except ValueError as e:
+        raise SystemExit(f"Adapter file {path.name} is not valid JSON: {e}") from None
+    verbs = ("replace", "update", "disaggregate", "delete", "create")
+    if not isinstance(data, dict) or not any(isinstance(data.get(v), list) for v in verbs):
+        raise SystemExit(f"Adapter file {path.name} has no transformations: expected a randonneur datapackage "
+                         f"with a list under one of {', '.join(verbs)}")
+    return data
+
+
+def _adapter_data(migration, registry=None) -> dict:
+    """The transformations of a migration: the user's file, or randonneur_data's by label."""
+    if is_adapter_file(migration):
+        return adapter_file(migration)
     import randonneur_data
 
+    return (registry or randonneur_data.Registry()).get_file(migration)
+
+
+def apply_adapter_file(importer, path, edge_filter=None, log=print) -> None:
+    """Apply the transformations of an adapter file to the exchanges of an import (what ``importer.randonneur``
+    does for randonneur_data's), matching on the fields of each transformation's ``source``."""
+    import randonneur as rn
+
+    migrations = adapter_file(path)
+    config = rn.MigrationConfig(fields=None, edge_filter=edge_filter, edges_label="exchanges", verbose=False,
+                                case_sensitive=False, add_extra_attributes=True, verbs=rn.utils.SAFE_VERBS)
+    before = sum(1 for ds in importer.data for e in ds.get("exchanges", []) if edge_filter is None or edge_filter(e))
+    try:
+        importer.data = rn.migrate_edges(graph=importer.data, migrations=migrations, config=config)
+    except rn.errors.WrongGraphContext:
+        log(f"Adapter file {Path(path).name}: it is not for exchanges, skipped")
+        return
+    after = sum(1 for ds in importer.data for e in ds.get("exchanges", []) if edge_filter is None or edge_filter(e))
+    log(f"Adapter file {Path(path).name}: {before - after} of {before} unlinked exchanges changed")
+
+
+def _replacements(labels) -> dict[str, dict]:
+    """SimaPro process name -> ecoinvent target (name, reference product, location) of the
+    randonneur_data migrations ``labels`` (or adapter files)."""
     out = {}
-    registry = randonneur_data.Registry()
+    registry = None
+    if any(not is_adapter_file(label) for label in labels):
+        import randonneur_data
+
+        registry = randonneur_data.Registry()
     for label in labels:
-        data = registry.get_file(label)
+        data = _adapter_data(label, registry)
         for verb in ("replace", "update"):
             for t in data.get(verb, []):
                 name = t["source"].get("name")
@@ -616,14 +671,18 @@ def import_simapro_csv(
 ) -> dict:
     """Import a SimaPro CSV process export as ``database``, linked to the databases in ``link_to``.
 
-    ``migrations``: randonneur_data labels renaming unlinked inputs before linking them (default:
-    SimaPro -> ecoinvent names for the ecoinvent versions in ``link_to``). ``unlinked``: "fail"
+    ``migrations``: randonneur_data labels, or paths of adapter files (randonneur datapackages in JSON), renaming
+    unlinked inputs before linking them (default: SimaPro -> ecoinvent names for the ecoinvent versions in
+    ``link_to``). ``unlinked``: "fail"
     (write nothing) or "drop" (remove unlinked exchanges). Unlinked exchanges are listed in the CSV
     ``report``. Returns counts: ``{"processes", "unlinked", "report"}``.
     """
     import bw2data as bd
     import bw2io as bi
 
+    for migration in migrations or []:  # a file of the user's is checked before the long reading of the export
+        if is_adapter_file(migration):
+            adapter_file(migration)
     bd.projects.set_current(project)
     _check_new(database)
     for db in [biosphere, *link_to]:
@@ -683,7 +742,10 @@ def link_simapro(importer, link_to, migrations, biosphere: str, log=None) -> Non
 
     log("Linking the inputs")
     for label in migrations:
-        importer.randonneur(label, fields=MIGRATION_FIELDS.get(label, ["name"]), edge_filter=unlinked_input)
+        if is_adapter_file(label):
+            apply_adapter_file(importer, label, edge_filter=unlinked_input, log=log)
+        else:
+            importer.randonneur(label, fields=MIGRATION_FIELDS.get(label, ["name"]), edge_filter=unlinked_input)
     for db in link_to:
         # "production": SimaPro's waste to treatment, as bw_simapro_csv writes it
         importer.apply_strategy(functools.partial(

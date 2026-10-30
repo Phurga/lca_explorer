@@ -717,6 +717,14 @@ function ProjectForm({ form, folder, projects, onJob, onCancel, onForm, busy }) 
   }, [source, linkTo.join("|")]);
   useEffect(() => { if (origin === "remote" && !remote) serverRequest("/api/brightway/remote").then(setRemote).catch(() => setRemote([])); }, [origin]);
   const migrations = chosen ?? adapters?.default ?? [];
+  // Adapter files of the user's (randonneur datapackages, JSON), added next to randonneur_data's: { name, path, transformations }
+  const [custom, setCustom] = useState([]);
+  const [customPath, setCustomPath] = useState("");
+  const [customError, setCustomError] = useState(null);
+  const addCustom = () => serverRequest(`/api/adapter-file?path=${encodeURIComponent(customPath)}`)
+    .then((found) => { setCustom((list) => (list.some((c) => c.path === found.path) ? list : [...list, found])); setCustomPath(""); setCustomError(null); })
+    .catch((e) => setCustomError(e.message));
+  const adapterList = [...migrations, ...custom.map((c) => c.path)];  // what the import applies, in this order
   const toggle = (list, item) => (list.includes(item) ? list.filter((x) => x !== item) : [...list, item]);
   const submit = (url, body) => (e) => { e.preventDefault(); onJob(url, body); };
   const actions = (label, disabled, danger) => html`
@@ -833,7 +841,7 @@ ${" "}Databases imported afterwards can link to them.</p>
       <div class="project-form">${head}
         <form class="source-form" onSubmit=${submit("/api/brightway/import", {
           folder, project: form.project, format: "simapro-csv", path, database, biosphere, defaults: defaults ? chosenVersion : null,
-          link_to: linkTo, migrations,
+          link_to: linkTo, migrations: adapterList,
           unlinked: form.unlinked || "fail" })}>
           <label>SimaPro CSV export (processes)
             <${PathInput} value=${path} onChange=${setPath} accept=".csv,.CSV" placeholder="e.g. C:\\Downloads\\AGB32_final.CSV" /></label>
@@ -844,8 +852,8 @@ ${" "}Databases imported afterwards can link to them.</p>
               <label class="check"><input type="checkbox" checked=${linkTo.includes(d)} onChange=${() => { setLinkTo(toggle(linkTo, d)); setChosen(null); }} /> ${d}</label>`)
               : html`<p class="muted small">None in this project: inputs from ecoinvent or another database will not link.</p>`}
           </fieldset>
-          <details class="adapters" open=${migrations.length > 0}>
-            <summary>Adapters: ${migrations.length ? migrations.join(", ") : "none"}</summary>
+          <details class="adapters" open=${adapterList.length > 0}>
+            <summary>Adapters: ${adapterList.length ? [...migrations, ...custom.map((c) => c.name)].join(", ") : "none"}</summary>
             <p class="muted small">Correspondence files from Départ de Sentier's randonneur_data (with PRé's SimaPro ↔ ecoinvent
               names): they rename the SimaPro inputs and flows to those of the background database before linking. Those for
               the background databases chosen above are ticked.</p>
@@ -855,6 +863,21 @@ ${" "}Databases imported afterwards can link to them.</p>
                   onChange=${() => setChosen(toggle(migrations, a.name))} /> ${a.name}
                   <span class="muted small">${a.source} → ${a.target}</span></label>`)}
             </div>
+            <h5>Your own adapter</h5>
+            <p class="muted small">A file of your own, in randonneur's format (a datapackage in JSON with lists of
+              <code>replace</code> or <code>update</code> transformations, each with a <code>source</code> and a <code>target</code>:
+              name, reference product, location, unit…). It is applied to the inputs left unlinked, after the ones above.</p>
+            ${custom.map((c) => html`
+              <div class="adapter-file" key=${c.path}>
+                <span><b>${c.name}</b> <span class="muted small">${Object.entries(c.transformations).map(([v, n]) => `${n} ${v}`).join(", ") || "nothing to apply"}</span></span>
+                <button type="button" class="link" aria-label="Remove" onClick=${() => setCustom(custom.filter((x) => x.path !== c.path))}>×</button>
+              </div>`)}
+            <div class="adapter-add">
+              <${PathInput} value=${customPath} onChange=${(v) => { setCustomPath(v); setCustomError(null); }} accept=".json,application/json"
+                placeholder="Path of an adapter file (.json)" />
+              <button type="button" disabled=${!customPath} onClick=${addCustom}>Add this adapter</button>
+            </div>
+            ${customError && html`<div class="error">${customError}</div>`}
           </details>
           <fieldset>
             <legend>If some inputs or flows can't be linked</legend>
@@ -1241,6 +1264,14 @@ function patchExchange(input, shown, text) {
     exchange.amount = String((Number(exchange.amount) < 0 ? -1 : 1) * Math.abs(value) / ratio);
   };
 }
+// The patch of a dataset's form that links the exchange of ``input`` ([database, code]) to another process or flow
+function patchSupplier(input, node) {
+  return (draft) => {
+    const exchange = draft.exchanges.find((x) => x.node.database === input[0] && x.node.code === input[1]);
+    if (!exchange) throw new Error("This exchange is not in the dataset any more: reopen it");
+    exchange.node = node;
+  };
+}
 const productOfProcess = (draft, code) => draft.products.find((p) => p.processCode === code || p.code === code) || draft.products[0];
 
 // A value that can be changed by double-clicking it in edit mode: ``onCommit(text)`` returns a promise.
@@ -1347,6 +1378,7 @@ function DatasetForm({ onClose, current, edit, initial, copyFrom: start, deleted
   const set = (changes) => setDraft((d) => ({ ...d, ...changes }));
   const setProcess = (changes) => set({ process: { ...draft.process, ...changes } });
   const setProduct = (i, changes) => set({ products: draft.products.map((p, k) => (k === i ? { ...p, ...changes } : p)) });
+  const [replacing, setReplacing] = useState(null);  // the exchange whose process or flow is being replaced
   const setExchange = (i, changes) => set({ exchanges: draft.exchanges.map((e, k) => (k === i ? { ...e, ...changes } : e)) });
   const several = draft.products.length > 1;
   const shares = draft.products.reduce((s, p) => s + (Number(p.allocation) || 0), 0);
@@ -1476,8 +1508,15 @@ function DatasetForm({ onClose, current, edit, initial, copyFrom: start, deleted
                       <th class="num" title="Lognormal uncertainty: squared geometric standard deviation, as in SimaPro (empty: none)">SD²</th><th>Comment</th><th></th></tr>
                     ${rows.map(([e, i]) => html`
                       <tr key=${e.id || `n${i}`}>
-                        <td class="node" title=${`${e.node.name} | ${nodeLabel(e.node)} | ${e.node.database}`}>
-                          ${e.node.name} <span class="loc-chip">${nodeLabel(e.node)}</span></td>
+                        <td class=${`node ${replacing === i ? "picking" : ""}`} title=${`${e.node.name} | ${nodeLabel(e.node)} | ${e.node.database}`}>
+                          ${replacing === i
+                            ? html`<${NodePicker} folder=${folder} project=${current.project} kind=${kind}
+                                placeholder=${`Replace ${e.node.name} by…`}
+                                onPick=${(node) => { setExchange(i, { node }); setReplacing(null); }} />
+                              <button class="link" onClick=${() => setReplacing(null)}>cancel</button>`
+                            : html`${e.node.name} <span class="loc-chip">${nodeLabel(e.node)}</span>
+                              <button class="link replace" aria-label="Replace" onClick=${() => setReplacing(i)}
+                                title=${`Link this exchange to another ${kind === "process" ? "process" : "flow"}: its amount, comment and uncertainty stay`}>replace</button>`}</td>
                         <td class="num"><input class="num" value=${e.amount} onInput=${(ev) => setExchange(i, { amount: ev.target.value })} /></td>
                         <td class="muted">${unit(e.node.unit || "")}</td>
                         <td class="num"><input class="num short" value=${e.sd2 || ""} placeholder="—" onInput=${(ev) => setExchange(i, { sd2: ev.target.value })} /></td>
@@ -1747,20 +1786,25 @@ function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onU
                     </span>
                   </div>
                 </td>
-                ${shown.has("amount") && html`<td class="num" title=${amount}>${editing && r.kind === "process" && r.meta && r.depth > 0 && suppliedTo(r, byId).length === 1
-                  ? html`<${Editable} value=${amount} title="Double-click to change this input in the dataset of the process above (not the amount in this tree)"
-                      disabled=${ctx.locked.includes(suppliedTo(r, byId)[0].database)}
-                      load=${async () => {
-                        const parent = suppliedTo(r, byId)[0];
-                        const found = await request(`/api/activity/${parent.index}/exchanges?product=${r.meta.index}`);
-                        const e = found.inputs[0];
-                        if (!e) throw new Error("This input is not in the dataset of the process above");
-                        if (!e.input) throw new Error("Build this database again once, to edit amounts here");
-                        links[r.id] = e;
-                        return String(Math.abs(e.amount));
-                      }}
-                      onCommit=${(text) => { const parent = suppliedTo(r, byId)[0]; const e = links[r.id];
-                        return quickEdit(ctx, parent.database, parent.code, patchExchange(e.input, e.amount, text)); }} />`
+                ${shown.has("amount") && html`<td class="num" title=${amount}>${editing && r.kind === "process" && r.meta
+                  ? html`
+                    ${r.depth > 0 && suppliedTo(r, byId).length === 1
+                      ? html`<${Editable} value=${r.waste ? -r.amount : r.amount} format=${fmtAmount} title="Double-click to change this input in the dataset of the process above (not the amount in this tree)"
+                          disabled=${ctx.locked.includes(suppliedTo(r, byId)[0].database)}
+                          load=${async () => {
+                            const parent = suppliedTo(r, byId)[0];
+                            const found = await request(`/api/activity/${parent.index}/exchanges?product=${r.meta.index}`);
+                            const e = found.inputs[0];
+                            if (!e) throw new Error("This input is not in the dataset of the process above");
+                            if (!e.input) throw new Error("Build this database again once, to edit amounts here");
+                            links[r.id] = e;
+                            return String(Math.abs(e.amount));
+                          }}
+                          onCommit=${(text) => { const parent = suppliedTo(r, byId)[0]; const e = links[r.id];
+                            return quickEdit(ctx, parent.database, parent.code, patchExchange(e.input, e.amount, text)); }} />`
+                      : fmtAmount(r.waste ? -r.amount : r.amount)}${" "}<${Editable} value=${r.unit} display=${unit(r.unit)} title="Double-click to change the unit of this process's product, in its own dataset"
+                      disabled=${ctx.locked.includes(r.meta.database)}
+                      onCommit=${(text) => quickEdit(ctx, r.meta.database, r.meta.code, (d) => { productOfProcess(d, r.meta.code).unit = text; })} />${r.waste ? " treated" : ""}`
                   : amount}</td>`}
                 ${shown.has("impact") && html`<td class="num impact">${fmt(r.impacts[0])}</td>`}
                 ${shown.has("share") && html`<td class="impact">
@@ -2858,12 +2902,32 @@ function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsByI
         <td>${u.flow !== 0 && html`<button class="chip" title="Open the tree at this activity (largest supply path)"
               onClick=${(e) => { e.stopPropagation(); onGoTo(u.index); onClose(); }}>go to</button>`}</td>`}`,
   };
+  // Edit mode, on the pop-up of an input of a process: "use instead" links that exchange, in the dataset(s) of the
+  // process(es) above, to an alternative (same amount): staged like any other change
+  const replaceable = ctx.editing && !exchange && !target.direct && parentMetas.length > 0;
+  async function useInstead(a) {
+    try {
+      const alt = await request(`/api/activity/${a.index}?method=${method}`);
+      const node = { database: alt.database, code: alt.code, name: alt.name, reference_product: alt.reference_product,
+        location: alt.location, unit: alt.unit, categories: [], type: "process" };
+      for (const m of parentMetas) {
+        const found = await request(`/api/activity/${m.index}/exchanges?product=${target.index}`);
+        const e = found.inputs[0];
+        if (!e) throw new Error(`This input is not in the dataset of ${m.name}`);
+        // (a model built before the build recorded what exchanges link to: the product itself is what the dataset links to)
+        await quickEdit(ctx, m.database, m.code, patchSupplier(e.input || [info.database, info.code], node));
+      }
+      onClose();
+    } catch (err) { setError(err.message); }
+  }
   const alternativesPanel = {
-    span: 3, load: inputsOf, empty: "No input from the technosphere.", label: (a) => a.name,
+    span: replaceable ? 4 : 3, load: inputsOf, empty: "No input from the technosphere.", label: (a) => a.name,
     onOpen: (a) => openActivity(a.index), onExchange: (a, above) => openExchange(a.index, above), onUse: useAsRoot,
     cells: (a, above, depth) => (depth === 0 ? html`
       <td class="num">${fmt(a.per_unit)}</td>
-      <td class="num">${a.relative === null ? "" : `${a.relative > 0 ? "+" : ""}${pct(a.relative)}`}</td>` : html`
+      <td class="num">${a.relative === null ? "" : `${a.relative > 0 ? "+" : ""}${pct(a.relative)}`}</td>
+      ${replaceable && html`<td><button class="chip" title="Link this input to that activity instead (same amount): staged, applied with the other changes"
+        onClick=${(e) => { e.stopPropagation(); useInstead(a); }}>use instead</button></td>`}` : html`
       <td class="num impact">${a.impact ? fmt(a.impact) : "–"}</td>
       <td class="num impact">${a.impact && a.of ? pct(a.impact / a.of) : ""}</td>`),
   };
@@ -2950,17 +3014,20 @@ function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsByI
             <h4>Alternative suppliers · ${alternatives.count} ${alternatives.count === 1 ? "activity" : "activities"} making ${alternatives.product}</h4>
             <p class="note">
               Cumulative impact per ${unit(alternatives.unit)} of ${alternatives.product}, lowest first.
+              ${replaceable && " Use instead links the input to that activity (same amount) in the dataset of the process above: the change is staged."}
             </p>
             <table class="flows alternatives plist">
               <thead><tr>
                 <th>Activity</th>
                 <th class="num" title=${`${methodInfo.unit} per ${unit(alternatives.unit)} of ${alternatives.product}`}>${methodInfo.unit} per ${unit(alternatives.unit)}</th>
                 <th class="num">vs. current</th>
+                ${replaceable && html`<th></th>`}
               </tr></thead>
               <tbody>
                 <tr class="current">
                   <td class="user">${alternatives.current.name} <span class="loc-chip">${alternatives.current.location}</span> <span class="muted">current</span></td>
                   <td class="num">${fmt(alternatives.current.per_unit)}</td><td class="num"></td>
+                  ${replaceable && html`<td></td>`}
                 </tr>
                 ${alternatives.alternatives.map((a) => html`
                   <${ProcessRow} key=${a.index} item=${a} above=${null} depth=${0} ancestors=${[target.index]} panel=${alternativesPanel} />`)}
@@ -4639,7 +4706,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onColl
             <span class="spacer"></span>
             <button class="collapse-side" onClick=${onCollapseSide} title="Hide the side panel" aria-label="Hide the side panel">»</button>
           </div>
-          ${tab === "chart" && allData.rows.length > 0 && html`<${ChartPanel} data=${allData} info=${info} method=${method}
+          ${tab === "chart" && allData.rows.length > 0 && html`<${ChartPanel} key=${editing ? "edit" : "view"} data=${allData} info=${info} method=${method}
               chartMethods=${chartMethods} setChartMethods=${setChartMethods} view=${view} />`}
           ${tab === "flows" && root && html`<${FlowPanel} info=${info} root=${root} amount=${amount} method=${method}
               onLocate=${goTo} onInfo=${(index, x, y) => openInfo({ index, row: null, x, y })} onFlowInfo=${showFlowInfo}
@@ -5057,7 +5124,7 @@ function App() {
   const topBar = (sidePanel, centre) => html`
     <header class="top-bar">
       <div class="top-left">
-      <h1>LCA Process Explorer</h1>
+      <h1>LCA Explorer</h1>
       <${DatabaseSelect} databases=${databases} />
       ${databases && html`<button onClick=${() => setLoadOpen(true)}
         title="Open another database: a model already built, or a database of your Brightway projects">Load database</button>`}
@@ -5067,8 +5134,9 @@ function App() {
             title="Explore the results of the model built from the database">View</button>
           <button class=${editing ? "primary" : ""} disabled=${!origin} onClick=${() => { setMode("edit"); setSideOpen(true); }}
             title=${origin ? "Change processes: changes are staged, then made together and the model built again" : "Open a database of a Brightway project to edit it"}>
-            Edit${pending.length ? ` (${pending.length})` : ""}</button>
+            Edit${pending.length ? ` (${pending.length} staged)` : ""}</button>
         </span>`}
+      ${editing && html`<span class="mode-badge" title="Edit mode: changes are staged, then made together in the project">Edit mode</span>`}
       ${outdated && html`<button class="primary" disabled=${rebuilding?.status === "running"} onClick=${rebuild}
         title=${`${outdated}: the model has to be built again, and its impacts are greyed out until then`}>
         ${rebuilding?.status === "running" ? "Rebuilding…" : "Rebuild required"}</button>`}
@@ -5095,6 +5163,7 @@ function App() {
   }
   if (!info || !layout) return html`<div class="empty">${error || "Loading model…"}</div>`;
   const allTabs = panesOf(layout).flatMap((p) => p.tabs);
+  const showStaged = !editing && !!origin && pending.length > 0;
   const focusedTab = activeTabOf(focus);
   function startSideResize(e) {
     e.preventDefault();
@@ -5120,12 +5189,17 @@ function App() {
   return html`
     <${EditorContext.Provider} value=${editor}>
     <${ViewOptionsContext.Provider} value=${viewOptions}>
-    <div class=${`app ${stale ? "stale" : ""}`}>
+    <div class=${`app ${stale ? "stale" : ""} ${editing ? "editing" : ""} ${showStaged ? "has-staged" : ""}`}>
       ${topBar(html`<button class=${sideOpen ? "primary" : ""} onClick=${() => setSideOpen(!sideOpen)}
           title="Show or hide the side panel (process and flow contribution, grouping, whole supply chain)">Side panel</button>`, html`
         <${FunctionalUnit} root=${focusedRoot} fields=${info.query_fields} onSelect=${pickRoot} />
         <button class=${viewOptions ? "primary" : ""} onClick=${() => setViewOptions(!viewOptions)} aria-pressed=${viewOptions}
           title="Show or hide the options of the views: amount, impact method, cut-off, display, grouping, names and colours (each tab and pop-up has its own)">View options</button>`)}
+      ${showStaged && html`
+        <div class="staged-warning" role="status">
+          <span>⚠ ${pending.length} staged change${pending.length === 1 ? "" : "s"} not applied to the project yet.</span>
+          <button onClick=${() => { setMode("edit"); setSideOpen(true); }}>Review and apply in Edit mode</button>
+        </div>`}
       <div class="body">
         <div class="workspace"><${LayoutView} node=${layout} renderPane=${renderPane}
           onResize=${(id, sizes) => setLayout((l) => resizeSplit(l, id, sizes))} /></div>

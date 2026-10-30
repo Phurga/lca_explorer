@@ -724,7 +724,8 @@ class ImportRequest(BaseModel):
     ecoinvent 3.9 methods of bw2io). None: link to ``biosphere``, installing nothing."""
     link_to: list[str] = []
     migrations: list[str] | None = None
-    """randonneur_data transformations (SimaPro CSV); default: chosen from ``link_to``."""
+    """randonneur_data transformations (SimaPro CSV), or paths of adapter files (randonneur datapackages in JSON);
+    default: chosen from ``link_to``."""
     unlinked: str = "fail"
 
 
@@ -1256,6 +1257,20 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
 
         return {"adapters": sources.adapters(), "default": default_migrations(link_to)}
 
+    @app.get("/api/adapter-file")
+    def adapter_file_info(path: str):
+        """What an adapter file of the user's holds (a randonneur datapackage in JSON): ``{"name", "path",
+        "transformations": {verb: count}}``; 400 when it cannot be used."""
+        from .importing import adapter_file
+
+        file = Path(path.strip().strip("'\"")).expanduser().resolve()
+        try:
+            found = adapter_file(file)
+        except SystemExit as e:
+            raise HTTPException(400, str(e))
+        verbs = {v: len(found[v]) for v in ("replace", "update", "disaggregate", "delete", "create") if isinstance(found.get(v), list)}
+        return {"name": file.name, "path": str(file), "transformations": verbs}
+
     @app.get("/api/brightway/defaults")
     def defaults():
         """ecoinvent versions whose default biosphere and impact methods can be installed in a project."""
@@ -1280,6 +1295,13 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
         if req.project not in project_names(folder):
             raise HTTPException(404, f"No project {req.project!r} in {folder}")
         report = data / f"import-{sources.slug(database)}-unlinked.csv"
+        # Adapters: labels of randonneur_data's, or files of the user's (randonneur datapackages in JSON)
+        from .importing import is_adapter_file
+
+        migrations = None if req.migrations is None else [folder_of(m) if is_adapter_file(m) else m for m in req.migrations]
+        for m in migrations or []:
+            if is_adapter_file(m) and not Path(m).is_file():
+                raise HTTPException(404, f"Adapter file {m} not found")
 
         def work(job):
             import csv
@@ -1291,8 +1313,8 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
                 args += ["--unlinked", req.unlinked, "--report", str(report)]
                 if req.link_to:
                     args += ["--link-to", *req.link_to]
-                if req.migrations is not None:
-                    args += ["--migration", *req.migrations]
+                if migrations is not None:
+                    args += ["--migration", *migrations]
             report.unlink(missing_ok=True)
 
             def unlinked_rows():
@@ -1309,6 +1331,9 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
                 raise ValueError(str(e)) from None
             unlinked_rows()  # dropped ones, with --unlinked drop
             uploaded(path)
+            for m in migrations or []:
+                if is_adapter_file(m):
+                    uploaded(Path(m))
             return {"message": lines[-1] if lines else f"{database} imported", "database": database}
 
         return start(f"{database} ({req.project})", ("import", folder, req.project, database), work)

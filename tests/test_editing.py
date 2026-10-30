@@ -394,6 +394,26 @@ def test_any_process_can_be_edited_and_what_the_form_cannot_show_stays(project, 
         editing.delete_dataset("toy", "bg", "elec")
 
 
+def test_an_input_can_be_replaced_by_another_supplier(project, farm):
+    """The exchange keeps its amount, comment and uncertainty; only what it is linked to changes."""
+    read = sources.read_dataset(project, "toy", "my datasets", farm["farm"])
+    edited = as_spec(read)
+    feed = next(e for e in edited["exchanges"] if e["code"] == "feed")
+    feed.update(database="bg", code="elec", comment="now electricity")  # 4 kg of feed -> 4 kWh of electricity
+    editing.write_dataset("toy", edited)
+
+    import bw2data as bd
+
+    node = bd.get_node(database="my datasets", code=farm["farm"])
+    inputs = sorted((e.input["name"], e["amount"]) for e in node.technosphere() if e["amount"] > 0)
+    assert inputs == [("electricity", 4.0), ("electricity", 5.0)]
+    assert "now electricity" in [e.get("comment") for e in node.technosphere()]
+    assert scores("my datasets")["milk"] == pytest.approx(0.8 * (5 * 0.1 + 4 * 0.1 + 3 * 0.2 + 3) / 10)
+    # Read back, the form has the new supplier
+    again = sources.read_dataset(project, "toy", "my datasets", farm["farm"])
+    assert sorted(e["node"]["name"] for e in again["exchanges"] if e["section"] == "technosphere") == ["electricity", "electricity"]
+
+
 def test_a_form_without_ids_rewrites_the_exchanges(project, farm):
     """A change staged by an older version has no exchange ids: its exchanges are written again from the form."""
     read = sources.read_dataset(project, "toy", "my datasets", farm["farm"])

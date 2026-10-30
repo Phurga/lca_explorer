@@ -113,8 +113,11 @@ builds do: the server itself never imports bw2data.
   database (same version, else same major.minor; 3.9 with biosphere3 already
   in the project: `bundled`), else asks. The SimaPro CSV import is
   unchanged; the page lists randonneur_data's transformations (`/api/adapters`,
-  with those `default_migrations` picks for the ticked background databases)
-  and, when exchanges stay unlinked, the rows of the report CSV, then offers
+  with those `default_migrations` picks for the ticked background databases),
+  an *Add this adapter* button for a file of the user's (a randonneur datapackage in JSON
+  with `replace`/`update` lists of `{source, target}`; `/api/adapter-file` checks it,
+  `importing.apply_adapter_file` applies it to the unlinked inputs after randonneur_data's, and
+  `--migration` also takes such a path) and, when exchanges stay unlinked, the rows of the report CSV, then offers
   `--unlinked drop`.
 - **Biosphere and impact methods alone** (*Add database* → *Brightway
   repository*, or `lca-viewer defaults 3.10 --project P`): `install_defaults`

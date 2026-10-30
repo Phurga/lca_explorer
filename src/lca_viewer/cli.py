@@ -275,7 +275,8 @@ def main(argv=None) -> None:
     p.add_argument("--link-to", nargs="*", default=[],
                    help="Databases already in the project that the new one links to (e.g. ecoinvent-3.9.1-cutoff)")
     p.add_argument("--migration", nargs="*", default=None,
-                   help="randonneur_data migrations applied to technosphere inputs before linking "
+                   help="randonneur_data migrations, or paths of adapter files (randonneur datapackages in JSON), "
+                        "applied to technosphere inputs before linking "
                         "(default: simapro-ecoinvent-3.9.1-cutoff when linking to an ecoinvent 3.9.1 database)")
     p.add_argument("--unlinked", choices=["fail", "drop"], default="fail",
                    help="Inputs or emissions that cannot be linked: stop (default), or drop them and write the database")

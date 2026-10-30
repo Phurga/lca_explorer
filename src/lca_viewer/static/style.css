@@ -56,6 +56,7 @@ input, select {
 }
 input:focus, select:focus, button:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
 
+.app.has-staged { grid-template-rows: auto auto 1fr; }
 .app { display: grid; grid-template-rows: auto 1fr; grid-template-columns: minmax(0, 1fr); height: 100vh; }
 header {
   display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
@@ -87,6 +88,16 @@ select.method { max-width: 300px; }
 select.database { max-width: 220px; font-weight: 600; }
 .amount { width: 80px; }
 .cutoff { width: 64px; }
+
+/* Edit mode: the whole app turns plum (accent, bars, backgrounds) and the top bar is underlined, so that it cannot be
+   taken for the view mode (green) */
+.app.editing { --accent: #9c3a7c; --accent-soft: #f4dfeb; --bar: #c26aa0; --bg: #f9f1f6; --border: #e6d3df; --hover: #f3e6ee; --guide: #d2b9c8; background: var(--bg); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .app.editing { --accent: #e59ac8; --accent-soft: #3a2232; --bar: #c970a6; --bg: #1a1218; --panel: #241921; --border: #43303c; --hover: #2c1f28; --guide: #5e4656; }
+}
+:root[data-theme="dark"] .app.editing { --accent: #e59ac8; --accent-soft: #3a2232; --bar: #c970a6; --bg: #1a1218; --panel: #241921; --border: #43303c; --hover: #2c1f28; --guide: #5e4656; }
+.app.editing .top-bar { border-bottom: 3px solid var(--accent); }
+.mode-badge { padding: 2px 10px; border-radius: 10px; background: var(--accent); color: var(--panel); font-size: 11px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; }
 
 /* Workspace: panes of tabs (split left/right or top/bottom) and one side panel */
 .top-bar { padding: 6px 16px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 560px) minmax(0, 1fr); gap: 12px; align-items: center; }
@@ -671,6 +682,8 @@ table.dataset-table td { padding: 2px 4px; border-bottom: 1px solid var(--border
 table.dataset-table th.num, table.dataset-table td.num { text-align: right; width: 90px; }
 table.dataset-table td input { width: 100%; min-width: 0; }
 table.dataset-table td.node { max-width: 380px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+table.dataset-table td.node.picking { overflow: visible; max-width: none; white-space: normal; position: relative; }
+table.dataset-table td.node button.replace { margin-left: 6px; font-size: 11px; }
 input.num { text-align: right; font-family: var(--mono); }
 input.short { width: 70px; }
 .node-picker { position: relative; }
@@ -715,3 +728,14 @@ textarea.editing { width: 100%; box-sizing: border-box; }
 .app.stale .impact, .app.stale .tree td:nth-child(3), .app.stale .tree td:nth-child(4), .app.stale .chart, .app.stale svg g .edge, .app.stale .share {
   opacity: 0.4; filter: grayscale(1); }
 .app.stale .impact:hover { opacity: 0.4; }
+
+/* View mode with changes staged in the project: a warning under the top bar, the Edit button counting them */
+.staged-warning { display: flex; align-items: center; gap: 12px; padding: 5px 16px; background: #fff3cd; color: #5c4400; border-bottom: 1px solid #e8c766; font-size: 12px; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .staged-warning { background: #3d3216; color: #f1d98a; border-bottom-color: #6b5a22; } }
+:root[data-theme="dark"] .staged-warning { background: #3d3216; color: #f1d98a; border-bottom-color: #6b5a22; }
+
+/* SimaPro import: the user's own adapter files */
+.adapters h5 { margin: 10px 0 2px; font-size: 12px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .03em; }
+.adapters .adapter-file { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 2px 0; }
+.adapters .adapter-add { display: flex; gap: 6px; align-items: flex-start; }
+.adapters .adapter-add .path-input { flex: 1; }

@@ -84,9 +84,12 @@ API in `src/lca_viewer/server.py`.
 - **Edit mode and the view.** `EditorContext` carries what the pop-ups and the tree need
   (mode, project, staged changes, locked databases, whether the impacts are stale). In Edit mode
   `FUView` sends `merges: []`, `substitutions: {}`, rules with `merge` off, and applies no custom
-  names (they stay in the tab, for View). Conflicts found: a grouping rule's *merge* and the
-  alternative supplier *use instead* act on the tree, not the data, so they are off too; pins,
-  cut-off and groups stay but act on impacts that may be stale (greyed: `.app.stale .impact`).
+  names (they stay in the tab, for View). Conflicts found: a grouping rule's *merge* acts on the
+  tree, not the data, so it is off too; pins, cut-off and groups stay but act on impacts that may
+  be stale (greyed: `.app.stale .impact`). Edit mode is plum (`.app.editing` redefines the accent,
+  bar and background variables, an EDIT MODE badge and an underlined top bar), View mode green. In
+  View mode with changes staged, the Edit button reads *Edit (n staged)* and a warning under the top
+  bar offers to review them (`.staged-warning`).
   `Editable` is a value that turns into an input on double-click (Enter or blur stages, Escape
   cancels); its `start` prop (a new object each time) opens it without a double-click, which is
   how Enter on the selected process of the tree renames it in the database; its `format` prop
@@ -94,7 +97,12 @@ API in `src/lca_viewer/server.py`.
   `quickEdit` patches the form of the dataset (its staged form if there is one) and stages
   it again; exchanges are found by what they link to (`input`, recorded by the build, so models
   built before need one rebuild for amounts to be editable), and an allocated process's share of
-  an exchange is scaled back to the dataset's.
+  an exchange is scaled back to the dataset's. In the list, double-clicking the amount of a process
+  row changes the input in the dataset of the process above, and its unit changes the unit of that
+  process's own product (in its dataset); an exchange's source is replaced in the process form
+  (*replace* on its row: the exchange keeps its id, amount, comment and uncertainty; `editing._update_exchange`
+  links it to the new process or flow) and, for a product, with *use instead* in the *Alternatives*
+  panel of its pop-up, which stages that replacement in the dataset(s) of the process(es) above it.
 - **Rebuild required**: `/api/databases` gives each Brightway-built model's `outdated` (what
   changed in the project since: `sources.changes`); the top bar shows the button when it is set.
 - **Locks**: *Lock* in *Load database* (`POST /api/brightway/lock`, kept in `data/locks.json`);

@@ -17,6 +17,59 @@ EI = "ecoinvent-3.9.1-cutoff"
 METHOD = ("toy", "climate change")
 
 
+def test_a_custom_adapter_file_renames_the_unlinked_inputs(tmp_path):
+    """An adapter of the user's (a randonneur datapackage in JSON) next to randonneur_data's: it changes the exchanges
+    the filter lets through, matched on the fields of each ``source``."""
+    import json
+
+    pytest.importorskip("randonneur")
+    assert importing.is_adapter_file("mine.json") and importing.is_adapter_file("C:\\x\\mine") and importing.is_adapter_file("/x/mine")
+    assert not importing.is_adapter_file("simapro-ecoinvent-3.9.1-cutoff")
+
+    file = tmp_path / "mine.json"
+    file.write_text(json.dumps({"update": [{"source": {"name": "Old name"}, "target": {"name": "New name", "location": "FR"}}]}))
+
+    class Importer:
+        data = [{"exchanges": [{"name": "Old name", "type": "technosphere", "amount": 1},
+                               {"name": "Old name", "type": "technosphere", "amount": 2, "input": ("db", "x")},
+                               {"name": "Other", "type": "technosphere", "amount": 3}]}]
+
+    messages = []
+    importer = Importer()
+    importing.apply_adapter_file(importer, file, edge_filter=lambda e: not e.get("input"), log=messages.append)
+    assert [(e["name"], e.get("location")) for e in importer.data[0]["exchanges"]] == [
+        ("New name", "FR"), ("Old name", None), ("Other", None)]  # the linked one is left as it is
+    assert "mine.json" in messages[0]
+
+
+def test_an_adapter_file_is_checked(tmp_path):
+    missing = tmp_path / "nothing.json"
+    with pytest.raises(SystemExit, match="not found"):
+        importing.adapter_file(missing)
+    broken = tmp_path / "broken.json"
+    broken.write_text("{not json")
+    with pytest.raises(SystemExit, match="not valid JSON"):
+        importing.adapter_file(broken)
+    empty = tmp_path / "empty.json"
+    empty.write_text('{"name": "nothing"}')
+    with pytest.raises(SystemExit, match="no transformations"):
+        importing.adapter_file(empty)
+
+
+def test_the_page_checks_an_adapter_file(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from lca_viewer.server import create_library
+
+    client = TestClient(create_library(tmp_path / "data"))
+    file = tmp_path / "mine.json"
+    file.write_text('{"replace": [{"source": {"name": "a"}, "target": {"name": "b"}}], "update": []}')
+    found = client.get("/api/adapter-file", params={"path": str(file)})
+    assert found.status_code == 200 and found.json()["name"] == "mine.json"
+    assert found.json()["transformations"] == {"replace": 1, "update": 0}
+    assert client.get("/api/adapter-file", params={"path": str(tmp_path / "other.json")}).status_code == 400
+
+
 def test_default_migrations():
     assert importing.default_migrations([EI]) == ["simapro-ecoinvent-3.9.1-cutoff"]
     assert importing.default_migrations(["ecoinvent-3.10-cutoff", "biosphere3"]) == ["simapro-ecoinvent-3.10-cutoff"]

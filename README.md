@@ -1,6 +1,6 @@
-# lca_viewer
+# LCA Explorer
 
-Process explorer for LCA results: a SimaPro-like supply chain tree you can
+LCA Explorer shows LCA results as a process explorer: a SimaPro-like supply chain tree you can
 expand, collapse and group (manually, by theme or by query), and contribution
 charts built from what the tree shows. It runs on your own computer and opens
 in your browser. It reads ecoinvent ecoSpold2 releases and SimaPro CSV
@@ -46,14 +46,14 @@ everything the app needs. You need:
 
 ### 1. Get the code
 
-On the [GitHub page](https://github.com/Phurga/lca_viewer), signed in,
+On the [GitHub page](https://github.com/Phurga/lca_explorer), signed in,
 click the green **Code** button, then **Download ZIP**. Unzip it somewhere
 easy to find, e.g. your Documents folder. On Windows: right-click the ZIP,
 *Extract All…*, then open the extracted folder; the setup doesn't work from
 inside the ZIP. You now have a folder named `lca_viewer` (or
 `lca_viewer-main`) with `setup.cmd`, `setup.sh` and `README.md` in it.
 
-If you use git, `git clone https://github.com/Phurga/lca_viewer.git` does the
+If you use git, `git clone https://github.com/Phurga/lca_explorer.git` does the
 same.
 
 ### 2. Run the setup
@@ -359,8 +359,10 @@ projects Brightway and Activity Browser use, so changes show there too:
     background databases you tick (e.g. ecoinvent) through the *adapters* of
     Départ de Sentier's randonneur_data: PRé's SimaPro ↔ ecoinvent name
     correspondences and flow mappings. Those for the ticked databases are
-    chosen for you. If some inputs or flows can't be linked, nothing is
-    written and they are listed, unless you chose *Import without them*.
+    chosen for you; *Your own adapter* adds a correspondence file of your
+    own (a JSON file in randonneur's format). If some inputs or flows can't
+    be linked, nothing is written and they are listed, unless you chose
+    *Import without them*.
   - **ecoinvent**: a release downloaded with your ecoinvent account (log in
     once; kept in the system's credential store if you tick *Remember*).
 

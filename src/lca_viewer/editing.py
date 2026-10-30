@@ -18,7 +18,8 @@ their codes, so the datasets using them stay linked, and a product that is used 
 removed, nor a dataset with a product used elsewhere. Each change is one SQLite transaction, and the
 database is processed again before it ends, so the matrices a model is built from are never out of step with
 the data. Any dataset can be edited, ecoinvent's included: its exchanges are changed one by one, by
-id, so that what the form cannot show (pedigree, formulas, other uncertainties) stays. Datasets that other
+id, so that what the form cannot show (pedigree, formulas, other uncertainties) stays; an exchange can be linked
+to another process or flow (a supplier replaced) with its amount and the rest kept. Datasets that other
 databases use are then to be built again: the databases that use the edited one see their results change.
 """
 
@@ -258,14 +259,22 @@ def _sd2_of(edge):
     return None
 
 
-def _update_exchange(edge, e: dict) -> None:
+def _update_exchange(bd, edge, e: dict) -> None:
     """Change an exchange to what the form says, touching nothing else: its pedigree, formulas,
-    properties and uncertainties of other kinds stay as they are. A lognormal uncertainty follows the amount."""
+    properties and uncertainties of other kinds stay as they are. A lognormal uncertainty follows the amount.
+    The exchange can be linked to another process or flow (a supplier replaced): its amount and the rest stay."""
     amount = _stored(e["section"], float(e["amount"]), edge)
     comment = e.get("comment") or ""
     sd2 = float(e["sd2"]) if e.get("sd2") else None
     before = _sd2_of(edge)
     changed = False
+    if (e.get("database"), e.get("code")) != tuple(edge["input"]):
+        other = bd.get_node(database=e["database"], code=e["code"])
+        if edge["type"] != "biosphere":
+            other = _supplier(other)
+        if other.key != tuple(edge["input"]):
+            edge["input"] = other.key
+            changed = True
     if amount != float(edge["amount"]):
         edge["amount"] = amount
         changed = True
@@ -500,7 +509,7 @@ def _replace(bd, db, code: str, process: dict, products: list[dict], exchanges: 
     for e in exchanges:
         edge = pool.pop(e["id"], None) if e.get("id") else None
         if edge is not None:
-            _update_exchange(edge, e)
+            _update_exchange(bd, edge, e)
         else:
             left.append(e)
     fresh = []
@@ -511,7 +520,7 @@ def _replace(bd, db, code: str, process: dict, products: list[dict], exchanges: 
         if same is None:
             fresh.append(e)
         else:
-            _update_exchange(pool.pop(same), e)
+            _update_exchange(bd, pool.pop(same), e)
     for edge in pool.values():
         edge.delete()
 
