@@ -68,38 +68,80 @@ def default_versions() -> list[str]:
 
 
 class _PlainUnpickler(pickle.Unpickler):
-    """The archive's pickles are flows (dicts) and characterisation factors: no class to build."""
+    """The archive's pickles are nodes and exchanges (dicts) and characterisation factors: the only
+    class to build is numpy's scalars, the numbers some of them hold."""
+
+    NUMPY = {("numpy._core.multiarray", "scalar"), ("numpy.core.multiarray", "scalar"), ("numpy", "dtype")}
 
     def find_class(self, module, name):
+        if (module, name) in self.NUMPY:
+            return super().find_class(module, name)
         raise pickle.UnpicklingError(f"{module}.{name} not allowed")
 
 
-def read_biosphere_archive(path) -> tuple[str, dict, list]:
-    """The biosphere database and impact methods of a Brightway project archive (``.tar.gz``),
-    read without restoring the project: ``(database, {(database, code): flow}, [(name, metadata,
-    [((database, code), factor), …]), …])``."""
+def read_project_archive(path) -> tuple[dict, dict, list]:
+    """The databases and impact methods of a Brightway project archive (``.tar.gz``), read without
+    restoring the project: ``({database: metadata}, {database: {(database, code): node}}, [(name,
+    metadata, [((database, code), factor), …]), …])``. Each node holds its ``exchanges``."""
     import io
     import sqlite3
     import tarfile
     import tempfile
     from contextlib import closing
 
+    def load(blob):
+        return _PlainUnpickler(io.BytesIO(blob)).load()
+
     with tarfile.open(path) as tar, tempfile.TemporaryDirectory() as tmp:
         root = tar.getnames()[0].split("/")[0]
-        database, = json.load(tar.extractfile(f"{root}/databases.json"))
+        databases = json.load(tar.extractfile(f"{root}/databases.json"))
         db_file = Path(tmp) / "databases.db"
         db_file.write_bytes(tar.extractfile(f"{root}/lci/databases.db").read())
+        nodes, key_of = {database: {} for database in databases}, {}
+        exchanges = collections.defaultdict(list)
         with closing(sqlite3.connect(db_file)) as con:
-            rows = con.execute("SELECT id, database, code, data FROM activitydataset").fetchall()
-        key_of = {i: (db, code) for i, db, code, _ in rows}
-        flows = {(db, code): _PlainUnpickler(io.BytesIO(data)).load() for _, db, code, data in rows if db == database}
+            for db, code, data in con.execute("SELECT output_database, output_code, data FROM exchangedataset"):
+                exchanges[(db, code)].append(load(data))
+            for i, db, code, data in con.execute("SELECT id, database, code, data FROM activitydataset"):
+                key_of[i] = (db, code)
+                if db in nodes:
+                    nodes[db][(db, code)] = {**load(data), "exchanges": exchanges.pop((db, code), [])}
         methods = []
         for name, meta in json.load(tar.extractfile(f"{root}/methods.json")):
             blob = tar.extractfile(f"{root}/intermediate/{meta['abbreviation']}.pickle").read()
-            cfs = [(key_of[key] if isinstance(key, int) else tuple(key), *rest)
-                   for key, *rest in _PlainUnpickler(io.BytesIO(blob)).load()]
+            cfs = [(key_of[key] if isinstance(key, int) else tuple(key), *rest) for key, *rest in load(blob)]
             methods.append((tuple(name), meta, cfs))
-    return database, flows, methods
+    return databases, nodes, methods
+
+
+def _download(archive: str, downloads, message: str) -> Path:
+    """An archive of files.brightway.dev, downloaded once into ``downloads``."""
+    import urllib.request
+
+    from .sources import REMOTE
+
+    path = Path(downloads) / archive
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        part = path.with_name(path.name + ".part")
+        print(message, flush=True)
+        with urllib.request.urlopen(REMOTE + archive, timeout=60) as response, open(part, "wb") as out:
+            while chunk := response.read(1 << 20):
+                out.write(chunk)
+        part.replace(path)
+    return path
+
+
+def _write_methods(methods: list, prefix: str) -> None:
+    """Impact methods read from an archive, named ``(prefix, …)`` so that they never replace those
+    the project has."""
+    import bw2data as bd
+
+    for name, meta, cfs in methods:
+        method = bd.Method((prefix, *name))
+        method.register(**{k: v for k, v in meta.items() if k not in ("abbreviation", "num_cfs", "geocollections", "filepath")})
+        method.write(cfs)
+    print(f"{len(methods)} impact methods installed", flush=True)
 
 
 def install_defaults(project: str, version: str, downloads) -> str:
@@ -113,11 +155,9 @@ def install_defaults(project: str, version: str, downloads) -> str:
     ``("ecoinvent-<version>", …)`` as bw2io's ``import_ecoinvent_release`` names them, so that they
     never replace methods of another version. What the project has already is kept.
     """
-    import urllib.request
-
     import bw2data as bd
 
-    from .sources import REMOTE, remote_projects
+    from .sources import remote_projects
 
     if version == "bundled":
         print("Installing the biosphere and the impact methods of Brightway (ecoinvent 3.9, a few minutes)", flush=True)
@@ -132,29 +172,49 @@ def install_defaults(project: str, version: str, downloads) -> str:
     archive = remote_projects().get(database)
     if not archive:
         raise SystemExit(f"files.brightway.dev has no biosphere for ecoinvent {version}")
-    path = Path(downloads) / archive
-    if not path.exists():
-        path.parent.mkdir(parents=True, exist_ok=True)
-        part = path.with_name(path.name + ".part")
-        print(f"Downloading the biosphere and impact methods of ecoinvent {version} from files.brightway.dev", flush=True)
-        with urllib.request.urlopen(REMOTE + archive, timeout=60) as response, open(part, "wb") as out:
-            while chunk := response.read(1 << 20):
-                out.write(chunk)
-        part.replace(path)
-    name, flows, methods = read_biosphere_archive(path)
-    if name != database:
-        raise SystemExit(f"{archive} holds {name}, not {database}")
+    path = _download(archive, downloads, f"Downloading the biosphere and impact methods of ecoinvent {version} from files.brightway.dev")
+    databases, nodes, methods = read_project_archive(path)
+    if database not in databases:
+        raise SystemExit(f"{archive} holds {', '.join(databases)}, not {database}")
     if database not in bd.databases:
-        print(f"Writing {database} ({len(flows)} elementary flows)", flush=True)
-        bd.Database(database).write(flows)
+        print(f"Writing {database} ({len(nodes[database])} elementary flows)", flush=True)
+        bd.Database(database).write(nodes[database])
     if not has_methods:
         print(f"Installing {len(methods)} impact methods of ecoinvent {version} (about 3 minutes)", flush=True)
-        for name, meta, cfs in methods:
-            method = bd.Method((prefix, *name))
-            method.register(**{k: v for k, v in meta.items() if k not in ("abbreviation", "num_cfs", "geocollections", "filepath")})
-            method.write(cfs)
-        print(f"{len(methods)} impact methods installed", flush=True)
+        _write_methods(methods, prefix)
     return database
+
+
+def install_remote_project(project: str, remote: str, downloads) -> list[str]:
+    """The databases and impact methods of a project of files.brightway.dev (e.g. BAFU), added to
+    ``project``, which keeps what it has; returns the databases' names. Read without restoring it,
+    as for :func:`install_defaults`: a restore can only make a new project. The methods are named
+    ``(remote, …)``. A database with its own biosphere stays apart from the rest of the project:
+    the project's other methods score nothing on it, and its methods nothing on other databases.
+    """
+    import bw2data as bd
+
+    from .sources import remote_projects
+
+    bd.projects.set_current(project)
+    archive = remote_projects().get(remote)
+    if not archive:
+        raise SystemExit(f"No project {remote!r} on files.brightway.dev")
+    has_methods = any(m[0] == remote for m in bd.methods)
+    path = _download(archive, Path(downloads), f"Downloading {remote} from files.brightway.dev")
+    databases, nodes, methods = read_project_archive(path)
+    if all(d in bd.databases for d in databases) and (has_methods or not methods):
+        print(f"{remote} is already in {project}", flush=True)
+        return list(databases)
+    for database in sorted(databases, key=lambda d: len(databases[d].get("depends", []))):  # what it links to first
+        if database not in bd.databases:
+            print(f"Writing {database} ({len(nodes[database])} nodes)", flush=True)
+            bd.Database(database).register(**{k: v for k, v in databases[database].items() if k in ("format", "comment")})
+            bd.Database(database).write(nodes[database])
+    if not has_methods:
+        print(f"Installing {len(methods)} impact methods of {remote}", flush=True)
+        _write_methods(methods, remote)
+    return list(databases)
 
 
 def _check_new(database: str) -> None:

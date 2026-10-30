@@ -125,6 +125,20 @@ builds do: the server itself never imports bw2data.
   version's. A database is removed from a project with *Remove* on its row
   (`lca-viewer database delete NAME --project P`), unless another database
   links to it.
+- **BAFU into a project** (*Add database* → *BAFU*, or `lca-viewer add-remote
+  BAFU-2025-v2 --project P`): `importing.install_remote_project` adds the
+  databases and methods of a project of files.brightway.dev to an existing
+  project (a restore can only make a new one). The archive is read without
+  restoring it (`read_project_archive`, kept in `data/downloads`); its pickles
+  hold numpy scalars (`loc`), the only class the unpickler builds. What the
+  project has is kept, and the methods are named `("BAFU-2025-v2", …)`, as
+  ecoinvent's are named after their version. BAFU's biosphere is its own, not
+  linked to ecoinvent's: in a mixed project the other methods score nothing on
+  it, so `server._default_method` passes over methods with no factor on the
+  model's flows. Checked on a project with the ecoinvent 3.10 biosphere and
+  668 methods: added in 105 s, built in 18 s (689 methods, 19 with factors on
+  BAFU); same matrices as the archive, and the scores of 7 processes on the
+  21 methods match a calculation from the archive within 1e-6.
 - **ecoinvent with the user's account** (*Add database* → *ecoinvent*, or
   `lca-viewer ecoinvent login` then `lca-viewer ecoinvent import --project P
   --version 3.10.1 --system-model cutoff`): `importing.import_ecoinvent_release`

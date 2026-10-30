@@ -180,8 +180,10 @@ def _find(activities, name: str, location: str) -> int | None:
 
 def _default_method(model: LCAModel) -> int:
     """Climate change (GWP100) when the model has it: EF v3.1's (also when the method names start
-    with the ecoinvent release, as ecoinvent_interface writes them), else the first one found."""
-    names = [tuple(str(part).lower() for part in m.name) for m in model.methods]
+    with the ecoinvent release, as ecoinvent_interface writes them), else the first one found.
+    Methods with no factor on the model's flows are passed over: they score nothing (those of
+    another biosphere of the project, as ecoinvent's on a BAFU added to the project)."""
+    names = [tuple(str(part).lower() for part in m.name) if m.cfs.any() else () for m in model.methods]
     ef = ("ef v3.1", "climate change", "global warming potential (gwp100)")
     tests = [
         lambda n: n[-3:] == ef,
@@ -194,7 +196,7 @@ def _default_method(model: LCAModel) -> int:
         found = next((k for k, name in enumerate(names) if test(name)), None)
         if found is not None:
             return found
-    return 0
+    return next((k for k, name in enumerate(names) if name), 0)
 
 
 def _layout(model: LCAModel) -> str:
@@ -783,6 +785,13 @@ class DefaultsRequest(BaseModel):
     methods of bw2io)."""
 
 
+class AddRemoteRequest(BaseModel):
+    folder: str
+    project: str
+    remote: str
+    """A project of files.brightway.dev (e.g. BAFU-2025-v2)."""
+
+
 class RestoreRequest(BaseModel):
     folder: str
     file: str | None = None
@@ -1276,6 +1285,21 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
     def remote():
         """Brightway projects published on files.brightway.dev (BAFU, USEEIO, …)."""
         return [{"name": k, "file": v} for k, v in sources.remote_projects().items()]
+
+    @app.post("/api/brightway/remote/add")
+    def add_remote(req: AddRemoteRequest):
+        """Add a project of files.brightway.dev to a project (``lca-viewer add-remote``)."""
+        folder = folder_of(req.folder)
+        if req.remote not in sources.remote_projects():
+            raise HTTPException(404, f"No project {req.remote!r} on files.brightway.dev")
+        if req.project not in project_names(folder):
+            raise HTTPException(404, f"No project {req.project!r} in {folder}")
+
+        def work(job):
+            cli(job, folder, ["add-remote", req.remote, "--project", req.project, "--data", str(data)], ours)
+            return {"message": f"{req.remote} is in {req.project}"}
+
+        return start(f"{req.remote} ({req.project})", ("add-remote", folder, req.project, req.remote), work)
 
     @app.post("/api/brightway/restore")
     def restore(req: RestoreRequest):

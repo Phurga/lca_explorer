@@ -811,12 +811,13 @@ const defaultsLabel = (v) => (v === "bundled" ? "ecoinvent 3.9, bundled with Bri
 const DATABASE_SOURCES = [
   { kind: "ecospold2", label: "ecoSpold2", hint: "an ecoinvent release (.7z) or its unpacked folder" },
   { kind: "simapro", label: "SimaPro CSV", hint: "a process export, e.g. Agribalyse" },
+  { kind: "bafu", label: "BAFU", hint: "the Swiss LCI database, from files.brightway.dev" },
   { kind: "ecoinvent", label: "ecoinvent", hint: "downloaded with your ecoinvent account" },
   { kind: "repository", label: "Brightway repository", hint: "biosphere and impact methods, from files.brightway.dev" },
 ];
 
 // The forms of the Brightway projects section: a new project (empty, or from a backup such as
-// BAFU on files.brightway.dev), a database added to a project (ecoSpold2, SimaPro CSV, ecoinvent
+// BAFU on files.brightway.dev), a database added to a project (ecoSpold2, SimaPro CSV, BAFU, ecoinvent
 // with the user's account, with or without the default biosphere and methods), a deletion.
 // Each starts a job.
 function ProjectForm({ form, folder, projects, onJob, onCancel, onForm, busy }) {
@@ -905,7 +906,7 @@ function ProjectForm({ form, folder, projects, onJob, onCancel, onForm, busy }) 
             onClick=${() => onForm({ kind: "add", project: form.project, source: s.kind })}>
             <b>${s.label}</b><span class="muted small">${s.hint}</span></button>`)}
       </div>
-      ${source && source !== "repository" && html`
+      ${source && source !== "repository" && source !== "bafu" && html`
         <label class="check"><input type="checkbox" checked=${defaults} onChange=${(e) => setDefaults(e.target.checked)} />
           <span>Add the default biosphere and impact methods ${source === "ecoinvent"
             && html`<span class="muted small">— those of the release: its elementary flows and LCIA methods</span>`}</span></label>
@@ -947,6 +948,21 @@ function ProjectForm({ form, folder, projects, onJob, onCancel, onForm, busy }) 
                 : `ecoinvent's elementary flows and impact methods of ${repoVersion}, from files.brightway.dev (about 20 MB, 3 minutes).`}
 ${" "}Databases imported afterwards can link to them.</p>
             ${actions("Add from the repository", !repoVersion || here && repoVersion === "bundled")}
+          </form>
+        </div>`;
+    }
+    if (source === "bafu") {
+      const here = processDbs.includes(remoteName);
+      const otherMethods = project?.methods > 0;
+      return html`
+        <div class="project-form">${head}
+          <form class="source-form" onSubmit=${submit("/api/brightway/remote/add", { folder, project: form.project, remote: remoteName })}>
+            <p class="muted small">${here ? `${remoteName} is already in this project.`
+              : html`${remoteName}: the Swiss LCI database of BAFU/UVEK (11,747 processes), with its elementary flows and
+                the 21 Ecological Scarcity 2021 methods, from files.brightway.dev (about 60 MB).`}</p>
+            ${!here && otherMethods && html`<p class="note">BAFU has its own elementary flows: the methods already in this project
+              score nothing on it, and its methods score nothing on the other databases.</p>`}
+            ${actions("Add BAFU", here)}
           </form>
         </div>`;
     }
@@ -1232,7 +1248,7 @@ function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
                 <td class="actions project-actions">
                   ${p.twofive && html`
                     <button class="link" onClick=${() => setForm({ kind: "add", project: p.name })}
-                      title="Import a database into this project: an ecoSpold2 release, a SimaPro CSV export, or ecoinvent with your account">+ Add database</button>`}
+                      title="Import a database into this project: an ecoSpold2 release, a SimaPro CSV export, BAFU, or ecoinvent with your account">+ Add database</button>`}
                   <button class="link danger" onClick=${() => setForm({ kind: "delete", project: p.name })} title="Delete this project">Delete</button>
                 </td>
               </tr>

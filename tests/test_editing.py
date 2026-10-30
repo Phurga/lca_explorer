@@ -792,6 +792,62 @@ def test_import_without_the_default_biosphere(tmp_path, monkeypatch):
     assert bad.status_code == 400
 
 
+def test_add_a_remote_project_through_the_api(tmp_path, monkeypatch):
+    import subprocess
+    import time
+
+    from fastapi.testclient import TestClient
+
+    from lca_viewer.server import create_library
+
+    seen = []
+
+    class Done:
+        stdout = iter(["Writing BAFU-2025-v2 (2 nodes)\n"])
+
+        def __init__(self, command, **kwargs):
+            seen.append(command)
+
+        def wait(self):
+            return 0
+
+    monkeypatch.setattr(subprocess, "Popen", Done)
+    monkeypatch.setattr(sources, "brightway_projects", lambda folder: [{"name": "p", "databases": []}])
+    monkeypatch.setattr(sources, "remote_projects", lambda: {"BAFU-2025-v2": "bafu.tar.gz"})
+    client = TestClient(create_library(tmp_path / "data"))
+    body = {"folder": str(tmp_path / "bw"), "project": "p", "remote": "BAFU-2025-v2"}
+    job = client.post("/api/brightway/remote/add", json=body).json()
+    for _ in range(100):
+        if job["status"] != "running":
+            break
+        time.sleep(0.05)
+        job = client.get(f"/api/jobs/{job['id']}").json()
+    assert job["status"] == "done" and job["message"] == "BAFU-2025-v2 is in p"
+    assert seen[0][seen[0].index("add-remote") + 1] == "BAFU-2025-v2" and "p" in seen[0]
+    assert client.post("/api/brightway/remote/add", json={**body, "remote": "nothing"}).status_code == 404
+    assert client.post("/api/brightway/remote/add", json={**body, "project": "nothing"}).status_code == 404
+
+
+def test_default_method_has_factors_on_the_model():
+    """In a project that holds another biosphere's methods (ecoinvent's next to BAFU's), the model
+    does not open on a method that scores nothing."""
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    from lca_viewer.server import _default_method
+
+    def model(*methods):
+        return SimpleNamespace(methods=[SimpleNamespace(name=n, cfs=np.array(cfs, dtype=float)) for n, cfs in methods])
+
+    none = [0, 0]
+    ef = ("ecoinvent-3.10", "EF v3.1", "climate change", "global warming potential (GWP100)")
+    assert _default_method(model((ef, [1, 0]), (("BAFU-2025-v2", "Global warming"), [0, 1]))) == 0
+    assert _default_method(model((ef, none), (("BAFU-2025-v2", "Global warming"), [0, 1]))) == 1
+    assert _default_method(model((ef, none), (("x", "acidification"), none), (("x", "land use"), [1, 0]))) == 2
+    assert _default_method(model((("x", "acidification"), none), (ef, none))) == 0  # nothing scores: as before
+
+
 def test_delete_database(project):
     import bw2data as bd
 

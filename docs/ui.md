@@ -41,7 +41,7 @@ API in `src/lca_viewer/server.py`.
   on each of its databases *Remove* (after a confirmation; refused while another
   database of the project links to it or its model is open; the model already
   built stays in the app). *Add database* asks for the source (ecoSpold2,
-  SimaPro CSV, ecoinvent with the user's account, or *Brightway repository*:
+  SimaPro CSV, BAFU from files.brightway.dev, ecoinvent with the user's account, or *Brightway repository*:
   only the biosphere and impact methods of an ecoinvent version, from
   files.brightway.dev, without a database), with a box *Add the default biosphere and impact
   methods* and their ecoinvent version (detected from the file name or the
