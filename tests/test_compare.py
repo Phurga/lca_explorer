@@ -43,7 +43,23 @@ def test_totals_of_the_requested_methods(client):
     assert post(client, entries=[{"root": 2}]).json()["entries"][0]["totals"] == []
 
 
+def test_flows_basis_splits_by_substance(client):
+    entries = [{"root": 2}, {"root": 1, "amount": 2.0}]
+    first, second = post(client, entries=entries, basis="flows").json()["entries"]
+    # climate change only counts CO2; water has no factor
+    assert first["groups"] == pytest.approx({"CO2 to air": 1.5}) and first["total"] == pytest.approx(1.5)
+    assert second["groups"] == pytest.approx({"CO2 to air": 3.0})
+    [water] = post(client, entries=[{"root": 2}], basis="flows", method=1).json()["entries"]
+    assert water["groups"] == pytest.approx({"Water consumed": 6.6})
+
+
+def test_flows_basis_folds_the_rest_into_other(client):
+    [entry] = post(client, entries=[{"root": 2}], basis="flows", limit=0).json()["entries"]
+    assert entry["groups"] == pytest.approx({"other": 1.5})
+
+
 def test_bad_requests(client):
+    assert post(client, entries=[{"root": 0}], basis="nope").status_code == 400
     assert post(client, entries=[]).status_code == 400
     assert post(client, entries=[{"root": 99}]).status_code == 404
     assert post(client, entries=[{"root": 0}], methods=[7]).status_code == 404

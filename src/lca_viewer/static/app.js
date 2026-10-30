@@ -4724,7 +4724,10 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
 // makes the difference between two of them (waterfall) and every impact category at once (heat
 // map). All three come from /api/compare, computed on the matrices: the cut-off, expansion,
 // merges and substitutions of a tab do not enter into it, only its functional unit and amount.
-const COMPARE_PANELS = [["groups", "Contribution by group"], ["difference", "Difference"], ["methods", "Impact categories"]];
+const COMPARE_PANELS = [["groups", "Compare contribution"], ["difference", "Difference"], ["methods", "Impact categories"]];
+// What the bars of the first two panels are split into: the groups (rules and quick groups), the rows of each
+// tab's displayed tree (View mode), or the elementary flows
+const COMPARE_BASES = [["groups", "By groups"], ["tree", "By tree"], ["flows", "By flows"]];
 const compareColor = (i) => PALETTE[i % PALETTE.length];
 const OTHER_GROUP = "other";
 const relative = (value, base) => (base ? (value - base) / Math.abs(base) : value ? null : 0);
@@ -4753,6 +4756,71 @@ function compareLabels(tabs) {
   return { short, full, common: sameName ? roots[0].name : null };
 }
 
+// The tree a tab displays, as /api/rows is asked for it (the method is the comparison's)
+const treeBody = (s, method) => ({
+  root: [s.root.index], amount: s.amount, expanded: s.expanded || [], rules: s.rules || [], cutoff: cutoffValue(s.cutoff, s.cutoffBasis),
+  cutoff_basis: s.cutoffBasis || "parent", method, methods: [], pinned: s.pinned || [], others: s.others || [], merges: s.merges || [],
+  ungrouped: s.ungrouped || [], substitutions: s.substitutions || {}, group_products: loadPreference("groupProducts", "0") === "1",
+});
+
+// A bar of a tab's tree: what it stands for (the same in every tab, so that bars line up) and its name. A process counts
+// wherever it is in the tree; its direct emissions, flows and others row go with it. The functional unit of each tab is
+// one and the same thing, whatever process it is: that is what is compared.
+function segmentOf(r, byId, rootIndex) {
+  const parent = byId.get(r.parent);
+  const ref = (meta) => (meta?.index === rootIndex ? "root" : `p${meta?.index}`);
+  const named = (meta) => (meta ? (meta.index === rootIndex ? "the functional unit" : `${meta.name} (${meta.location})`) : "?");
+  const [parentKey, parentName] = parent ? segmentOf(parent, byId, rootIndex) : ["", ""];
+  switch (r.kind) {
+    case "process": return [ref(r.meta), r.custom || named(r.meta)];
+    case "direct": return [r.meta ? `d${ref(r.meta)}` : `d@${parentKey}`, `direct: ${r.meta ? named(r.meta) : parentName}`];
+    case "flow": return [`f${r.flow.index}@${parentKey}`, `${r.custom || r.label} · ${parentName}`];
+    case "rest": return [`r@${parentKey}`, `others under ${parentName}`];
+    default: return [`${r.kind}:${r.label}`, r.custom || r.label];  // group, merged
+  }
+}
+
+// The bars (frontier) of each tab's displayed tree, aligned by what they stand for: the entries of /api/compare with
+// ``groups`` and ``total`` replaced
+function treeEntries(entries, rowsOf, roots) {
+  const perTab = rowsOf.map((rows, i) => {
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    const parts = new Map();
+    for (const r of frontier(rows)) {
+      const [key, label] = segmentOf(r, byId, roots[i]);
+      parts.set(key, { label, impact: (parts.get(key)?.impact || 0) + r.impacts[0] });
+    }
+    return parts;
+  });
+  const names = new Map(), taken = new Set();
+  for (const parts of perTab) {
+    for (const [key, { label }] of parts) {
+      if (names.has(key)) continue;
+      let name = label, n = 2;
+      while (taken.has(name)) name = `${label} #${n++}`;
+      names.set(key, name);
+      taken.add(name);
+    }
+  }
+  return entries.map((e, i) => {
+    const groups = {};
+    for (const [key, { impact }] of perTab[i]) groups[names.get(key)] = impact;
+    return { ...e, groups, total: Object.values(groups).reduce((s, v) => s + v, 0) };
+  });
+}
+
+function CompareBasis({ basis, setBasis, limit, setLimit }) {
+  return html`
+    <span class="mode-switch" role="group" aria-label="Compare by">
+      ${COMPARE_BASES.map(([key, label]) => html`<button class=${basis === key ? "primary" : ""} onClick=${() => setBasis(key)}
+        title=${key === "groups" ? "The groups chosen on the left" : key === "tree" ? "The rows of the tree each tab displays in View mode (expanded rows split, collapsed ones are bars), lined up by process"
+          : "The elementary flows of the whole inventory, one per substance"}>${label}</button>`)}
+    </span>
+    ${basis === "flows" && html`
+      <label class="muted">largest <select value=${limit} onChange=${(e) => setLimit(Number(e.target.value))} aria-label="Number of flows shown">
+        ${[5, 10, 15, 25, 40].map((n) => html`<option value=${n}>${n}</option>`)}</select></label>`}`;
+}
+
 // The steps from one total to another: the first total, what each group adds or removes (largest
 // first), the second total. A step floats between the running total before and after it.
 function waterfallRows(from, to, names) {
@@ -4771,7 +4839,8 @@ function waterfallRows(from, to, names) {
   return rows;
 }
 
-function CompareBars({ results, base, unitLabel, names, groupColor, mode, setMode }) {
+function CompareBars({ results, base, unitLabel, names, groupColor, mode, setMode, basis, setBasis, limit, setLimit }) {
+  const noun = { groups: "Group", tree: "Row", flows: "Flow" }[basis];
   const baseTotal = Math.abs(results[base].total);
   const value = (r, g) => {
     const v = r.groups[g] || 0;
@@ -4795,36 +4864,45 @@ function CompareBars({ results, base, unitLabel, names, groupColor, mode, setMod
     return o;
   }, [results, names, mode, unitLabel]);
   const exportCsv = () => {
-    const header = ["group", ...results.flatMap((r) => [csvQuote(r.label), csvQuote(`${r.label}: share`)])].join(",");
+    const header = [noun.toLowerCase(), ...results.flatMap((r) => [csvQuote(r.label), csvQuote(`${r.label}: share`)])].join(",");
     const lines = [...names, "total"].map((g) => [csvQuote(g), ...results.flatMap((r) => {
       const v = g === "total" ? r.total : r.groups[g] || 0;
       return [v, r.total ? v / r.total : 0];
     })].join(","));
-    download("comparison-groups.csv", [`# ${unitLabel}`, header, ...lines].join("\n"), "text/csv");
+    download(`comparison-${basis}.csv`, [`# ${unitLabel}`, header, ...lines].join("\n"), "text/csv");
   };
   return html`
     <div class="row">
-      ${[["absolute", unitLabel], ["baseline", "% of baseline"], ["own", "Each its own 100 %"]].map(([key, label]) => html`
-        <button class=${mode === key ? "primary" : ""} onClick=${() => setMode(key)}>${label}</button>`)}
+      <${CompareBasis} basis=${basis} setBasis=${setBasis} limit=${limit} setLimit=${setLimit} />
       <span style="flex:1"></span>
       <button onClick=${exportCsv}>Export CSV</button>
     </div>
+    <div class="row">
+      ${[["absolute", unitLabel], ["baseline", "% of baseline"], ["own", "Each its own 100 %"]].map(([key, label]) => html`
+        <button class=${mode === key ? "primary" : ""} onClick=${() => setMode(key)}>${label}</button>`)}
+    </div>
     <${Chart} option=${option} height=${Math.max(200, results.length * 54 + 90)} />
     <table class="results compare-table">
-      <thead><tr><th>Group <span class="muted">· ${unitLabel}</span></th>
-        ${results.map((r) => html`<th class="num" title=${r.label}><span class="dot" style=${{ background: r.color }}></span>${truncate(r.label, 28)}</th>`)}</tr></thead>
+      <thead>
+        <tr><th rowspan="2">${noun} <span class="muted">· ${unitLabel}</span></th>
+          ${results.map((r) => html`<th class="tab-head" colspan="2" title=${r.label}><span class="dot" style=${{ background: r.color }}></span>${truncate(r.label, 28)}</th>`)}</tr>
+        <tr>${results.map(() => html`<th class="num">${unitLabel}</th><th class="num">share</th>`)}</tr>
+      </thead>
       <tbody>${names.map((g) => html`
         <tr key=${g}><td><span class="dot" style=${{ background: groupColor(g) }}></span>${g}</td>
-          ${results.map((r) => html`<td class="num">${fmt(r.groups[g] || 0)} <span class="muted">${pct(r.total ? (r.groups[g] || 0) / r.total : 0)}</span></td>`)}</tr>`)}
+          ${results.map((r) => g in r.groups
+            ? html`<td class="num">${fmt(r.groups[g])}</td><td class="num muted">${pct(r.total ? r.groups[g] / r.total : 0)}</td>`
+            : html`<td class="num muted">–</td><td></td>`)}</tr>`)}
       </tbody>
       <tfoot>
-        <tr><th>Total</th>${results.map((r) => html`<th class="num">${fmt(r.total)}</th>`)}</tr>
-        <tr><td class="muted">vs baseline</td>${results.map((r, i) => html`<td class="num muted">${i === base ? "baseline" : signedPct(relative(r.total, results[base].total))}</td>`)}</tr>
+        <tr class="total"><th>Total</th>${results.map((r) => html`<td class="num">${fmt(r.total)}</td><td class="num muted">${r.total ? "100.0%" : ""}</td>`)}</tr>
+        <tr><td class="muted">vs baseline</td>${results.map((r, i) => html`<td class="num muted" colspan="2">${i === base ? "baseline" : signedPct(relative(r.total, results[base].total))}</td>`)}</tr>
       </tfoot>
     </table>`;
 }
 
-function CompareDifference({ results, base, target, setTarget, unitLabel, names, zoom, setZoom }) {
+function CompareDifference({ results, base, target, setTarget, unitLabel, names, zoom, setZoom, basis, setBasis, limit, setLimit }) {
+  const noun = { groups: "Group", tree: "Row", flows: "Flow" }[basis];
   const from = results[base], to = results[target];
   const rows = useMemo(() => waterfallRows(from, to, names), [from, to, names]);
   // A small difference is invisible against two totals drawn from zero: zoom on the steps (the totals are cut)
@@ -4868,10 +4946,15 @@ function CompareDifference({ results, base, target, setTarget, unitLabel, names,
   const lead = steps[0];
   const exportCsv = () => {
     const lines = steps.map((s) => [csvQuote(s.name), from.groups[s.name] || 0, to.groups[s.name] || 0, s.delta].join(","));
-    download("comparison-difference.csv", [`# ${unitLabel}`, ["group", csvQuote(from.label), csvQuote(to.label), "difference"].join(","),
+    download("comparison-difference.csv", [`# ${unitLabel}`, [noun.toLowerCase(), csvQuote(from.label), csvQuote(to.label), "difference"].join(","),
       ...lines, ["total", from.total, to.total, change].join(",")].join("\n"), "text/csv");
   };
   return html`
+    <div class="row">
+      <${CompareBasis} basis=${basis} setBasis=${setBasis} limit=${limit} setLimit=${setLimit} />
+      <span style="flex:1"></span>
+      <button onClick=${exportCsv}>Export CSV</button>
+    </div>
     <div class="row">
       <span class="muted">From the baseline</span><b title=${from.label}>${truncate(from.label, 40)}</b>
       <span class="muted">to</span>
@@ -4880,24 +4963,23 @@ function CompareDifference({ results, base, target, setTarget, unitLabel, names,
       </select>
       <label title="The axis starts near the steps, so that a small difference is visible; the two totals are then cut"><input type="checkbox" checked=${zoomed} disabled=${!steps.length}
         onChange=${(e) => setZoom(e.target.checked)} /> Zoom on the steps</label>
-      <span style="flex:1"></span>
-      <button onClick=${exportCsv}>Export CSV</button>
     </div>
     <p class="note">
       <b>${truncate(to.label, 50)}</b> is <b>${signedPct(relative(to.total, from.total))}</b> (${signed(change)} ${unitLabel}) against the baseline${lead
         ? html`; the largest step is <b>${lead.name}</b> (${signed(lead.delta)} ${unitLabel})` : ""}.
       Orange steps add to the score, green ones take away from it.
-      ${names.length < 2 && " Add groups (left) to see which parts of the supply chain make the difference."}
+      ${basis === "groups" && names.length < 2 && " Add groups (left) to see which parts of the supply chain make the difference."}
     </p>
     <${Chart} option=${option} height=${Math.max(200, rows.length * 34 + 60)} />
     <table class="results compare-table">
-      <thead><tr><th>Group</th><th class="num">${truncate(from.label, 24)}</th><th class="num">${truncate(to.label, 24)}</th>
+      <thead><tr><th>${noun}</th><th class="num" title=${from.label}>${truncate(from.label, 24)}</th><th class="num" title=${to.label}>${truncate(to.label, 24)}</th>
         <th class="num">Difference</th><th class="num">Of the total difference</th></tr></thead>
       <tbody>${steps.map((s) => html`
         <tr key=${s.name}><td>${s.name}</td><td class="num">${fmt(from.groups[s.name] || 0)}</td><td class="num">${fmt(to.groups[s.name] || 0)}</td>
           <td class="num">${signed(s.delta)}</td><td class="num muted">${change ? pct(s.delta / change) : ""}</td></tr>`)}
       </tbody>
-      <tfoot><tr><th>Total</th><th class="num">${fmt(from.total)}</th><th class="num">${fmt(to.total)}</th><th class="num">${signed(change)}</th><th></th></tr></tfoot>
+      <tfoot><tr class="total"><th>Total</th><td class="num">${fmt(from.total)}</td><td class="num">${fmt(to.total)}</td><td class="num">${signed(change)}</td>
+        <td class="num muted">${change ? "100.0%" : ""}</td></tr></tfoot>
     </table>`;
 }
 
@@ -4979,15 +5061,23 @@ function ComparisonView({ info, tabs, compare, setCompare }) {
     return { groups, flowGroups };
   }, [rules, quick.join("|")]);
   const heatMethods = useMemo(() => info.methods.flatMap((m, i) => (m.name[0] === family ? [i] : [])), [info, family]);
-  const body = { entries: chosen.map((t) => ({ root: t.state.root.index, amount: t.state.amount })), groups, flow_groups: flowGroups, rule, method, methods: heatMethods };
-  const key = JSON.stringify(body);
+  // What the bars are split into: groups, the tabs' displayed trees (asked of /api/rows tab by tab; /api/compare then
+  // only gives the totals) or elementary flows
+  const basis = compare.basis || "groups";
+  const limit = compare.limit || 15;
+  const body = { entries: chosen.map((t) => ({ root: t.state.root.index, amount: t.state.amount })), method, methods: heatMethods, rule,
+    basis: basis === "flows" ? "flows" : "groups", limit, groups: basis === "groups" ? groups : {}, flow_groups: basis === "groups" ? flowGroups : {} };
+  const trees = basis === "tree" ? chosen.map((t) => treeBody(t.state, method)) : null;
+  const key = JSON.stringify([body, trees]);
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   useEffect(() => {
     if (body.entries.length < 2) return;
     let cancelled = false;
     setError(null);
-    request("/api/compare", body).then((d) => !cancelled && setData({ key, entries: d.entries })).catch((e) => !cancelled && setError(e.message));
+    Promise.all([request("/api/compare", body), trees && Promise.all(trees.map((b, i) => request("/api/rows", b).then((d) => withLabels(d.rows, chosen[i].state.labels || {}))))])
+      .then(([d, rows]) => !cancelled && setData({ key, entries: rows ? treeEntries(d.entries, rows, chosen.map((t) => t.state.root.index)) : d.entries }))
+      .catch((e) => !cancelled && setError(e.message));
     return () => { cancelled = true; };
   }, [key]);
   const ready = data?.key === key ? data.entries : null;
@@ -5030,28 +5120,38 @@ function ComparisonView({ info, tabs, compare, setCompare }) {
         </div>
         <h3>Impact method</h3>
         <${MethodSelect} methods=${info.methods} value=${method} onChange=${(m) => set({ method: m })} />
-        <h3>Groups</h3>
-        <label class="compare-field">Rules of
-          <select value=${groupsFrom ?? ""} onChange=${(e) => set({ groupsFrom: e.target.value })}>
-            <option value="">no tab</option>
-            ${chosen.map((t) => html`<option value=${t.id}>${labels[t.id]}</option>`)}
-          </select>
-        </label>
-        <label class="compare-field">Attribution
-          <select value=${rule} onChange=${(e) => set({ rule: e.target.value })}>
-            <option value="direct">Own emissions of each group</option>
-            <option value="first_match">Whole supply chain below the first match</option>
-          </select>
-        </label>
-        <div class="chips">${PRESETS.filter((p) => p.rule.predicate).map((p) => html`
-          <button class=${quick.includes(p.label) ? "primary" : ""} onClick=${() => setCompare((c) => {
-            const now = c.quick || [];
-            return { ...c, quick: now.includes(p.label) ? now.filter((q) => q !== p.label) : [...now, p.label] };
-          })}>${p.label}</button>`)}
-        </div>
-        <p class="note">${Object.keys(groups).length + Object.keys(flowGroups).length} groups. The rules are those of the tab's <i>Group rules</i>; quick groups are added to them.</p>
+        ${basis === "groups" && html`
+          <h3>Groups</h3>
+          <label class="compare-field">Rules of
+            <select value=${groupsFrom ?? ""} onChange=${(e) => set({ groupsFrom: e.target.value })}>
+              <option value="">no tab</option>
+              ${chosen.map((t) => html`<option value=${t.id}>${labels[t.id]}</option>`)}
+            </select>
+          </label>
+          <label class="compare-field">Attribution
+            <select value=${rule} onChange=${(e) => set({ rule: e.target.value })}>
+              <option value="direct">Own emissions of each group</option>
+              <option value="first_match">Whole supply chain below the first match</option>
+            </select>
+          </label>
+          <div class="chips">${PRESETS.filter((p) => p.rule.predicate).map((p) => html`
+            <button class=${quick.includes(p.label) ? "primary" : ""} onClick=${() => setCompare((c) => {
+              const now = c.quick || [];
+              return { ...c, quick: now.includes(p.label) ? now.filter((q) => q !== p.label) : [...now, p.label] };
+            })}>${p.label}</button>`)}
+          </div>
+          <p class="note">${Object.keys(groups).length + Object.keys(flowGroups).length} groups. The rules are those of the tab's <i>Group rules</i>; quick groups are added to them.</p>`}
+        ${basis === "tree" && html`
+          <h3>Trees</h3>
+          <p class="note">Each tab's tree as displayed in View mode (its expanded rows, groups, merges, pins and cut-off), at this method.
+            Bars are lined up by process, so shape the trees alike to compare like with like: a process expanded in one tab and
+            collapsed in another appears as its inputs on one side and as one bar on the other.</p>`}
+        ${basis === "flows" && html`
+          <h3>Flows</h3>
+          <p class="note">The elementary flows of each functional unit's whole inventory, one per substance (compartments added up),
+            the largest over all tabs and <i>other</i> for the rest.</p>`}
         ${units.length > 1 && html`<p class="warning">The functional units are in ${units.join(", ")}: compare them only if they deliver an equivalent function.</p>`}
-        ${substituted.length > 0 && html`<p class="warning">Substitutions made in the tree of ${substituted.map((t) => labels[t.id]).join(", ")} are not applied here.</p>`}
+        ${substituted.length > 0 && basis !== "tree" && html`<p class="warning">Substitutions made in the tree of ${substituted.map((t) => labels[t.id]).join(", ")} are not applied here (they are in <i>By tree</i>).</p>`}
       </div>
       <div class="compare-main">
         <div class="tabs" role="tablist">
@@ -5062,9 +5162,11 @@ function ComparisonView({ info, tabs, compare, setCompare }) {
             : error ? html`<div class="error">${error}</div>`
             : !results ? html`<div class="empty">Computing…</div>`
             : panel === "groups" ? html`<${CompareBars} results=${results} base=${base} unitLabel=${unitLabel} names=${names} groupColor=${groupColor}
-                mode=${compare.mode || "absolute"} setMode=${(mode) => set({ mode })} />`
+                mode=${compare.mode || "absolute"} setMode=${(mode) => set({ mode })} basis=${basis} setBasis=${(b) => set({ basis: b })}
+                limit=${limit} setLimit=${(n) => set({ limit: n })} />`
             : panel === "difference" ? html`<${CompareDifference} results=${results} base=${base} target=${target} setTarget=${(t) => set({ target: t })}
-                unitLabel=${unitLabel} names=${names} zoom=${compare.zoom} setZoom=${(zoom) => set({ zoom })} />`
+                unitLabel=${unitLabel} names=${names} zoom=${compare.zoom} setZoom=${(zoom) => set({ zoom })}
+                basis=${basis} setBasis=${(b) => set({ basis: b })} limit=${limit} setLimit=${(n) => set({ limit: n })} />`
             : html`<${CompareMethods} results=${results} base=${base} info=${info} methods=${heatMethods} family=${family}
                 setFamily=${(f) => set({ family: f })} sorted=${!!compare.sorted} setSorted=${(sorted) => set({ sorted })} />`}
         </div>

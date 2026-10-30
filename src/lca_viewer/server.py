@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from .analysis import (flow_contribution, flow_contributors, group_contributors, main_path, matched,
+from .analysis import (OTHER, flow_contribution, flow_contributors, group_contributors, main_path, matched,
                        supply_chain_contribution)
 from .model import LCAModel
 from .query import derived_activities, derived_flows, evaluate, search, suggest_values
@@ -106,6 +106,10 @@ class CompareRequest(BaseModel):
     """The method the groups are split for."""
     methods: list[int] = []
     """Methods whose total score is returned for every entry (the heat map)."""
+    basis: str = "groups"
+    """"groups": the groups of ``groups`` / ``flow_groups`` and *other*; "flows": the elementary flows (one
+    per substance), the ``limit`` weighing most over all entries and *other* for the rest."""
+    limit: int = 15
 
 
 class ContributorsRequest(GlobalRequest):
@@ -154,6 +158,14 @@ def label_key(row, serialised: dict) -> str | None:
     if row.kind in ("merged", "group"):
         return f"r:{row.id}"
     return None
+
+
+def _substances(model: LCAModel, flows: pd.DataFrame, root: int, method: int, amount: float) -> dict[str, float]:
+    """Impact of each elementary flow of a functional unit's whole inventory, the compartments of a
+    substance summed (flows without impact left out)."""
+    _, impacts = flow_contribution(model, root, method, amount)
+    by_name = pd.Series(impacts).groupby(flows["name"].to_numpy()).sum()
+    return {str(name): float(v) for name, v in by_name.items() if v != 0}
 
 
 def _find(activities, name: str, location: str) -> int | None:
@@ -568,22 +580,32 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
             raise HTTPException(400, "Nothing to compare")
         if req.rule not in ("direct", "first_match"):
             raise HTTPException(400, f"Unknown rule {req.rule!r}")
+        if req.basis not in ("groups", "flows"):
+            raise HTTPException(400, f"Unknown basis {req.basis!r}")
         for k in [req.method, *req.methods]:
             if not 0 <= k < len(model.methods):
                 raise HTTPException(404, f"No method {k}")
-        out = []
         for entry in req.entries:
             if not 0 <= entry.root < model.size:
                 raise HTTPException(404, f"No activity {entry.root}")
-            split = supply_chain_contribution(model, entry.root, req.groups, req.rule, entry.amount,
-                                              req.flow_groups, [req.method])
-            parts = {name: float(v[0]) for name, v in split.items()}
-            out.append({
-                "groups": parts,
-                "total": sum(parts.values()),
-                "totals": _floats(model.score(entry.root, entry.amount)[req.methods]),
-            })
-        return {"entries": out}
+        if req.basis == "flows":
+            split = [_substances(model, flows, e.root, req.method, e.amount) for e in req.entries]
+            weight: dict[str, float] = {}
+            for parts in split:
+                for name, impact in parts.items():
+                    weight[name] = weight.get(name, 0.0) + abs(impact)
+            shown = set(sorted(weight, key=lambda n: -weight[n])[: max(req.limit, 0)])
+            split = [{**{n: v for n, v in parts.items() if n in shown},
+                      **({OTHER: rest} if (rest := sum(v for n, v in parts.items() if n not in shown)) else {})}
+                     for parts in split]
+        else:
+            split = [{name: float(v[0]) for name, v in supply_chain_contribution(
+                model, e.root, req.groups, req.rule, e.amount, req.flow_groups, [req.method]).items()} for e in req.entries]
+        return {"entries": [{
+            "groups": parts,
+            "total": sum(parts.values()),
+            "totals": _floats(model.score(e.root, e.amount)[req.methods]),
+        } for e, parts in zip(req.entries, split)]}
 
     @app.post("/api/global/contributors")
     def global_contributors(req: ContributorsRequest):

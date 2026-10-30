@@ -72,20 +72,34 @@ API in `src/lca_viewer/server.py`.
   panel give way to a comparison of the functional units of the open tabs (the
   tabs stay mounted, so nothing is lost when going back). Left: the tabs to
   compare (tick them; the radio marks the **baseline**, the others are read against
-  it), the impact method, and the **groups**: the named rules of one tab's *Group
-  rules* (process rules as groups, flow rules as flow groups, as in *Group
-  contributions*) plus the *quick groups* ticked here, and the attribution
-  (*own emissions of each group*, or *whole supply chain below the first match*, see
-  [grouping.md](grouping.md)). A tab counts by its functional unit and amount; its
-  cut-off, expansion, merges and substitutions do not enter (`POST /api/compare`
-  works on the matrices, each entry split exactly into the groups and *other*; the
-  page warns when a tab has substitutions, or when the units differ). Tabs are named
-  by what tells them apart (the place when they share the process). Three panels, each with CSV export:
-  - *Contribution by group*: one stacked bar per tab, in the unit, as % of the
-    baseline's total, or each as its own 100 %; the table under it has every group's
-    value and share, the totals and the change against the baseline.
+  it) and the impact method. Tabs are named by what tells them apart (the place when
+  they share the process). Three panels, each with CSV export. The first two split the
+  bars the same way, chosen with the switch **By groups / By tree / By flows** (shared
+  by both):
+  - *By groups*: the named rules of one tab's *Group rules* (process rules as groups,
+    flow rules as flow groups, as in *Group contributions*) plus the *quick groups*
+    ticked on the left, and the attribution (*own emissions of each group*, or *whole
+    supply chain below the first match*, see [grouping.md](grouping.md)). A tab counts by
+    its functional unit and amount; its cut-off, expansion, merges and substitutions do
+    not enter (`POST /api/compare` works on the matrices, each entry split exactly into
+    the groups and *other*; the page warns when a tab has substitutions, or when the
+    units differ).
+  - *By tree*: the tree each tab displays in View mode (`/api/rows` from the tab's
+    own view: expansion, groups, merges, pins, substitutions, cut-off, at the
+    comparison's method): its expanded rows are split, the others are bars. Bars are
+    lined up by process (wherever it is in the tree; its direct emissions, flows and
+    others row go with it); the functional unit of each tab is the same bar whatever
+    process it is. A process expanded in one tab and collapsed in another shows as its
+    inputs on one side and as one bar on the other, so shape the trees alike.
+  - *By flows*: the elementary flows of the whole inventory (`basis: "flows"`), one per
+    substance, the largest *n* over all tabs (5 to 40) and *other* for the rest.
+  A row a tab does not have shows as – in the table.
+  - *Compare contribution*: one stacked bar per tab, in the unit, as % of the
+    baseline's total, or each as its own 100 %; the table under it has a value and a
+    share column per tab (numbers right-aligned, the totals in the same columns) and
+    the change against the baseline.
   - *Difference*: a waterfall from the baseline's total to another tab's, one step per
-    group (largest first; orange adds, green takes away; the steps add up to the
+    group, row or flow (largest first; orange adds, green takes away; the steps add up to the
     difference exactly). *Zoom on the steps* (on by default when the difference is
     under 25 % of the totals) starts the axis near the steps; the totals are then cut.
   - *Impact categories*: a heat map of tabs × the methods of a family (the 25 EF
