@@ -80,6 +80,14 @@ rights), creates a `lca_viewer` conda environment and installs the packages, whi
 run then starts the app and opens http://localhost:8765. Extra arguments go to `lca-viewer serve`
 (`--port 8800`); `lca_explorer.cmd setup` runs the setup again.
 
+## Versions and updating
+
+`main` is the stable branch: it only changes when a new version is released (see the
+[releases](https://github.com/Phurga/lca_explorer/releases) and the [changelog](CHANGELOG.md)); work in progress
+lives on `dev`. To update, run `git pull` in the repository folder, or download the latest release and put your
+`data/` folder in it. To stay on one version: `git checkout v1.0.0`. Your data and Brightway projects are never
+touched by an update.
+
 The app starts empty: **Load database** lists the databases of your Brightway 2.5 projects (it reads
 `BRIGHTWAY2_DIR`, else Brightway's default folder) and lets you import ecoSpold2, SimaPro CSV or ecoinvent
 databases. More in the [user guide](docs/user-guide.md).
