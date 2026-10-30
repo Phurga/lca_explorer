@@ -78,15 +78,18 @@ API in `src/lca_viewer/server.py`.
   bars the same way, chosen with the switch **By groups / By tree / By flows** (shared
   by both):
   - *By groups*: the named rules of one tab's *Group rules* (process rules as groups,
-    flow rules as flow groups, as in *Group contributions*) plus the *quick groups*
-    ticked on the left, and the attribution (*own emissions of each group*, or *whole
-    supply chain below the first match*, see [grouping.md](grouping.md)). A tab counts by
+    flow rules as flow groups, as in *Group contributions*), and the attribution (*own
+    emissions of each group*, or *whole supply chain below the first match*, see
+    [grouping.md](grouping.md)). The rules are edited in the fourth panel, *Group rules*
+    (link under the groups on the left): it is the *Group rules* tab of the tab chosen
+    in *Rules of*, the same rules, so a change there is seen in its tab and the other way
+    round, without leaving Compare mode. A tab counts by
     its functional unit and amount; its cut-off, expansion, merges and substitutions do
     not enter (`POST /api/compare` works on the matrices, each entry split exactly into
     the groups and *other*; the page warns when a tab has substitutions, or when the
     units differ).
   - *By tree*: the tree each tab displays in View mode (`/api/rows` from the tab's
-    own view: expansion, groups, merges, pins, substitutions, cut-off, at the
+    own view: expansion, groups, merges, restored rows, substitutions, cut-off, at the
     comparison's method): its expanded rows are split, the others are bars. Bars are
     lined up by process (wherever it is in the tree; its direct emissions, flows and
     others row go with it); the functional unit of each tab is the same bar whatever
@@ -103,9 +106,12 @@ API in `src/lca_viewer/server.py`.
     group, row or flow (largest first; orange adds, green takes away; the steps add up to the
     difference exactly). *Zoom on the steps* (on by default when the difference is
     under 25 % of the totals) starts the axis near the steps; the totals are then cut.
-  - *Impact categories*: a heat map of tabs × the methods of a family (the 25 EF
-    categories, say), each cell the change against the baseline (the colour stops at
-    ±100 %; values in the tooltip), optionally with the largest difference first.
+  - *Impact categories*: a heat map of tabs × the methods chosen as in *Several methods*
+    of *Process contribution* (a family, *All of family* / *None*, each method ticked or
+    not; the 25 EF categories to begin with), each cell the change against the baseline
+    (the colour stops at ±100 %; values in the tooltip), optionally with the largest
+    difference first.
+  - *Group rules*: the rules of the tab chosen in *Rules of*, to edit (see *By groups*).
   Decision: a mode of its own, not a panel of the side panel: the side panel shows
   one tab, and a comparison needs several. Tabs, not a new kind of object, so that
   a comparison is made of what is already open. Groups instead of tree rows so that
@@ -233,11 +239,11 @@ API in `src/lca_viewer/server.py`.
   Every row has a **×** (on hover: at the right end of the name in the list,
   after the other row actions; at the box corner in the tree view) that moves
   it to its parent's **others** row; with several rows selected, the × of one of
-  them (like **o**) moves all of them. Rows shown inside an expanded others row have **pin** instead
+  them (like **o**) moves all of them. Rows shown inside an expanded others row have **restore** instead
   (↑ in the tree view, **o** on the keyboard; with several selected, all of them):
-  it takes them out of others, shown despite the cut-off ("pinned ×" to
+  it moves them back from others to the main section, shown despite the cut-off ("restored ×" to
   undo), like ticking them in the others pop-up. Row actions ("(i)", "✎", "merge", "merged ×", "ungroup",
-  "pinned ×", "×") show only on the hovered or selected row.
+  "restored ×", "×") show only on the hovered or selected row.
   **Rename** (✎, or **r** on the selected row): the name is edited in place
   (Enter or leaving the field saves, Esc cancels, **↺** or an empty name
   restores the original; the tree view asks in a dialog). It is a *display* name only,
@@ -262,8 +268,8 @@ API in `src/lca_viewer/server.py`.
   click, which only selects). Members pop-ups follow the view's naming choice;
   clicking or right-clicking a member opens its own pop-up (← comes back).
   - *Others*: what the row contains and why (below cut-off / moved);
-    ticking a member **pins** it: shown again in the tree and the chart
-    ("pinned ×" chip to undo; *Show all* / *Hide pinned*) — also how to pin
+    ticking a member **restores** it: shown again in the tree and the chart
+    ("restored ×" chip to undo; *Show all* / *Hide restored*) — also how to show
     exceptions to the cut-off. See [grouping.md](grouping.md).
   - *Group* and *merged*: each member's amount and impact (current method),
     absolute and as a share of the row (amount shares only when every member
@@ -278,10 +284,12 @@ API in `src/lca_viewer/server.py`.
 - **Keyboard** (the tree clicked last; not while typing in a field). The
   **Shortcuts** button of the top bar lists these keys, those of the pop-ups
   and those of the search fields (`SHORTCUTS` in `app.js`); the panels
-  themselves carry no key hints. Three keys work anywhere (not while typing, in a
-  pop-up or in a dialog) and change the mode: **v** goes to View mode, and in View mode
+  themselves carry no key hints (what a tab of the side panel shows is in a popup on its
+  name). Four keys work anywhere (not while typing, in a
+  pop-up or in a dialog): **v** goes to View mode, and in View mode
   shows or hides the view options; **e** goes to Edit mode (a Brightway-built database;
-  once in Edit mode, **e** is the tree's, below); **c** goes to Compare mode. The key of the
+  once in Edit mode, **e** is the tree's, below); **c** goes to Compare mode; **s** goes to
+  the search of the top bar (as Ctrl/⌘ + K). The key of the
   exchange pop-up is **i** (info), which was **c** before.
 
   | Key | Action |
@@ -293,7 +301,7 @@ API in `src/lca_viewer/server.py`.
   | ← → ↓ ↑ in the tree view with the root on top | the arrows are turned with the layout: ← → go across the processes (siblings), ↓ expands (then goes to the first child), ↑ collapses (then goes to the parent) |
   | Space | open (or close) the row's pop-up (members pop-up for a bundle) |
   | i | open (or close) the pop-up of the row's exchange (info): comment and uncertainty |
-  | o | move the selection to others (inside an expanded others row: pin it out) |
+  | o | move the selection to others (inside an expanded others row: restore it) |
   | m | merge the selection, or unmerge a selected merged row |
   | g | one group: ungroup it (a "group by product" becomes an exception, put back by its regroup chip or by g on one of its processes); one process: put back its ungrouped product group, else group its same-named siblings under the product name, else nothing; several rows: group them (named after the product when they all deliver one, else "group N") |
   | r | rename the selected row (display name only) |
@@ -430,7 +438,7 @@ API in `src/lca_viewer/server.py`.
   highlighted, filterable) and *Metadata* (name, compartment, unit, database
   id). For a substance spread over several compartments, chips switch between
   them. API: `/api/flow/{index}?method=&activities=`.
-- **Side panel — tabs**:
+- **Side panel — tabs** (what each shows is explained in a popup on its name, not in the panel):
   - *Process contribution* (the former contribution chart): current method
     bars, or several methods as 100 % stacked bars; CSV export. See
     [charts.md](charts.md).
@@ -447,9 +455,11 @@ API in `src/lca_viewer/server.py`.
     Right-click a substance or flow for its pop-up (below). API:
     `/api/flows`, `/api/flows/contributors` (`analysis.flow_contribution`,
     `flow_contributors`).
-  - *Group rules*: active rules (reorder / remove; **merge** turns every group
-    of a process rule into a merged process, **disable** / **enable**
-    switches a rule off and on without losing it), quick groups (transport,
+  - *Group rules*: active rules (reorder, **edit** — the form below is filled in with
+    the rule, with *Save rule* and *Cancel*; a group made from selected rows or a nested
+    query can only be renamed —, remove; the eye switches a rule off and on without losing
+    it, crossed out while it is off; what rules do is in the **(i)** next to *Active rules*;
+    the *merge* button of a rule is gone, a group is merged from its row), quick groups (transport,
     electricity, heat & fuels, infrastructure, waste treatment, pesticides
     (CPC 3466 and "pesticide, unspecified"), fertilisers (CPC 3461–3465:
     mineral, organic and organo-mineral fertilisers, manure), agricultural
@@ -535,7 +545,7 @@ so tabs and splits come back on reload; a view saved before tabs existed
 opens as the first tab. A tab moved to another pane is rebuilt from its
 saved state (selection and undo are not kept).
 
-**Save ▾** downloads the view as JSON; the arrow menu offers *Load view…*
+**Save ▾** (in the toolbar, hidden with the view options) downloads the view as JSON; the arrow menu offers *Load view…*
 and *Copy view as JSON*. Files are `version` 2: `cutoff` is a fraction, as in
 `/api/rows` (0.05 for the 5 % shown in the page); version 1 files stored the
 percentage and still load. The `labels` of a file (`p:<activity>`, `f:<flow>`,

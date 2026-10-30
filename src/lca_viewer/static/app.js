@@ -410,6 +410,34 @@ function BodyPortal({ children }) {
   return null;
 }
 
+// A popup with an explanation when the pointer rests on an element, drawn on the page (not clipped by the panel it is in):
+// ``const [props, popup] = useTip(text)``, the props go on the element, the popup next to it
+function useTip(text) {
+  const [box, setBox] = useState(null);
+  const leave = useRef(null);
+  const props = {
+    onMouseEnter: (e) => { clearTimeout(leave.current); setBox(e.currentTarget.getBoundingClientRect()); },
+    onMouseLeave: () => { leave.current = setTimeout(() => setBox(null), 80); },
+  };
+  const width = Math.min(360, window.innerWidth - 16);
+  const popup = box && html`<${BodyPortal}>
+    <div class="tip" role="tooltip" style=${{ left: `${Math.max(8, Math.min(box.left, window.innerWidth - width - 8))}px`, top: `${box.bottom + 6}px`, width: `${width}px` }}>${text}</div>
+  <//>`;
+  return [props, popup];
+}
+
+// A tab whose name has its explanation in a popup
+function TabButton({ tip, children, ...props }) {
+  const [tipProps, popup] = useTip(tip);
+  return html`<button ...${props} ...${tipProps}>${children}</button>${popup}`;
+}
+
+// A small (i) with an explanation in a popup
+function InfoTip({ text, label = "What this is" }) {
+  const [tipProps, popup] = useTip(text);
+  return html`<button class="help-btn" aria-label=${label} ...${tipProps}>i</button>${popup}`;
+}
+
 const SHORT_FIELDS = new Set(["unit", "activity_type", "flow_type", "database", "compartment"]);
 // ISIC and CPC classes are written "code:name" in the data, so a code is matched on the start of it
 const CLASS_FIELDS = new Set(["isic", "cpc"]);
@@ -1157,7 +1185,7 @@ function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
       <section>
         <h3>Built models <span class="muted">ready in a few seconds</span></h3>
         ${sources.models.length === 0
-          ? html`<p class="muted">None yet. The setup (setup.cmd or setup.sh) builds ecoinvent, and every Brightway database you load below is added here.</p>`
+          ? html`<p class="muted">None yet. The setup (lca_explorer.cmd) builds ecoinvent, and every Brightway database you load below is added here.</p>`
           : html`<table class="load-table">
               ${sources.models.map((m) => html`
                 <tr key=${m.path}>
@@ -1916,14 +1944,14 @@ function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onU
                         : html`<button class="chip merge" title="Split back into the original processes"
                             onClick=${(e) => { e.stopPropagation(); onUnmerge(r); }}>merged ×</button>`)}
                       ${r.pinned && html`
-                        <button class="chip pin" title="Shown despite the cut-off — click to hide again"
-                          onClick=${(e) => { e.stopPropagation(); onUnpin(r); }}>pinned ×</button>`}
+                        <button class="chip pin" title="Restored from others, shown despite the cut-off — click to move it back to others"
+                          onClick=${(e) => { e.stopPropagation(); onUnpin(r); }}>restored ×</button>`}
                       ${r.replaced && html`
                         <button class="chip merge" title="Supplied by another activity — back to the original"
                           onClick=${(e) => { e.stopPropagation(); onRevert(r); }}>replaced ×</button>`}
                       ${movable(r) && (inOthers(r)
-                        ? html`<button class="chip pin" title="Pin: take it out of others, shown in the tree and the chart despite the cut-off"
-                            onClick=${(e) => { e.stopPropagation(); onPin([r.id]); }}>pin</button>`
+                        ? html`<button class="chip pin" title="Restore: move it back from others to the main section, shown in the tree and the chart despite the cut-off"
+                            onClick=${(e) => { e.stopPropagation(); onPin([r.id]); }}>restore</button>`
                         : html`<button class="to-others" title="Move to others (out of the tree and the chart)" aria-label="Move to others"
                             onClick=${(e) => { e.stopPropagation(); onMoveToOthers([r.id]); }}>×</button>`)}
                     </span>
@@ -2342,11 +2370,11 @@ function TreeGraph({ rows, rootImpact, shareBasis, selection, onToggle, onSelect
                         onClick=${(e) => { e.stopPropagation(); onUnmerge(r); }}>unmerge</text>`}
                 ${r.pinned && html`
                   <text x=${x + BOX.w - 10} y=${y + 17} class="unpin" text-anchor="end"
-                        onClick=${(e) => { e.stopPropagation(); onUnpin(r); }}>pinned ×</text>`}
+                        onClick=${(e) => { e.stopPropagation(); onUnpin(r); }}>restored ×</text>`}
                 ${movable(r) && (inOthers(r)
                   ? html`
                     <g class="to-others pin" onClick=${(e) => { e.stopPropagation(); onPin([r.id]); }}>
-                      <title>Pin: take it out of others, shown in the tree and the chart despite the cut-off</title>
+                      <title>Restore: move it back from others to the main section, shown in the tree and the chart despite the cut-off</title>
                       <circle cx=${x + BOX.w} cy=${y} r="8" />
                       <text x=${x + BOX.w} y=${y + 4} text-anchor="middle">↑</text>
                     </g>`
@@ -2402,8 +2430,8 @@ function OthersPopup({ target, win, rest, rows, rootImpact, cutoff, cutoffBasis,
       subtitle=${`${reasons} · ${fmt(rest.impacts[0])} (${pct(share(rest))})`}
       footer=${html`
         <button onClick=${() => setShown(rest.members.map((m) => m.id), true)}>Show all</button>
-        <button disabled=${!shownPins.length} onClick=${() => setShown(shownPins.map((m) => m.id), false)}>Hide pinned</button>`}>
-      <p class="note">Tick a ${things} to pin it: shown in the tree and the contribution chart; untick to put it back in others. Click a ${things} for its details.</p>
+        <button disabled=${!shownPins.length} onClick=${() => setShown(shownPins.map((m) => m.id), false)}>Hide restored</button>`}>
+      <p class="note">Tick a ${things} to restore it: shown in the tree and the contribution chart; untick to put it back in others. Click a ${things} for its details.</p>
       <div class="details-list">
         <table>
           <tbody>
@@ -2414,10 +2442,10 @@ function OthersPopup({ target, win, rest, rows, rootImpact, cutoff, cutoffBasis,
               return html`
                 <tr key=${r.id} class="member" onClick=${(e) => !e.target.closest("input") && onMember(r)}
                     onContextMenu=${(e) => { e.preventDefault(); onMember(r); }}>
-                  <td><input type="checkbox" checked=${shown} aria-label="Pin: show in tree and chart" title="Pin: show in tree and chart"
+                  <td><input type="checkbox" checked=${shown} aria-label="Restore: show in tree and chart" title="Restore: show in tree and chart"
                         onChange=${(e) => setShown([r.id], e.target.checked)} /></td>
                   <td class="name-cell" title=${r.label}>${names.main}${names.qual && html` <span class="loc">${names.qual}</span>`}</td>
-                  <td class="reason">${r.moved ? "moved" : r.pinned ? "pinned" : r.kind === "flow" && r.impacts[0] === 0 ? "no impact" : "cut-off"}</td>
+                  <td class="reason">${r.moved ? "moved" : r.pinned ? "restored" : r.kind === "flow" && r.impacts[0] === 0 ? "no impact" : "cut-off"}</td>
                   <td class="num">${amount}</td>
                   <td class="num">${fmt(r.impacts[0])}</td>
                   <td class="num">${pct(share(r))}</td>
@@ -3405,6 +3433,36 @@ function RecipeEditor({ recipe, setRecipe, example }) {
 }
 
 // ---------------------------------------------------------------- chart panel
+// What each tab of the side panel shows, in a popup on its name
+const PANEL_TIPS = {
+  chart: "The contribution of each row of the tree as displayed: every visible row that is not expanded is a bar segment. Expand, collapse or group rows to change the breakdown.",
+  flows: "The contribution of elementary flows to the score: everything the whole supply chain emits or takes from nature, times its characterisation factor in the current method.",
+  groups: "The rules that bundle sibling rows of the tree into groups: quick groups, and a form for new rules.",
+  global: "Group contributions over the whole supply chain, using the named groups defined in the Group rules tab. Process groups come first: a group keeps every flow it reaches first. "
+    + "Flow groups (a substance, added from the Flow contribution tab) then take their flows from what is left, the emissions of processes outside the groups. "
+    + "Process groups nest (electricity uses transport, which uses electricity), so the attribution of impacts is chosen in the panel.",
+};
+
+// The methods to show together: a family (EF v3.1, ReCiPe, …), all of it or none, and each of its methods ticked or not
+function MethodChoice({ info, family, setFamily, selected, setSelected }) {
+  const families = [...new Set(info.methods.map((m) => m.name[0]))];
+  const familyMethods = info.methods.map((m, i) => [m, i]).filter(([m]) => m.name[0] === family);
+  return html`
+    <div class="row">
+      <select value=${family} onChange=${(e) => setFamily(e.target.value)} aria-label="Method family">
+        ${families.map((f) => html`<option value=${f}>${f}</option>`)}
+      </select>
+      <button onClick=${() => setSelected(familyMethods.map(([, i]) => i))}>All of family</button>
+      <button onClick=${() => setSelected([])}>None</button>
+    </div>
+    <div class="methods-list">
+      ${familyMethods.map(([m, i]) => html`
+        <label><input type="checkbox" checked=${selected.includes(i)}
+          onChange=${(e) => setSelected(e.target.checked ? [...selected, i] : selected.filter((x) => x !== i))} />
+          ${m.name.slice(1).join(" | ")}</label>`)}
+    </div>`;
+}
+
 function ChartPanel({ data, info, method, chartMethods, setChartMethods, view }) {
   const { naming, recipe } = view;
   const [mode, setMode] = useState("single");
@@ -3475,9 +3533,6 @@ function ChartPanel({ data, info, method, chartMethods, setChartMethods, view })
     return o;
   }, [parts, chartMethods, data]);
 
-  const families = [...new Set(info.methods.map((m) => m.name[0]))];
-  const familyMethods = info.methods.map((m, i) => [m, i]).filter(([m]) => m.name[0] === family);
-
   function exportCsv() {
     const quote = (v) => `"${String(v).replace(/"/g, '""')}"`;
     const header = ["row", "kind", "merged rows", ...data.methods.map((m) => quote(`${methodLabel(info.methods[m])} [${info.methods[m].unit}]`))];
@@ -3493,10 +3548,6 @@ function ChartPanel({ data, info, method, chartMethods, setChartMethods, view })
         <span class="spacer" style="flex:1"></span>
         <button onClick=${exportCsv}>Export CSV</button>
       </div>
-      <p class="note">
-        Built from the tree as displayed: each visible row that is not expanded is a bar segment.
-        Expand, collapse or group rows to change the breakdown. ${parts.length} segments.
-      </p>
       ${mode === "single"
         ? html`
           <${Chart} option=${singleOption} height=${Math.max(260, parts.length * 26 + 60)} />
@@ -3514,19 +3565,7 @@ function ChartPanel({ data, info, method, chartMethods, setChartMethods, view })
               <th class="num">${fmt(total)}</th><th class="num">100%</th></tr></tfoot>
           </table>`
         : html`
-          <div class="row">
-            <select value=${family} onChange=${(e) => setFamily(e.target.value)} aria-label="Method family">
-              ${families.map((f) => html`<option value=${f}>${f}</option>`)}
-            </select>
-            <button onClick=${() => setChartMethods(familyMethods.map(([, i]) => i))}>All of family</button>
-            <button onClick=${() => setChartMethods([])}>None</button>
-          </div>
-          <div class="methods-list">
-            ${familyMethods.map(([m, i]) => html`
-              <label><input type="checkbox" checked=${chartMethods.includes(i)}
-                onChange=${(e) => setChartMethods(e.target.checked ? [...chartMethods, i] : chartMethods.filter((x) => x !== i))} />
-                ${m.name.slice(1).join(" | ")}</label>`)}
-          </div>
+          <${MethodChoice} info=${info} family=${family} setFamily=${setFamily} selected=${chartMethods} setSelected=${setChartMethods} />
           ${chartMethods.length === 0
             ? html`<div class="empty">Select methods to compare.</div>`
             : html`<${Chart} option=${multiOption} height=${Math.max(300, chartMethods.length * 28 + 120)} />`}`}
@@ -3574,8 +3613,32 @@ const FLOW_PRESETS = [
   { label: "By compartment", rule: { by: "compartment", target: "flows" } },
 ];
 
+const RULES_TIP = "Rules bundle sibling processes in the tree (flow rules: the elementary flows of expanded direct emissions). "
+  + "Named groups are applied first, then group-by rules, each in list order; a process goes to the first group that claims it. "
+  + "Numbers never change, only how they are bundled.";
+
+// A rule's query as the builder's conditions (null: it cannot be shown there, as a group made from selected rows)
+function queryOf(predicate) {
+  const condition = (c) => ({ id: ++conditionIds, field: c.field, op: c.op, value: Array.isArray(c.value) ? c.value.join(", ") : String(c.value ?? "") });
+  if (predicate?.field) return { combinator: "all", conditions: [condition(predicate)] };
+  const key = predicate?.all ? "all" : predicate?.any ? "any" : null;
+  return key && predicate[key].length && predicate[key].every((c) => c.field) ? { combinator: key, conditions: predicate[key].map(condition) } : null;
+}
+
+// An eye, crossed out while the rule is switched off
+function EyeIcon({ off }) {
+  return html`
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true">
+      <path d="M1.5 8s2.3-4.5 6.5-4.5S14.5 8 14.5 8 12.2 12.5 8 12.5 1.5 8 1.5 8z" /><circle cx="8" cy="8" r="1.9" />
+      ${off && html`<path d="M2.5 13.5l11-11" />`}
+    </svg>`;
+}
+
 function GroupPanel({ info, rules, setRules, selectedRow, view, setView }) {
   const { editing } = useContext(EditorContext);
+  const [editIndex, setEditIndex] = useState(null);  // the rule being changed in the form below, else null
+  const [queryLocked, setQueryLocked] = useState(false);  // the rule edited has a query the builder cannot show
+  const form = useRef(null);
   const [kind, setKind] = useState("named");
   const [target, setTarget] = useState("processes");  // what the new rule groups: processes or elementary flows
   const flows = target === "flows";
@@ -3610,13 +3673,43 @@ function GroupPanel({ info, rules, setRules, selectedRow, view, setView }) {
     }
     setName("");
   }
+  // Change a rule: its form is the one of a new rule, filled in; the target, the kind and the scope stay as they were
+  function startEdit(i) {
+    const r = rules[i];
+    setEditIndex(i);
+    setTarget(r.target === "flows" ? "flows" : "processes");
+    if (r.by) {
+      setKind("by");
+      setBy(r.by);
+      setQueryLocked(false);
+    } else {
+      setKind("named");
+      setName(r.name);
+      const q = queryOf(r.predicate);
+      setQueryLocked(!q);
+      setQuery(q || emptyQuery("name", "contains"));
+    }
+    setTimeout(() => form.current?.scrollIntoView({ block: "start", behavior: "smooth" }));
+  }
+  function stopEdit() {
+    setEditIndex(null);
+    setQueryLocked(false);
+    setName("");
+    setQuery(emptyQuery("name", "contains"));
+  }
+  function saveEdit() {
+    const r = rules[editIndex];
+    const next = r.by ? { ...r, by } : { ...r, name: name.trim() || r.name, ...(queryLocked || !predicate ? {} : { predicate }) };
+    setRules(rules.map((x, j) => (j === editIndex ? next : x)));
+    stopEdit();
+  }
   // A rule's colour: picked here (kept in the view), or derived from its name
   const ruleKey = (r) => r.by || r.name;
   const pickColor = (key, color) => {
     const { [key]: old, ...rest } = view.ruleColors || {};
     setView({ ...view, ruleColors: color ? { ...rest, [key]: color } : rest });
   };
-  // Disabling keeps a rule (to switch it back on); merging turns each of its groups into a merged process
+  // Disabling keeps a rule (to switch it back on)
   const toggle = (i, key) => setRules(rules.map((r, j) => {
     if (j !== i) return r;
     const { [key]: on, ...rest } = r;
@@ -3644,8 +3737,8 @@ function GroupPanel({ info, rules, setRules, selectedRow, view, setView }) {
 
   return html`
     <div class="panel">
-      <h3>Active rules ${rules.length > 1 && html`<button class="link" onClick=${() => setRules([])}>remove all</button>`}</h3>
-      <p class="note">Rules bundle sibling processes in the tree (flow rules: the elementary flows of expanded direct emissions). Named groups are applied first, then group-by rules, each in list order; a process goes to the first group that claims it. Numbers never change, only how they are bundled.</p>
+      <h3 class="rules-head">Active rules <${InfoTip} text=${RULES_TIP} label="How rules work" />
+        ${rules.length > 1 && html`<button class="link" onClick=${() => { setRules([]); stopEdit(); }}>remove all</button>`}</h3>
       ${rules.length === 0 ? html`<p class="note">No grouping. Select several sibling rows in the tree (Ctrl/⌘-click) and use "Group selected", or add a rule below.</p>` : html`
         <ul class="rules">
           ${rules.map((r, i) => html`
@@ -3665,12 +3758,12 @@ function GroupPanel({ info, rules, setRules, selectedRow, view, setView }) {
                 ${r.target === "flows" && "flows: "}${r.by ? html`<b>group by ${r.by === "name" && r.target === "flows" ? "substance" : r.by}</b>` : html`<b>${r.name}</b> <small>← ${describePredicate(r.predicate)}</small>`}
                 <br /><small>${r.scope === "*" ? "everywhere in the tree" : `under ${r.scope}`}${r.merge ? " · merged" : ""}${r.disabled ? " · disabled" : ""}</small>
               </span>
-              ${r.target !== "flows" && !editing && html`
-                <button class=${r.merge ? "primary" : ""} aria-pressed=${!!r.merge} onClick=${() => toggle(i, "merge")}
-                  title=${r.merge ? "Show this rule's groups as groups again" : "Turn each group of this rule into one merged process (inventories added, common inputs summed)"}>merge</button>`}
-              <button onClick=${() => toggle(i, "disabled")}
-                title=${r.disabled ? "Apply this rule again" : "Stop applying this rule, keeping it in the list"}>${r.disabled ? "enable" : "disable"}</button>
-              <button onClick=${() => setRules(rules.filter((_, j) => j !== i))} aria-label="Remove rule">×</button>
+              <button class=${editIndex === i ? "primary" : ""} onClick=${() => (editIndex === i ? stopEdit() : startEdit(i))}
+                title="Change this rule in the form below">edit</button>
+              <button class="icon-btn" onClick=${() => toggle(i, "disabled")} aria-pressed=${!!r.disabled}
+                aria-label=${r.disabled ? "Enable rule" : "Disable rule"}
+                title=${r.disabled ? "Disabled: apply this rule again" : "Stop applying this rule, keeping it in the list"}><${EyeIcon} off=${!!r.disabled} /></button>
+              <button onClick=${() => { setRules(rules.filter((_, j) => j !== i)); if (editIndex !== null) stopEdit(); }} aria-label="Remove rule">×</button>
             </li>`)}
         </ul>`}
 
@@ -3679,30 +3772,32 @@ function GroupPanel({ info, rules, setRules, selectedRow, view, setView }) {
       <div class="row"><span class="muted">Direct emission flows:</span>
         ${FLOW_PRESETS.map((p) => html`<button onClick=${() => add(p.rule)}>${p.label}</button>`)}</div>
 
-      <h3>New rule</h3>
+      <h3 ref=${form}>${editIndex !== null ? "Edit rule" : "New rule"}</h3>
       <div class="row">
         <span class="segmented" role="group" aria-label="What the rule groups">
-          <button class=${!flows ? "primary" : ""} aria-pressed=${!flows} onClick=${() => chooseTarget("processes")}>Processes</button>
-          <button class=${flows ? "primary" : ""} aria-pressed=${flows} onClick=${() => chooseTarget("flows")}>Elementary flows</button>
+          <button class=${!flows ? "primary" : ""} aria-pressed=${!flows} disabled=${editIndex !== null} onClick=${() => chooseTarget("processes")}>Processes</button>
+          <button class=${flows ? "primary" : ""} aria-pressed=${flows} disabled=${editIndex !== null} onClick=${() => chooseTarget("flows")}>Elementary flows</button>
         </span>
       </div>
       <div class="row">
         <span class="segmented" role="group" aria-label="Kind of rule">
-          <button class=${kind === "named" ? "primary" : ""} aria-pressed=${kind === "named"} onClick=${() => setKind("named")}>Named group from a query</button>
-          <button class=${kind === "by" ? "primary" : ""} aria-pressed=${kind === "by"} onClick=${() => setKind("by")}>Group by a field</button>
+          <button class=${kind === "named" ? "primary" : ""} aria-pressed=${kind === "named"} disabled=${editIndex !== null} onClick=${() => setKind("named")}>Named group from a query</button>
+          <button class=${kind === "by" ? "primary" : ""} aria-pressed=${kind === "by"} disabled=${editIndex !== null} onClick=${() => setKind("by")}>Group by a field</button>
         </span>
       </div>
       ${kind === "named" ? html`
         <div class="row"><input placeholder="Group name" value=${name} onInput=${(e) => setName(e.target.value)} aria-label="Group name" /></div>
-        <${QueryBuilder} query=${query} setQuery=${setQuery} fields=${flows ? info.flow_query_fields : info.query_fields} flows=${flows} />
-        ${preview && html`<p class="note">${`Matches ${preview.total} ${flows ? "flows" : "activities"} in the database, e.g. `
+        ${queryLocked
+          ? html`<p class="note">This group was made from selected rows or a nested query: only its name can be changed here.</p>`
+          : html`<${QueryBuilder} query=${query} setQuery=${setQuery} fields=${flows ? info.flow_query_fields : info.query_fields} flows=${flows} />`}
+        ${preview && !queryLocked && html`<p class="note">${`Matches ${preview.total} ${flows ? "flows" : "activities"} in the database, e.g. `
           + preview.results.slice(0, 3).map((r) => `${r.name} (${r.location})`).join("; ")
           + (preview.total > 3 ? "…" : "")}</p>`}
       ` : html`
         <div class="row"><select value=${by} onChange=${(e) => setBy(e.target.value)} aria-label="Group by field">
           ${(flows ? info.flow_query_fields : info.group_by_fields).map((f) => html`<option value=${f}>${fieldLabel(f, flows)}</option>`)}
         </select></div>`}
-      ${!flows && html`<div class="row">
+      ${!flows && editIndex === null && html`<div class="row">
         <span class="segmented" role="group" aria-label="Where the rule applies">
           <button class=${scope === "*" ? "primary" : ""} aria-pressed=${scope === "*"} onClick=${() => setScope("*")}>Everywhere</button>
           <button class=${scope === "selected" ? "primary" : ""} aria-pressed=${scope === "selected"} disabled=${!scopeTarget} onClick=${() => setScope("selected")}
@@ -3710,7 +3805,11 @@ function GroupPanel({ info, rules, setRules, selectedRow, view, setView }) {
         </span>
         ${scopeTarget && html`<span class="muted">${truncate(scopeTarget.label.split(" | ")[1], 40)}</span>`}
       </div>`}
-      <div class="row"><button class="primary" onClick=${addCustom}>Add rule</button></div>
+      <div class="row">
+        ${editIndex !== null
+          ? html`<button class="primary" onClick=${saveEdit}>Save rule</button><button onClick=${stopEdit}>Cancel</button>`
+          : html`<button class="primary" onClick=${addCustom}>Add rule</button>`}
+      </div>
     </div>`;
 }
 
@@ -3820,13 +3919,7 @@ function GlobalPanel({ info, root, amount, method, rules, view, onLocate, onInfo
 
   return html`
     <div class="panel">
-      <p class="note">
-        Group contributions over the whole supply chain, using the named groups defined in the Group rules tab (${Object.keys(groups).length} groups of
-        processes${Object.keys(flowGroups).length ? `, ${Object.keys(flowGroups).length} of elementary flows` : ""}).
-        Process groups come first: a group keeps every flow it reaches first. Flow groups (e.g. a substance, added from
-        the Flow contribution tab) then take their flows from what is left, the emissions of processes outside the groups.
-        Process groups nest (electricity uses transport, which uses electricity), so choose how impacts are attributed:
-      </p>
+      <div class="row"><b>Attribution of impacts</b></div>
       <div class="row">
         <label><input type="radio" checked=${rule === "direct"} onChange=${() => setRule("direct")} />
           <b>Direct</b>: each process's own emissions go to its group</label>
@@ -3961,10 +4054,6 @@ function FlowPanel({ info, root, amount, method, onLocate, onInfo, onFlowInfo, r
 
   return html`
     <div class="panel">
-      <p class="note">
-        Contribution of elementary flows to the score: everything the whole supply chain emits or takes
-        from nature, times its characterisation factor (${methodLabel(info.methods[method])}).
-      </p>
       <div class="row">
         <span class="segmented" role="group" aria-label="Flow grouping">
           <button class=${by === "substance" ? "primary" : ""} onClick=${() => setBy("substance")}
@@ -4063,6 +4152,7 @@ function Portal({ slot, children }) {
 // The tree that takes keyboard navigation: the one clicked last (several can be visible in split panes)
 let keyboardOwner = null;
 const ROOT_SETTERS = {};  // tab id -> the function that makes a process the functional unit of the tab (the search in the top bar)
+const TAB_API = {};  // tab id -> { rules, setRules, view, setView } of the tab, for the comparison to edit its group rules
 // ``initial``: { state } a saved view, { inherit, root? } settings taken from another tab,
 // or { defaultRoot: true } (first start: the model's default functional unit)
 // ``embedded``: the left panel alone (header, list and bars, without the side panel), inside the Exchanges tab of a
@@ -4248,7 +4338,10 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
     else document.querySelector(".top-bar .fu-input input")?.focus({ preventScroll: true });
   }
 
-  if (!embedded) ROOT_SETTERS[id] = (r) => { keyboardOwner = id; selectRoot(r); };
+  if (!embedded) {
+    ROOT_SETTERS[id] = (r) => { keyboardOwner = id; selectRoot(r); };
+    TAB_API[id] = { rules, setRules, view, setView };
+  }
   function selectRoot(r) {
     setRoot(r);
     setExpanded(new Set([String(r.index)]));
@@ -4801,15 +4894,15 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
         </select>
       </header>`}
         <section class="tree-section" ref=${treeSection} onMouseDown=${() => { if (!embedded) keyboardOwner = id; }}>
-          ${(showOptions || !embedded) && html`<div class="toolbar">
-            ${showOptions && !embedded && html`<div class="segmented" role="group" aria-label="Display">
+          ${showOptions && html`<div class="toolbar">
+            ${!embedded && html`<div class="segmented" role="group" aria-label="Display">
               <button class=${display === "list" ? "primary" : ""} onClick=${() => setDisplay("list")}>List</button>
               <button class=${display === "graph" ? "primary" : ""} onClick=${() => setDisplay("graph")}>Tree</button>
               <button class=${display === "sankey" ? "primary" : ""} onClick=${() => setDisplay("sankey")}
                 title="The tree as a flowchart: bands as thick as the impact flowing from each supplier to its user">Sankey</button>
             </div>`}
-            ${showOptions && html`<button onClick=${() => setExpanded(new Set(root ? [String(root.index)] : []))} title="Collapse everything below the root">Collapse</button>
-            <button onClick=${resetView} disabled=${!root} title="Collapse the tree, clear pinned rows and rows moved to others, and remove all groups, merges and custom names (undoable)">Reset view</button>`}
+            <button onClick=${() => setExpanded(new Set(root ? [String(root.index)] : []))} title="Collapse everything below the root">Collapse</button>
+            <button onClick=${resetView} disabled=${!root} title="Collapse the tree, clear restored rows and rows moved to others, and remove all groups, merges and custom names (undoable)">Reset view</button>
             <span class="spacer"></span>
             ${!embedded && html`<${SaveMenu} disabled=${!root} onSave=${exportView} onLoad=${loadView} onCopy=${copyView} />`}
           </div>`}
@@ -4854,7 +4947,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
         <section class="side">
           <div class="tabs" role="tablist">
             ${[["chart", "Process contribution"], ["flows", "Flow contribution"], ["groups", `Group rules${activeRules ? ` (${activeRules})` : ""}`], ["global", "Group contributions"]].map(([key, label]) => html`
-              <button role="tab" class=${tab === key ? "active" : ""} onClick=${() => setTab(key)}>${label}</button>`)}
+              <${TabButton} role="tab" class=${tab === key ? "active" : ""} onClick=${() => setTab(key)} tip=${PANEL_TIPS[key]}>${label}<//>`)}
             <span class="spacer"></span>
             <button class="collapse-side" onClick=${onCollapseSide} title="Hide the side panel" aria-label="Hide the side panel"><${SidePanelIcon} open /></button>
           </div>
@@ -4877,7 +4970,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
 // makes the difference between two of them (waterfall) and every impact category at once (heat
 // map). All three come from /api/compare, computed on the matrices: the cut-off, expansion,
 // merges and substitutions of a tab do not enter into it, only its functional unit and amount.
-const COMPARE_PANELS = [["groups", "Compare contribution"], ["difference", "Difference"], ["methods", "Impact categories"]];
+const COMPARE_PANELS = [["groups", "Compare contribution"], ["difference", "Difference"], ["methods", "Impact categories"], ["rules", "Group rules"]];
 // What the bars of the first two panels are split into: the groups (rules and quick groups), the rows of each
 // tab's displayed tree (View mode), or the elementary flows
 const COMPARE_BASES = [["groups", "By groups"], ["tree", "By tree"], ["flows", "By flows"]];
@@ -5136,7 +5229,7 @@ function CompareDifference({ results, base, target, setTarget, unitLabel, names,
     </table>`;
 }
 
-function CompareMethods({ results, base, info, methods, family, setFamily, sorted, setSorted }) {
+function CompareMethods({ results, base, info, methods, setMethods, family, setFamily, sorted, setSorted }) {
   const rows = useMemo(() => {
     const list = methods.map((k, j) => {
       const changes = results.map((r) => relative(r.totals[j], results[base].totals[j]));
@@ -5144,7 +5237,6 @@ function CompareMethods({ results, base, info, methods, family, setFamily, sorte
     });
     return sorted ? [...list].sort((a, b) => b.spread - a.spread) : list;
   }, [results, base, methods, sorted]);
-  const families = [...new Set(info.methods.map((m) => m.name[0]))];
   const option = useMemo(() => {
     const o = baseOption();
     const clip = (c) => (c == null ? 0 : Math.max(-1, Math.min(1, c)));
@@ -5175,17 +5267,18 @@ function CompareMethods({ results, base, info, methods, family, setFamily, sorte
     download("comparison-methods.csv", [header, ...lines].join("\n"), "text/csv");
   };
   return html`
+    <${MethodChoice} info=${info} family=${family} setFamily=${setFamily} selected=${methods} setSelected=${setMethods} />
     <div class="row">
-      <select value=${family} onChange=${(e) => setFamily(e.target.value)} aria-label="Method family">
-        ${families.map((f) => html`<option value=${f}>${f}</option>`)}
-      </select>
       <label><input type="checkbox" checked=${sorted} onChange=${(e) => setSorted(e.target.checked)} /> Largest difference first</label>
       <span style="flex:1"></span>
       <button onClick=${exportCsv}>Export CSV</button>
     </div>
-    <p class="note">Total score of each functional unit in the ${methods.length} impact categories of ${family}, as a change against the baseline
-      (orange: higher, green: lower; the colour stops at ±100 %). The values are in the tooltip and the CSV.</p>
-    <${Chart} option=${option} height=${Math.max(240, rows.length * 28 + 130)} />`;
+    ${methods.length === 0
+      ? html`<div class="empty">Select methods to compare.</div>`
+      : html`
+        <p class="note">Total score of each functional unit in the ${methods.length} impact categories chosen, as a change against the baseline
+          (orange: higher, green: lower; the colour stops at ±100 %). The values are in the tooltip and the CSV.</p>
+        <${Chart} option=${option} height=${Math.max(240, rows.length * 28 + 130)} />`}`;
 }
 
 function ComparisonView({ info, tabs, compare, setCompare }) {
@@ -5198,22 +5291,21 @@ function ComparisonView({ info, tabs, compare, setCompare }) {
   const method = compare.method ?? baseline?.state.method ?? info.default_method;
   const rule = compare.rule || "direct";
   const groupsFrom = compare.groupsFrom === undefined ? baseline?.id : compare.groupsFrom;
-  const quick = compare.quick || [];
   const family = compare.family ?? info.methods[method].name[0];
   const panel = compare.panel || "groups";
   const toggle = (id) => set({ chosen: chosen.some((t) => t.id === id) ? chosen.filter((t) => t.id !== id).map((t) => t.id) : [...chosen.map((t) => t.id), id] });
 
   // The groups of the comparison: the rules of one tab (named rules on processes, and on elementary flows
-  // as flow groups, as in the Group contributions tab), and the quick groups ticked here
+  // as flow groups, as in the Group contributions tab); they are changed in the Group rules panel here
   const rules = tabs.find((t) => t.id === groupsFrom)?.state.rules;
   const { groups, flowGroups } = useMemo(() => {
     const active = (rules || []).filter((r) => r.predicate && !r.disabled);
     const groups = Object.fromEntries(active.filter((r) => r.target !== "flows").map((r) => [r.name, r.predicate]));
-    for (const p of PRESETS) if (quick.includes(p.label) && p.rule.predicate && !(p.rule.name in groups)) groups[p.rule.name] = p.rule.predicate;
     const flowGroups = Object.fromEntries(active.filter((r) => r.target === "flows").map((r) => [r.name in groups ? `${r.name} (flows)` : r.name, r.predicate]));
     return { groups, flowGroups };
-  }, [rules, quick.join("|")]);
-  const heatMethods = useMemo(() => info.methods.flatMap((m, i) => (m.name[0] === family ? [i] : [])), [info, family]);
+  }, [rules]);
+  // The methods of the heat map: those ticked, from the family of the method to begin with
+  const heatMethods = compare.methodsSel ?? info.methods.flatMap((m, i) => (m.name[0] === family ? [i] : []));
   // What the bars are split into: groups, the tabs' displayed trees (asked of /api/rows tab by tab; /api/compare then
   // only gives the totals) or elementary flows
   const basis = compare.basis || "groups";
@@ -5247,6 +5339,7 @@ function ComparisonView({ info, tabs, compare, setCompare }) {
   const groupColor = (g) => (g === OTHER_GROUP ? cssVar("--muted") : colorOf(g.replace(/ \(flows\)$/, ""), ruleColors));
   const target = chosen.length > 1 && compare.target !== base && compare.target < chosen.length ? compare.target : base === 0 ? 1 : 0;
   const unitLabel = info.methods[method].unit;
+  const tabApi = TAB_API[groupsFrom];  // the rules (and their colours) of the tab, edited where they live
   const units = [...new Set(chosen.map((t) => unit(t.state.root.unit)).filter(Boolean))];
   const substituted = chosen.filter((t) => Object.keys(t.state.substitutions || {}).length);
 
@@ -5287,16 +5380,11 @@ function ComparisonView({ info, tabs, compare, setCompare }) {
               <option value="first_match">Whole supply chain below the first match</option>
             </select>
           </label>
-          <div class="chips">${PRESETS.filter((p) => p.rule.predicate).map((p) => html`
-            <button class=${quick.includes(p.label) ? "primary" : ""} onClick=${() => setCompare((c) => {
-              const now = c.quick || [];
-              return { ...c, quick: now.includes(p.label) ? now.filter((q) => q !== p.label) : [...now, p.label] };
-            })}>${p.label}</button>`)}
-          </div>
-          <p class="note">${Object.keys(groups).length + Object.keys(flowGroups).length} groups. The rules are those of the tab's <i>Group rules</i>; quick groups are added to them.</p>`}
+          <p class="note">${Object.keys(groups).length + Object.keys(flowGroups).length} groups, from the rules of the tab chosen above.
+            <button class="link" onClick=${() => set({ panel: "rules" })}>Edit the group rules</button></p>`}
         ${basis === "tree" && html`
           <h3>Trees</h3>
-          <p class="note">Each tab's tree as displayed in View mode (its expanded rows, groups, merges, pins and cut-off), at this method.
+          <p class="note">Each tab's tree as displayed in View mode (its expanded rows, groups, merges, restored rows and cut-off), at this method.
             Bars are lined up by process, so shape the trees alike to compare like with like: a process expanded in one tab and
             collapsed in another appears as its inputs on one side and as one bar on the other.</p>`}
         ${basis === "flows" && html`
@@ -5310,7 +5398,11 @@ function ComparisonView({ info, tabs, compare, setCompare }) {
         <div class="tabs" role="tablist">
           ${COMPARE_PANELS.map(([k, label]) => html`<button role="tab" class=${panel === k ? "active" : ""} onClick=${() => set({ panel: k })}>${label}</button>`)}
         </div>
-        <div class="panel">
+        ${panel === "rules" ? (tabApi
+          ? html`<div class="compare-rules-note muted">Rules of <b>${labels[groupsFrom]}</b>: the same as in its tab, changed here or there.</div>
+              <${GroupPanel} info=${info} rules=${tabApi.rules} setRules=${tabApi.setRules} selectedRow=${null} view=${tabApi.view} setView=${tabApi.setView} />`
+          : html`<div class="panel"><div class="empty">Choose a tab whose rules to edit (<i>Rules of</i>, on the left, in <i>By groups</i>).</div></div>`)
+        : html`<div class="panel">
           ${chosen.length < 2 ? html`<div class="empty">Tick at least two tabs to compare.</div>`
             : error ? html`<div class="error">${error}</div>`
             : !results ? html`<div class="empty">Computing…</div>`
@@ -5320,9 +5412,9 @@ function ComparisonView({ info, tabs, compare, setCompare }) {
             : panel === "difference" ? html`<${CompareDifference} results=${results} base=${base} target=${target} setTarget=${(t) => set({ target: t })}
                 unitLabel=${unitLabel} names=${names} zoom=${compare.zoom} setZoom=${(zoom) => set({ zoom })}
                 basis=${basis} setBasis=${(b) => set({ basis: b })} limit=${limit} setLimit=${(n) => set({ limit: n })} />`
-            : html`<${CompareMethods} results=${results} base=${base} info=${info} methods=${heatMethods} family=${family}
+            : html`<${CompareMethods} results=${results} base=${base} info=${info} methods=${heatMethods} setMethods=${(m) => set({ methodsSel: m })} family=${family}
                 setFamily=${(f) => set({ family: f })} sorted=${!!compare.sorted} setSorted=${(sorted) => set({ sorted })} />`}
-        </div>
+        </div>`}
       </div>
     </div>`;
 }
@@ -5498,6 +5590,7 @@ const SHORTCUTS = [
     ["v", "View mode; when already in View mode, show or hide the view options"],
     ["e", "Edit mode (a Brightway-built database); when already in Edit mode, open the form of the selected process, as below"],
     ["c", "Compare mode"],
+    ["s", "Search a process in the top bar (as Ctrl/⌘ + K)"],
   ]],
   ["Lists and trees (the one clicked last)", [
     ["↓ ↑", "Select the row below / above"],
@@ -5591,6 +5684,9 @@ function App() {
   const [mode, setMode] = useState(() => loadPreference("mode", "view"));
   useEffect(() => savePreference("mode", mode === "compare" ? "view" : mode), [mode]);  // the page opens on the explorer
   const comparing = mode === "compare";
+  const comparingRef = useRef(false);
+  comparingRef.current = comparing;
+  const [, setTick] = useState(0);
   const [compare, setCompare] = useState({});  // the comparison's choices, kept while the mode is left
   const [layout, setLayout] = useState(null);
   const [focus, setFocus] = useState(null);
@@ -5609,7 +5705,7 @@ function App() {
   const origin = databases?.find((d) => d.key === DATABASE)?.brightway || null;
   const editing = mode === "edit" && !!origin;
   // v: View mode, or in View mode the view options; e: Edit mode (in Edit mode the tree's e opens the form of the
-  // process); c: Compare mode. Not while typing, in a pop-up or in a dialog.
+  // process); c: Compare mode; s: the search of the top bar. Not while typing, in a pop-up or in a dialog.
   useEffect(() => {
     const onKey = (e) => {
       if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || e.defaultPrevented) return;
@@ -5621,7 +5717,12 @@ function App() {
         setMode("edit");
         setSideOpen(true);
       } else if (e.key === "c") setMode("compare");
-      else return;
+      else if (e.key === "s") {
+        const input = document.querySelector(".top-bar .fu-input input");
+        if (!input) return;
+        input.focus();
+        input.select();
+      } else return;
       e.preventDefault();
     };
     document.addEventListener("keydown", onKey);
@@ -5699,7 +5800,8 @@ function App() {
 
   const initialOf = (id) => (states.current[id] ? { state: states.current[id] } : starts.current[id]);
   const activeTabOf = (paneId) => (layout ? panesOf(layout).find((p) => p.id === paneId)?.active : null);
-  const onSave = (id, state) => { states.current[id] = state; persist(); };
+  // The comparison reads the states of the tabs: it is drawn again when one of them changes (its group rules, edited there)
+  const onSave = (id, state) => { states.current[id] = state; persist(); if (comparingRef.current) setTick((t) => t + 1); };
   const onTitle = (id, root) => setTitles((t) => ({ ...t, [id]: root ? { name: root.name, location: root.location, index: root.index } : null }));
   function openTab(paneId, start, zone = "center") {
     const id = newId("t");
