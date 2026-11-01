@@ -3162,7 +3162,7 @@ function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsByI
           ${exchanges?.available && html`
             <${FUView} key=${target.index} id=${`exchanges-${target.index}`} info=${model} visible=${shown === "exchanges"}
               initial=${{ root: base, inherit: { method, chartMethods: [], cutoff: 500, cutoffBasis: "top", rules: [] } }}
-              embedded=${{ onInfo: follow, onUse: useAsRoot, keys: explorerKeys }} onSave=${() => {}} onTitle=${() => {}} />`}
+              embedded=${{ method, onInfo: follow, onUse: useAsRoot, keys: explorerKeys }} onSave=${() => {}} onTitle=${() => {}} />`}
           ${shown === "users" && users && html`
             <section>
               <h4>${users.waste ? "Treats the waste of" : "Used by"} · ${users.count} ${users.count === 1 ? "activity" : "activities"}${root ? `, ${users.in_supply_chain} in this supply chain` : ""}</h4>
@@ -4328,7 +4328,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
   // and has rules of its own.
   const lens = useContext(LensContext);
   const [ownRules, setOwnRules] = useState([]);
-  const method = embedded ? embedded.method : lens.method;
+  const method = embedded ? (embedded.method ?? lens.method) : lens.method;
   const chartMethods = embedded ? [] : lens.chartMethods;
   const rules = useMemo(() => (embedded ? ownRules : [...lens.rules, ...ownRules]), [lens.rules, ownRules]);
   function setRules(next) {

@@ -9,9 +9,13 @@ latest release, new work happens on `dev`.
 
 Changes on `dev`, not released yet.
 
+## 1.2.0 - 2026-11-01
+
 - The *Groups* panel is now *Rules*, and *Group contributions* is *Rules contributions*.
 - A *Group by rules* switch in the view options turns the grouping of the tree by the rules on or off, without
   touching the rules.
+- Fixed: in 1.1.0 the Exchanges panel of a process pop-up stayed empty and the pop-up could not be closed
+  (the explorer inside it had no impact method). 1.1.0 should be skipped.
 
 ## 1.1.0 - 2026-10-30
 
