@@ -9,6 +9,20 @@ latest release, new work happens on `dev`.
 
 Changes on `dev`, not released yet.
 
+- **View options**: headers *Group by* (rules, product, substance, compartment) and *Organize* (split by type,
+  hide others), with one-word buttons.
+- **Projects**: the last one opened first, its databases folded (a click shows them).
+- **Processes panel**: drag the processes between windows, to a new window, or before another; close a window from
+  its header. Drag a process from any row (explorer, panels, pop-ups) onto a window, a tab list or the panel to
+  open it in a new tab. Closing a tab or a window can be undone (a notice, and *Reopen what I closed*).
+- **Edit mode**: the pop-up no longer renames a process; the explanations moved into tooltips (*Stage*, *Products*,
+  *Edit mode*) and the *used by* text is gone.
+- **Attribution** (first match by default) is one choice for *Rules contributions* and Compare.
+- **Compare**: the breakdown is *Rules*, *Flows* or *Processes* (the rows of each tab's *Current view*, or each
+  process's *Activity content*), and the scale has its own header.
+- **Rules panel**: its sections fold (rule set, quick groups, new rule), and a rule has an icon to edit it.
+- Shorter descriptions in the app's own words.
+
 - **Projects** (it was *Load database*): one list of projects and their databases. A database has **Open** and an
   **Options** menu: close, lock, rename, add a database, remove; a project has *Add database* and *Delete project*.
 - New: **rename a database**, and **add a database from another project** (or a copy of one of the same project).

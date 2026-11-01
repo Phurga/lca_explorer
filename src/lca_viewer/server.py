@@ -603,7 +603,7 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
             raise HTTPException(400, "Nothing to compare")
         if req.rule not in ("direct", "first_match"):
             raise HTTPException(400, f"Unknown rule {req.rule!r}")
-        if req.basis not in ("groups", "flows"):
+        if req.basis not in ("groups", "flows", "activities"):
             raise HTTPException(400, f"Unknown basis {req.basis!r}")
         for k in [req.method, *req.methods]:
             if not 0 <= k < len(model.methods):
@@ -621,6 +621,24 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
             split = [{**{n: v for n, v in parts.items() if n in shown},
                       **({OTHER: rest} if (rest := sum(v for n, v in parts.items() if n not in shown)) else {})}
                      for parts in split]
+        elif req.basis == "activities":
+            # each process by its own emissions, wherever it is in the supply chain; the ``limit`` weighing most over all
+            # entries, and *other* for the rest
+            direct = [model.supply(e.root, e.amount) * model.U[req.method] for e in req.entries]
+            weight = sum(np.abs(d) for d in direct)
+            top = [int(j) for j in np.argsort(-weight)[: max(req.limit, 0)] if weight[j] > 0]
+            label = {}
+            for j in top:
+                m = meta(j)
+                name = f"{m['name']} ({m['location']})"
+                label[j] = name if name not in label.values() else f"{name} #{j}"
+            split = []
+            for d in direct:
+                parts = {label[j]: float(d[j]) for j in top if d[j] != 0}
+                rest = float(d.sum() - sum(d[j] for j in top))
+                if abs(rest) > 1e-12 * max(abs(float(d.sum())), 1e-300):
+                    parts[OTHER] = rest
+                split.append(parts)
         else:
             split = [{name: float(v[0]) for name, v in supply_chain_contribution(
                 model, e.root, req.groups, req.rule, e.amount, req.flow_groups, [req.method], req.order or None).items()}

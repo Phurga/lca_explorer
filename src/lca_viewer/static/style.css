@@ -871,8 +871,8 @@ textarea.editing { width: 100%; box-sizing: border-box; }
 .info-head-actions .pin-mark { display: inline-flex; align-items: center; color: var(--accent); padding: 0 4px; }
 
 /* The view options in groups */
-.view-bar .view-group { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin: 4px 0; }
-.view-bar .view-group-label { flex: none; width: 54px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.view-group { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin: 4px 0; }
+.view-group-label { flex: none; width: 64px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
 /* The colour bar of a row by flow type: its name on hover */
 .tree tr td:first-child { position: relative; }
 .tree .type-bar { position: absolute; left: 0; top: 0; bottom: 0; width: 7px; z-index: 1; }
@@ -880,3 +880,26 @@ textarea.editing { width: 100%; box-sizing: border-box; }
 /* A button whose label has a shortcut: the letter is underlined while the pointer is on it */
 .has-key .key-hint { text-decoration: none; }
 .has-key:hover .key-hint, .has-key:focus-visible .key-hint { text-decoration: underline; }
+
+/* Projects: a folded project shows a line */
+.load-table tr.project .toggle { border: none; background: none; padding: 0 4px; color: var(--muted); }
+
+/* The Processes panel: windows to drop into, a notice to undo a close */
+.window-head { display: flex; align-items: center; justify-content: space-between; }
+.window-head .close-tab { border: none; background: none; color: var(--muted); padding: 0 5px; font-size: 15px; line-height: 1; }
+.window-head .close-tab:hover { color: var(--bar-negative); }
+.window-group.drop-here { background: var(--accent-soft); }
+.process-row.drop-before { box-shadow: 0 -2px 0 var(--accent); }
+.window-new { border: 2px dashed var(--border); border-radius: 8px; padding: 10px; text-align: center; color: var(--muted); margin-bottom: 10px; }
+.window-new.drop-here { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.process-row[draggable="true"] { cursor: grab; }
+.toast { display: flex; align-items: center; gap: 10px; padding: 6px 14px; background: var(--panel); border-top: 1px solid var(--border); font-size: 12px; }
+.toast span { flex: 1; }
+.tree tr[draggable="true"] { cursor: default; }
+
+/* Sections of a panel that fold */
+.fold { border: none; margin: 0 0 6px; }
+.fold-head { display: flex; align-items: center; gap: 6px; margin: 8px 0 4px; font-size: 13px; }
+.fold-toggle { border: none; background: none; padding: 2px 4px 2px 0; font: inherit; font-weight: 600; color: var(--text); display: inline-flex; gap: 4px; align-items: center; }
+.fold-toggle:hover { color: var(--accent); }
+.fold-toggle .caret { color: var(--muted); font-size: 11px; width: 10px; }

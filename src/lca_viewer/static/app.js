@@ -1145,6 +1145,22 @@ function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
   const [showLog, setShowLog] = useState(false);
   const [form, setForm] = useState(null);  // { kind, project }: a ProjectForm open
   const [jobAt, setJobAt] = useState(null);  // the project a job was started from: its progress shows there
+  // The projects a database was opened from, the last one first; the ones whose databases are shown (all folded at first)
+  const [recent, setRecent] = useState(() => { try { return JSON.parse(loadPreference("recentProjects", "[]")); } catch { return []; } });
+  const [unfolded, setUnfolded] = useState(() => { try { return new Set(JSON.parse(loadPreference("unfoldedProjects", "[]"))); } catch { return new Set(); } });
+  const noteProject = (name) => {
+    const next = [name, ...recent.filter((n) => n !== name)].slice(0, 30);
+    setRecent(next);
+    savePreference("recentProjects", JSON.stringify(next));
+  };
+  // A project with a database open comes first, then the ones opened from last to first, then the others
+  const rank = (q) => (q.databases.some((d) => d.model?.key) ? -1 : recent.indexOf(q.name) >= 0 ? recent.indexOf(q.name) : 1e9);
+  const toggleProject = (name) => {
+    const next = new Set(unfolded);
+    next.has(name) ? next.delete(name) : next.add(name);
+    setUnfolded(next);
+    savePreference("unfoldedProjects", JSON.stringify([...next]));
+  };
   const box = useRef(null);
 
   const refresh = () => serverRequest("/api/sources").then((s) => {
@@ -1191,7 +1207,7 @@ function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
     setJobAt(at || null);
     serverRequest(url, body).then(setJob).catch((e) => setJob({ status: "failed", error: e.message, log: [] }));
   };
-  const start = (body) => startJob("/api/load", body, body.project);
+  const start = (body) => { if (body.project) noteProject(body.project); startJob("/api/load", body, body.project); };
   const busy = job?.status === "running" || (job?.status === "done" && !!job.key);
   const unload = (key) => serverRequest("/api/unload", { key }).then((list) => {
     if (key === DATABASE) { location.href = "/"; return; }
@@ -1209,7 +1225,7 @@ function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
     if (!p.twofive) return null;
     if (!d.processes) return html`<span class="muted">elementary flows</span>`;
     const body = { brightway: projects.folder, project: p.name, database: d.name };
-    if (d.model?.key) return html`<button onClick=${() => openDatabase(d.model.key)}>${d.model.key === DATABASE ? "Shown" : "Switch to"}</button>`;
+    if (d.model?.key) return html`<button onClick=${() => { noteProject(p.name); openDatabase(d.model.key); }}>${d.model.key === DATABASE ? "Shown" : "Switch to"}</button>`;
     if (d.model && !d.model.outdated) return html`<button class="primary" disabled=${busy} onClick=${() => start(body)}>Open</button>`;
     return html`
       <button class="primary" disabled=${busy} onClick=${() => start({ ...body, rebuild: !!d.model })}
@@ -1290,11 +1306,16 @@ function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
         ${folder && !projects && !projectsError && html`<div class="empty">Reading the projects…</div>`}
         ${projects && html`
           <table class="load-table">
-            ${projects.projects.filter((p) => p.databases.length || p.twofive).map((p) => html`
+            ${projects.projects.filter((p) => p.databases.length || p.twofive)
+              .sort((a, b) => rank(a) - rank(b)).map((p) => { const shown = unfolded.has(p.name) || form?.project === p.name || jobAt === p.name;
+              const opened = p.databases.filter((d) => d.model?.key); return html`
               <tr class="project" key=${`p:${p.name}`}>
-                <td colspan="2"><b>${p.name}</b>
+                <td colspan="2"><button class="toggle" aria-expanded=${shown} aria-label=${shown ? "Fold the databases" : "Show the databases"}
+                    title=${shown ? "Fold the databases" : "Show the databases"} onClick=${() => toggleProject(p.name)}>${shown ? "▾" : "▸"}</button>
+                  <b>${p.name}</b>
                   <span class="muted"> · ${!p.twofive ? "Brightway 2 project: lca_viewer reads Brightway 2.5 projects only (upgrade it in Activity Browser 3 or Brightway 2.5)"
-                    : p.databases.length ? `${count(p.methods)} impact methods` : "empty"}</span></td>
+                    : p.databases.length ? `${p.databases.filter((d) => d.processes).length} ${p.databases.filter((d) => d.processes).length === 1 ? "database" : "databases"}, ${count(p.methods)} impact methods` : "empty"}
+                    ${opened.length > 0 && html` · <span class="loc-chip" title="Databases of this project that are open">${opened.map((d) => d.name).join(", ")} open</span>`}</span></td>
                 <td class="actions project-actions">
                   <${PopupMenu} label="Options ▾" title="Options of this project" items=${[
                     ...(p.twofive ? [{ label: "Add database…", title: "Import a database into this project: an ecoSpold2 release, a SimaPro CSV export, BAFU, ecoinvent with your account, or a copy of one of another project",
@@ -1304,13 +1325,13 @@ function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
               </tr>
               ${jobAt === p.name && jobBox && html`<tr class="form-row" key=${`j:${p.name}`}><td colspan="3">${jobBox}</td></tr>`}
               ${form?.project === p.name && html`<tr class="form-row" key=${`f:${p.name}`}><td colspan="3">${projectForm}</td></tr>`}
-              ${p.databases.map((d) => html`
+              ${shown && p.databases.map((d) => html`
                 <tr key=${`d:${p.name}/${d.name}`} class=${p.twofive && d.processes ? "" : "muted"}>
                   <td class="indent">${d.name}${d.locked && html` <span class="loc-chip" title="What this database contains cannot be edited">🔒 locked</span>`}${d.model?.outdated && html`<div class="muted small">${d.model.outdated}${d.model.key ? ": close it to rebuild it" : ""}</div>`}</td>
                   <td class="num muted">${d.processes ? `${count(d.processes)} processes` : `${count(d.flows)} flows`}</td>
                   <td class="actions">${dbAction(p, d)}
                     ${p.twofive && html`<${PopupMenu} label="Options ▾" title="Options of this database" items=${dbOptions(p, d)} />`}</td>
-                </tr>`)}`)}
+                </tr>`)}`; })}
           </table>
           ${!projects.projects.length && html`<p class="muted">No project in this folder yet: create one with <i>New project</i>.</p>`}`}
       </section>
@@ -1655,22 +1676,13 @@ function DatasetForm({ onClose, current, edit, initial, copyFrom: start, deleted
     <div class="modal-backdrop" onMouseDown=${(e) => e.target === e.currentTarget && onClose()}>
       <div class="load-dialog dataset-dialog" role="dialog" aria-label=${edit ? "Edit a dataset" : "New process"}>
         <div class="info-head">
-          <div class="info-title">${edit ? `Edit ${original ? original.process.name : "a dataset"}` : "New process"}${" "}
-            <span class="muted">· staged in ${current.project}, made when the changes are applied</span></div>
+          <div class="info-title">${edit ? `Edit ${original ? original.process.name : "a dataset"}` : "New process"}</div>
           <button onClick=${onClose} aria-label="Close">×</button>
         </div>
         <div class="load-body">
           ${error && html`<div class="error">${error}</div>`}
           ${edit
-            ? html`
-              <section>
-                <p class="muted small">Applying the change replaces the dataset where it is: its products keep their identity, so the datasets that use them stay linked.${" "}
-                  ${users.length
-                    ? html`Used by <b>${[...new Set(users.map((u) => u.name))].join(", ")}</b>${original?.used_by.length >= 30 ? " and more" : ""}: the products they use cannot be removed.`
-                    : "No other dataset uses it: its co-products can be removed."}${" "}
-                  A co-product can be added to a process with one product.${" "}
-                  ${original && html`The databases that use ${original.database} have to be built again once it is changed.`}</p>
-              </section>`
+            ? null
             : html`
               <section>
                 <h3>Save into</h3>
@@ -1717,7 +1729,8 @@ function DatasetForm({ onClose, current, edit, initial, copyFrom: start, deleted
             </details>
           </section>
           <section>
-            <h3>Products <span class="muted">${several ? `co-products, allocated with these percentages (sum: ${shares} %)` : "the reference product"}</span></h3>
+            <h3>Products <span class="muted">${several ? `co-products, allocated with these percentages (sum: ${shares} %)` : "the reference product"}</span>
+              <${InfoTip} text=${edit ? "Applying replaces the process in place: its products keep their identity, so what uses them stays linked. A product another process uses cannot be removed. A co-product can be added to a process with one product." : "The reference product, or co-products with allocation percentages."} label="About products" /></h3>
             <table class="dataset-table">
               <tr><th>Name</th><th class="num">Amount</th><th>Unit</th>${several && html`<th class="num">Allocation %</th>`}<th>Comment</th><th></th></tr>
               ${draft.products.map((p, i) => html`
@@ -1770,10 +1783,11 @@ function DatasetForm({ onClose, current, edit, initial, copyFrom: start, deleted
         </div>
         <div class="dataset-footer">
           <div class="form-actions">
-            <span class="muted small">${problems.length ? `To stage: ${problems.join(", ")}.` : "Ready to stage: nothing is written until you apply the changes."}</span>
+            <span class="muted small">${problems.length ? `To stage: ${problems.join(", ")}.` : ""}</span>
             <span class="spacer"></span>
             ${fresh && html`<button onClick=${() => { if (confirm("Clear this form?")) { setDraft({ ...emptyDraft(), project: current.project, database: draft.database }); setTemplate(null); } }}>Clear</button>`}
-            <button class="primary" disabled=${problems.length > 0 || busy} onClick=${stage}>${edit || initial ? "Stage the change" : "Stage the new process"}</button>
+            <button class="primary" disabled=${problems.length > 0 || busy} onClick=${stage}
+              title=${`Stage: nothing is written yet. Staged changes are made together by Apply, in project ${current.project}; the models of the databases they touch are then built again.`}>${edit || initial ? "Stage the change" : "Stage the new process"}</button>
           </div>
         </div>
       </div>
@@ -1836,9 +1850,8 @@ function EditPanel({ origin, dataset, pending, affected, locked, outdated, onFor
   return html`
     <div class="edit-panel">
       <h3 class="edit-title">Edit mode <span class="muted">· project ${origin.project}</span>
+        <${InfoTip} text="Changes are staged here, then made together by Apply. Press e on a process to edit it. Impacts are those of the last build, greyed once stale." label="About edit mode" />
         <button class="collapse-side" onClick=${onCollapse} title="Hide the side panel (Ctrl/⌘ + →)" aria-label="Hide the side panel"><${SidePanelIcon} open /></button></h3>
-      <p class="muted small">Changes are staged here and made together when you apply them. Press e on a process of the list (or use Edit below) to change it in its form; values of a pop-up can be changed by double-clicking them.
-        The impacts shown are those of the last build: they are greyed out once what they come from has changed.</p>
       ${error && html`<div class="error">${error}</div>`}
       ${outdated && html`
         <div class="edit-warning">
@@ -1853,7 +1866,7 @@ function EditPanel({ origin, dataset, pending, affected, locked, outdated, onFor
             <div class="edit-card">
               <div><b>${dataset.process.name}</b> <span class="loc-chip">${dataset.process.location}</span></div>
               <div class="muted small">${dataset.database}${isLocked ? " · 🔒 locked: unlock it in Projects to change it" : ""}
-                ${users.length > 0 && ` · used by ${[...new Set(users.map((u) => u.name))].join(", ")}${dataset.used_by.length >= 30 ? " and more" : ""}`}</div>
+</div>
               ${staged && html`<div class="small">${KIND[staged.kind]} staged</div>`}
               <div class="edit-actions">
                 <button disabled=${isLocked || staged?.kind === "delete"}
@@ -1974,7 +1987,7 @@ function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onU
             return html`
               <${Fragment} key=${r.id}>
               ${heading && html`<tr class="section"><td colspan=${span} style=${{ "--depth": r.depth }}><span style=${{ paddingLeft: `${r.depth * 16 + 18}px` }}>${heading}</span></td></tr>`}
-              <tr data-id=${r.id} class="${r.kind} ${selection.has(r.id) ? "selected" : ""} ${focus === r.id ? "focus" : ""} ${colors.has(r.id) ? "in-group" : ""}"
+              <tr data-id=${r.id} ...${dragProcess(r.kind === "process" || r.kind === "direct" ? r.meta?.index : null)} class="${r.kind} ${selection.has(r.id) ? "selected" : ""} ${focus === r.id ? "focus" : ""} ${colors.has(r.id) ? "in-group" : ""}"
                   style=${colors.has(r.id) ? { "--group-color": colors.get(r.id) } : null}
                   onClick=${(e) => onSelect(r, e.ctrlKey || e.metaKey || e.shiftKey)}
                   onContextMenu=${(e) => onInfo(r, e)}>
@@ -2599,35 +2612,39 @@ function SaveMenu({ disabled, onSave, onLoad, onCopy }) {
     </span>`;
 }
 
-// ---------------------------------------------------------------- view bar (groups, names and colours)
+// ---------------------------------------------------------------- view bar (group by, organize, names, colours)
+// The headers say what the buttons are for, so the buttons are one word
 function ViewBar({ view, setView, example }) {
   const set = (patch) => setView({ ...view, ...patch });
   const toggle = (key, label, title, on = !!view[key]) => html`
     <button class=${on ? "primary" : ""} onClick=${() => set({ [key]: !on })} aria-pressed=${on} title=${title}>${label}</button>`;
   return html`
     <div class="view-bar">
-      <div class="view-group" role="group" aria-label="Groups">
-        <span class="view-group-label">Groups</span>
-        ${toggle("groupByRules", "Group by rules", "Bundle sibling rows under the groups of the rules (Rules panel): on or off, the rules stay as they are", view.groupByRules !== false)}
-        ${toggle("groupProducts", "Group by product", "Bundle sibling inputs of the same product (other regions or routes) under one row")}
-        ${toggle("groupSubstance", "Group by substance", "Under direct emissions, bundle the flows of one substance (its compartments added up)")}
-        ${toggle("groupCompartment", "Group by compartment", "Under direct emissions, bundle the flows by compartment (air, water, soil…)")}
-        ${toggle("splitByType", "Split by flow type", "Order what is below each row in sections, as in the form of a new process: inputs from technosphere, inputs from nature, emissions, direct emissions, waste to treatment")}
-        ${toggle("hideOthers", "Hide others", "Hide the others rows (what the cut-off or a move to others took out) from the list, the tree and the Sankey; the chart keeps them")}
+      <div class="view-group" role="group" aria-label="Group by">
+        <span class="view-group-label">Group by</span>
+        ${toggle("groupByRules", "Rules", "Bundle rows under the groups of your rules (Rules panel)", view.groupByRules !== false)}
+        ${toggle("groupProducts", "Product", "Bundle the suppliers of one product: its regions and routes")}
+        ${toggle("groupSubstance", "Substance", "In direct emissions, bundle the flows of a substance")}
+        ${toggle("groupCompartment", "Compartment", "In direct emissions, bundle the flows by compartment: air, water, soil")}
+      </div>
+      <div class="view-group" role="group" aria-label="Organize">
+        <span class="view-group-label">Organize</span>
+        ${toggle("splitByType", "Split by type", "Sort the rows under a row in sections: technosphere inputs, nature inputs, emissions, waste")}
+        ${toggle("hideOthers", "Hide others", "Hide the 'others' rows, and what they hold, from the tree; the chart keeps them")}
       </div>
       <div class="view-group" role="group" aria-label="Names">
         <span class="view-group-label">Names</span>
         <span class="segmented">
-          ${[["full", "Full names"], ["short", "Short names"], ["custom", "Custom name"]].map(([id, label]) => html`
-            <button class=${view.naming === id ? "primary" : ""} onClick=${() => set({ naming: id })}>${label}</button>`)}
+          ${[["full", "Full", "Process, product and place"], ["short", "Short", "The main part of the name"], ["custom", "Custom", "A format of your own"]].map(([id, label, hint]) => html`
+            <button class=${view.naming === id ? "primary" : ""} title=${hint} onClick=${() => set({ naming: id })}>${label}</button>`)}
         </span>
       </div>
       <div class="view-group" role="group" aria-label="Colours">
         <span class="view-group-label">Colours</span>
         <span class="segmented">
-          ${[["none", "No colours", "Colour nothing: rows and bars keep one colour"],
-            ["group", "Rules colours", "Colour the rows of each group with its rule's colour"],
-            ["type", "Flow type colours", "Colour the rows by the kind of exchange: product, technosphere input, waste, resource, emission (hover the colour bar of a row for its name)"]].map(([id, label, hint]) => html`
+          ${[["none", "None", "No colours"],
+            ["group", "Rules", "Colour each group with the colour of its rule"],
+            ["type", "Flow type", "Colour rows by exchange: product, input, waste, resource, emission (hover a colour bar for its name)"]].map(([id, label, hint]) => html`
             <button class=${(view.groupColors ? view.colorBy || "group" : "none") === id ? "primary" : ""} title=${hint}
               onClick=${() => set(id === "none" ? { groupColors: false } : { colorBy: id, groupColors: true })}>${label}</button>`)}
         </span>
@@ -2722,7 +2739,7 @@ function ProcessRow({ item, above, depth, ancestors, panel }) {
     }
   };
   return html`<${Fragment}>
-    <tr class="exchange" data-nav data-depth=${depth} tabindex="-1" onKeyDown=${keys} onDblClick=${() => expandable && setOpen(!open)}
+    <tr class="exchange" data-nav data-depth=${depth} tabindex="-1" ...${dragProcess(item.index)} onKeyDown=${keys} onDblClick=${() => expandable && setOpen(!open)}
         onContextMenu=${(e) => { e.preventDefault(); e.stopPropagation(); panel.onOpen(item); }}>
       <td class="user" title=${`${item.reference_product ?? ""} | ${item.name} | ${item.location}`}>
         <span class="user-cell" style=${{ paddingLeft: `${depth * 16}px` }}>
@@ -3213,17 +3230,13 @@ function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsByI
       onKeyDown=${popupKeys({ tabs, shown, setTab, body, onClose, exchange, explorerKeys })}
       head=${html`
         <div class="info-title">${target.direct ? "Direct emissions of " : ""}${(target.direct ? rowsById.get(row?.parent)?.custom : row?.custom)
-          || (info ? (exchange ? info.name : html`<${Editable} value=${info.name} disabled=${locked} onCommit=${(t) => own((dr) => { dr.process.name = t; })} />`) : "…")}${" "}
-          ${info && (exchange ? html`<span class="loc-chip">${info.location}</span>`
-            : html`<${Editable} className="loc-chip" value=${info.location} disabled=${locked} onCommit=${(t) => own((dr) => { dr.process.location = t; })} />`)}
+          || (info ? info.name : "…")}${" "}
+          ${info && html`<span class="loc-chip">${info.location}</span>`}
           ${stagedHere && html` <span class="chip staged" title="A change of this process is staged: the values below are those of the last build">changes staged</span>`}
           ${ctx.editing && locked && html` <span class="chip" title="Its database is locked">🔒 locked</span>`}</div>
         ${info && (target.direct ? rowsById.get(row?.parent)?.custom : row?.custom) && html`<div class="muted">renamed in this view · ${info.name}</div>`}
-        ${info && (exchange ? html`<div class="muted">Exchange · ${info.reference_product} · ${unit(info.unit)}</div>` : html`<div class="muted">${info.activity_type} ·${" "}
-          <${Editable} value=${info.reference_product} disabled=${locked}
-            onCommit=${(t) => own((dr) => { productOfProcess(dr, info.code).name = t; })} /> ·${" "}
-          <${Editable} value=${info.unit} display=${unit(info.unit)} disabled=${locked}
-            onCommit=${(t) => own((dr) => { productOfProcess(dr, info.code).unit = t; })} /></div>`)}`}>
+        ${info && (exchange ? html`<div class="muted">Exchange · ${info.reference_product} · ${unit(info.unit)}</div>`
+          : html`<div class="muted">${info.activity_type} · ${info.reference_product} · ${unit(info.unit)}</div>`)}`}>
       ${error && html`<div class="error">${error}</div>`}
       ${info && html`
         ${!exchange && html`<div class="tabs info-tabs" role="tablist">
@@ -3530,14 +3543,12 @@ function RecipeEditor({ recipe, setRecipe, example }) {
 // ---------------------------------------------------------------- chart panel
 // What each tab of the side panel shows, in a popup on its name
 const PANEL_TIPS = {
-  chart: "The contribution of each row of the tree as displayed: every visible row that is not expanded is a bar segment. Expand, collapse or group rows to change the breakdown.",
-  flows: "The contribution of elementary flows to the score: everything the whole supply chain emits or takes from nature, times its characterisation factor in the current method.",
-  groups: "The rules that bundle sibling rows of the tree into groups: quick groups, and a form for new rules. The rule sets are shared by the tabs that follow the workspace.",
-  processes: "The processes of the tabs open, and their amounts; tick the ones to compare in Compare mode, and mark the baseline the others are read against.",
-  methods: "The impact methods: the active one (tree, charts, totals) and the ones shown together (the several methods chart, the Impact categories heat map).",
-  global: "Rules contributions over the whole supply chain, using the named groups defined in the Rules panel, which go by the order of the rules: "
-    + "a group of processes listed before a group of flows keeps every flow it reaches, a group of flows (a substance, added from the Flow contribution tab) listed before it takes its flows from it. "
-    + "Process groups nest (electricity uses transport, which uses electricity), so the attribution of impacts is chosen in the panel.",
+  chart: "What each row of the tree adds to the score. Expand or group rows to change the bars.",
+  flows: "Which substances drive the score, and which processes emit them.",
+  groups: "Bundle rows into named groups to see what electricity, transport or fertilisers weigh.",
+  processes: "Your open tabs: compare, reorder, close. Drop a process here to open it.",
+  methods: "The indicator of the tree and charts, and the ones to show together.",
+  global: "The score split by your rules over the whole supply chain, to see what each rule weighs.",
 };
 
 function ChartPanel({ data, info, method, chartMethods, onPickMethods, view, root, amount, onInfo }) {
@@ -3620,9 +3631,9 @@ function ChartPanel({ data, info, method, chartMethods, onPickMethods, view, roo
     <div class="panel">
       <div class="row">
         <button class=${mode === "single" ? "primary" : ""} onClick=${() => setMode("single")}
-          title="One indicator: the main method, one bar for each row of the tree">Single indicator</button>
+          title="One bar for each row of the tree, in the main method">Single indicator</button>
         <button class=${mode === "multi" ? "primary" : ""} onClick=${() => setMode("multi")}
-          title="Several indicators: one 100 % bar for each method ticked in the Methods panel">Multi indicator</button>
+          title="One 100 % bar for each method ticked in Methods">Multi indicator</button>
         <span class="spacer" style="flex:1"></span>
         <button onClick=${exportCsv}>Export CSV</button>
       </div>
@@ -3662,7 +3673,7 @@ function DirectContributions({ info, root, amount, method, onInfo }) {
     <table class="results chart-results direct-contributions">
       <thead><tr><th>Process <span class="muted">· direct contributions</span></th><th class="num">${unitLabel}</th><th class="num">Share</th></tr></thead>
       <tbody>${shown.map((c) => html`
-        <tr key=${c.index} class="clickable" title=${`${c.reference_product ?? ""} | ${c.name} | ${c.location}: right-click for its details`}
+        <tr key=${c.index} class="clickable" ...${dragProcess(c.index)} title=${`${c.reference_product ?? ""} | ${c.name} | ${c.location}: right-click for its details`}
             onContextMenu=${(e) => { e.preventDefault(); onInfo?.(c.index, e.clientX, e.clientY); }}>
           <td>${c.name} <span class="loc-chip">${c.location}</span></td>
           <td class="num">${fmt(c.impact)}</td>
@@ -3713,9 +3724,8 @@ const PRESETS = [
   { label: "By ISIC division", rule: { by: "isic_division" } },
 ];
 
-const RULES_TIP = "Rules bundle sibling rows into groups, in list order (named groups first). The first group that claims a process takes it. "
-  + "Shared by all tabs, except a rule under one row of a tree. Numbers never change.";
-const RULE_SET_TIP = "A rule set is a named list of group rules. One is in use, shared by all tabs; New, Copy, Rename and Delete manage the sets.";
+const RULES_TIP = "Rules bundle rows into groups, in list order: the first rule that matches takes a process. Shared by all tabs. Numbers never change.";
+const RULE_SET_TIP = "A named list of rules. The one in use is shared by all tabs.";
 
 // A rule's query as the builder's conditions (null: it cannot be shown there, as a group made from selected rows)
 function queryOf(predicate) {
@@ -3737,6 +3747,22 @@ function EyeIcon({ off }) {
 // A rule in words, whole (the list shows one line of it, this is its tooltip)
 const ruleText = (r) => `${r.target === "flows" ? "flows: " : ""}${r.by ? `group by ${r.by === "name" && r.target === "flows" ? "substance" : r.by}` : `${r.name} ← ${describePredicate(r.predicate)}`}`
   + ` — ${r.scope === "*" ? "everywhere in the tree" : `under ${r.scope} (this tab only)`}${r.merge ? ", merged" : ""}${r.disabled ? ", disabled" : ""}`;
+// A section of a panel that folds: its header is the button, ``force`` keeps it open (a rule being edited), ``actions``
+// stay at the right of the header. Open or folded is kept per ``id``.
+function Fold({ id, title, open = true, force = false, actions, innerRef, children }) {
+  const [on, setOn] = useState(() => { const v = loadPreference(`fold.${id}`, ""); return v === "" ? open : v === "1"; });
+  const shown = on || force;
+  const toggle = () => { setOn(!shown); savePreference(`fold.${id}`, !shown ? "1" : "0"); };
+  return html`
+    <section class="fold" ref=${innerRef}>
+      <h3 class="fold-head">
+        <button class="fold-toggle" onClick=${toggle} aria-expanded=${shown} title=${shown ? "Fold" : "Unfold"}><span class="caret">${shown ? "▾" : "▸"}</span> ${title}</button>
+        ${actions}
+      </h3>
+      ${shown && children}
+    </section>`;
+}
+
 // ``shared``: { set } when the rules are those of a rule set of the workspace
 function GroupPanel({ info, rules, setRules, selectedRow, view, setView, shared }) {
   const { editing } = useContext(EditorContext);
@@ -3863,7 +3889,7 @@ function GroupPanel({ info, rules, setRules, selectedRow, view, setView, shared 
                 <span class="line"><small>${r.scope === "*" ? "everywhere in the tree" : `under ${r.scope} · this tab only`}${r.merge ? " · merged" : ""}${r.disabled ? " · disabled" : ""}</small></span>
               </span>
               <button class=${editIndex === i ? "primary" : ""} onClick=${() => (editIndex === i ? stopEdit() : startEdit(i))}
-                title="Change this rule in the form below">edit</button>
+                aria-label="Edit rule" title="Edit this rule">✎</button>
               <button class="icon-btn" onClick=${() => toggle(i, "disabled")} aria-pressed=${!!r.disabled}
                 aria-label=${r.disabled ? "Enable rule" : "Disable rule"}
                 title=${r.disabled ? "Disabled: apply this rule again" : "Stop applying this rule, keeping it in the list"}><${EyeIcon} off=${!!r.disabled} /></button>
@@ -3871,10 +3897,11 @@ function GroupPanel({ info, rules, setRules, selectedRow, view, setView, shared 
             </li>`)}
         </ul>`}
 
-      <h3>Quick groups</h3>
-      <div class="row">${PRESETS.map((p) => html`<button onClick=${() => add(p.rule)}>${p.label}</button>`)}</div>
+      <${Fold} id="quick" title="Quick groups" open=${false}>
+        <div class="row">${PRESETS.map((p) => html`<button onClick=${() => add(p.rule)}>${p.label}</button>`)}</div>
+      <//>
 
-      <h3 ref=${form}>${editIndex !== null ? "Edit rule" : "New rule"}</h3>
+      <${Fold} id="new" title=${editIndex !== null ? "Edit rule" : "New rule"} open=${false} force=${editIndex !== null} innerRef=${form}>
       <div class="row">
         <span class="segmented" role="group" aria-label="What the rule groups">
           <button class=${!flows ? "primary" : ""} aria-pressed=${!flows} disabled=${editIndex !== null} onClick=${() => chooseTarget("processes")}>Processes</button>
@@ -3912,6 +3939,7 @@ function GroupPanel({ info, rules, setRules, selectedRow, view, setView, shared 
           ? html`<button class="primary" onClick=${saveEdit}>Save rule</button><button onClick=${stopEdit}>Cancel</button>`
           : html`<button class="primary" onClick=${addCustom}>Add rule</button>`}
       </div>
+      <//>
     </div>`;
 }
 
@@ -3948,8 +3976,21 @@ function namedGroups(rules) {
   return { groups, flowGroups, order: active.map(nameOf) };
 }
 
-function GlobalPanel({ info, root, amount, method, rules, view, onLocate, onInfo }) {
-  const [rule, setRule] = useState("direct");
+// How the impacts go to the rules, one choice for Rules contributions and for Compare (``rule``: "first_match" or "direct")
+function AttributionSwitch({ rule, setRule }) {
+  return html`
+    <div class="view-group" role="group" aria-label="Attribution">
+      <span class="view-group-label">Attribute</span>
+      <span class="segmented">
+        <button class=${rule === "first_match" ? "primary" : ""} onClick=${() => setRule("first_match")}
+          title="First match: the first process of a rule on each supply path takes its whole supply chain">First match</button>
+        <button class=${rule === "direct" ? "primary" : ""} onClick=${() => setRule("direct")}
+          title="Direct: each process's own emissions go to its rule">Direct</button>
+      </span>
+    </div>`;
+}
+
+function GlobalPanel({ info, root, amount, method, rules, view, rule, setRule, onLocate, onInfo }) {
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
   const [group, setGroup] = useState(null);
@@ -4027,15 +4068,7 @@ function GlobalPanel({ info, root, amount, method, rules, view, onLocate, onInfo
 
   return html`
     <div class="panel">
-      <div class="row"><b>Attribution of impacts</b></div>
-      <div class="row">
-        <label><input type="radio" checked=${rule === "direct"} onChange=${() => setRule("direct")} />
-          <b>Direct</b>: each process's own emissions go to its group</label>
-      </div>
-      <div class="row">
-        <label><input type="radio" checked=${rule === "first_match"} onChange=${() => setRule("first_match")} />
-          <b>First match</b>: the first matching process on each supply path takes its whole cumulative impact</label>
-      </div>
+      <${AttributionSwitch} rule=${rule} setRule=${setRule} />
       ${error && html`<div class="error">${error}</div>`}
       ${result && html`
         <${Chart} option=${option} height=${Math.max(200, entries.length * 34 + 60)}
@@ -4071,7 +4104,7 @@ function GlobalPanel({ info, root, amount, method, rules, view, onLocate, onInfo
                 <thead><tr><th>Process</th><th class="num">${unit}</th><th class="pct">of group</th><th class="pct">of total</th></tr></thead>
                 <tbody>
                   ${contributors.contributors.map((c) => html`
-                    <tr key=${c.index} title=${`${c.reference_product} | ${c.name} | ${c.location}`}
+                    <tr key=${c.index} ...${dragProcess(c.index)} title=${`${c.reference_product} | ${c.name} | ${c.location}`}
                         onClick=${(e) => e.detail < 2 && onInfo(c.index, e.clientX, e.clientY)}
                         onContextMenu=${(e) => menu.open(e, c)}
                         onDblClick=${() => goTo(c)}>
@@ -4221,7 +4254,7 @@ function FlowPanel({ info, root, amount, method, onLocate, onInfo, onFlowInfo, r
                 <thead><tr><th>Process</th><th class="num">${unit(flow.unit)}</th><th class="num">${methodUnit}</th><th class="pct">of flow</th><th class="pct">of total</th></tr></thead>
                 <tbody>
                   ${contributors.contributors.map((c) => html`
-                    <tr key=${c.index} title=${`${c.reference_product} | ${c.name} | ${c.location}`}
+                    <tr key=${c.index} ...${dragProcess(c.index)} title=${`${c.reference_product} | ${c.name} | ${c.location}`}
                         onContextMenu=${(e) => menu.open(e, c)} onDblClick=${() => goTo(c)}>
                       <td>${c.name}<span class="loc">${c.location}</span></td>
                       <td class="num">${fmtAmount(c.amount)}</td><td class="num">${fmt(c.impact)}</td>
@@ -4328,12 +4361,14 @@ function initLens(info, seed) {
   const sets = stored?.sets && Object.keys(stored.sets).length ? stored.sets : { Default: (seed?.rules || []).filter((r) => r.scope === "*") };
   return {
     method, chartMethods: chart ? chart.filter((k) => k >= 0) : familyOf(info, method), sets, set: stored?.set in sets ? stored.set : Object.keys(sets)[0],
+    attribution: stored?.attribution === "direct" ? "direct" : "first_match",  // of the impacts to the rules: Rules contributions and Compare
   };
 }
 function saveLens(info, lens) {
   try {
     localStorage.setItem(LENS_KEY, JSON.stringify({ method: info.methods[lens.method]?.name,
-      chartMethods: lens.chartMethods.map((k) => info.methods[k]?.name).filter(Boolean), sets: lens.sets, set: lens.set }));
+      chartMethods: lens.chartMethods.map((k) => info.methods[k]?.name).filter(Boolean), sets: lens.sets, set: lens.set,
+      attribution: lens.attribution }));
   } catch { /* storage unavailable */ }
 }
 
@@ -4365,7 +4400,6 @@ function SetMenu({ lens, onEdit }) {
   const ask = (text, value = "") => { const name = window.prompt(text, value); return name && name.trim() ? name.trim() : null; };
   return html`
     <div class="lens-menu">
-      <h3 class="rules-head">Rule set <${InfoTip} text=${RULE_SET_TIP} label="What a rule set is" /></h3>
       <ul class="rule-sets">
         ${names.map((name) => html`
           <li key=${name}><label><input type="radio" name="rule-set" checked=${name === lens.set} onChange=${() => lens.chooseSet(name)} />
@@ -4417,7 +4451,11 @@ function LensPanel({ info, lens, tab, setTab, tabs, focusedTab, comparing, view,
         />`}
     </div>
     <div class="groups-panel" style=${{ display: tab === "groups" ? "" : "none" }}>
-      <div class="panel"><${SetMenu} lens=${lens} /></div>
+      <div class="panel">
+        <${Fold} id="ruleset" title=${`Rule set · ${lens.set}`} open=${false} actions=${html`<${InfoTip} text=${RULE_SET_TIP} label="What a rule set is" />`}>
+          <${SetMenu} lens=${lens} />
+        <//>
+      </div>
       ${comparing && view && html`<${GroupPanel} info=${info} rules=${lens.rules} setRules=${lens.setRules} selectedRow=${null} view=${view.view} setView=${view.setView}
         shared=${{ set: lens.set }} />`}
       ${tabs.map((id) => html`<div key=${id} id=${`groups-${id}`} class="groups-slot" style=${{ display: id === focusedTab && !comparing ? "" : "none" }}></div>`)}
@@ -5209,6 +5247,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
               onLocate=${goTo} onInfo=${(index, x, y) => openInfo({ index, row: null, x, y })} onFlowInfo=${showFlowInfo}
               rules=${rules} setRules=${setRules} view=${view} />`}
           ${tab === "global" && html`<${GlobalPanel} info=${info} root=${root} amount=${amount} method=${method} rules=${rules} view=${view}
+              rule=${lens.attribution} setRule=${lens.setAttribution}
               onLocate=${goTo} onInfo=${(index, x, y) => openInfo({ index, row: null, x, y })} />`}
         </section>
       <//>`}
@@ -5334,16 +5373,28 @@ function treeEntries(entries, rowsOf, roots) {
   });
 }
 
+// The breakdown of the bars: by rules, by flows, or by processes (the rows of each tab's view, or what each process
+// contributes by its own emissions). One at a time.
 function CompareBasis({ basis, setBasis, limit, setLimit }) {
+  const kind = basis === "groups" ? "groups" : basis === "flows" ? "flows" : "processes";
+  const choose = (k) => setBasis(k === "processes" ? (basis === "activities" ? "activities" : "tree") : k);
   return html`
-    <span class="mode-switch" role="group" aria-label="Compare by">
-      ${COMPARE_BASES.map(([key, label]) => html`<button class=${basis === key ? "primary" : ""} onClick=${() => setBasis(key)}
-        title=${key === "groups" ? "The groups chosen on the left" : key === "tree" ? "The rows of the tree each tab displays in View mode (expanded rows split, collapsed ones are bars), lined up by process"
-          : "The elementary flows of the whole inventory, one per substance"}>${label}</button>`)}
-    </span>
-    ${basis === "flows" && html`
-      <label class="muted">largest <select value=${limit} onChange=${(e) => setLimit(Number(e.target.value))} aria-label="Number of flows shown">
-        ${[5, 10, 15, 25, 40].map((n) => html`<option value=${n}>${n}</option>`)}</select></label>`}`;
+    <div class="view-group" role="group" aria-label="Breakdown">
+      <span class="view-group-label">Breakdown</span>
+      <span class="segmented">
+        ${[["groups", "Rules", "The groups of your rules (Rules panel)"], ["flows", "Flows", "The elementary flows of the whole inventory, one per substance"],
+          ["processes", "Processes", "Processes: the rows of each tab, or what each process emits"]].map(([k, label, hint]) => html`
+          <button class=${kind === k ? "primary" : ""} onClick=${() => choose(k)} title=${hint}>${label}</button>`)}
+      </span>
+      ${kind === "processes" && html`
+        <span class="segmented" role="group" aria-label="Processes">
+          ${[["tree", "Current view", "The rows each tab shows in View mode, lined up by process"], ["activities", "Activity content", "Each process by its own emissions, wherever it is in the supply chain"]].map(([k, label, hint]) => html`
+            <button class=${basis === k ? "primary" : ""} onClick=${() => setBasis(k)} title=${hint}>${label}</button>`)}
+        </span>`}
+      ${(basis === "flows" || basis === "activities") && html`
+        <label class="muted">largest <select value=${limit} onChange=${(e) => setLimit(Number(e.target.value))} aria-label="Number of bars shown">
+          ${[5, 10, 15, 25, 40].map((n) => html`<option value=${n}>${n}</option>`)}</select></label>`}
+    </div>`;
 }
 
 // The steps from one total to another: the first total, what each group adds or removes (largest
@@ -5365,7 +5416,7 @@ function waterfallRows(from, to, names) {
 }
 
 function CompareBars({ results, base, unitLabel, names, groupColor, mode, setMode, basis, setBasis, limit, setLimit }) {
-  const noun = { groups: "Group", tree: "Row", flows: "Flow" }[basis];
+  const noun = { groups: "Group", tree: "Row", flows: "Flow", activities: "Process" }[basis];
   const baseTotal = Math.abs(results[base].total);
   const value = (r, g) => {
     const v = r.groups[g] || 0;
@@ -5402,9 +5453,12 @@ function CompareBars({ results, base, unitLabel, names, groupColor, mode, setMod
       <span style="flex:1"></span>
       <button onClick=${exportCsv}>Export CSV</button>
     </div>
-    <div class="row">
-      ${[["absolute", unitLabel], ["baseline", "% of baseline"], ["own", "Each its own 100 %"]].map(([key, label]) => html`
-        <button class=${mode === key ? "primary" : ""} onClick=${() => setMode(key)}>${label}</button>`)}
+    <div class="view-group" role="group" aria-label="Scale">
+      <span class="view-group-label">Scale</span>
+      <span class="segmented">
+        ${[["absolute", unitLabel, "The impact, in its unit"], ["baseline", "% of baseline", "Each bar as a share of the baseline's total"], ["own", "Each 100 %", "Each bar as 100 %: its own composition"]].map(([key, label, hint]) => html`
+          <button class=${mode === key ? "primary" : ""} title=${hint} onClick=${() => setMode(key)}>${label}</button>`)}
+      </span>
     </div>
     <${Chart} option=${option} height=${Math.max(200, results.length * 54 + 90)} />
     <table class="results compare-table">
@@ -5427,7 +5481,7 @@ function CompareBars({ results, base, unitLabel, names, groupColor, mode, setMod
 }
 
 function CompareDifference({ results, base, target, setTarget, unitLabel, names, zoom, setZoom, basis, setBasis, limit, setLimit }) {
-  const noun = { groups: "Group", tree: "Row", flows: "Flow" }[basis];
+  const noun = { groups: "Group", tree: "Row", flows: "Flow", activities: "Process" }[basis];
   const from = results[base], to = results[target];
   const rows = useMemo(() => waterfallRows(from, to, names), [from, to, names]);
   // A small difference is invisible against two totals drawn from zero: zoom on the steps (the totals are cut)
@@ -5614,10 +5668,13 @@ function compareSelection(tabs, compare) {
 
 // The tabs open (*Processes* of the left panel), grouped by window (the panes of the split): the ones to compare in
 // Compare mode (ticked), the baseline (round mark) and a button to close the tab; a right-click opens the pop-up of the
-// process. What each does is in its tooltip.
-// ``windows``: { panes: the panes of the layout, current: the pane used last, select(pane id, tab id), focus(pane id), close(tab id) }
+// process. Drag a process to another window, before another one, or to the zone for a new window; drop a process from a
+// row of the explorer or a panel to open it in a new tab. What each does is in its tooltip.
+// ``windows``: { panes, current: the pane used last, select(pane, tab), focus(pane), close(tab), closePane(pane), drag(tab),
+// move(tab, pane, zone, before), openProcess(index, pane, zone), reopen(), closed: how many closed ones are kept, dragging: tab }
 function ProcessesPanel({ tabs, compare, setCompare, windows }) {
   const { labels, fullLabels, common, chosen, baseline } = compareSelection(tabs, compare);
+  const [over, setOver] = useState(null);  // where a drop would go: { pane, before } or { fresh: true }
   const set = (patch) => setCompare((c) => ({ ...c, ...patch }));
   const toggle = (id) => set({ chosen: chosen.some((t) => t.id === id) ? chosen.filter((t) => t.id !== id).map((t) => t.id) : [...chosen.map((t) => t.id), id] });
   // The tab shown in its window first (a hidden tab has no pop-up to see), then its pop-up
@@ -5628,32 +5685,62 @@ function ProcessesPanel({ tabs, compare, setCompare, windows }) {
     showTab(pane, t);
     setTimeout(() => POPUP_OPENERS[t.id]?.(x, y), 60);
   };
+  const lastPane = windows.panes[windows.panes.length - 1];
+  const dragging = windows.dragging || processDrag;
+  // Drop on a window (``before``: ahead of a tab of it): a tab moves there, a process opens there
+  const target = (pane, before = null) => ({
+    onDragOver: (e) => { if (!dragging) return; e.preventDefault(); e.stopPropagation(); if (over?.pane !== pane.id || over?.before !== before) setOver({ pane: pane.id, before }); },
+    onDrop: (e) => {
+      if (!dragging) return;
+      e.preventDefault(); e.stopPropagation(); setOver(null);
+      if (processDrag) { const { index } = processDrag; processDrag = null; windows.openProcess(index, pane.id, "center"); }
+      else windows.move(windows.dragging, pane.id, "center", before);
+    },
+  });
+  const fresh = {
+    onDragOver: (e) => { if (!dragging) return; e.preventDefault(); e.stopPropagation(); setOver({ fresh: true }); },
+    onDragLeave: () => setOver(null),
+    onDrop: (e) => {
+      if (!dragging) return;
+      e.preventDefault(); e.stopPropagation(); setOver(null);
+      if (processDrag) { const { index } = processDrag; processDrag = null; windows.openProcess(index, lastPane.id, "right"); }
+      else windows.move(windows.dragging, lastPane.id, "right", null);
+    },
+  };
   const row = (t, pane) => {
     const i = tabs.indexOf(t);
     const on = chosen.includes(t);
-    return html`<div key=${t.id} class="process-row ${on ? "" : "off"} ${pane.active === t.id ? "shown" : ""}" onContextMenu=${(e) => openPopup(e, pane, t)}>
+    return html`<div key=${t.id} class="process-row ${on ? "" : "off"} ${pane.active === t.id ? "shown" : ""} ${over?.pane === pane.id && over.before === t.id ? "drop-before" : ""}"
+      draggable="true" onDragStart=${(e) => { e.dataTransfer.setData("text/plain", t.id); e.dataTransfer.effectAllowed = "move"; windows.drag(t.id); }}
+      onDragEnd=${() => { windows.drag(null); setOver(null); }} ...${target(pane, t.id)}
+      onContextMenu=${(e) => openPopup(e, pane, t)}>
       <div class="compare-tab ${on ? "" : "off"}">
-        <input type="checkbox" checked=${on} onChange=${() => toggle(t.id)} aria-label=${`Compare ${labels[t.id]}`} title="Compared in Compare mode (c)" />
+        <input type="checkbox" checked=${on} onChange=${() => toggle(t.id)} aria-label=${`Compare ${labels[t.id]}`} title="Compare it (c)" />
         <span class="dot" style=${{ background: compareColor(i) }}></span>
-        <span class="name" title=${`${fullLabels[t.id]}: click to show it in its window, right-click for its details`} onClick=${() => showTab(pane, t)}>${labels[t.id]}</span>
+        <span class="name" title=${`${fullLabels[t.id]}. Click: show it. Right-click: its details. Drag: move it to another window.`} onClick=${() => showTab(pane, t)}>${labels[t.id]}</span>
         <input type="radio" name="baseline" checked=${t === baseline} disabled=${!on} onChange=${() => set({ baseline: t.id })} aria-label="Baseline"
-          title="Baseline: the other processes are read against it in Compare mode" />
-        <button class="close-tab" onClick=${() => windows.close(t.id)} aria-label=${`Close ${labels[t.id]}`} title="Close this tab (w)">×</button>
+          title="Baseline: the others are read against it" />
+        <button class="close-tab" onClick=${() => windows.close(t.id)} aria-label=${`Close ${labels[t.id]}`} title="Close it (w); Undo brings it back">×</button>
       </div>
     </div>`;
   };
   const groups = windows.panes.map((pane) => ({ pane, items: pane.tabs.map((id) => tabs.find((t) => t.id === id)).filter(Boolean) })).filter((g) => g.items.length);
   return html`
-    <div class="lens-menu">
+    <div class="lens-menu" ...${target(windows.panes.find((q) => q.id === windows.current) || lastPane)}>
       ${common && html`<div class="muted compare-common" title=${common}>${common}</div>`}
       <div class="compare-tabs">
-        ${tabs.length === 0 && html`<div class="muted">No tab has a process yet.</div>`}
+        ${tabs.length === 0 && html`<div class="muted">No process yet.</div>`}
         ${groups.map(({ pane, items }, n) => html`
-          <div key=${pane.id} class="window-group ${windows.panes.length > 1 && pane.id === windows.current ? "focused" : ""}"
-            title=${windows.panes.length > 1 ? `Window ${n + 1}: a split pane of the workspace` : undefined}>
-            ${windows.panes.length > 1 && html`<div class="window-head">Window ${n + 1}</div>`}
+          <div key=${pane.id} class="window-group ${windows.panes.length > 1 && pane.id === windows.current ? "focused" : ""} ${over?.pane === pane.id && !over.before ? "drop-here" : ""}"
+            ...${target(pane)}>
+            <div class="window-head">
+              <span title="A window of the workspace: a split pane">Window ${n + 1}</span>
+              <button class="close-tab" onClick=${() => windows.closePane(pane.id)} aria-label=${`Close window ${n + 1}`} title="Close this window and its tabs; Undo brings them back">×</button>
+            </div>
             ${items.map((t) => row(t, pane))}
           </div>`)}
+        ${dragging && html`<div class="window-new ${over?.fresh ? "drop-here" : ""}" ...${fresh}>Drop here: a new window</div>`}
+        ${windows.closed > 0 && html`<button class="link" onClick=${windows.reopen} title="Bring back the last tab or window closed">↺ Reopen what I closed (${windows.closed})</button>`}
       </div>
     </div>`;
 }
@@ -5666,7 +5753,7 @@ function ComparisonView({ info, tabs, compare, setCompare }) {
   // The method(s) and the group rules are those of the workspace (the Methods and Rules panel)
   const lens = useContext(LensContext);
   const method = lens.method;
-  const rule = compare.rule || "direct";
+  const rule = lens.attribution;
   const panel = compare.panel || "groups";
 
   // The groups of the comparison: the rule set of the workspace (named rules on processes, and on elementary flows
@@ -5680,7 +5767,7 @@ function ComparisonView({ info, tabs, compare, setCompare }) {
   const basis = compare.basis || "groups";
   const limit = compare.limit || 15;
   const body = { entries: chosen.map((t) => ({ root: t.state.root.index, amount: t.state.amount })), method, methods: heatMethods, rule,
-    basis: basis === "flows" ? "flows" : "groups", limit, groups: basis === "groups" ? groups : {}, flow_groups: basis === "groups" ? flowGroups : {},
+    basis: basis === "flows" ? "flows" : basis === "activities" ? "activities" : "groups", limit, groups: basis === "groups" ? groups : {}, flow_groups: basis === "groups" ? flowGroups : {},
     order: basis === "groups" ? order : [] };
   const trees = basis === "tree" ? chosen.map((t) => treeBody(t.state, method)) : null;
   const key = JSON.stringify([body, trees]);
@@ -5728,12 +5815,7 @@ function ComparisonView({ info, tabs, compare, setCompare }) {
           · <button class="link" onClick=${() => lens.show("methods")}>Methods panel</button>
           · <button class="link" onClick=${() => lens.show("processes")}>Processes panel</button></p>
         ${basis === "groups" && html`
-          <label class="compare-field">Attribution
-            <select value=${rule} onChange=${(e) => set({ rule: e.target.value })}>
-              <option value="direct">Own emissions of each group</option>
-              <option value="first_match">Whole supply chain below the first match</option>
-            </select>
-          </label>
+          <${AttributionSwitch} rule=${rule} setRule=${lens.setAttribution} />
           <p class="note">${Object.keys(groups).length + Object.keys(flowGroups).length} groups, from the rule set <b>${lens.set}</b> of the workspace
             (<i>Rules</i> panel).
             <button class="link" onClick=${() => lens.show("groups")}>Edit the group rules</button></p>`}
@@ -5763,6 +5845,16 @@ function ComparisonView({ info, tabs, compare, setCompare }) {
       </div>
     </div>`;
 }
+
+// ---------------------------------------------------------------- dragging a process
+// The process being dragged from a row (an activity index), for the windows and the Processes panel to take
+let processDrag = null;
+// Props that make a row draggable as a process (none without an index)
+const dragProcess = (index) => (index == null ? {} : {
+  draggable: true,
+  onDragStart: (e) => { processDrag = { index }; e.dataTransfer.setData("text/plain", String(index)); e.dataTransfer.effectAllowed = "copy"; },
+  onDragEnd: () => { processDrag = null; document.dispatchEvent(new CustomEvent("lca-dragend")); },
+});
 
 // ---------------------------------------------------------------- workspace: tabs and split panes
 // Like a notes app: each tab is one process; panes hold tabs and can be split
@@ -5851,15 +5943,16 @@ function PaneView({ pane, focused, multiple, titles, dragging, drop, setDrop, ac
     return "center";
   }
   const over = (zone, before = null) => (e) => {
-    if (!dragging) return;
+    if (!dragging && !processDrag) return;
     e.preventDefault();
     e.stopPropagation();
     const z = typeof zone === "function" ? zone(e) : zone;
     if (drop?.pane !== pane.id || drop.zone !== z || drop.before !== before) setDrop({ pane: pane.id, zone: z, before });
   };
   const dropHere = (e) => {
-    if (!dragging || !drop) return;
+    if ((!dragging && !processDrag) || !drop) return;
     e.preventDefault();
+    if (processDrag) { const { index } = processDrag; processDrag = null; setDrop(null); actions.openProcess(index, pane.id, drop.zone); return; }
     actions.move(dragging, pane.id, drop.zone, drop.before);
   };
   const title = (id) => titles[id] ? titles[id].name : "New tab";
@@ -5890,7 +5983,7 @@ function PaneView({ pane, focused, multiple, titles, dragging, drop, setDrop, ac
       <div class="pane-body" ref=${body} data-pane=${pane.id} onDragOver=${over(zoneAt)} onDrop=${dropHere}
            onDragLeave=${(e) => !body.current.contains(e.relatedTarget) && drop?.pane === pane.id && setDrop(null)}>
         ${children}
-        ${dragging && drop?.pane === pane.id && !drop.before && html`<div class="drop-zone ${drop.zone}"></div>`}
+        ${(dragging || processDrag) && drop?.pane === pane.id && !drop.before && html`<div class="drop-zone ${drop.zone}"></div>`}
       </div>
     </div>`;
 }
@@ -6200,6 +6293,40 @@ function App() {
       return next;
     });
   }
+  // What was closed, the last first: a notice offers to bring it back, and the Processes panel while any is kept
+  const closedStack = useRef([]);
+  const [toast, setToast] = useState(null);
+  const toastTimer = useRef(null);
+  const [closedCount, setClosedCount] = useState(0);
+  function remember(list, message) {
+    closedStack.current = [...closedStack.current.slice(-19), list];
+    setClosedCount(closedStack.current.length);
+    setToast({ message });
+    clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), 12000);
+  }
+  function reopenClosed() {
+    const list = closedStack.current.pop();
+    setClosedCount(closedStack.current.length);
+    setToast(null);
+    if (!list) return;
+    setLayout((l) => {
+      let next = l, made = null;
+      for (const snap of list) {
+        if (snap.state) states.current[snap.id] = snap.state; else starts.current[snap.id] = snap.start || { inherit: null };
+        if (panesOf(next).some((q) => q.id === snap.pane)) next = insertTab(next, snap.pane, snap.id, "center", snap.before);
+        else if (made) next = insertTab(next, made, snap.id, "center", null);
+        else { next = insertTab(next, panesOf(next)[0].id, snap.id, "right"); made = paneOfTab(next, snap.id).id; }
+      }
+      setFocus(paneOfTab(next, list[list.length - 1].id).id);
+      return next;
+    });
+  }
+  useEffect(() => {
+    const clear = () => setDrop(null);
+    document.addEventListener("lca-dragend", clear);
+    return () => document.removeEventListener("lca-dragend", clear);
+  }, []);
   const actions = {
     focus: (paneId) => paneId !== focus && setFocus(paneId),
     select: (paneId, id) => setLayout((l) => mapPanes(l, (p) => (p.id === paneId ? { ...p, active: id } : p))),
@@ -6210,6 +6337,9 @@ function App() {
       openTab(paneId, states.current[source] ? { state: structuredClone(states.current[source]) } : { inherit: null }, zone);
     },
     close: (id) => {
+      const pane = paneOfTab(current.current.layout, id);
+      remember([{ id, state: states.current[id], start: starts.current[id], pane: pane.id, before: pane.tabs[pane.tabs.indexOf(id) + 1] ?? null }],
+        `Closed ${titles[id] ? titles[id].name : "a tab"}`);
       delete states.current[id];
       delete starts.current[id];
       setLayout((l) => {
@@ -6226,6 +6356,34 @@ function App() {
         return pane;
       });
     },
+    // A window (a pane) with its tabs
+    closePane: (paneId) => {
+      const pane = panesOf(current.current.layout).find((q) => q.id === paneId);
+      if (!pane) return;
+      remember(pane.tabs.map((id) => ({ id, state: states.current[id], start: starts.current[id], pane: paneId, before: null })),
+        `Closed a window of ${pane.tabs.length} ${pane.tabs.length === 1 ? "tab" : "tabs"}`);
+      pane.tabs.forEach((id) => { delete states.current[id]; delete starts.current[id]; });
+      setLayout((l) => {
+        const next = mapPanes(l, (q) => (q.id === paneId ? null : q));
+        if (next) {
+          setFocus((f) => (panesOf(next).some((q) => q.id === f) ? f : panesOf(next)[0].id));
+          return next;
+        }
+        const fresh = newId("t");
+        starts.current[fresh] = { inherit: null };
+        const empty = { type: "pane", id: newId("p"), tabs: [fresh], active: fresh };
+        setFocus(empty.id);
+        return empty;
+      });
+    },
+    // A process opened in a new tab of a window (``zone``: "center", or an edge: a new window there)
+    openProcess: async (index, paneId, zone = "center") => {
+      try {
+        const found = await request(`/api/activity/${index}?method=${lens.method}`);
+        openTab(paneId, { inherit: states.current[activeTabOf(paneId)], root: found }, zone);
+      } catch { /* not a process of this database */ }
+    },
+    reopen: () => reopenClosed(),
     drag: (id) => { setDragging(id); if (!id) setDrop(null); },
     move: (id, paneId, zone, before) => {
       setDragging(null);
@@ -6247,6 +6405,7 @@ function App() {
     ...lens, rules: lens.sets[lens.set],
     setMethod: (method) => setLens((l) => ({ ...l, method })),
     setChartMethods: (chartMethods) => setLens((l) => ({ ...l, chartMethods })),
+    setAttribution: (attribution) => setLens((l) => ({ ...l, attribution })),
     setRules: (rules) => setLens((l) => ({ ...l, sets: { ...l.sets, [l.set]: rules } })),
     chooseSet: (set) => setLens((l) => ({ ...l, set })),
     addSet: (name, copy) => setLens((l) => { const n = freshName(name, l.sets); return { ...l, set: n, sets: { ...l.sets, [n]: copy ? l.sets[l.set] : [] } }; }),
@@ -6265,7 +6424,7 @@ function App() {
       <h1>LCA Explorer</h1>
       <${DatabaseSelect} databases=${databases} />
       ${databases && html`<button onClick=${() => setLoadOpen(true)}
-        title="Projects: open a database of your Brightway projects, add, rename, lock or remove one">Projects</button>`}
+        title="Projects: open, add, rename, lock or remove a database">Projects</button>`}
       ${editing && html`<span class="mode-badge" title="Edit mode: changes are staged, then made together in the project">Edit mode</span>`}
       ${outdated && html`<button class="primary" disabled=${rebuilding?.status === "running"} onClick=${rebuild}
         title=${`${outdated}: the model has to be built again, and its impacts are greyed out until then`}>
@@ -6352,7 +6511,8 @@ function App() {
         <aside class="leftbar" style=${{ width: `${leftWidth}px`, display: leftOpen ? "" : "none" }}>
           <${LensPanel} info=${info} lens=${lensApi} tab=${leftTab} setTab=${setLeftTab} tabs=${allTabs} focusedTab=${focusedTab} comparing=${comparing}
             view=${TAB_API[focusedTab] || Object.values(TAB_API)[0]} compareTabs=${compareTabs} compare=${compare} setCompare=${setCompare} onCollapse=${() => setLeftOpen(false)}
-            windows=${{ panes: panesOf(layout), current: focus, select: actions.select, focus: actions.focus, close: actions.close }} />
+            windows=${{ panes: panesOf(layout), current: focus, select: actions.select, focus: actions.focus, close: actions.close, drag: actions.drag, move: actions.move,
+              closePane: actions.closePane, openProcess: actions.openProcess, reopen: actions.reopen, closed: closedCount, dragging }} />
         </aside>
         ${leftOpen && html`<div class="side-resizer" onPointerDown=${startLeftResize} title="Drag to resize"></div>`}
         <div class="workspace" style=${{ display: comparing ? "none" : "" }}><${LayoutView} node=${layout} renderPane=${renderPane}
@@ -6370,6 +6530,11 @@ function App() {
         </aside>
       </div>
       <div class="bottom">
+      ${toast && html`<div class="toast" role="status">
+        <span>${toast.message}</span>
+        <button onClick=${reopenClosed}>Undo</button>
+        <button class="link" onClick=${() => setToast(null)} aria-label="Dismiss">×</button>
+      </div>`}
       <div class="bottom-pane" style=${{ display: viewOpen && !comparing ? "" : "none" }}>
         <div class="bottom-head">
           <b>View options</b><span class="muted" title="The options belong to the tab in focus, the one of the window used last">of ${viewTitle}</span>
@@ -6380,14 +6545,14 @@ function App() {
       </div>
       <footer class="status-bar">
         <button class=${`status-button ${leftOpen ? "on" : ""}`} onClick=${() => setLeftOpen(!leftOpen)} aria-pressed=${leftOpen}
-          title="Show or hide the left panel: processes, methods and rules (Ctrl/⌘ + ←)"><${SidePanelIcon} left open=${leftOpen} /></button>
+          title="Left panel: processes, methods, rules (Ctrl/⌘ + ←)"><${SidePanelIcon} left open=${leftOpen} /></button>
         <button class="status-text" onClick=${() => lensApi.show("methods")} title=${methodLabel(info.methods[lens.method])}>
           ${methodSummary(info, lens.method, lens.chartMethods)}</button>
         <button class="status-text" onClick=${() => lensApi.show("groups")} title="The rule set shared by all tabs">Rules: ${lens.set} · ${lensApi.rules.filter((r) => !r.disabled).length}</button>
         <span class="spacer"></span>
         ${!comparing && html`<button class=${`status-button ${viewOpen ? "on" : ""}`} onClick=${() => setViewOpen(!viewOpen)} aria-pressed=${viewOpen}
-          aria-label="View options" title="Show or hide the options of the view of the tab in focus: display, cut-off, grouping of rows, names and colours (v)"><${SlidersIcon} /></button>`}
-        <button class="status-button" onClick=${() => setShortcutsOpen(true)} aria-label="Shortcuts" title="Keyboard shortcuts of the lists, the pop-ups and the panels"><${KeyboardIcon} /></button>
+          aria-label="View options" title="View options: how this tab groups, names and colours rows (v)"><${SlidersIcon} /></button>`}
+        <button class="status-button" onClick=${() => setShortcutsOpen(true)} aria-label="Shortcuts" title="Keyboard shortcuts"><${KeyboardIcon} /></button>
       </footer>
       </div>
     </div>

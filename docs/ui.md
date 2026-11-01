@@ -33,7 +33,9 @@ API in `src/lca_viewer/server.py`.
   first time and *Rebuild and open* when the project changed since the build, about a minute for
   ecoinvent, kept in `data/cache`), and **Options ▾**: *Close (free its memory)* for one that is open,
   *Open the old build* when a rebuild is due, *Lock* / *Unlock*, *Rename…*, *Add database…* and *Remove…*. A project
-  has *Options ▾* too: *Add database…* and *Delete project…*. Models that no listed database explains (built from
+  has *Options ▾* too: *Add database…* and *Delete project…*. The projects are listed with the last one opened first
+  (a project with an open database on top) and their databases folded, a click on a project's arrow
+  shows them; both are remembered. Models that no listed database explains (built from
   files, or from a database renamed since) are under *Other models*. A load runs on the server: the dialog shows
   its steps (*Details* for the build's output) and opens the database when it is
   ready; it can be closed meanwhile and finds the load again when reopened.
@@ -213,7 +215,11 @@ API in `src/lca_viewer/server.py`.
   shown in its window first). The amount of a process is 1: it is no longer set in the panel.
   A side pane that is opened takes the focus, on its panel's tab, where ← and → switch panel. The tabs are grouped
   in a frame for each window (split pane), the one used last in the accent colour, a click on a
-  name shows the tab in its window. Decision: the impact
+  name shows the tab in its window. They can be **dragged**: to another window, before another process, or
+  onto *Drop here: a new window*; a **×** on a window's header closes it with its tabs. A process dragged
+  from a row of the explorer, of a panel or of a pop-up (the list of *Used by*, the direct contributions,
+  the contributors of a rule or a flow) and dropped on the panel, on a tab list or on a window opens in a new
+  tab. Closing a tab or a window shows a notice with *Undo*, and the panel keeps *Reopen what I closed*. Decision: the impact
   methods and the group rules are chosen once for the workspace and **shared by all
   tabs**, not per tab and per panel as before (a method list in the header, another in the
   *Process contribution* panel and a third in Compare mode; rules copied from tab to tab,
