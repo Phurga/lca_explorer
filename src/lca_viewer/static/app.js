@@ -12,7 +12,7 @@ const STORAGE_KEY = DATABASE ? `lca_viewer.view.${DATABASE}` : "lca_viewer.view"
 // The API of the database shown (under /db/<key>/)
 const request = (url, body) => serverRequest(url.startsWith("/api/") ? API_BASE + url : url, body);
 
-// The server's own API (databases loaded, Load database)
+// The server's own API (databases loaded, Projects)
 async function serverRequest(url, body) {
   const options = body === undefined ? {} : {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
@@ -188,6 +188,12 @@ const SPLIT_SECTIONS = [
 const SECTION_LABELS = Object.fromEntries(SPLIT_SECTIONS);
 const SECTION_RANK = Object.fromEntries(SPLIT_SECTIONS.map(([key], i) => [key, i]));
 const sectionOf = (r) => (r.kind === "rest" ? "rest" : flowTypeOf(r));
+// The groups of the flows of a direct emissions row asked for by the options of the view (Group by substance, by
+// compartment): rules on the elementary flows, applied after the others
+const flowRulesOf = (view) => [
+  ...(view.groupSubstance ? [{ by: "name", target: "flows", scope: "*" }] : []),
+  ...(view.groupCompartment ? [{ by: "compartment", target: "flows", scope: "*" }] : []),
+];
 // Hide others: the others rows and what an expanded one shows below it (its members, and their own rows). The rows are
 // in display order, so what is below a row is what follows it, deeper.
 function withoutOthers(rows) {
@@ -650,7 +656,8 @@ function FunctionalUnit({ root, onSelect, fields }) {
   return html`
     <div class="fu" ref=${box}>
       <div class="fu-input">
-        <input placeholder=${current || "Search a process: name, product, location…"} value=${text} title=${current}
+        <input placeholder=${current || "Search a process: name, product, location…"} value=${text}
+               title=${`${current ? `${current} — ` : ""}Search a process (s or Ctrl/⌘ + K); Enter shows it in the tab, Ctrl/⌘ + Enter opens it in a new tab`}
                onInput=${(e) => { setText(e.target.value); setOpen(true); }} onFocus=${() => setOpen(true)}
                onKeyDown=${onKeyDown} aria-label="Process" />
       </div>
@@ -833,6 +840,7 @@ const DATABASE_SOURCES = [
   { kind: "bafu", label: "BAFU", hint: "the Swiss LCI database, from files.brightway.dev" },
   { kind: "ecoinvent", label: "ecoinvent", hint: "downloaded with your ecoinvent account" },
   { kind: "repository", label: "Brightway repository", hint: "biosphere and impact methods, from files.brightway.dev" },
+  { kind: "project", label: "Another project", hint: "a database of another project, or a copy of one of this project" },
 ];
 
 // The forms of the Brightway projects section: a new project (empty, or from a backup such as
@@ -855,6 +863,8 @@ function ProjectForm({ form, folder, projects, onJob, onCancel, onForm, busy }) 
   const [remote, setRemote] = useState(null);
   const [remoteName, setRemoteName] = useState("BAFU-2025-v2");
   const [confirm, setConfirm] = useState("");
+  const [copyFrom, setCopyFrom] = useState(null);  // a database of a project to copy: "project\ndatabase"
+  const [copyName, setCopyName] = useState(null);  // the name of the copy; null: the suggested one
   const [versions, setVersions] = useState(["3.12", "3.11", "3.10", "3.9.1", "3.8"]);  // until the server answers
   const [version, setVersion] = useState(null);  // of the default biosphere and methods; null: the detected one
   const source = form.kind === "add" ? form.source : null;
@@ -925,7 +935,7 @@ function ProjectForm({ form, folder, projects, onJob, onCancel, onForm, busy }) 
             onClick=${() => onForm({ kind: "add", project: form.project, source: s.kind })}>
             <b>${s.label}</b><span class="muted small">${s.hint}</span></button>`)}
       </div>
-      ${source && source !== "repository" && source !== "bafu" && html`
+      ${source && !["repository", "bafu", "project"].includes(source) && html`
         <label class="check"><input type="checkbox" checked=${defaults} onChange=${(e) => setDefaults(e.target.checked)} />
           <span>Add the default biosphere and impact methods ${source === "ecoinvent"
             && html`<span class="muted small">— those of the release: its elementary flows and LCIA methods</span>`}</span></label>
@@ -951,6 +961,32 @@ function ProjectForm({ form, folder, projects, onJob, onCancel, onForm, busy }) 
             </select></label>`
           : html`<p class="note">This project has no biosphere database yet: tick the box above to add one.</p>`)}`}`;
     if (!source) return html`<div class="project-form">${head}${actions(null)}</div>`;
+    if (source === "project") {
+      const choices = (projects?.projects || []).filter((q) => q.twofive).flatMap((q) => q.databases.filter((d) => d.processes)
+        .map((d) => ({ key: `${q.name}\n${d.name}`, project: q.name, database: d.name, depends: d.depends || [] })));
+      const picked = choices.find((c) => c.key === copyFrom) || choices[0];
+      const names = (project?.databases || []).map((d) => d.name);
+      const suggestion = picked ? (picked.project === form.project ? `${picked.database} copy` : picked.database) : "";
+      const target = (copyName ?? suggestion).trim();
+      const missing = picked ? picked.depends.filter((d) => d !== picked.database && !names.includes(d)) : [];
+      const taken = names.includes(target);
+      return html`
+        <div class="project-form">${head}
+          <form class="source-form" onSubmit=${submit("/api/brightway/databases/copy", { folder, project: form.project,
+            database: picked?.database, new_name: target, from_project: picked?.project })}>
+            <label>Database to copy
+              <select value=${picked?.key} onChange=${(e) => { setCopyFrom(e.target.value); setCopyName(null); }}>
+                ${choices.map((c) => html`<option value=${c.key}>${c.database} · project ${c.project}${c.project === form.project ? " (this one)" : ""}</option>`)}
+              </select></label>
+            <label>Name of the copy <input value=${copyName ?? suggestion} onInput=${(e) => setCopyName(e.target.value)} /></label>
+            ${taken && html`<div class="error">${form.project} already has ${target}.</div>`}
+            ${missing.length > 0 && html`<div class="error">${form.project} has no ${missing.join(", ")}, which ${picked.database} links to: add
+              ${missing.length === 1 ? "it" : "them"} to this project first (the biosphere and impact methods: <i>Brightway repository</i>).</div>`}
+            <p class="muted small">Its processes and exchanges are copied, linked to the same databases of this project. About a minute for ecoinvent.</p>
+            ${actions("Copy the database", !picked || !target || taken || missing.length > 0)}
+          </form>
+        </div>`;
+    }
     if (source === "repository") {
       const repoVersion = version ?? versions[0] ?? "";
       const here = repoVersion === "bundled" ? hasBundled : flowDbs.includes(`ecoinvent-${repoVersion}-biosphere`);
@@ -1059,6 +1095,19 @@ ${" "}Databases imported afterwards can link to them.</p>
         </form>
       </div>`;
   }
+  if (form.kind === "renameDb") {
+    const users = (project?.databases || []).filter((d) => d.depends.includes(form.database)).map((d) => d.name);
+    const taken = (project?.databases || []).some((d) => d.name === name.trim());
+    return html`
+      <form class="project-form" onSubmit=${submit("/api/brightway/databases/rename", { folder, project: form.project, database: form.database, new_name: name.trim() })}>
+        <h4>Rename ${form.database}</h4>
+        <label>New name <input value=${name} onInput=${(e) => setName(e.target.value)} autofocus placeholder=${form.database} /></label>
+        ${users.length > 0 && html`<div class="error">${`${users.join(", ")} ${users.length === 1 ? "links" : "link"} to it: it cannot be renamed while ${users.length === 1 ? "it does" : "they do"}.`}</div>`}
+        ${taken && html`<div class="error">${form.project} already has ${name.trim()}.</div>`}
+        <p class="muted small">The links inside the database follow its name. A model already built from it stays in the app under the old name.</p>
+        ${actions("Rename database", !name.trim() || name.trim() === form.database || taken || users.length > 0)}
+      </form>`;
+  }
   if (form.kind === "removeDb") {
     const users = (project?.databases || []).filter((d) => d.depends.includes(form.database)).map((d) => d.name);
     return html`
@@ -1081,7 +1130,7 @@ ${" "}Databases imported afterwards can link to them.</p>
   return null;
 }
 
-// Load database: the models already built (data/models.json) open
+// Projects: the models already built (data/models.json) open
 // in seconds; a database of a Brightway project is first built into a model (once, kept in
 // data/cache). Loads run on the server, the dialog follows them and opens the database when ready.
 // The Brightway projects can also be changed here (new, deleted, restored, databases imported).
@@ -1163,13 +1212,27 @@ function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
     if (d.model?.key) return html`<button onClick=${() => openDatabase(d.model.key)}>${d.model.key === DATABASE ? "Shown" : "Switch to"}</button>`;
     if (d.model && !d.model.outdated) return html`<button class="primary" disabled=${busy} onClick=${() => start(body)}>Open</button>`;
     return html`
-      ${d.model && html`<button disabled=${busy} title="Open the model built before the database changed"
-        onClick=${() => start(body)}>Open old build</button>`}
       <button class="primary" disabled=${busy} onClick=${() => start({ ...body, rebuild: !!d.model })}
         title="Builds the model the app reads (about a minute for ecoinvent), kept for next time in data/cache">
         ${d.model ? "Rebuild and open" : "Build and open"}</button>`;
   };
 
+  // The options of a database: close it, lock it, rename it, add one, remove it
+  const dbOptions = (p, d) => {
+    const open = d.model?.key;
+    const body = { brightway: projects.folder, project: p.name, database: d.name };
+    return [
+      ...(open ? [{ label: "Close (free its memory)", title: "Stop serving this database", run: () => unload(open) }] : []),
+      ...(d.model?.outdated && !open && d.processes ? [{ label: "Open the old build", disabled: busy, title: "Open the model built before the database changed", run: () => start(body) }] : []),
+      { label: d.locked ? "Unlock" : "Lock", title: d.locked ? "Unlock: its processes can be edited again" : "Lock: nothing in this database can be edited, deleted or added to, from any database", run: () => lockDatabase(p, d) },
+      { label: "Rename…", disabled: busy || d.locked || !!open, title: d.locked ? "Unlock it first" : open ? "Close it first" : "Give the database another name", run: () => setForm({ kind: "renameDb", project: p.name, database: d.name }) },
+      { label: "Add database…", title: `Add a database to ${p.name}: a file, a download, or a copy of one of another project`, run: () => setForm({ kind: "add", project: p.name }) },
+      { label: "Remove…", danger: true, disabled: busy || d.locked, title: "Delete this database from the project", run: () => setForm({ kind: "removeDb", project: p.name, database: d.name }) },
+    ];
+  };
+  // Built models that no database of a listed project explains (made from files, or of a database renamed since)
+  const otherModels = (sources?.models || []).filter((m) => !m.source?.project
+    || (projects && !projects.projects.some((q) => q.name === m.source.project && q.databases.some((d) => d.name === m.source.database))));
   const jobBox = job && html`
       <div class=${`load-job ${job.status}`}>
         <div class="load-job-head">
@@ -1202,40 +1265,8 @@ function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
     ${error && html`<div class="error">${error}</div>`}
     ${!listed(jobAt) && jobBox}
     ${!sources ? (!error && html`<div class="empty">Looking for databases…</div>`) : html`
-      ${sources.loaded.length > 0 && html`
-        <section>
-          <h3>Loaded</h3>
-          <table class="load-table">
-            ${sources.loaded.map((d) => html`
-              <tr key=${d.key}>
-                <td><b>${d.title}</b>${d.key === DATABASE && html` <span class="loc-chip">shown</span>`}</td>
-                <td class="num muted">${count(d.activities)} activities</td>
-                <td class="actions">
-                  ${d.key !== DATABASE && html`<button onClick=${() => openDatabase(d.key)}>Switch to</button>`}
-                  <button title="Stop serving this database, to free its memory" onClick=${() => unload(d.key)}>Close</button>
-                </td>
-              </tr>`)}
-          </table>
-        </section>`}
       <section>
-        <h3>Built models <span class="muted">ready in a few seconds</span></h3>
-        ${sources.models.length === 0
-          ? html`<p class="muted">None yet. Every Brightway database you load below is added here.</p>`
-          : html`<table class="load-table">
-              ${sources.models.map((m) => html`
-                <tr key=${m.path}>
-                  <td><b>${m.title}</b>${m.source?.project && html`<div class="muted small">Brightway project ${m.source.project}</div>`}</td>
-                  <td class="num muted">${m.built ? "" : "not built"}</td>
-                  <td class="actions">
-                    ${m.key
-                      ? html`<button onClick=${() => openDatabase(m.key)}>${m.key === DATABASE ? "Shown" : "Switch to"}</button>`
-                      : html`<button class="primary" disabled=${busy || !m.built} onClick=${() => start({ path: m.path })}>Open</button>`}
-                  </td>
-                </tr>`)}
-            </table>`}
-      </section>
-      <section>
-        <h3>Brightway projects <span class="muted">databases you imported with Brightway 2.5 or Activity Browser</span></h3>
+        <h3>Projects <span class="muted">Brightway 2.5 projects: the databases you imported with Brightway or Activity Browser</span></h3>
         <div class="load-folder">
           <select aria-label="Brightway data folder" value=${isKnown ? folder : "other"}
             onChange=${(e) => { if (e.target.value === "other") { setTyped(folder); setFolder(""); setProjects(null); } else setFolder(e.target.value); }}>
@@ -1265,10 +1296,10 @@ function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
                   <span class="muted"> · ${!p.twofive ? "Brightway 2 project: lca_viewer reads Brightway 2.5 projects only (upgrade it in Activity Browser 3 or Brightway 2.5)"
                     : p.databases.length ? `${count(p.methods)} impact methods` : "empty"}</span></td>
                 <td class="actions project-actions">
-                  ${p.twofive && html`
-                    <button class="link" onClick=${() => setForm({ kind: "add", project: p.name })}
-                      title="Import a database into this project: an ecoSpold2 release, a SimaPro CSV export, BAFU, or ecoinvent with your account">+ Add database</button>`}
-                  <button class="link danger" onClick=${() => setForm({ kind: "delete", project: p.name })} title="Delete this project">Delete</button>
+                  <${PopupMenu} label="Options ▾" title="Options of this project" items=${[
+                    ...(p.twofive ? [{ label: "Add database…", title: "Import a database into this project: an ecoSpold2 release, a SimaPro CSV export, BAFU, ecoinvent with your account, or a copy of one of another project",
+                      run: () => setForm({ kind: "add", project: p.name }) }] : []),
+                    { label: "Delete project…", danger: true, title: "Delete this project", run: () => setForm({ kind: "delete", project: p.name }) }]} />
                 </td>
               </tr>
               ${jobAt === p.name && jobBox && html`<tr class="form-row" key=${`j:${p.name}`}><td colspan="3">${jobBox}</td></tr>`}
@@ -1278,23 +1309,37 @@ function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
                   <td class="indent">${d.name}${d.locked && html` <span class="loc-chip" title="What this database contains cannot be edited">🔒 locked</span>`}${d.model?.outdated && html`<div class="muted small">${d.model.outdated}${d.model.key ? ": close it to rebuild it" : ""}</div>`}</td>
                   <td class="num muted">${d.processes ? `${count(d.processes)} processes` : `${count(d.flows)} flows`}</td>
                   <td class="actions">${dbAction(p, d)}
-                    ${p.twofive && html`<button class="link" onClick=${() => lockDatabase(p, d)}
-                      title=${d.locked ? "Unlock: its processes can be edited again" : "Lock: nothing in this database can be edited, deleted or added to, from any database"}>${d.locked ? "Unlock" : "Lock"}</button>`}
-                    ${p.twofive && html`<button class="link danger" disabled=${busy || d.locked} onClick=${() => setForm({ kind: "removeDb", project: p.name, database: d.name })}
-                      title="Delete this database from the project">Remove</button>`}</td>
+                    ${p.twofive && html`<${PopupMenu} label="Options ▾" title="Options of this database" items=${dbOptions(p, d)} />`}</td>
                 </tr>`)}`)}
           </table>
           ${!projects.projects.length && html`<p class="muted">No project in this folder yet: create one with <i>New project</i>.</p>`}`}
       </section>
+      ${otherModels.length > 0 && html`
+        <section>
+          <h3>Other models <span class="muted">built from files, or from a database that is not listed above any more</span></h3>
+          <table class="load-table">
+            ${otherModels.map((m) => html`
+              <tr key=${m.path}>
+                <td><b>${m.title}</b>${m.source?.project && html`<div class="muted small">Project ${m.source.project}, database ${m.source.database}</div>`}</td>
+                <td class="num muted">${m.built ? "" : "not built"}</td>
+                <td class="actions">
+                  ${m.key
+                    ? html`<button onClick=${() => openDatabase(m.key)}>${m.key === DATABASE ? "Shown" : "Switch to"}</button>
+                        <button title="Stop serving this database, to free its memory" onClick=${() => unload(m.key)}>Close</button>`
+                    : html`<button class="primary" disabled=${busy || !m.built} onClick=${() => start({ path: m.path })}>Open</button>`}
+                </td>
+              </tr>`)}
+          </table>
+        </section>`}
       <p class="muted small">ecoSpold2 releases, SimaPro CSV exports and ecoinvent releases are imported into a project first
         (<i>+ New project</i>, then <i>+ Add database</i>), then opened from it like any Brightway database. Your own datasets: <i>Edit</i> in the top bar (new processes, copies, changes: staged, then applied together).</p>`}`;
 
-  if (!onClose) return html`<div class="load-page"><h2>Load a database</h2>${content}</div>`;
+  if (!onClose) return html`<div class="load-page"><h2>Projects</h2>${content}</div>`;
   return html`
     <div class="modal-backdrop" onMouseDown=${(e) => e.target === e.currentTarget && onClose()}>
-      <div class="load-dialog" ref=${box} role="dialog" aria-label="Load a database">
+      <div class="load-dialog" ref=${box} role="dialog" aria-label="Projects">
         <div class="info-head">
-          <div class="info-title">Load a database</div>
+          <div class="info-title">Projects</div>
           <button onClick=${onClose} aria-label="Close">×</button>
         </div>
         <div class="load-body">${content}</div>
@@ -1436,7 +1481,7 @@ function specOf(draft, target, code) {
 // changed by ``patch(draft, read)`` and staged again. Rejects when the database is locked.
 async function quickEdit(ctx, database, code, patch) {
   const read = await serverRequest(datasetUrl(ctx.origin, database, code));
-  if (read.locked) throw new Error(`${read.database} is locked: unlock it in Load database to change what it contains`);
+  if (read.locked) throw new Error(`${read.database} is locked: unlock it in Projects to change what it contains`);
   const staged = ctx.pending.find((c) => c.kind === "edit" && c.database === read.database && c.code === read.code);
   const draft = structuredClone(staged?.form || { ...emptyDraft(), project: ctx.origin.project, database: read.database, ...formOf(read) });
   patch(draft, read);
@@ -1492,7 +1537,7 @@ function Editable({ value, display, edit, multiline, load, onCommit, disabled, t
   }, [start]);
   const looks = (v) => (format && Number.isFinite(Number(v)) ? format(Number(v)) : v);
   if (!ctx.editing) return html`<span class=${className}>${display ?? looks(value)}</span>`;
-  if (disabled) return html`<span class=${`${className} locked`} title=${title || "Locked: unlock its database in Load database to change it"}>${display ?? looks(value)}</span>`;
+  if (disabled) return html`<span class=${`${className} locked`} title=${title || "Locked: unlock its database in Projects to change it"}>${display ?? looks(value)}</span>`;
   const finish = (commit) => {
     if (closing.current) return;  // Enter or Escape came first: the blur that follows is not a second answer
     closing.current = true;
@@ -1557,7 +1602,7 @@ function DatasetForm({ onClose, current, edit, initial, copyFrom: start, deleted
   useEffect(() => {
     if (edit) {
       serverRequest(datasetUrl(current, edit.database, edit.code)).then((read) => {
-        if (read.locked) throw new Error(`${read.database} is locked: unlock it in Load database to change what it contains`);
+        if (read.locked) throw new Error(`${read.database} is locked: unlock it in Projects to change what it contains`);
         setOriginal(read);
         // a change staged before (this one, or an edit of the same dataset): its form, not what is in the project
         const before = initial?.form ? initial : (staged || []).find((c) => c.kind === "edit" && c.database === read.database && c.code === read.code);
@@ -1791,7 +1836,7 @@ function EditPanel({ origin, dataset, pending, affected, locked, outdated, onFor
   return html`
     <div class="edit-panel">
       <h3 class="edit-title">Edit mode <span class="muted">· project ${origin.project}</span>
-        <button class="collapse-side" onClick=${onCollapse} title="Hide the side panel" aria-label="Hide the side panel"><${SidePanelIcon} open /></button></h3>
+        <button class="collapse-side" onClick=${onCollapse} title="Hide the side panel (Ctrl/⌘ + →)" aria-label="Hide the side panel"><${SidePanelIcon} open /></button></h3>
       <p class="muted small">Changes are staged here and made together when you apply them. Press e on a process of the list (or use Edit below) to change it in its form; values of a pop-up can be changed by double-clicking them.
         The impacts shown are those of the last build: they are greyed out once what they come from has changed.</p>
       ${error && html`<div class="error">${error}</div>`}
@@ -1807,7 +1852,7 @@ function EditPanel({ origin, dataset, pending, affected, locked, outdated, onFor
           : html`
             <div class="edit-card">
               <div><b>${dataset.process.name}</b> <span class="loc-chip">${dataset.process.location}</span></div>
-              <div class="muted small">${dataset.database}${isLocked ? " · 🔒 locked: unlock it in Load database to change it" : ""}
+              <div class="muted small">${dataset.database}${isLocked ? " · 🔒 locked: unlock it in Projects to change it" : ""}
                 ${users.length > 0 && ` · used by ${[...new Set(users.map((u) => u.name))].join(", ")}${dataset.used_by.length >= 30 ? " and more" : ""}`}</div>
               ${staged && html`<div class="small">${KIND[staged.kind]} staged</div>`}
               <div class="edit-actions">
@@ -1934,6 +1979,7 @@ function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onU
                   onClick=${(e) => onSelect(r, e.ctrlKey || e.metaKey || e.shiftKey)}
                   onContextMenu=${(e) => onInfo(r, e)}>
                 <td style=${{ "--depth": r.depth }}>
+                  ${colors.has(r.id) && view.colorBy === "type" && flowTypeOf(r) && html`<span class="type-bar" title=${`${FLOW_TYPES[flowTypeOf(r)].label}: ${FLOW_TYPES[flowTypeOf(r)].hint}`}></span>`}
                   <div class="name" style=${{ paddingLeft: `${r.depth * 16}px` }}>
                     ${r.expandable
                       ? html`<button class="toggle" aria-label=${r.expanded ? "Collapse" : "Expand"}
@@ -2553,38 +2599,45 @@ function SaveMenu({ disabled, onSave, onLoad, onCopy }) {
     </span>`;
 }
 
-// ---------------------------------------------------------------- view bar (names and product grouping)
-function ViewBar({ view, setView, example, embedded }) {
+// ---------------------------------------------------------------- view bar (groups, names and colours)
+function ViewBar({ view, setView, example }) {
   const set = (patch) => setView({ ...view, ...patch });
+  const toggle = (key, label, title, on = !!view[key]) => html`
+    <button class=${on ? "primary" : ""} onClick=${() => set({ [key]: !on })} aria-pressed=${on} title=${title}>${label}</button>`;
   return html`
     <div class="view-bar">
-      <div class="row">
-        <button class=${view.groupByRules !== false ? "primary" : ""} onClick=${() => set({ groupByRules: view.groupByRules === false })} aria-pressed=${view.groupByRules !== false}
-          title="Bundle sibling rows under the groups of the rules (Rules panel): on or off, the rules stay as they are">Group by rules</button>
-        <button class=${view.groupProducts ? "primary" : ""} onClick=${() => set({ groupProducts: !view.groupProducts })}
-          title="Bundle sibling inputs of the same product (other regions or routes) under one row">Group by product</button>
-        <button class=${view.splitByType ? "primary" : ""} onClick=${() => set({ splitByType: !view.splitByType })}
-          title="Order what is below each row in sections, as in the form of a new process: inputs from technosphere, inputs from nature, emissions, direct emissions, waste to treatment">Split by flow type</button>
-        <button class=${view.hideOthers ? "primary" : ""} onClick=${() => set({ hideOthers: !view.hideOthers })}
-          title="Hide the others rows (what the cut-off or a move to others took out) from the list, the tree and the Sankey; the chart keeps them">Hide others</button>
-        ${!embedded && html`<span class="segmented" role="group" aria-label="Row names">
+      <div class="view-group" role="group" aria-label="Groups">
+        <span class="view-group-label">Groups</span>
+        ${toggle("groupByRules", "Group by rules", "Bundle sibling rows under the groups of the rules (Rules panel): on or off, the rules stay as they are", view.groupByRules !== false)}
+        ${toggle("groupProducts", "Group by product", "Bundle sibling inputs of the same product (other regions or routes) under one row")}
+        ${toggle("groupSubstance", "Group by substance", "Under direct emissions, bundle the flows of one substance (its compartments added up)")}
+        ${toggle("groupCompartment", "Group by compartment", "Under direct emissions, bundle the flows by compartment (air, water, soil…)")}
+        ${toggle("splitByType", "Split by flow type", "Order what is below each row in sections, as in the form of a new process: inputs from technosphere, inputs from nature, emissions, direct emissions, waste to treatment")}
+        ${toggle("hideOthers", "Hide others", "Hide the others rows (what the cut-off or a move to others took out) from the list, the tree and the Sankey; the chart keeps them")}
+      </div>
+      <div class="view-group" role="group" aria-label="Names">
+        <span class="view-group-label">Names</span>
+        <span class="segmented">
           ${[["full", "Full names"], ["short", "Short names"], ["custom", "Custom name"]].map(([id, label]) => html`
             <button class=${view.naming === id ? "primary" : ""} onClick=${() => set({ naming: id })}>${label}</button>`)}
-        </span>`}
-        ${!embedded && html`<span class="segmented" role="group" aria-label="Colours">
+        </span>
+      </div>
+      <div class="view-group" role="group" aria-label="Colours">
+        <span class="view-group-label">Colours</span>
+        <span class="segmented">
           ${[["none", "No colours", "Colour nothing: rows and bars keep one colour"],
-            ["group", "Group colours", "Colour the rows of each group with its rule's colour"],
-            ["type", "Flow type colours", "Colour the rows by the kind of exchange: product, technosphere input, waste, resource, emission"]].map(([id, label, hint]) => html`
+            ["group", "Rules colours", "Colour the rows of each group with its rule's colour"],
+            ["type", "Flow type colours", "Colour the rows by the kind of exchange: product, technosphere input, waste, resource, emission (hover the colour bar of a row for its name)"]].map(([id, label, hint]) => html`
             <button class=${(view.groupColors ? view.colorBy || "group" : "none") === id ? "primary" : ""} title=${hint}
               onClick=${() => set(id === "none" ? { groupColors: false } : { colorBy: id, groupColors: true })}>${label}</button>`)}
-        </span>`}
+        </span>
       </div>
-      ${!embedded && view.groupColors && view.colorBy === "type" && html`
+      ${view.groupColors && view.colorBy === "type" && html`
         <div class="color-legend" aria-label="Flow type colours">
           ${Object.entries(FLOW_TYPES).map(([key, t]) => html`
             <span key=${key} title=${t.hint}><i style=${{ background: t.color }}></i>${t.label}</span>`)}
         </div>`}
-      ${!embedded && view.naming === "custom" && html`<${RecipeEditor} recipe=${view.recipe} setRecipe=${(recipe) => set({ recipe })} example=${example} />`}
+      ${view.naming === "custom" && html`<${RecipeEditor} recipe=${view.recipe} setRecipe=${(recipe) => set({ recipe })} example=${example} />`}
     </div>`;
 }
 
@@ -2669,7 +2722,8 @@ function ProcessRow({ item, above, depth, ancestors, panel }) {
     }
   };
   return html`<${Fragment}>
-    <tr class="exchange" data-nav data-depth=${depth} tabindex="-1" onKeyDown=${keys} onDblClick=${() => expandable && setOpen(!open)}>
+    <tr class="exchange" data-nav data-depth=${depth} tabindex="-1" onKeyDown=${keys} onDblClick=${() => expandable && setOpen(!open)}
+        onContextMenu=${(e) => { e.preventDefault(); e.stopPropagation(); panel.onOpen(item); }}>
       <td class="user" title=${`${item.reference_product ?? ""} | ${item.name} | ${item.location}`}>
         <span class="user-cell" style=${{ paddingLeft: `${depth * 16}px` }}>
           ${loop
@@ -2752,10 +2806,34 @@ function dockAt(x, y, popup) {
     width: across ? r.width / 2 : r.width, height: across ? r.height : r.height / 2 };
 }
 
+// The ⋯ menu at the top right of a pop-up: ``items``: [{ label, run, title, disabled }]
+function PopupMenu({ items, label = "⋯", title = "Actions of this pop-up", className = "menu-btn" }) {
+  const [at, setAt] = useState(null);
+  const box = useRef(null);
+  useEffect(() => {
+    if (!at) return;
+    const away = (e) => !box.current?.contains(e.target) && setAt(null);
+    document.addEventListener("mousedown", away);
+    return () => document.removeEventListener("mousedown", away);
+  }, [at]);
+  const open = (e) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    setAt(at ? null : { top: r.bottom + 4, left: Math.max(8, r.right - 190) });
+  };
+  return html`
+    <span class="popup-menu" ref=${box}>
+      <button class=${className} onClick=${open} aria-label=${title} aria-expanded=${!!at} title=${title}>${label}</button>
+      ${at && html`<div class="menu" role="menu" style=${{ position: "fixed", top: `${at.top}px`, left: `${at.left}px`, right: "auto", minWidth: "190px" }}>
+        ${items.map((it) => html`<button role="menuitem" key=${it.label} class=${it.danger ? "danger" : ""} disabled=${it.disabled} title=${it.title}
+          onClick=${() => { setAt(null); it.run(); }}>${it.label}</button>`)}
+      </div>`}
+    </span>`;
+}
+
 // ``win``: { rect, pinned, onPin, onRect } (kept by the view, so that a pop-up keeps its place and
 // size when a link inside it opens another kind of pop-up); ``head``: the title lines; the children
 // follow the header. ``onDock(place)``: given when the pop-up can open as a tab.
-function PopupWindow({ target, win, label, className = "", head, width = 560, onClose, onBack, onDock, onKeyDown, children }) {
+function PopupWindow({ target, win, label, className = "", head, width = 560, menu = [], onClose, onBack, onDock, onKeyDown, children }) {
   const box = useRef(null);
   usePopupKeys(box, onClose, onBack, win.pinned);
   // A pop-up that opens takes the keyboard (arrows, Space, c: see popupKeys)
@@ -2816,10 +2894,11 @@ function PopupWindow({ target, win, label, className = "", head, width = 560, on
         <div class="info-head" title="Drag to move">
           <div>${head}</div>
           <span class="info-head-actions">
-            <button class=${`pin ${win.pinned ? "active" : ""}`} onClick=${win.onPin} aria-label="Pin" aria-pressed=${win.pinned}
-              title=${win.pinned ? "Unpin: Esc or a click outside closes it again" : "Pin: keep it open, to have several pop-ups at once"}><${PinIcon} /></button>
+            ${win.pinned && html`<span class="pin-mark" title="Pinned: Esc or a click outside does not close it"><${PinIcon} /></span>`}
             <${BackButton} onBack=${onBack} />
-            <button onClick=${onClose} aria-label="Close">×</button>
+            <${PopupMenu} items=${[...menu, { label: win.pinned ? "Unpin" : "Pin", run: win.onPin,
+              title: win.pinned ? "Unpin: Esc or a click outside closes it again" : "Pin: keep it open, to have several pop-ups at once" }]} />
+            <button onClick=${onClose} aria-label="Close" title="Close (Esc)">×</button>
           </span>
         </div>
         ${children}
@@ -3075,15 +3154,9 @@ function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsByI
       return { items, more: root ? (found.users.length >= 15 ? Math.max(0, found.in_supply_chain - items.length) : 0) : found.count - found.users.length };
     });
   const usersPanel = {
-    span: root ? 5 : 2, load: usersOf, empty: `No activity uses it${root ? " in this supply chain" : ""}.`, label: (u) => u.name,
+    span: 2, load: usersOf, empty: "No activity uses it.", label: (u) => u.name,
     onOpen: (u) => openActivity(u.index), onExchange: (u, above) => openExchange(above.index, u), onUse: useAsRoot,
-    cells: (u, above) => html`
-      <td class="num">${fmtAmount(Math.abs(u.per_unit))} ${unit(above.unit)}/${unit(u.unit)}</td>
-      ${root && html`
-        <td class="num">${u.flow ? `${fmtAmount(Math.abs(u.flow))} ${unit(above.unit)}` : "–"}</td>
-        <td class="num">${u.flow ? pct(u.share) : ""}</td>
-        <td>${u.flow !== 0 && html`<button class="chip" title="Open the tree at this activity (largest supply path)"
-              onClick=${(e) => { e.stopPropagation(); onGoTo(u.index); onClose(); }}>go to</button>`}</td>`}`,
+    cells: (u, above) => html`<td class="num">${fmtAmount(Math.abs(u.per_unit))} ${unit(above.unit)}/${unit(u.unit)}</td>`,
   };
   // Edit mode, on the pop-up of an input of a process: "use instead" links that exchange, in the dataset(s) of the
   // process(es) above, to an alternative (same amount): staged like any other change
@@ -3130,6 +3203,13 @@ function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsByI
   return html`
     <${PopupWindow} target=${target} win=${win} label=${exchange ? "Exchange information" : "Activity information"} onClose=${onClose} onBack=${onBack}
       onDock=${info && !exchange ? (place) => { onOpenTab(info, place); onClose(); } : null}
+      menu=${info && !exchange ? [
+        { label: "Use in this tab", title: "Show this process in the tab in focus", run: () => { onUseAsRoot(info); onClose(); } },
+        { label: "Open in new tab", title: "Open it in a new tab (or drag the pop-up by its header to a tab list or the edge of a pane)", run: () => { onOpenTab(info); onClose(); } },
+        ...(ctx.editing && ctx.origin ? [{ label: "Edit…", disabled: locked,
+          title: locked ? "Its database is locked: unlock it in the Projects dialog" : "Open the form of this process: the change is staged, then applied with the others",
+          run: () => { ctx.openForm({ edit: { database: info.database, code: info.code } }); onClose(); } }] : []),
+      ] : []}
       onKeyDown=${popupKeys({ tabs, shown, setTab, body, onClose, exchange, explorerKeys })}
       head=${html`
         <div class="info-title">${target.direct ? "Direct emissions of " : ""}${(target.direct ? rowsById.get(row?.parent)?.custom : row?.custom)
@@ -3177,13 +3257,11 @@ function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsByI
               embedded=${{ method, onInfo: follow, onUse: useAsRoot, keys: explorerKeys }} onSave=${() => {}} onTitle=${() => {}} />`}
           ${shown === "users" && users && html`
             <section>
-              <h4>${users.waste ? "Treats the waste of" : "Used by"} · ${users.count} ${users.count === 1 ? "activity" : "activities"}${root ? `, ${users.in_supply_chain} in this supply chain` : ""}</h4>
               ${users.count === 0 ? html`<p class="text muted">No activity in the database uses this product.</p>` : html`
                 <table class="flows users plist">
                   <thead><tr>
                     <th>Activity</th>
                     <th class="num" title=${`${unit(info.unit)} ${users.waste ? "of waste" : ""} per unit of the activity's product`}>per unit</th>
-                    ${root && html`<th class="num" title="Amount going to this activity in the supply chain of the process">in this tree</th><th class="num">share</th><th></th>`}
                   </tr></thead>
                   <tbody>${users.users.map((u) => html`
                     <${ProcessRow} key=${u.index} item=${u} above=${base} depth=${0} ancestors=${[target.index]} panel=${usersPanel} />`)}
@@ -3194,11 +3272,6 @@ function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsByI
             </section>`}
           ${shown === "alternatives" && alternatives && html`
           <section>
-            <h4>Alternative suppliers · ${alternatives.count} ${alternatives.count === 1 ? "activity" : "activities"} making ${alternatives.product}</h4>
-            <p class="note">
-              Cumulative impact per ${unit(alternatives.unit)} of ${alternatives.product}, lowest first.
-              ${replaceable && " Use instead links the input to that activity (same amount) in the dataset of the process above: the change is staged."}
-            </p>
             <table class="flows alternatives plist">
               <thead><tr>
                 <th>Activity</th>
@@ -3249,14 +3322,7 @@ function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsByI
               ${d.filename && html`<tr><th>File</th><td class="muted">${d.filename}</td></tr>`}
             </table>
           </section>`}
-        </div>
-        ${!exchange && html`<div class="info-actions">
-          <button onClick=${() => { onUseAsRoot(info); onClose(); }}>Use in this tab</button>
-          <button onClick=${() => { onOpenTab(info); onClose(); }} title="Open this activity in a new tab (or drag the pop-up by its header to a tab list or the edge of a pane)">Open in new tab</button>
-          ${ctx.editing && ctx.origin && html`<button class="primary" disabled=${locked}
-            title=${locked ? "Its database is locked: unlock it in Load database" : "Open the form of this process: the change is staged, then applied with the others"}
-            onClick=${() => { ctx.openForm({ edit: { database: info.database, code: info.code } }); onClose(); }}>Edit</button>`}
-        </div>`}`}
+        </div>`}
     <//>`;
 }
 
@@ -3474,7 +3540,7 @@ const PANEL_TIPS = {
     + "Process groups nest (electricity uses transport, which uses electricity), so the attribution of impacts is chosen in the panel.",
 };
 
-function ChartPanel({ data, info, method, chartMethods, onPickMethods, view }) {
+function ChartPanel({ data, info, method, chartMethods, onPickMethods, view, root, amount, onInfo }) {
   const { naming, recipe } = view;
   const [mode, setMode] = useState("single");
 
@@ -3553,27 +3619,17 @@ function ChartPanel({ data, info, method, chartMethods, onPickMethods, view }) {
   return html`
     <div class="panel">
       <div class="row">
-        <button class=${mode === "single" ? "primary" : ""} onClick=${() => setMode("single")}>Current method</button>
-        <button class=${mode === "multi" ? "primary" : ""} onClick=${() => setMode("multi")}>Several methods (100 %)</button>
+        <button class=${mode === "single" ? "primary" : ""} onClick=${() => setMode("single")}
+          title="One indicator: the main method, one bar for each row of the tree">Single indicator</button>
+        <button class=${mode === "multi" ? "primary" : ""} onClick=${() => setMode("multi")}
+          title="Several indicators: one 100 % bar for each method ticked in the Methods panel">Multi indicator</button>
         <span class="spacer" style="flex:1"></span>
         <button onClick=${exportCsv}>Export CSV</button>
       </div>
       ${mode === "single"
         ? html`
           <${Chart} option=${singleOption} height=${Math.max(260, parts.length * 26 + 60)} />
-          <table class="results chart-results">
-            <thead><tr><th>Segment <span class="muted">· as in the chart, largest first</span></th>
-              <th class="num">${unit}</th><th class="num">Share</th></tr></thead>
-            <tbody>${parts.map((p) => html`
-              <tr key=${p.rows[0]?.id ?? p.label} title=${p.label}>
-                <td>${p.main}${p.qual && html` <span class="muted">${p.qual}</span>`}${p.rows.length > 1 && html` <span class="muted">· ${p.rows.length} rows merged</span>`}</td>
-                <td class="num">${fmt(p.impacts[0])}</td>
-                <td class="num">${pct(total ? p.impacts[0] / total : 0)}</td>
-              </tr>`)}
-            </tbody>
-            <tfoot><tr><th>Total · ${parts.length} ${parts.length === 1 ? "segment" : "segments"}</th>
-              <th class="num">${fmt(total)}</th><th class="num">100%</th></tr></tfoot>
-          </table>`
+          ${root && html`<${DirectContributions} info=${info} root=${root} amount=${amount} method=${method} onInfo=${onInfo} />`}`
         : html`
           <div class="row">
             <button onClick=${onPickMethods} title="Tick the methods in the Methods panel">${chartMethods.length} ${chartMethods.length === 1 ? "method" : "methods"} shown together</button>
@@ -3582,6 +3638,43 @@ function ChartPanel({ data, info, method, chartMethods, onPickMethods, view }) {
             ? html`<div class="empty">Select methods to compare.</div>`
             : html`<${Chart} option=${multiOption} height=${Math.max(300, chartMethods.length * 28 + 120)} />`}`}
     </div>`;
+}
+
+// What each process of the supply chain contributes by its own emissions (the direct contributions, wherever it is in the
+// tree), largest first: the whole list, from /api/global/contributors with no group (everything is "other")
+function DirectContributions({ info, root, amount, method, onInfo }) {
+  const [limit, setLimit] = useState(100);
+  const [found, setFound] = useState(null);
+  const [error, setError] = useState(null);
+  useEffect(() => { setLimit(100); }, [root.index, amount, method]);
+  useEffect(() => {
+    let live = true;
+    setError(null);
+    request("/api/global/contributors", { root: root.index, amount, groups: {}, flow_groups: {}, order: [], rule: "direct", group: "other", method, limit })
+      .then((f) => live && setFound(f)).catch((e) => live && setError(e.message));
+    return () => { live = false; };
+  }, [root.index, amount, method, limit]);
+  if (error) return html`<div class="error">${error}</div>`;
+  if (!found) return html`<div class="muted">…</div>`;
+  const unitLabel = info.methods[method].unit;
+  const shown = found.contributors;
+  return html`
+    <table class="results chart-results direct-contributions">
+      <thead><tr><th>Process <span class="muted">· direct contributions</span></th><th class="num">${unitLabel}</th><th class="num">Share</th></tr></thead>
+      <tbody>${shown.map((c) => html`
+        <tr key=${c.index} class="clickable" title=${`${c.reference_product ?? ""} | ${c.name} | ${c.location}: right-click for its details`}
+            onContextMenu=${(e) => { e.preventDefault(); onInfo?.(c.index, e.clientX, e.clientY); }}>
+          <td>${c.name} <span class="loc-chip">${c.location}</span></td>
+          <td class="num">${fmt(c.impact)}</td>
+          <td class="num">${pct(found.total ? c.impact / found.total : 0)}</td>
+        </tr>`)}
+      </tbody>
+      <tfoot>
+        ${found.others.count > 0 && html`<tr><td class="muted">${found.others.count} more</td><td class="num">${fmt(found.others.impact)}</td><td class="num">${pct(found.total ? found.others.impact / found.total : 0)}</td></tr>`}
+        <tr><th>Total · ${found.count} ${found.count === 1 ? "process" : "processes"}</th><th class="num">${fmt(found.total)}</th><th class="num">100%</th></tr>
+      </tfoot>
+    </table>
+    ${found.count > shown.length && html`<button class="link" onClick=${() => setLimit(1000000)}>Show all ${found.count}</button>`}`;
 }
 
 // ---------------------------------------------------------------- grouping panel
@@ -3618,11 +3711,6 @@ const PRESETS = [
   { label: "By location", rule: { by: "location" } },
   { label: "By activity type", rule: { by: "activity_type" } },
   { label: "By ISIC division", rule: { by: "isic_division" } },
-];
-// Rules on the elementary flows shown when a "direct emissions" row is expanded
-const FLOW_PRESETS = [
-  { label: "By substance", rule: { by: "name", target: "flows" } },
-  { label: "By compartment", rule: { by: "compartment", target: "flows" } },
 ];
 
 const RULES_TIP = "Rules bundle sibling rows into groups, in list order (named groups first). The first group that claims a process takes it. "
@@ -3785,8 +3873,6 @@ function GroupPanel({ info, rules, setRules, selectedRow, view, setView, shared 
 
       <h3>Quick groups</h3>
       <div class="row">${PRESETS.map((p) => html`<button onClick=${() => add(p.rule)}>${p.label}</button>`)}</div>
-      <div class="row"><span class="muted">Direct emission flows:</span>
-        ${FLOW_PRESETS.map((p) => html`<button onClick=${() => add(p.rule)}>${p.label}</button>`)}</div>
 
       <h3 ref=${form}>${editIndex !== null ? "Edit rule" : "New rule"}</h3>
       <div class="row">
@@ -4178,16 +4264,26 @@ function Portal({ slot, children }) {
 // their tab. Kept per database in ``localStorage``, by method name (positions change when a model is rebuilt).
 const LENS_KEY = `${STORAGE_KEY}.lens`;
 // The options of the view as kept in the preferences; a pop-up's explorer lists its exchanges by section, in full names
-const initialView = (embedded) => ({
-  naming: embedded ? "full" : loadPreference("naming", "full"),
-  splitByType: embedded || loadPreference("splitByType", "0") === "1",
-  hideOthers: !embedded && loadPreference("hideOthers", "0") === "1",
+// The view of the explorer in a pop-up (the exchanges of a process): the plain tree, in the sections of the form of a new
+// process, whatever the options of the tabs are
+const PLAIN_VIEW = {
+  naming: "full", splitByType: true, hideOthers: false, groupProducts: false, groupByRules: true, groupSubstance: false,
+  groupCompartment: false, groupColors: false, colorBy: "group",
+};
+const initialView = (embedded) => (embedded
+  ? { ...PLAIN_VIEW, recipe: { ...DEFAULT_RECIPE }, columns: [...DEFAULT_COLUMNS], ruleColors: {} } : preferredView());
+const preferredView = () => ({
+  naming: loadPreference("naming", "full"),
+  splitByType: loadPreference("splitByType", "0") === "1",
+  hideOthers: loadPreference("hideOthers", "0") === "1",
   recipe: {
     main: loadPreference("recipeMain", DEFAULT_RECIPE.main), secondary: loadPreference("recipeSecondary", DEFAULT_RECIPE.secondary),
     flowMain: loadPreference("recipeFlowMain", DEFAULT_RECIPE.flowMain), flowSecondary: loadPreference("recipeFlowSecondary", DEFAULT_RECIPE.flowSecondary),
   },
   groupProducts: loadPreference("groupProducts", "0") === "1",
-  groupByRules: embedded || loadPreference("groupByRules", "1") === "1",  // the rules of the workspace (and the tab's) group the tree
+  groupByRules: loadPreference("groupByRules", "1") === "1",  // the rules of the workspace (and the tab's) group the tree
+  groupSubstance: loadPreference("groupSubstance", "0") === "1",  // the flows of direct emissions, by substance
+  groupCompartment: loadPreference("groupCompartment", "0") === "1",  // … and by compartment
   columns: (() => { try { const c = JSON.parse(loadPreference("columns", "null")); if (Array.isArray(c)) return c; } catch { /* the default */ } return DEFAULT_COLUMNS; })(),
   groupColors: loadPreference("groupColors", "1") === "1",
   colorBy: loadPreference("colorBy", "group"),  // "group" or "type" (flow type)
@@ -4204,6 +4300,8 @@ function saveViewPreferences({ view, display, orientation, cycles }) {
   savePreference("recipeFlowSecondary", view.recipe.flowSecondary ?? DEFAULT_RECIPE.flowSecondary);
   savePreference("groupProducts", view.groupProducts ? "1" : "0");
   savePreference("groupByRules", view.groupByRules ? "1" : "0");
+  savePreference("groupSubstance", view.groupSubstance ? "1" : "0");
+  savePreference("groupCompartment", view.groupCompartment ? "1" : "0");
   savePreference("columns", JSON.stringify(view.columns));
   savePreference("groupColors", view.groupColors ? "1" : "0");
   savePreference("colorBy", view.colorBy);
@@ -4239,6 +4337,9 @@ function saveLens(info, lens) {
   } catch { /* storage unavailable */ }
 }
 
+// A method as the Brightway name (family, category, indicator…) shown in parts: the category as the main text, the indicator
+// and what follows in grey, as the products of the explorer
+const methodParts = (m) => ({ family: m.name[0], main: m.name[1] ?? m.name[0], qual: m.name.slice(2).join(" | ") });
 // ``Methods`` summary: the active method, and how many more are shown together
 const methodSummary = (info, method, chartMethods) => {
   const m = info.methods[method];
@@ -4252,8 +4353,8 @@ function MethodMenu({ info, method, setMethod, chartMethods, setChartMethods, no
   return html`
     <div class="lens-menu">
       ${note && html`<p class="note">${note}</p>`}
-      <p class="method-legend muted"><input type="radio" class="main" checked disabled aria-hidden="true" /> the method of the tree and the charts
-        <input type="checkbox" checked disabled aria-hidden="true" /> shown together: <i>Several methods</i> and <i>Impact categories</i></p>
+      <p class="method-legend muted"><input type="radio" class="main" checked disabled aria-hidden="true" /> main method, for single indicator
+        <input type="checkbox" checked disabled aria-hidden="true" /> multi indicator</p>
       <${MethodTree} info=${info} main=${method} setMain=${setMethod} selected=${chartMethods} setSelected=${setChartMethods} />
     </div>`;
 }
@@ -4280,6 +4381,21 @@ function SetMenu({ lens, onEdit }) {
     </div>`;
 }
 
+// A label with the letter of its shortcut ``k`` underlined while the pointer is on its button (``.has-key``)
+const KeyedLabel = ({ label, k }) => {
+  const i = label.toLowerCase().indexOf(k);
+  return i < 0 ? label : html`${label.slice(0, i)}<u class="key-hint">${label[i]}</u>${label.slice(i + 1)}`;
+};
+// ←/→ on the tab bar of a side pane: the previous or the next panel, the focus staying on the bar
+const tabKeys = (ids, current, setCurrent) => (e) => {
+  if ((e.key !== "ArrowLeft" && e.key !== "ArrowRight") || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const next = ids[(ids.indexOf(current) + (e.key === "ArrowRight" ? 1 : -1) + ids.length) % ids.length];
+  const bar = e.currentTarget;
+  setCurrent(next);
+  setTimeout(() => bar.querySelector("button.active")?.focus(), 0);
+};
 // The left panel, where the processes (the processes of the tabs, their amounts, what is compared), the impact
 // methods and the group rules are chosen: *Processes*, *Methods* and *Rules* (the rule sets and the rules). The rules
 // shown are those of the tab in focus, which its own component puts in its slot (``groups-<tab id>``); in Compare mode
@@ -4287,18 +4403,18 @@ function SetMenu({ lens, onEdit }) {
 function LensPanel({ info, lens, tab, setTab, tabs, focusedTab, comparing, view, compareTabs, compare, setCompare, windows, onCollapse }) {
   const methods = lens.method < info.methods.length;
   return html`
-    <div class="tabs" role="tablist">
+    <div class="tabs" role="tablist" onKeyDown=${tabKeys(["processes", "methods", "groups"], tab, setTab)}>
       ${[["processes", "Processes"], ["methods", "Methods"], ["groups", "Rules"]].map(([key, label]) => html`
         <${TabButton} role="tab" class=${tab === key ? "active" : ""} onClick=${() => setTab(key)} tip=${PANEL_TIPS[key]}>${label}<//>`)}
       <span class="spacer"></span>
-      <button class="collapse-side" onClick=${onCollapse} title="Hide the panel" aria-label="Hide the panel"><${SidePanelIcon} open left /></button>
+      <button class="collapse-side" onClick=${onCollapse} title="Hide the panel (Ctrl/⌘ + ←)" aria-label="Hide the panel"><${SidePanelIcon} open left /></button>
     </div>
     <div class="panel" style=${{ display: tab === "processes" ? "" : "none" }}>
       <${ProcessesPanel} tabs=${compareTabs} compare=${compare} setCompare=${setCompare} windows=${windows} />
     </div>
     <div class="panel" style=${{ display: tab === "methods" ? "" : "none" }}>
       ${methods && html`<${MethodMenu} info=${info} method=${lens.method} setMethod=${lens.setMethod} chartMethods=${lens.chartMethods} setChartMethods=${lens.setChartMethods}
-        note="Chosen once for the workspace: all the tabs use them." />`}
+        />`}
     </div>
     <div class="groups-panel" style=${{ display: tab === "groups" ? "" : "none" }}>
       <div class="panel"><${SetMenu} lens=${lens} /></div>
@@ -4312,7 +4428,7 @@ function LensPanel({ info, lens, tab, setTab, tabs, focusedTab, comparing, view,
 // The tree that takes keyboard navigation: the one clicked last (several can be visible in split panes)
 let keyboardOwner = null;
 const TAB_API = {};  // tab id -> { view, setView } of the tab: the comparison's group rules take their colours from a view
-const AMOUNT_SETTERS = {};  // tab id -> the function that sets the amount of the process of the tab (the Processes panel)
+const POPUP_OPENERS = {};  // tab id -> the function that opens the pop-up of the process of the tab at (x, y): the Processes panel
 const ROOT_SETTERS = {};  // tab id -> the function that makes a process the process of the tab (the search in the top bar)
 // ``initial``: { state } a saved view, { inherit, root? } settings taken from another tab,
 // or { defaultRoot: true } (first start: the model's default process)
@@ -4478,7 +4594,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
 
   if (!embedded) {
     ROOT_SETTERS[id] = (r) => { keyboardOwner = id; selectRoot(r); };
-    AMOUNT_SETTERS[id] = setAmount;
+    POPUP_OPENERS[id] = (x, y) => root && openInfo({ index: root.index, row: null, x, y });
     TAB_API[id] = { view, setView };
   }
   function selectRoot(r) {
@@ -4568,7 +4684,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
   }
 
   const viewState = (exp = expanded) => ({
-    root: [root.index], amount, expanded: [...exp], rules: view.groupByRules === false ? [] : editing ? rules.map((r) => ({ ...r, merge: false })) : rules, cutoff: cutoffValue(cutoff, cutoffBasis), cutoff_basis: cutoffBasis, method, methods: chartMethods,
+    root: [root.index], amount, expanded: [...exp], rules: [...(view.groupByRules === false ? [] : editing ? rules.map((r) => ({ ...r, merge: false })) : rules), ...flowRulesOf(view)], cutoff: cutoffValue(cutoff, cutoffBasis), cutoff_basis: cutoffBasis, method, methods: chartMethods,
     pinned: [...pinned], others: [...others], merges: editing ? [] : merges, ungrouped: [...ungrouped],
     substitutions: editing ? {} : substitutions, group_products: view.groupProducts,
   });
@@ -4580,13 +4696,13 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
       .then((d) => { if (!cancelled) { setData(d); setError(null); } })
       .catch((e) => !cancelled && setError(e.message));
     return () => { cancelled = true; };
-  }, [root, amount, method, cutoff, cutoffBasis, expanded, rules, chartMethods, pinned, others, merges, ungrouped, substitutions, view.groupProducts, view.groupByRules, info, editing]);
+  }, [root, amount, method, cutoff, cutoffBasis, expanded, rules, chartMethods, pinned, others, merges, ungrouped, substitutions, view.groupProducts, view.groupByRules, view.groupSubstance, view.groupCompartment, info, editing]);
   // The tab's state is kept for the next visit (renaming does not reload the rows)
   useEffect(() => {
     if (!root || !info) return;
-    onSave(id, { root, amount, method, cutoff, cutoffBasis, expanded: [...expanded], rules, chartMethods, groupByRules: view.groupByRules, pinned: [...pinned], others: [...others], merges, ungrouped: [...ungrouped], substitutions, labels,
+    onSave(id, { root, amount, method, cutoff, cutoffBasis, expanded: [...expanded], rules, chartMethods, groupByRules: view.groupByRules, groupSubstance: view.groupSubstance, groupCompartment: view.groupCompartment, pinned: [...pinned], others: [...others], merges, ungrouped: [...ungrouped], substitutions, labels,
       layout: info.layout, methodName: info.methods[method]?.name, chartMethodNames: chartMethods.map((k) => info.methods[k]?.name) });
-  }, [root, amount, method, cutoff, cutoffBasis, expanded, rules, chartMethods, view.groupByRules, pinned, others, merges, ungrouped, substitutions, labels, info]);
+  }, [root, amount, method, cutoff, cutoffBasis, expanded, rules, chartMethods, view.groupByRules, view.groupSubstance, view.groupCompartment, pinned, others, merges, ungrouped, substitutions, labels, info]);
   function startRename(row) {
     if (editing || !labelKey(row)) return;
     // The tree and Sankey views have no inline editor: ask
@@ -4782,7 +4898,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
       model: { title: info.title, activities: info.activities },
       root, amount, method: info.methods[method].name, chartMethods: chartMethods.map((k) => info.methods[k].name),
       cutoff: +cutoffValue(cutoff, cutoffBasis).toFixed(8), cutoffBasis, expanded: [...expanded], rules, pinned: [...pinned], others: [...others], merges, ungrouped: [...ungrouped], substitutions, labels,
-      display: { naming: view.naming, recipe: view.recipe, groupProducts: view.groupProducts, groupByRules: view.groupByRules, splitByType: view.splitByType, hideOthers: view.hideOthers, columns: view.columns, groupColors: view.groupColors, colorBy: view.colorBy, ruleColors: view.ruleColors },
+      display: { naming: view.naming, recipe: view.recipe, groupProducts: view.groupProducts, groupByRules: view.groupByRules, groupSubstance: view.groupSubstance, groupCompartment: view.groupCompartment, splitByType: view.splitByType, hideOthers: view.hideOthers, columns: view.columns, groupColors: view.groupColors, colorBy: view.colorBy, ruleColors: view.ruleColors },
     };
   }
   function exportView() {
@@ -5038,20 +5154,11 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
   const collapseButton = html`<button onClick=${() => setExpanded(new Set(root ? [String(root.index)] : []))} title="Collapse everything below the root">Collapse</button>`;
   const resetButton = html`<button onClick=${resetView} disabled=${!root}
     title="Collapse the tree, clear restored rows and rows moved to others, and remove this tab's groups, merges and custom names (undoable); the rule set of the workspace stays">Reset view</button>`;
-  const viewBar = html`<${ViewBar} embedded=${embedded} view=${view} setView=${setDisplayView}
+  const viewBar = html`<${ViewBar} view=${view} setView=${setDisplayView}
     example=${(() => { const r = data.rows.find((x) => x.kind === "process" && x.depth > 0); return r ? rowNames(r, rowsById, view) : null; })()} />`;
   return html`
     <div class=${`fu-view ${embedded ? "embedded" : ""}`} ref=${box} style=${{ display: visible ? "" : "none" }}>
-      ${embedded && html`<header class="fu-header">
-        <label>Amount <${NumberInput} class="amount" value=${amount} min=${1e-12} step="any"
-          onValue=${setAmount} aria-label="Amount" />${root ? root.unit : ""}</label>
-        ${cutoffControls}
-      </header>`}
         <section class="tree-section" ref=${treeSection} onMouseDown=${() => { if (!embedded) keyboardOwner = id; }}>
-          ${embedded && html`<div class="toolbar">
-            ${collapseButton}${resetButton}
-          </div>`}
-          ${embedded && viewBar}
           ${undo && html`
             <div class="notice" role="status">
               <span>${undo.message}</span>
@@ -5089,14 +5196,15 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
         </section>
       ${!embedded && html`<${Portal} slot=${`side-${id}`}>
         <section class="side">
-          <div class="tabs" role="tablist">
+          <div class="tabs" role="tablist" onKeyDown=${tabKeys(["chart", "flows", "global"], tab, setTab)}>
             ${[["chart", "Process contribution"], ["flows", "Flow contribution"], ["global", "Rules contributions"]].map(([key, label]) => html`
               <${TabButton} role="tab" class=${tab === key ? "active" : ""} onClick=${() => setTab(key)} tip=${PANEL_TIPS[key]}>${label}<//>`)}
             <span class="spacer"></span>
-            <button class="collapse-side" onClick=${onCollapseSide} title="Hide the side panel" aria-label="Hide the side panel"><${SidePanelIcon} open /></button>
+            <button class="collapse-side" onClick=${onCollapseSide} title="Hide the side panel (Ctrl/⌘ + →)" aria-label="Hide the side panel"><${SidePanelIcon} open /></button>
           </div>
           ${tab === "chart" && allData.rows.length > 0 && html`<${ChartPanel} key=${editing ? "edit" : "view"} data=${allData} info=${info} method=${method}
-              chartMethods=${chartMethods} onPickMethods=${() => lens.show("methods")} view=${view} />`}
+              chartMethods=${chartMethods} onPickMethods=${() => lens.show("methods")} view=${view}
+              root=${root} amount=${amount} onInfo=${(index, x, y) => openInfo({ index, row: null, x, y })} />`}
           ${tab === "flows" && root && html`<${FlowPanel} info=${info} root=${root} amount=${amount} method=${method}
               onLocate=${goTo} onInfo=${(index, x, y) => openInfo({ index, row: null, x, y })} onFlowInfo=${showFlowInfo}
               rules=${rules} setRules=${setRules} view=${view} />`}
@@ -5175,7 +5283,7 @@ function compareLabels(tabs) {
 
 // The tree a tab displays, as /api/rows is asked for it (the method is the comparison's)
 const treeBody = (s, method) => ({
-  root: [s.root.index], amount: s.amount, expanded: s.expanded || [], rules: s.groupByRules === false ? [] : s.rules || [], cutoff: cutoffValue(s.cutoff, s.cutoffBasis),
+  root: [s.root.index], amount: s.amount, expanded: s.expanded || [], rules: [...(s.groupByRules === false ? [] : s.rules || []), ...flowRulesOf(s)], cutoff: cutoffValue(s.cutoff, s.cutoffBasis),
   cutoff_basis: s.cutoffBasis || "parent", method, methods: [], pinned: s.pinned || [], others: s.others || [], merges: s.merges || [],
   ungrouped: s.ungrouped || [], substitutions: s.substitutions || {}, group_products: loadPreference("groupProducts", "0") === "1",
 });
@@ -5437,7 +5545,7 @@ function MethodTree({ info, main, setMain, selected, setSelected }) {
               <div class="method-row" key=${i}>
                 <input type="checkbox" checked=${ticked.has(i)} onChange=${(e) => tick([i], e.target.checked)}
                   aria-label=${`${methodLabel(info.methods[i])} shown together`} title="Shown together with the others ticked" />
-                <span class="name" title=${methodLabel(info.methods[i])} onClick=${() => tick([i], !ticked.has(i))}>${info.methods[i].name.slice(1).join(" | ") || family}</span>
+                <span class="name" title=${methodLabel(info.methods[i])} onClick=${() => tick([i], !ticked.has(i))}>${methodParts(info.methods[i]).main}${methodParts(info.methods[i]).qual && html` <span class="muted">${methodParts(info.methods[i]).qual}</span>`}</span>
                 <input type="radio" class="main" name=${group} checked=${i === main} onChange=${() => setMain(i)}
                   aria-label=${`${methodLabel(info.methods[i])}: the active method`} title="The active method: the tree, the charts and the comparison" />
               </div>`)}
@@ -5504,38 +5612,45 @@ function compareSelection(tabs, compare) {
   return { labels, fullLabels, common, chosen, baseline: chosen.find((t) => t.id === compare.baseline) || chosen[0] };
 }
 
-// The tabs open (*Processes* of the left panel), grouped by window (the panes of the split): the amount of each
-// process, the ones to compare in Compare mode (ticked), the baseline (round mark) and a button to close the tab.
+// The tabs open (*Processes* of the left panel), grouped by window (the panes of the split): the ones to compare in
+// Compare mode (ticked), the baseline (round mark) and a button to close the tab; a right-click opens the pop-up of the
+// process. What each does is in its tooltip.
 // ``windows``: { panes: the panes of the layout, current: the pane used last, select(pane id, tab id), focus(pane id), close(tab id) }
 function ProcessesPanel({ tabs, compare, setCompare, windows }) {
   const { labels, fullLabels, common, chosen, baseline } = compareSelection(tabs, compare);
   const set = (patch) => setCompare((c) => ({ ...c, ...patch }));
   const toggle = (id) => set({ chosen: chosen.some((t) => t.id === id) ? chosen.filter((t) => t.id !== id).map((t) => t.id) : [...chosen.map((t) => t.id), id] });
+  // The tab shown in its window first (a hidden tab has no pop-up to see), then its pop-up
+  const showTab = (pane, t) => { windows.select(pane.id, t.id); windows.focus(pane.id); };
+  const openPopup = (e, pane, t) => {
+    e.preventDefault();
+    const { clientX: x, clientY: y } = e;
+    showTab(pane, t);
+    setTimeout(() => POPUP_OPENERS[t.id]?.(x, y), 60);
+  };
   const row = (t, pane) => {
     const i = tabs.indexOf(t);
     const on = chosen.includes(t);
-    return html`<div key=${t.id} class="process-row ${on ? "" : "off"} ${pane.active === t.id ? "shown" : ""}">
+    return html`<div key=${t.id} class="process-row ${on ? "" : "off"} ${pane.active === t.id ? "shown" : ""}" onContextMenu=${(e) => openPopup(e, pane, t)}>
       <div class="compare-tab ${on ? "" : "off"}">
-        <input type="checkbox" checked=${on} onChange=${() => toggle(t.id)} aria-label=${`Compare ${labels[t.id]}`} />
+        <input type="checkbox" checked=${on} onChange=${() => toggle(t.id)} aria-label=${`Compare ${labels[t.id]}`} title="Compared in Compare mode (c)" />
         <span class="dot" style=${{ background: compareColor(i) }}></span>
-        <span class="name" title=${fullLabels[t.id]} onClick=${() => { windows.select(pane.id, t.id); windows.focus(pane.id); }}>${labels[t.id]}</span>
-        <input type="radio" name="baseline" checked=${t === baseline} disabled=${!on} onChange=${() => set({ baseline: t.id })} aria-label="Baseline" title="Baseline" />
-        <button class="close-tab" onClick=${() => windows.close(t.id)} aria-label=${`Close ${labels[t.id]}`} title="Close this tab">×</button>
+        <span class="name" title=${`${fullLabels[t.id]}: click to show it in its window, right-click for its details`} onClick=${() => showTab(pane, t)}>${labels[t.id]}</span>
+        <input type="radio" name="baseline" checked=${t === baseline} disabled=${!on} onChange=${() => set({ baseline: t.id })} aria-label="Baseline"
+          title="Baseline: the other processes are read against it in Compare mode" />
+        <button class="close-tab" onClick=${() => windows.close(t.id)} aria-label=${`Close ${labels[t.id]}`} title="Close this tab (w)">×</button>
       </div>
-      <label class="amount-line">Amount <${NumberInput} class="amount" value=${t.state.amount} min=${1e-12} step="any"
-        onValue=${(v) => AMOUNT_SETTERS[t.id]?.(v)} aria-label=${`Amount of ${labels[t.id]}`} /> ${t.state.root.unit || ""}</label>
     </div>`;
   };
   const groups = windows.panes.map((pane) => ({ pane, items: pane.tabs.map((id) => tabs.find((t) => t.id === id)).filter(Boolean) })).filter((g) => g.items.length);
   return html`
     <div class="lens-menu">
-      <p class="note">The process of each tab, with its amount. In <i>Compare</i> mode (key c) the ticked ones are compared; the round
-        mark is the <b>baseline</b>, the others are read against it. The frames are the windows of the workspace (its splits).</p>
       ${common && html`<div class="muted compare-common" title=${common}>${common}</div>`}
       <div class="compare-tabs">
         ${tabs.length === 0 && html`<div class="muted">No tab has a process yet.</div>`}
         ${groups.map(({ pane, items }, n) => html`
-          <div key=${pane.id} class="window-group ${windows.panes.length > 1 && pane.id === windows.current ? "focused" : ""}">
+          <div key=${pane.id} class="window-group ${windows.panes.length > 1 && pane.id === windows.current ? "focused" : ""}"
+            title=${windows.panes.length > 1 ? `Window ${n + 1}: a split pane of the workspace` : undefined}>
             ${windows.panes.length > 1 && html`<div class="window-head">Window ${n + 1}</div>`}
             ${items.map((t) => row(t, pane))}
           </div>`)}
@@ -5762,10 +5877,10 @@ function PaneView({ pane, focused, multiple, titles, dragging, drop, setDrop, ac
                onDragOver=${over("center", id)}>
             <span class="pane-tab-title">${title(id)}</span>
             ${titles[id] && html`<span class="loc">${titles[id].location}</span>`}
-            <button class="close" aria-label="Close tab" title="Close (middle-click)"
+            <button class="close" aria-label="Close tab" title="Close (w, or middle-click)"
               onClick=${(e) => { e.stopPropagation(); actions.close(id); }}>×</button>
           </div>`)}
-        <button class="new-tab" onClick=${() => actions.add(pane.id)} title="New tab" aria-label="New tab">+</button>
+        <button class="new-tab" onClick=${() => actions.add(pane.id)} title="New tab (t)" aria-label="New tab">+</button>
         <span class="spacer"></span>
         <button class="icon" onClick=${() => actions.split(pane.id, "right")} title="Split right: open a copy of this tab on the right"
           aria-label="Split right"><${SplitIcon} dir="row" /></button>
@@ -5890,7 +6005,7 @@ function App() {
   const [lens, setLens] = useState(null);
   useEffect(() => { if (lens && info) saveLens(info, lens); }, [lens]);
   const [error, setError] = useState(null);
-  // Databases loaded in the server; null: a server without Load database (one model, plain URLs)
+  // Databases loaded in the server; null: a server without the Projects dialog (one model, plain URLs)
   const [databases, setDatabases] = useState(undefined);
   const [loadOpen, setLoadOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
@@ -5940,6 +6055,16 @@ function App() {
   useEffect(() => savePreference("leftWidth", String(leftWidth)), [leftWidth]);
   useEffect(() => savePreference("leftTab", leftTab), [leftTab]);
   watchStates.current = comparing || (leftOpen && leftTab === "processes");
+  // A side pane that is opened takes the focus (its panel's tab: ← and → switch panel)
+  const opened = useRef({ left: leftOpen, side: sideOpen, mounted: false });
+  useEffect(() => {
+    const was = opened.current;
+    opened.current = { left: leftOpen, side: sideOpen, mounted: true };
+    if (!was.mounted) return;
+    const focusOn = (selector) => setTimeout(() => document.querySelector(selector)?.focus({ preventScroll: true }), 40);
+    if (leftOpen && !was.left) focusOn(".leftbar .tabs button.active");
+    if (sideOpen && !was.side) focusOn(".sidebar .side-slot:not([style*=\"none\"]) .tabs button.active, .sidebar .edit-title button");
+  }, [leftOpen, sideOpen]);
   const states = useRef({});  // tab id → its saved view (what a remounted tab starts from)
   const starts = useRef({});  // tab id → how a tab without a saved view starts
   const current = useRef({});
@@ -6140,7 +6265,7 @@ function App() {
       <h1>LCA Explorer</h1>
       <${DatabaseSelect} databases=${databases} />
       ${databases && html`<button onClick=${() => setLoadOpen(true)}
-        title="Open another database: a model already built, or a database of your Brightway projects">Load database</button>`}
+        title="Projects: open a database of your Brightway projects, add, rename, lock or remove one">Projects</button>`}
       ${editing && html`<span class="mode-badge" title="Edit mode: changes are staged, then made together in the project">Edit mode</span>`}
       ${outdated && html`<button class="primary" disabled=${rebuilding?.status === "running"} onClick=${rebuild}
         title=${`${outdated}: the model has to be built again, and its impacts are greyed out until then`}>
@@ -6151,13 +6276,13 @@ function App() {
       <div class="top-right">
       ${databases && html`
         <span class="mode-switch" role="group" aria-label="Mode">
-          <button class=${!editing && !comparing ? "primary" : ""} onClick=${() => setMode("view")}
-            title="Explore the results of the model built from the database">View</button>
-          <button class=${comparing ? "primary" : ""} onClick=${() => setMode("compare")}
-            title="Compare the processes of several tabs: contribution by group, difference, impact categories">Compare</button>
-          <button class=${editing ? "primary" : ""} disabled=${!origin} onClick=${() => { setMode("edit"); setSideOpen(true); }}
-            title=${origin ? "Change processes: changes are staged, then made together and the model built again" : "Open a database of a Brightway project to edit it"}>
-            Edit${pending.length ? ` (${pending.length} staged)` : ""}</button>
+          <button class=${`has-key ${!editing && !comparing ? "primary" : ""}`} onClick=${() => setMode("view")}
+            title="View (v): explore the results of the model built from the database"><${KeyedLabel} label="View" k="v" /></button>
+          <button class=${`has-key ${comparing ? "primary" : ""}`} onClick=${() => setMode("compare")}
+            title="Compare (c): the processes of several tabs: contribution by group, difference, impact categories"><${KeyedLabel} label="Compare" k="c" /></button>
+          <button class=${`has-key ${editing ? "primary" : ""}`} disabled=${!origin} onClick=${() => { setMode("edit"); setSideOpen(true); }}
+            title=${origin ? "Edit (e): change processes, staged then made together and the model built again" : "Open a database of a Brightway project to edit it"}>
+            <${KeyedLabel} label="Edit" k="e" />${pending.length ? ` (${pending.length} staged)` : ""}</button>
         </span>`}
       </div>
     </header>
@@ -6223,7 +6348,7 @@ function App() {
           <button onClick=${() => { setMode("edit"); setSideOpen(true); }}>Review and apply in Edit mode</button>
         </div>`}
       <div class="body">
-        ${!leftOpen && html`<button class="side-reopen left" onClick=${() => setLeftOpen(true)} title="Show the Processes, Methods and Rules panel" aria-label="Show the Processes, Methods and Rules panel"><${SidePanelIcon} left /></button>`}
+        ${!leftOpen && html`<button class="side-reopen left" onClick=${() => setLeftOpen(true)} title="Show the Processes, Methods and Rules panel (Ctrl/⌘ + ←)" aria-label="Show the Processes, Methods and Rules panel"><${SidePanelIcon} left /></button>`}
         <aside class="leftbar" style=${{ width: `${leftWidth}px`, display: leftOpen ? "" : "none" }}>
           <${LensPanel} info=${info} lens=${lensApi} tab=${leftTab} setTab=${setLeftTab} tabs=${allTabs} focusedTab=${focusedTab} comparing=${comparing}
             view=${TAB_API[focusedTab] || Object.values(TAB_API)[0]} compareTabs=${compareTabs} compare=${compare} setCompare=${setCompare} onCollapse=${() => setLeftOpen(false)}
@@ -6236,7 +6361,7 @@ function App() {
           tabs=${compareTabs} />`}
         ${!comparing && (sideOpen
           ? html`<div class="side-resizer" onPointerDown=${startSideResize} title="Drag to resize"></div>`
-          : html`<button class="side-reopen" onClick=${() => setSideOpen(true)} title="Show the side panel" aria-label="Show the side panel"><${SidePanelIcon} /></button>`)}
+          : html`<button class="side-reopen" onClick=${() => setSideOpen(true)} title="Show the side panel (Ctrl/⌘ + →)" aria-label="Show the side panel"><${SidePanelIcon} /></button>`)}
         <aside class="sidebar" style=${{ width: `${sideWidth}px`, display: sideOpen && !comparing ? "" : "none" }}>
           ${allTabs.map((id) => html`<div key=${id} id=${`side-${id}`} class="side-slot" style=${{ display: id === focusedTab && !editing ? "" : "none" }}></div>`)}
           ${editing && html`<${EditPanel} origin=${origin} dataset=${dataset} pending=${pending} affected=${pendingView.affected}
@@ -6255,14 +6380,14 @@ function App() {
       </div>
       <footer class="status-bar">
         <button class=${`status-button ${leftOpen ? "on" : ""}`} onClick=${() => setLeftOpen(!leftOpen)} aria-pressed=${leftOpen}
-          title="Show or hide the left panel: processes, view, methods and groups"><${SidePanelIcon} left open=${leftOpen} /></button>
+          title="Show or hide the left panel: processes, methods and rules (Ctrl/⌘ + ←)"><${SidePanelIcon} left open=${leftOpen} /></button>
         <button class="status-text" onClick=${() => lensApi.show("methods")} title=${methodLabel(info.methods[lens.method])}>
           ${methodSummary(info, lens.method, lens.chartMethods)}</button>
         <button class="status-text" onClick=${() => lensApi.show("groups")} title="The rule set shared by all tabs">Rules: ${lens.set} · ${lensApi.rules.filter((r) => !r.disabled).length}</button>
         <span class="spacer"></span>
         ${!comparing && html`<button class=${`status-button ${viewOpen ? "on" : ""}`} onClick=${() => setViewOpen(!viewOpen)} aria-pressed=${viewOpen}
           aria-label="View options" title="Show or hide the options of the view of the tab in focus: display, cut-off, grouping of rows, names and colours (v)"><${SlidersIcon} /></button>`}
-        <button class="status-button" onClick=${() => setShortcutsOpen(true)} aria-label="Shortcuts" title="Keyboard shortcuts of the lists and pop-ups"><${KeyboardIcon} /></button>
+        <button class="status-button" onClick=${() => setShortcutsOpen(true)} aria-label="Shortcuts" title="Keyboard shortcuts of the lists, the pop-ups and the panels"><${KeyboardIcon} /></button>
       </footer>
       </div>
     </div>

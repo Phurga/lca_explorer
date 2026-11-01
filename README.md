@@ -88,7 +88,7 @@ lives on `dev`. To update, run `git pull` in the repository folder, or download 
 `data/` folder in it. To stay on one version: `git checkout v1.0.0`. Your data and Brightway projects are never
 touched by an update.
 
-The app starts empty: **Load database** lists the databases of your Brightway 2.5 projects (it reads
+The app starts empty: **Projects** lists the databases of your Brightway 2.5 projects (it reads
 `BRIGHTWAY2_DIR`, else Brightway's default folder) and lets you import ecoSpold2, SimaPro CSV or ecoinvent
 databases. More in the [user guide](docs/user-guide.md).
 

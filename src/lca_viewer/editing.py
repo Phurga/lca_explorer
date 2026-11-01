@@ -107,6 +107,71 @@ def delete_database(project: str, name: str) -> None:
     print(f"Deleted database {name} from project {project}", flush=True)
 
 
+def rename_database(project: str, name: str, new_name: str) -> None:
+    """Rename a database of a project (the links of its own exchanges follow), unless another database
+    of the project links to it: those links would break."""
+    import bw2data as bd
+
+    new_name = new_name.strip()
+    if not new_name:
+        raise SystemExit("Give the database a new name")
+    if project not in bd.projects:
+        raise SystemExit(f"No project {project!r}")
+    bd.projects.set_current(project)
+    if name not in bd.databases:
+        raise SystemExit(f"No database {name!r} in project {project!r}")
+    if new_name in bd.databases:
+        raise SystemExit(f"Project {project!r} already has a database {new_name!r}")
+    users = sorted(d for d, meta in bd.databases.items() if d != name and name in meta.get("depends", []))
+    if users:
+        raise SystemExit(f"{name} is used by {', '.join(users)}: it cannot be renamed while they link to it")
+    print(f"Renaming {name} to {new_name} (a minute or two for a large database)", flush=True)
+    bd.Database(name).rename(new_name)
+    print(f"Renamed database {name} to {new_name} in project {project}", flush=True)
+
+
+def copy_database(project: str, name: str, new_name: str, from_project: str | None = None) -> None:
+    """A copy of a database as ``new_name`` in ``project``: of one of the same project, or of one of ``from_project``.
+    From another project the databases it links to (its biosphere, its background) must be in ``project`` by the same
+    names: the copy links to those."""
+    import bw2data as bd
+
+    new_name = new_name.strip()
+    if not new_name:
+        raise SystemExit("Give the copy a name")
+    source_project = from_project or project
+    for p in {project, source_project}:
+        if p not in bd.projects:
+            raise SystemExit(f"No project {p!r}")
+    bd.projects.set_current(source_project)
+    if name not in bd.databases:
+        raise SystemExit(f"No database {name!r} in project {source_project!r}")
+    if source_project == project:
+        if new_name in bd.databases:
+            raise SystemExit(f"Project {project!r} already has a database {new_name!r}")
+        print(f"Copying {name} to {new_name}", flush=True)
+        bd.Database(name).copy(new_name)
+        print(f"Copied database {name} to {new_name} in project {project}", flush=True)
+        return
+    source = bd.Database(name)
+    meta = dict(bd.databases[name])
+    depends = [d for d in meta.get("depends", []) if d != name]
+    print(f"Reading {name} from project {source_project}", flush=True)
+    data = source.relabel_data(source.load(), name, new_name)
+    bd.projects.set_current(project)
+    if new_name in bd.databases:
+        raise SystemExit(f"Project {project!r} already has a database {new_name!r}")
+    missing = [d for d in depends if d not in bd.databases]
+    if missing:
+        raise SystemExit(f"{project} has no {', '.join(missing)}, which {name} links to: add "
+                         f"{'it' if len(missing) == 1 else 'them'} to {project} first")
+    print(f"Copying {name} into project {project} as {new_name}", flush=True)
+    target = bd.Database(new_name)
+    target.register(format=f"Copied from '{name}' of project '{source_project}'", depends=depends)
+    target.write(data, searchable=meta.get("searchable", True))
+    print(f"Copied database {name} from project {source_project} to {new_name} in project {project}", flush=True)
+
+
 def restore_project(path, name: str | None = None) -> str:
     """A project from a Brightway backup archive (``.tar.gz``, e.g. BAFU from files.brightway.dev)."""
     import bw2data as bd

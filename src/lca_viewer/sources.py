@@ -87,7 +87,7 @@ def brightway_dir() -> Path:
 
 
 def brightway_dirs() -> list[dict]:
-    """The Brightway data folder offered by *Load database* (other folders can be typed in)."""
+    """The Brightway data folder offered by *Projects* (other folders can be typed in)."""
     label = "BRIGHTWAY2_DIR" if os.environ.get("BRIGHTWAY2_DIR") else "Brightway default folder"
     return [{"label": label, "path": str(brightway_dir())}]
 

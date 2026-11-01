@@ -4,7 +4,7 @@
 
 | source | status |
 |---|---|
-| Brightway 2.5 project (bw2data 4) | done: `lca_viewer.brightway.from_brightway`; from the app with *Load database* (`lca_viewer.sources`) |
+| Brightway 2.5 project (bw2data 4) | done: `lca_viewer.brightway.from_brightway`; from the app with *Projects* (`lca_viewer.sources`) |
 | ecoinvent ecoSpold2 release (`.7z`) | done via Brightway import (`lca-viewer import ecospold2`, or `scripts/import_ecoinvent.py`) |
 | ecoinvent release downloaded with the user's account | done: into a project (`lca-viewer ecoinvent import`, *Add database* → *ecoinvent*) |
 | SimaPro CSV process export (Agribalyse 3.2) | done via Brightway import (`lca-viewer import simapro-csv`), tested on toy data only |
@@ -69,7 +69,7 @@ Each loaded model is mounted at `/db/<key>/` with the API of `create_app`;
 
 ## Changing projects from the app
 
-The Brightway projects section of *Load database* and the *edit panel*
+The Brightway projects section of *Projects* and the *edit panel*
 panel change projects. Each change runs as `lca-viewer project …`,
 `lca-viewer import …` or `lca-viewer dataset …` in a separate process with
 `BRIGHTWAY2_DIR` set to the chosen folder (`server.create_library.cli`), as

@@ -1,6 +1,6 @@
 """``lca-viewer setup``: record the Python the start script runs the app with.
 
-The app starts with no database: *Load database* offers the built models (``data/models.json``)
+The app starts with no database: *Projects* offers the built models (``data/models.json``)
 and the databases of the user's Brightway projects. Also the helpers that unpack an ecoSpold2
 release for ``lca-viewer import``.
 """

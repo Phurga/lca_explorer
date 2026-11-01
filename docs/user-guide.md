@@ -24,7 +24,7 @@ create datasets, add Agribalyse, run it on a shared server, set it up by hand an
   filter lists its values and what codes stand for); ↑/↓ and Enter to choose.
 - Pick the **impact method** in the *Methods* panel of the left panel (the round mark is the
   active method, the ticks the ones shown together) and the group rules in its *Rules* tab (a rule
-  set shared by all tabs). The **amount** of each process is in its *Processes* tab. The
+  set shared by all tabs). The *Processes* tab lists the tabs open (right-click one for its pop-up). The
   **cut-off** and the other options of the view (List / Tree, names, colours…) are in the pane that
   the sliders icon of the status bar (or **v**) opens. **Ctrl/⌘ + ←** and **→** hide or show the left and the
   right panel.
@@ -62,7 +62,7 @@ create datasets, add Agribalyse, run it on a shared server, set it up by hand an
 
 ## Loading a database, e.g. from your Brightway projects
 
-The app starts with no database loaded. **Load database** (top bar) lists:
+The app starts with no database loaded. **Projects** (top bar, it was *Projects*) lists:
 
 - **Built models**, ready in a few seconds: every database loaded from Brightway before.
 - **Brightway projects**: the projects of Brightway's data folder, the one
@@ -177,7 +177,7 @@ to View. The number of staged changes shows on the Edit button; they are kept by
 - **Impacts that may be wrong are greyed out**: in Edit mode once staged changes affect the open
   database (theirs, and the databases using them), and in either mode when the project changed
   since the model was built. The top bar then shows **Rebuild required**, and the same goes for
-  the other models listed in *Load database* (*outdated*).
+  the other models listed in *Projects* (*outdated*).
 - **View-only features are left out in Edit mode**: merging, custom names and replacing a
   supplier by an alternative only change how the view looks, not the data, so they are hidden
   and not applied (a grouping rule's *merge* shows as a plain group); they come back in View.
@@ -187,7 +187,7 @@ to View. The number of staged changes shows on the Edit button; they are kept by
   like any other change. In the tree, the name is the process's own name (the label shown may
   be its product), and the amount is the input in the dataset of the process above, not the
   amount of this supply chain. The pop-up has an **Edit** button for the whole form.
-- **Lock a database** (*Load database*, next to each database of a project): nothing in it can be
+- **Lock a database** (*Projects*, in the *Options* of each database): nothing in it can be
   edited, deleted or added to, whichever database is open when one of its processes is reached.
   The lock is kept by the server (`data/locks.json`) and enforced when changes are staged and
   again when they are applied. Copying from a locked database is fine.
@@ -212,7 +212,7 @@ to View. The number of staged changes shows on the Edit button; they are kept by
 
 Agribalyse is imported into the same Brightway project as ecoinvent (it
 uses ecoinvent processes), then loaded in the app next to ecoinvent. This needs ecoinvent 3.9.1
-imported first, in a project of your Brightway folder (**+ Add database** in **Load database**). The commands
+imported first, in a project of your Brightway folder (**+ Add database** in **Projects**). The commands
 below use the project `lca_viewer_ei391` and the database `ecoinvent-3.9.1-cutoff`: replace them with yours.
 Details and caveats:
 [docs/data-import.md](data-import.md).
@@ -251,7 +251,7 @@ the project's impact methods could not characterise them, as they only cover
 flows of its biosphere. Details:
 [docs/data-import.md](data-import.md).
 
-**3. Open it** in the app: **Load database**, folder *lca_viewer*, project
+**3. Open it** in the app: **Projects**, folder *lca_viewer*, project
 `lca_viewer_ei391`, then **Build and open** next to `agribalyse-3.2`. The
 model includes the ecoinvent activities that Agribalyse uses. Without the
 app, `lca-viewer build --project lca_viewer_ei391 --database agribalyse-3.2
@@ -349,7 +349,7 @@ lca-viewer serve --open
 ```
 
 The app opens in your browser at **http://localhost:8765**; stop it with Ctrl+C. It starts with no database:
-load one from **Load database**, or import one with **+ Add database** (see above). Next time, only this step is
+load one from **Projects**, or import one with **+ Add database** (see above). Next time, only this step is
 needed, in a terminal where the `lca_viewer` environment is active.
 
 ### If something goes wrong

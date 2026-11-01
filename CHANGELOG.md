@@ -9,6 +9,23 @@ latest release, new work happens on `dev`.
 
 Changes on `dev`, not released yet.
 
+- **Projects** (it was *Load database*): one list of projects and their databases. A database has **Open** and an
+  **Options** menu: close, lock, rename, add a database, remove; a project has *Add database* and *Delete project*.
+- New: **rename a database**, and **add a database from another project** (or a copy of one of the same project).
+
+- **Pop-up**: its explorer is the plain tree, with no options; the actions (use in this tab, open in new tab) and
+  *Pin* are in a **⋯** menu at the top right; *Used by* and *Alternatives* lose their headers and texts, *Used by*
+  keeps one column, and their rows open with Space or a right-click.
+- **Processes panel**: no amounts and no text (tooltips instead); a right-click opens the pop-up of a process.
+- **Process contribution**: *Single indicator* and *Multi indicator*, and under the chart the whole list of direct
+  contributions of the processes. The Methods panel legend says what the round and the square mark are, and
+  the methods show their category and, in grey, their indicator.
+- **View options**: the buttons are in groups (*Groups*, *Names*, *Colours*), *Group colours* is *Rules colours*,
+  and *Group by substance* and *Group by compartment* replace the quick groups of the Rules panel. The colour
+  bar of a row names its flow type on hover.
+- A side pane that opens takes the focus; ← and → switch its panel. Buttons with a shortcut show it in their
+  tooltip, and View, Compare and Edit underline its letter on hover.
+
 - Fixed: *Hide others* left the rows of an expanded others row on screen (list, tree and Sankey).
 - Fixed: a selection kept rows that were no longer shown (hidden, collapsed, grouped away), so the selection bar and
   the totals counted them.

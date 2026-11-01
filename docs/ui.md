@@ -23,27 +23,35 @@ API in `src/lca_viewer/server.py`.
 
 ## Layout
 
-- **Load database** (top bar): the app starts with no database and shows
-  this dialog as its start page. Three lists: databases loaded (*Switch to*,
-  *Close* to free memory), built models (`data/models.json`, *Open*), and
-  the projects of the Brightway data folder (`BRIGHTWAY2_DIR`, else
-  Brightway's default folder; *Other folder…* types another), each database with its process count and *Build and open* / *Open*
-  / *Rebuild and open*. A load runs on the server: the dialog shows its steps
-  (*Details* for the build's output) and opens the database when it is
+- **Projects** (top bar; it was *Load database*): the app starts with no database and shows
+  this dialog as its start page. One list: the projects of the Brightway data folder (`BRIGHTWAY2_DIR`, else
+  Brightway's default folder; *Other folder…* types another), each with its databases and their process count.
+  Decision: a Brightway **project** holds databases, the elementary flows and the impact methods, and is what one
+  imports into and manages; a **database** is one dataset of a project (ecoinvent, BAFU…), the unit the app
+  opens. The dialog used to list loaded databases, built models and projects apart, each with its own buttons;
+  a database now has one state and two buttons. **Open** (*Shown* for the one on screen; *Build and open* the
+  first time and *Rebuild and open* when the project changed since the build, about a minute for
+  ecoinvent, kept in `data/cache`), and **Options ▾**: *Close (free its memory)* for one that is open,
+  *Open the old build* when a rebuild is due, *Lock* / *Unlock*, *Rename…*, *Add database…* and *Remove…*. A project
+  has *Options ▾* too: *Add database…* and *Delete project…*. Models that no listed database explains (built from
+  files, or from a database renamed since) are under *Other models*. A load runs on the server: the dialog shows
+  its steps (*Details* for the build's output) and opens the database when it is
   ready; it can be closed meanwhile and finds the load again when reopened.
   Decision: one database per page (`/db/<key>/`), switched with the picker
   next to the title, rather than databases mixed in one workspace: tabs,
   saved views and node ids are per model. An address of a database that is
   not loaded (after a restart) shows the start page with a note.
-  The Brightway section also changes projects: *+ New project* (empty, or
-  from a backup: files.brightway.dev, e.g. BAFU, or a `.tar.gz`), and on
-  each project *+ Add database* and *Delete* (typing the name to confirm), and
-  on each of its databases *Remove* (after a confirmation; refused while another
+  The dialog also changes projects: *+ New project* (empty, or
+  from a backup: files.brightway.dev, e.g. BAFU, or a `.tar.gz`), *Delete project…* (typing the name to
+  confirm), and on a database *Remove…* (after a confirmation; refused while another
   database of the project links to it or its model is open; the model already
-  built stays in the app). *Add database* asks for the source (ecoSpold2,
-  SimaPro CSV, BAFU from files.brightway.dev, ecoinvent with the user's account, or *Brightway repository*:
+  built stays in the app) and *Rename…* (refused while another database links to it, it is locked or open: the
+  links inside the database follow its name; `lca-viewer database rename`). *Add database* asks for the source
+  (ecoSpold2, SimaPro CSV, BAFU from files.brightway.dev, ecoinvent with the user's account, *Brightway repository*:
   only the biosphere and impact methods of an ecoinvent version, from
-  files.brightway.dev, without a database), with a box *Add the default biosphere and impact
+  files.brightway.dev, without a database, or *Another project*: a copy of a database of another project, or of
+  this one, under a new name, linked to the same biosphere and background databases, which the project must have
+  by the same names; `lca-viewer database copy --from-project`), with a box *Add the default biosphere and impact
   methods* and their ecoinvent version (detected from the file name or the
   SimaPro background, else chosen), ticked when the project has no biosphere
   database; it opens by itself on a project just created empty. Forms on a
@@ -54,7 +62,7 @@ API in `src/lca_viewer/server.py`.
   with *Import without them…*. Decision: as in Activity Browser, projects
   are created first and databases added to them, so there is one way in for
   each source (ecoinvent no longer makes its own project). These forms sit
-  in the Load database dialog, next to the projects they change, rather than
+  in the Projects dialog, next to the projects they change, rather than
   in a separate manager.
 - **Process form** (opened from the edit panel): a wide dialog to enter
   a process as in SimaPro: target (folder, project, database or new one),
@@ -156,7 +164,7 @@ API in `src/lca_viewer/server.py`.
   panel of its pop-up, which stages that replacement in the dataset(s) of the process(es) above it.
 - **Rebuild required**: `/api/databases` gives each Brightway-built model's `outdated` (what
   changed in the project since: `sources.changes`); the top bar shows the button when it is set.
-- **Locks**: *Lock* in *Load database* (`POST /api/brightway/lock`, kept in `data/locks.json`);
+- **Locks**: *Lock* in *Projects* (`POST /api/brightway/lock`, kept in `data/locks.json`);
   `/api/brightway` lists `locked` per database and `/api/brightway/dataset` says whether a process is
   locked, which disables its fields, Edit and Delete.
 - **Tabs and panes** (like a notes app such as Obsidian): each tab is one
@@ -199,9 +207,11 @@ API in `src/lca_viewer/server.py`.
   or hides the left panel, and the active method and the rule set in use, which open it.
 - **Left panel: Processes, Methods and Rules** (hidden and shown with its icon, the
   status bar's, the edge of the page or Ctrl/⌘ + ←; the right panel with Ctrl/⌘ + →;
-  resizable, in every mode). *Processes* lists the tabs open: the **amount** of the
-  process of each (it was in the tab's header), the tick for the ones compared in
-  Compare mode, the round mark for the baseline and a × that closes the tab. The tabs are grouped
+  resizable, in every mode). *Processes* lists the tabs open: the tick for the ones compared in
+  Compare mode, the round mark for the baseline and a × that closes the tab; what each
+  does is in its tooltip, not in a text, and a right-click on a process opens its pop-up (the tab is
+  shown in its window first). The amount of a process is 1: it is no longer set in the panel.
+  A side pane that is opened takes the focus, on its panel's tab, where ← and → switch panel. The tabs are grouped
   in a frame for each window (split pane), the one used last in the accent colour, a click on a
   name shows the tab in its window. Decision: the impact
   methods and the group rules are chosen once for the workspace and **shared by all
@@ -399,7 +409,11 @@ API in `src/lca_viewer/server.py`.
   rows, with the rows of an expanded one, and their boxes in the tree view and the Sankey, are left out; the chart keeps them), *Full / Short /
   Custom* names, applied
   to the list, the tree view, the others panel and the chart; see
-  [charts.md](charts.md); and the colours: *No colours*, *Group colours* or *Flow type colours*.
+  [charts.md](charts.md); and the colours: *No colours*, *Rules colours* or *Flow type colours*. In the view
+  options pane the buttons are in three labelled groups (*Groups*, *Names*, *Colours*); *Group by
+  substance* and *Group by compartment* bundle the flows under direct emissions (they were quick
+  groups of the Rules panel, which are gone); the flow type legend shows only with the flow type
+  colours, and the colour bar at the left of a row names its type on hover.
   **Columns of the list**: right-click the column headers to choose them (the process is
   always there; remembered, saved with the view). *Amount*, *Impact* and *Share* are on by
   default; *Exchange data* columns, off by default, show what the exchange supplying
@@ -434,7 +448,12 @@ API in `src/lca_viewer/server.py`.
   product and, largest first, the amount each takes in this functional
   unit's supply chain and its share; *go to*
   to open the tree at it), the ecoinvent description, included activities, time period, classifications,
-  authors and file; actions "Use as process" and "Open in new tab".
+  authors and file. The list of *Used by* has one column (the amount per unit), no header and
+  no text; its rows, like those of *Alternatives* (also without header or text), open with Space or a
+  right-click. The actions of the pop-up ("Use in this tab", "Open in new tab", and *Edit…* in Edit mode)
+  and *Pin* are in the **⋯** menu at the top right of the pop-up, not at its foot. The explorer of the
+  *Exchanges* panel shows the plain tree, whatever the options of the view are: no options of its own,
+  no cut-off, no grouping.
   **Alternatives** lists the other activities producing the same product
   with their cumulative impact per unit, lowest first (rows like the others;
   below an expanded one, its inputs with their impact and share of it).
@@ -464,7 +483,7 @@ API in `src/lca_viewer/server.py`.
   history: **←** next to × (or **Backspace**) goes back; opening a pop-up
   from outside, or closing it, starts a new history.
 - **Pop-up windows** (all kinds). Drag the header to move a pop-up and any
-  edge or corner to resize it. The **pin** button keeps it open, so that several
+  edge or corner to resize it. *Pin* (in its ⋯ menu) keeps it open, so that several
   can be side by side: a pinned pop-up ignores clicks outside and opening
   another pop-up, and Esc / Backspace act on it only while the pointer is on
   it; the one that is not pinned is replaced by the next you open. A pop-up
@@ -483,9 +502,11 @@ API in `src/lca_viewer/server.py`.
   id). For a substance spread over several compartments, chips switch between
   them. API: `/api/flow/{index}?method=&activities=`.
 - **Side panel — tabs** (what each shows is explained in a popup on its name, not in the panel):
-  - *Process contribution* (the former contribution chart): current method
-    bars, or several methods as 100 % stacked bars; CSV export. See
-    [charts.md](charts.md).
+  - *Process contribution* (the former contribution chart): **single indicator**, the bars of
+    the main method, or **multi indicator**, the methods ticked in the Methods panel as 100 % stacked
+    bars; CSV export. Under the single-indicator chart, the whole list of what each process contributes by
+    its own emissions (direct contributions, wherever it is in the supply chain), largest first, 100 rows
+    and *Show all* (`/api/global/contributors` with no group). See [charts.md](charts.md).
   - *Flow contribution*: the score split by elementary flow: the whole
     inventory of the process (B·s) times the current method's
     characterisation factors, so it sums to the total. *By substance*
@@ -525,7 +546,7 @@ API in `src/lca_viewer/server.py`.
     colours* colour the rows (list, tree view, Sankey and charts) by the kind of exchange instead:
     product (the root), technosphere input, waste (output to treatment),
     resource (input from nature), emission (output to nature) and direct
-    emissions rows; *Group colours* goes back to the colours of groups.
+    emissions rows; *Rules colours* goes back to the colours of groups.
   - *Rules contributions*: global grouping with the named groups, direct
     (the default) or first-match attribution (see [grouping.md](grouping.md)),
     groups sorted by decreasing impact with *other* last.

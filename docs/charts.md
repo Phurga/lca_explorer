@@ -14,11 +14,11 @@ configuration to keep in sync.
 
 ## Modes
 
-- **Current method**: one horizontal bar per frontier row, sorted by
+- **Single indicator** (main method): one horizontal bar per frontier row, sorted by
   absolute impact, all in one colour (groups and merged rows are not told
   apart by colour: the label says what they are); negative contributions in
   orange.
-- **Several methods (100 %)**: one 100 % stacked bar per method shown together
+- **Multi indicator**: one 100 % stacked bar per method shown together
   (ticked in the Methods menu; default: the current method's family, e.g. the 25 EF 3.1 categories). The
   frontier is the same for all methods; segments are the 11 largest rows for
   the current method plus "n others", to keep the legend readable.

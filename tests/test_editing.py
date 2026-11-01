@@ -923,3 +923,50 @@ def test_add_defaults_from_the_repository(tmp_path, monkeypatch):
                        json={"folder": str(tmp_path / "bw"), "project": "p", "version": "--x"}).status_code == 400
     assert client.post("/api/brightway/defaults/install",
                        json={"folder": str(tmp_path / "bw"), "project": "nope", "version": "3.10"}).status_code == 404
+
+
+def _bio(bd):
+    bd.Database("bio").write({
+        ("bio", "co2"): {"name": "Carbon dioxide, fossil", "categories": ("air",), "unit": "kilogram", "type": "emission"},
+    })
+
+
+def test_a_database_is_renamed_with_its_links(project):
+    import bw2data as bd
+
+    editing.rename_database("toy", "bg", "background")
+    assert "bg" not in bd.databases and "background" in bd.databases
+    node = bd.get_node(database="background", code="elec")
+    assert {e.input.key for e in node.technosphere()} == set()
+    assert any(e.input.key == ("background", "elec") for e in node.production())
+    # a database another one links to cannot be renamed
+    with pytest.raises(SystemExit, match="used by"):
+        editing.rename_database("toy", "bio", "biosphere")
+    with pytest.raises(SystemExit, match="already has"):
+        editing.rename_database("toy", "background", "bio")
+
+
+def test_a_database_is_copied_in_its_project(project):
+    import bw2data as bd
+
+    editing.copy_database("toy", "bg", "bg copy")
+    assert len(bd.Database("bg copy")) == len(bd.Database("bg")) == 3
+    assert bd.get_node(database="bg copy", code="feed")["name"] == "feed"
+    with pytest.raises(SystemExit, match="already has"):
+        editing.copy_database("toy", "bg", "bg copy")
+
+
+def test_a_database_is_copied_from_another_project(project):
+    import bw2data as bd
+
+    bd.projects.set_current("other")
+    with pytest.raises(SystemExit, match="no bio"):
+        editing.copy_database("other", "bg", "bg", from_project="toy")
+    bd.projects.set_current("other")
+    _bio(bd)
+    editing.copy_database("other", "bg", "bg", from_project="toy")
+    bd.projects.set_current("other")
+    assert len(bd.Database("bg")) == 3
+    assert "bg" in bd.databases and bd.databases["bg"]["depends"] == ["bio"]
+    bd.projects.set_current("toy")
+    assert len(bd.Database("bg")) == 3  # the original is untouched

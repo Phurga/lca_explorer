@@ -784,6 +784,20 @@ class DeleteDatabaseRequest(BaseModel):
     database: str
 
 
+class RenameDatabaseRequest(DeleteDatabaseRequest):
+    new_name: str
+
+
+class CopyDatabaseRequest(BaseModel):
+    folder: str
+    project: str
+    """The project the copy goes to."""
+    database: str
+    new_name: str
+    from_project: str | None = None
+    """The project of the database to copy (default: ``project``)."""
+
+
 class DefaultsRequest(BaseModel):
     folder: str
     project: str
@@ -1207,7 +1221,8 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
 
     def ours(line: str):
         """The progress lines of lca_viewer.editing, not Brightway's own messages."""
-        return line if line.startswith(("Created project", "Installing", "Deleted", "Restor", "Downloading", "Writing")) \
+        return line if line.startswith(("Created project", "Installing", "Deleted", "Restor", "Downloading", "Writing",
+                                        "Renam", "Copying", "Reading")) \
             or line.endswith("impact methods installed") else None
 
     def uploaded(path: Path) -> None:
@@ -1271,6 +1286,67 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
             return {"message": f"{req.database} removed from {req.project}"}
 
         return start(f"{req.database} ({req.project})", ("delete-database", folder, req.project, req.database), work)
+
+    def twofive_project(folder: str, name: str) -> dict:
+        """A project of the folder made with Brightway 2.5, or the error to show."""
+        try:
+            p = next((p for p in sources.brightway_projects(folder) if p["name"] == name), None)
+        except FileNotFoundError:
+            p = None
+        if p is None:
+            raise HTTPException(404, f"No project {name!r} in {folder}")
+        if not p["twofive"]:
+            raise HTTPException(400, f"Project {name!r} was made with Brightway 2: upgrade it to Brightway 2.5 first")
+        return p
+
+    @app.post("/api/brightway/databases/rename")
+    def rename_database(req: RenameDatabaseRequest):
+        """Rename a database of a project, unless a database links to it, it is locked, or its model is open."""
+        folder = folder_of(req.folder)
+        new_name = req.new_name.strip()
+        p = twofive_project(folder, req.project)
+        names = [d["name"] for d in p["databases"]]
+        if req.database not in names:
+            raise HTTPException(404, f"No database {req.database!r} in project {req.project!r}")
+        if not new_name:
+            raise HTTPException(400, "Give the database a new name")
+        if new_name in names:
+            raise HTTPException(400, f"Project {req.project!r} already has a database {new_name!r}")
+        users = [d["name"] for d in p["databases"] if req.database in d["depends"]]
+        if users:
+            raise HTTPException(400, f"{req.database} is used by {', '.join(users)}: it cannot be renamed while "
+                                     f"{'it links' if len(users) == 1 else 'they link'} to it")
+        if req.database in locked_read(folder, req.project):
+            raise HTTPException(400, f"{req.database} is locked: unlock it first")
+        if any(built_from(m) == (folder, req.project, req.database) and loaded_key(m["path"]) for m in sources.catalog(data)):
+            raise HTTPException(400, f"{req.database} is open: close it first")
+
+        def work(job):
+            cli(job, folder, ["database", "rename", req.database, "--project", req.project, "--to", new_name], ours)
+            return {"message": f"{req.database} is now {new_name}"}
+
+        return start(f"{req.database} ({req.project})", ("rename-database", folder, req.project, req.database), work)
+
+    @app.post("/api/brightway/databases/copy")
+    def copy_database(req: CopyDatabaseRequest):
+        """A copy of a database, of the same project or of another one, as a new database of ``project``."""
+        folder = folder_of(req.folder)
+        new_name = req.new_name.strip()
+        target = twofive_project(folder, req.project)
+        source = twofive_project(folder, req.from_project or req.project)
+        if req.database not in [d["name"] for d in source["databases"]]:
+            raise HTTPException(404, f"No database {req.database!r} in project {source['name']!r}")
+        if not new_name:
+            raise HTTPException(400, "Give the copy a name")
+        if new_name in [d["name"] for d in target["databases"]]:
+            raise HTTPException(400, f"Project {req.project!r} already has a database {new_name!r}")
+
+        def work(job):
+            cli(job, folder, ["database", "copy", req.database, "--project", req.project, "--to", new_name,
+                              "--from-project", source["name"]], ours)
+            return {"message": f"{new_name} is in {req.project}"}
+
+        return start(f"{new_name} ({req.project})", ("copy-database", folder, req.project, new_name), work)
 
     @app.post("/api/brightway/defaults/install")
     def install_defaults_(req: DefaultsRequest):
@@ -1640,7 +1716,7 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
         hit = sorted(set(databases) & set(locked_read(folder, project)))
         if hit:
             raise HTTPException(400, f"{', '.join(hit)} {'is' if len(hit) == 1 else 'are'} locked: unlock "
-                                     f"{'it' if len(hit) == 1 else 'them'} in Load database to change what it contains")
+                                     f"{'it' if len(hit) == 1 else 'them'} in Projects to change what it contains")
 
     def touched_by(change: dict) -> set[str]:
         return {d for d in (change.get("database"), (change.get("spec") or {}).get("database")) if d}

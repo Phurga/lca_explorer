@@ -864,3 +864,19 @@ textarea.editing { width: 100%; box-sizing: border-box; }
 .compare-tab .name { cursor: pointer; }
 .compare-tab .close-tab { border: none; background: none; padding: 0 5px; color: var(--muted); font-size: 15px; line-height: 1; }
 .compare-tab .close-tab:hover { color: var(--bar-negative); }
+
+/* The ⋯ menu of a pop-up */
+.popup-menu { display: inline-flex; }
+.info-head-actions button.menu-btn { font-size: 15px; line-height: 1; padding: 2px 8px; }
+.info-head-actions .pin-mark { display: inline-flex; align-items: center; color: var(--accent); padding: 0 4px; }
+
+/* The view options in groups */
+.view-bar .view-group { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin: 4px 0; }
+.view-bar .view-group-label { flex: none; width: 54px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+/* The colour bar of a row by flow type: its name on hover */
+.tree tr td:first-child { position: relative; }
+.tree .type-bar { position: absolute; left: 0; top: 0; bottom: 0; width: 7px; z-index: 1; }
+
+/* A button whose label has a shortcut: the letter is underlined while the pointer is on it */
+.has-key .key-hint { text-decoration: none; }
+.has-key:hover .key-hint, .has-key:focus-visible .key-hint { text-decoration: underline; }

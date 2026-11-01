@@ -74,7 +74,7 @@ def serve(args) -> None:
             for path, title, root in zip(args.model, titles, roots)
         ]
     else:
-        models, n = [], 0  # loaded from the page (Load database)
+        models, n = [], 0  # loaded from the page (Projects)
     if args.reload:
         # The reloader re-imports the app in a fresh process: pass settings by environment
         os.environ["LCA_VIEWER_MODELS"] = json.dumps(models)
@@ -92,7 +92,7 @@ def serve(args) -> None:
         loaded = "model" if n == 1 else f"{n} models"
         print(f"{loaded} loaded and factorised in {time.perf_counter() - t:.1f}s, serving http://{args.host}:{args.port}")
     else:
-        print(f"serving http://{args.host}:{args.port}: choose a database to load in the page (Load database)")
+        print(f"serving http://{args.host}:{args.port}: choose a database to load in the page (Projects)")
     if args.open:
         import threading
         import webbrowser
@@ -166,10 +166,17 @@ def project(args) -> None:
 
 
 def database(args) -> None:
-    """Delete a database from a Brightway project."""
+    """Delete, rename or copy a database of a Brightway project."""
     from . import editing
 
-    editing.delete_database(args.project, args.name)
+    if args.action == "delete":
+        editing.delete_database(args.project, args.name)
+    elif not args.to:
+        raise SystemExit(f"{args.action} needs --to, the new name")
+    elif args.action == "rename":
+        editing.rename_database(args.project, args.name, args.to)
+    else:
+        editing.copy_database(args.project, args.name, args.to, args.from_project)
 
 
 def defaults(args) -> None:
@@ -313,10 +320,12 @@ def main(argv=None) -> None:
                    help="With create: install the biosphere and impact methods bundled with Brightway (ecoinvent 3.9)")
     p.set_defaults(func=project)
 
-    p = sub.add_parser("database", help="Delete a database from a Brightway project (in BRIGHTWAY2_DIR)")
-    p.add_argument("action", choices=["delete"])
+    p = sub.add_parser("database", help="Delete, rename or copy a database of a Brightway project (in BRIGHTWAY2_DIR)")
+    p.add_argument("action", choices=["delete", "rename", "copy"])
     p.add_argument("name", help="Database name")
-    p.add_argument("--project", required=True)
+    p.add_argument("--project", required=True, help="The project (for copy: the one the copy goes to)")
+    p.add_argument("--to", help="With rename or copy: the new name")
+    p.add_argument("--from-project", help="With copy: the project of the database to copy (default: --project)")
     p.set_defaults(func=database)
 
     p = sub.add_parser("defaults", help="Install the default biosphere and impact methods of an ecoinvent version "
@@ -368,9 +377,9 @@ def main(argv=None) -> None:
     p = sub.add_parser("serve", help="Serve the explorer; databases are loaded from the page, or with --model")
     p.add_argument("--model", action="append",
                    help="Model directory loaded at start; repeat to load several (default: none, "
-                        "choose them in the page with Load database)")
+                        "choose them in the page with Projects)")
     p.add_argument("--data", default="data",
-                   help="Folder of the built models (models.json, cache/), offered by Load database "
+                   help="Folder of the built models (models.json, cache/), offered by Projects "
                         "with the projects of BRIGHTWAY2_DIR (default: data)")
     p.add_argument("--title", action="append",
                    help="Title shown in the UI; repeat for each --model, in the same order (default: directory name)")

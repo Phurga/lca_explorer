@@ -21,7 +21,7 @@
 5. Elementary flows across the whole supply chain ("all N2O, wherever
    emitted"); flow query builder in the grouping panel.
 6. ~~Load a model directly from a Brightway project in the UI~~: done
-   (*Load database*, see [data-import.md](data-import.md#loading-from-the-app)).
+   (*Projects*, see [data-import.md](data-import.md#loading-from-the-app)).
 
 ## Ideas parked
 
