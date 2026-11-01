@@ -470,7 +470,7 @@ function baseOption() {
     grid: { left: 8, right: 64, top: 36, bottom: 8, containLabel: true },
     toolbox: { right: 8, feature: { saveAsImage: { title: "PNG", pixelRatio: 2 } } },
     tooltip: { trigger: "item", confine: true },
-    xAxis: { axisLabel: { color: muted, formatter: fmtAxis }, splitLine: { lineStyle: { color: border } } },
+    xAxis: { axisLabel: { color: muted, formatter: fmtAxis, hideOverlap: true }, splitLine: { lineStyle: { color: border } } },
     yAxis: { axisLabel: { color: text }, axisLine: { lineStyle: { color: border } } },
   };
 }

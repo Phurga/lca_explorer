@@ -2,12 +2,15 @@
 
 All notable changes to LCA Explorer. Versions follow [semantic versioning](https://semver.org/):
 a patch (1.0.x) fixes bugs, a minor (1.x.0) adds features without breaking your projects, a major (x.0.0)
-may need you to do something when you update. Each version is a git tag; the `main` branch is always the
-latest release, new work happens on `dev`.
+may need you to do something when you update. Each version is a git tag; the latest release is the stable
+version, `main` can be ahead of it with work in progress.
 
 ## Unreleased
 
 Changes on `dev`, not released yet.
+
+- Chart axes drop labels that would overlap.
+- README: use the latest release for a stable version; screenshots and wording follow the current interface.
 
 ## 1.3.0 - 2026-11-02
 

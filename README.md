@@ -8,9 +8,9 @@ Anyone can use it by cloning this repository on their own machine. No data is st
 your Brightway (v2.5) project folder.
 
 - **Explore** process trees as a list, a tree or a Sankey diagram.
-- **Understand** contributions by grouping or merging processes into "abstract" processes: you define the
-  grouping rules and have several types of contribution analysis.
-- **Compare** processes (the *Compare* menu).
+- **Understand** contributions by grouping or merging processes into "abstract" processes: you define *rules* on
+  processes and elementary flows, and the contributions follow your own model structure.
+- **Compare** processes (the *Compare* mode).
 - **Manage** Brightway projects and databases.
 
 ## Features
@@ -20,50 +20,59 @@ your Brightway (v2.5) project folder.
 - Explore the process trees in list view, tree view and Sankey view.
 - Understand contributions by grouping or merging processes into "abstract" processes, e.g. break down a
   global market food product per contributing transports, electricity input and fertiliser production.
-- Define preloaded or custom grouping rules to declutter complex supply chains, with colour coding.
-- Process contribution, flow contribution and group contribution analyses.
+- Define rules (quick groups, your own from a query or a field) on processes and elementary flows to declutter
+  complex supply chains, with colours and palettes; rules live in rule sets shared by all your tabs, with an
+  attribution rule (first match or direct) for the contributions.
+- Custom view, process contribution, flow contribution and rules contribution analyses; the method names in the
+  results are yours to format.
 - Find alternative producers of the same product.
 - Find processes with complex filters (location, CPC codes, etc., with helpers listing the values).
-- Split screens and tabs to keep several process views side by side; save and load the views you like.
+- Split screens and tabs to keep several process views side by side (a tab shows the panels of a process: its
+  tree, who uses it, its alternatives, its description); save and load the views you like.
 - Manage Brightway projects and databases.
 - Load any database: ecoSpold2, SimaPro CSV, or with your ecoinvent credentials.
-- Compare processes intuitively: contribution analyses and thematic differences.
+- Compare processes intuitively: contributions, cascade (what makes the difference, step by step) and a
+  multi indicator matrix.
 - Create and edit processes in your project.
 
 ## Gallery
 
 <table>
 <tr>
-<td width="50%"><a href="docs/img/gallery/01-process-tree.png"><img src="docs/img/gallery/01-process-tree.png" alt="Process list with colour-coded groups and the contribution chart"></a><br><b>Process tree</b>: expandable list with colour-coded groups, and the contribution chart of what the tree shows.</td>
+<td width="50%"><a href="docs/img/gallery/01-process-tree.png"><img src="docs/img/gallery/01-process-tree.png" alt="Custom view: the process tree with colour-coded rules, the view options and the contribution chart"></a><br><b>Custom view</b>: the expandable tree with the groups of your rules in colour, the view options, and the chart of what the tree shows.</td>
 <td width="50%"><a href="docs/img/gallery/02-sankey.png"><img src="docs/img/gallery/02-sankey.png" alt="Sankey view"></a><br><b>Sankey view</b>: band thickness is proportional to impact.</td>
 </tr>
 <tr>
 <td><a href="docs/img/gallery/03-tree-graph.png"><img src="docs/img/gallery/03-tree-graph.png" alt="Tree view"></a><br><b>Tree view</b>: the supply chain as nodes and edges.</td>
-<td><a href="docs/img/gallery/04-group-rules.png"><img src="docs/img/gallery/04-group-rules.png" alt="Group rules"></a><br><b>Group rules</b>: quick groups, your own rules from a query or a field, colour coding.</td>
+<td><a href="docs/img/gallery/04-rules.png"><img src="docs/img/gallery/04-rules.png" alt="Rules"></a><br><b>Rules</b>: the attribution rule, the active rules, a colour palette, quick groups, and your own rules from a query or a field.</td>
 </tr>
 <tr>
-<td><a href="docs/img/gallery/05-group-contributions.png"><img src="docs/img/gallery/05-group-contributions.png" alt="Group contributions"></a><br><b>Group contributions</b>: how much electricity, transport, fertilisers... anywhere upstream.</td>
-<td><a href="docs/img/gallery/06-flow-contribution.png"><img src="docs/img/gallery/06-flow-contribution.png" alt="Flow contribution"></a><br><b>Flow contribution</b>: the score split by elementary flow.</td>
+<td><a href="docs/img/gallery/05-rules-contributions.png"><img src="docs/img/gallery/05-rules-contributions.png" alt="Rules contributions"></a><br><b>Rules contributions</b>: how much electricity, transport, fertilisers... anywhere upstream, by your rules.</td>
+<td><a href="docs/img/gallery/06-flow-contribution.png"><img src="docs/img/gallery/06-flow-contribution.png" alt="Flow contribution"></a><br><b>Flow contribution</b>: the score split by elementary flow, by substance, compartment or subcompartment.</td>
 </tr>
 <tr>
 <td><a href="docs/img/gallery/07-search-filters.png"><img src="docs/img/gallery/07-search-filters.png" alt="Search with filters"></a><br><b>Search with filters</b>: location, CPC and ISIC codes... the (i) lists the values, with names for the codes.</td>
-<td><a href="docs/img/gallery/08-alternatives.png"><img src="docs/img/gallery/08-alternatives.png" alt="Alternative producers"></a><br><b>Alternative producers</b>: right-click a process for its exchanges, its users and the other producers of the same product.</td>
+<td><a href="docs/img/gallery/08-alternatives.png"><img src="docs/img/gallery/08-alternatives.png" alt="Alternative producers"></a><br><b>Alternative producers</b>: the panels of a process (tree, used by, alternatives, description, metadata) are the first line of its tab, and of its pop-up (right-click a process).</td>
 </tr>
 <tr>
-<td><a href="docs/img/gallery/09-split-views.png"><img src="docs/img/gallery/09-split-views.png" alt="Split views"></a><br><b>Split screens and tabs</b>: several process views at once; save and load views.</td>
-<td><a href="docs/img/gallery/10-compare.png"><img src="docs/img/gallery/10-compare.png" alt="Compare contributions"></a><br><b>Compare</b>: contributions of several processes side by side, by group, tree or flow.</td>
+<td><a href="docs/img/gallery/09-split-views.png"><img src="docs/img/gallery/09-split-views.png" alt="Split views"></a><br><b>Split screens and tabs</b>: several process views at once, one rule set for all; save and load views.</td>
+<td><a href="docs/img/gallery/10-compare.png"><img src="docs/img/gallery/10-compare.png" alt="Compare contributions"></a><br><b>Compare contributions</b>: several processes side by side, broken down by rule, flow, custom view or activity.</td>
 </tr>
 <tr>
-<td><a href="docs/img/gallery/11-compare-difference.png"><img src="docs/img/gallery/11-compare-difference.png" alt="Compare difference"></a><br><b>Thematic differences</b>: what makes one process differ from another, step by step.</td>
-<td><a href="docs/img/gallery/12-load-database.png"><img src="docs/img/gallery/12-load-database.png" alt="Load database"></a><br><b>Load database</b>: built models and the databases of your Brightway projects.</td>
+<td><a href="docs/img/gallery/11-compare-difference.png"><img src="docs/img/gallery/11-compare-difference.png" alt="Cascade"></a><br><b>Cascade</b>: what makes one process differ from another, step by step.</td>
+<td><a href="docs/img/gallery/12-load-database.png"><img src="docs/img/gallery/12-load-database.png" alt="Projects"></a><br><b>Projects</b>: the databases of your Brightway projects, most recent first.</td>
 </tr>
 <tr>
-<td><a href="docs/img/gallery/13-add-database.png"><img src="docs/img/gallery/13-add-database.png" alt="Add a database"></a><br><b>Project manager</b>: new projects, and databases from ecoSpold2, SimaPro CSV, ecoinvent or the Brightway repository.</td>
+<td><a href="docs/img/gallery/13-add-database.png"><img src="docs/img/gallery/13-add-database.png" alt="Add a database"></a><br><b>Add a database</b> to a project: from ecoSpold2, SimaPro CSV, ecoinvent or the Brightway repository.</td>
 <td><a href="docs/img/gallery/14-new-process.png"><img src="docs/img/gallery/14-new-process.png" alt="New process"></a><br><b>Create and edit processes</b> in your project (<i>Edit</i> mode).</td>
 </tr>
 </table>
 
 ## Quick start
+
+**Use the latest [release](https://github.com/Phurga/lca_explorer/releases) to get a stable version**: download it,
+or clone the repository and check out its tag (`git checkout v1.3.0`). The `main` branch is not guaranteed to be
+stable: it can hold work in progress between two releases.
 
 From the repository folder:
 
@@ -82,11 +91,11 @@ run then starts the app and opens http://localhost:8765. Extra arguments go to `
 
 ## Versions and updating
 
-`main` is the stable branch: it only changes when a new version is released (see the
-[releases](https://github.com/Phurga/lca_explorer/releases) and the [changelog](CHANGELOG.md)); work in progress
-lives on `dev`. To update, run `git pull` in the repository folder, or download the latest release and put your
-`data/` folder in it. To stay on one version: `git checkout v1.0.0`. Your data and Brightway projects are never
-touched by an update.
+Each version is a tagged release (see the [releases](https://github.com/Phurga/lca_explorer/releases) and the
+[changelog](CHANGELOG.md)); the stable one is the latest release. `main` follows the work and can be ahead of it,
+without any guarantee. To update, download the latest release and put your `data/` folder in it, or in your clone
+run `git fetch --tags` and `git checkout` the new tag. To stay on one version, stay on its tag (`git checkout
+v1.3.0`). Your data and Brightway projects are never touched by an update.
 
 The app starts empty: **Projects** lists the databases of your Brightway 2.5 projects (it reads
 `BRIGHTWAY2_DIR`, else Brightway's default folder) and lets you import ecoSpold2, SimaPro CSV or ecoinvent
