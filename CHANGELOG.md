@@ -21,6 +21,13 @@ Changes on `dev`, not released yet.
 - **Compare**: the breakdown is *Rules*, *Flows* or *Processes* (the rows of each tab's *Current view*, or each
   process's *Activity content*), and the scale has its own header.
 - **Rules panel**: its sections fold (rule set, quick groups, new rule), and a rule has an icon to edit it.
+- **Rules panel**: *Active rules* first, then the attribution (a picture of *Direct* and *First match*
+  side by side opens from its (i)), the rule set, quick groups and a new rule; a new rule is a named group
+  from a query, applied everywhere.
+- **Compare**: no method and rules header; the difference panel has no zoom option (the axis zooms by itself).
+- **Charts**: the axes use the numbers' rule of the tree (scientific from 10 000 and below 0.001).
+- Explanations are tooltips, not text on the page; one caret for every list or section that folds;
+  the actions of a row never cover its name, and a label never runs into its buttons.
 - Shorter descriptions in the app's own words.
 
 - **Projects** (it was *Load database*): one list of projects and their databases. A database has **Open** and an

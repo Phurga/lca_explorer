@@ -40,6 +40,13 @@ function fmtAmount(x) {
   const a = Math.abs(x);
   return a >= 1e3 || a < 0.01 ? x.toExponential(2) : x.toPrecision(3);
 }
+// A tick of a chart axis, with the rule of the numbers of the tree: scientific from 10 000 and below 0.001
+function fmtAxis(v) {
+  if (v === 0) return "0";
+  const a = Math.abs(v);
+  if (a >= 1e4 || a < 1e-3) return v.toExponential(2).replace(/\.?0+e/, "e").replace("e+", "e");
+  return String(Number(v.toPrecision(3)));
+}
 const pct = (x) => `${(x * 100).toFixed(1)}%`;
 const methodLabel = (m) => m.name.join(" | ");
 const productOf = (rowId) => Number(rowId.split("/").pop());
@@ -373,7 +380,7 @@ function baseOption() {
     grid: { left: 8, right: 64, top: 36, bottom: 8, containLabel: true },
     toolbox: { right: 8, feature: { saveAsImage: { title: "PNG", pixelRatio: 2 } } },
     tooltip: { trigger: "item", confine: true },
-    xAxis: { axisLabel: { color: muted }, splitLine: { lineStyle: { color: border } } },
+    xAxis: { axisLabel: { color: muted, formatter: fmtAxis }, splitLine: { lineStyle: { color: border } } },
     yAxis: { axisLabel: { color: text }, axisLine: { lineStyle: { color: border } } },
   };
 }
@@ -791,7 +798,7 @@ function EcoinventForm({ folder, project, existing, biosphere, linked, onJob, bu
     ${actions(null)}`;
   if (!status.username) return html`
     <form class="source-form" onSubmit=${login}>
-      <p class="muted small">Your account of ecoquery.ecoinvent.org, with a licence for the releases you download.</p>
+      <${InfoTip} text="Your ecoquery.ecoinvent.org account, with a licence for the releases." label="About the account" />
       <label>User name <input value=${username} onInput=${(e) => setUsername(e.target.value)} autocomplete="username" autofocus /></label>
       <label>Password <input type="password" value=${password} onInput=${(e) => setPassword(e.target.value)} autocomplete="current-password" /></label>
       <label class="check"><input type="checkbox" checked=${remember} disabled=${!status.store} onChange=${(e) => setRemember(e.target.checked)} />
@@ -816,8 +823,7 @@ function EcoinventForm({ folder, project, existing, biosphere, linked, onJob, bu
         </select></label>
       ${taken && html`<div class="error">${project} already has ${database}.</div>`}
       ${error && html`<div class="error">${error}</div>`}
-      <p class="muted small">Downloads the release (about 1 GB, kept in ecoinvent_interface's cache for next time) and imports
-        it as <b>${version ? database : "ecoinvent-<version>-<model>"}</b> (10 to 20 minutes).</p>
+      <${InfoTip} text=${`Downloads the release (about 1 GB, kept for next time) and imports it as ${version ? database : "ecoinvent-<version>-<model>"} (10 to 20 minutes).`} label="About the download" />
       ${actions("Download and import", busy || !version || !models || taken || !linked)}
     </form>`;
 }
@@ -835,12 +841,12 @@ function defaultsFor(text, versions, hasBundled) {
 const defaultsLabel = (v) => (v === "bundled" ? "ecoinvent 3.9, bundled with Brightway (biosphere3, no download)" : `ecoinvent ${v}`);
 
 const DATABASE_SOURCES = [
-  { kind: "ecospold2", label: "ecoSpold2", hint: "an ecoinvent release (.7z) or its unpacked folder" },
-  { kind: "simapro", label: "SimaPro CSV", hint: "a process export, e.g. Agribalyse" },
-  { kind: "bafu", label: "BAFU", hint: "the Swiss LCI database, from files.brightway.dev" },
-  { kind: "ecoinvent", label: "ecoinvent", hint: "downloaded with your ecoinvent account" },
-  { kind: "repository", label: "Brightway repository", hint: "biosphere and impact methods, from files.brightway.dev" },
-  { kind: "project", label: "Another project", hint: "a database of another project, or a copy of one of this project" },
+  { kind: "ecospold2", label: "ecoSpold2", hint: "An ecoinvent release (.7z) or its unpacked folder" },
+  { kind: "simapro", label: "SimaPro CSV", hint: "A process export, such as Agribalyse" },
+  { kind: "bafu", label: "BAFU", hint: "The Swiss LCI database, from files.brightway.dev" },
+  { kind: "ecoinvent", label: "ecoinvent", hint: "Downloaded with your ecoinvent account" },
+  { kind: "repository", label: "Brightway repository", hint: "Biosphere and impact methods, from files.brightway.dev" },
+  { kind: "project", label: "Another project", hint: "A database of another project, or a copy of one of this project" },
 ];
 
 // The forms of the Brightway projects section: a new project (empty, or from a backup such as
@@ -901,7 +907,7 @@ function ProjectForm({ form, folder, projects, onJob, onCancel, onForm, busy }) 
         : { folder, file: path, name: name.trim() || null })}>
       <h4>New Brightway project</h4>
       <label>Name <input value=${name} onInput=${(e) => setName(e.target.value)} autofocus
-        placeholder=${origin === "empty" ? "e.g. my study" : "default: the name in the backup"} /></label>
+        placeholder=${origin === "empty" ? "Name" : "Name in the backup"} /></label>
       <fieldset>
         <legend>Start from</legend>
         <label class="check"><input type="radio" checked=${origin === "empty"} onChange=${() => setOrigin("empty")} />
@@ -931,14 +937,14 @@ function ProjectForm({ form, folder, projects, onJob, onCancel, onForm, busy }) 
       <h4>Add a database to ${form.project}</h4>
       <div class="source-choice" role="radiogroup" aria-label="Source of the database">
         ${DATABASE_SOURCES.map((s) => html`
-          <button type="button" role="radio" aria-checked=${source === s.kind} class=${source === s.kind ? "selected" : ""}
+          <button type="button" role="radio" aria-checked=${source === s.kind} class=${source === s.kind ? "selected" : ""} title=${s.hint}
             onClick=${() => onForm({ kind: "add", project: form.project, source: s.kind })}>
-            <b>${s.label}</b><span class="muted small">${s.hint}</span></button>`)}
+            <b>${s.label}</b></button>`)}
       </div>
       ${source && !["repository", "bafu", "project"].includes(source) && html`
         <label class="check"><input type="checkbox" checked=${defaults} onChange=${(e) => setDefaults(e.target.checked)} />
           <span>Add the default biosphere and impact methods ${source === "ecoinvent"
-            && html`<span class="muted small">— those of the release: its elementary flows and LCIA methods</span>`}</span></label>
+            && html`<${InfoTip} text="Those of the release: its elementary flows and impact methods." label="About the defaults" />`}</span></label>
         ${defaults && source !== "ecoinvent" && html`
           <label class="defaults-version">Of
             <select value=${chosenVersion} onChange=${(e) => setVersion(e.target.value)}>
@@ -946,13 +952,12 @@ function ProjectForm({ form, folder, projects, onJob, onCancel, onForm, busy }) 
               ${versions.map((v) => html`<option value=${v}>${defaultsLabel(v)}${v === detected ? " (detected)" : ""}</option>`)}
               <option value="bundled">${defaultsLabel("bundled")}${detected === "bundled" ? " (detected)" : ""}</option>
             </select>
-            <span class="muted small">${!chosenVersion
+            <${InfoTip} label="About the version" text=${`${!chosenVersion
               ? (source === "ecospold2" ? "Not found in the file name: choose the version of the release."
                 : "No ecoinvent background ticked below: choose the ecoinvent version the export was made with.")
               : already ? "Already in this project: nothing to add."
                 : chosenVersion === "bundled" ? "A few minutes, once per project."
-                  : `ecoinvent's elementary flows and impact methods of ${chosenVersion}, from files.brightway.dev (about 20 MB, 3 minutes), once per project.`}
-              ${version === null && detected && ` Detected from ${source === "ecospold2" ? "the file name" : detectedFrom}.`}</span>
+                  : `ecoinvent's elementary flows and impact methods of ${chosenVersion}, from files.brightway.dev (about 20 MB, 3 minutes), once per project.`}${version === null && detected ? ` Detected from ${source === "ecospold2" ? "the file name" : detectedFrom}.` : ""}`} />
           </label>`}
         ${!defaults && (flowDbs.length ? html`
           <label>Elementary flows from
@@ -982,7 +987,7 @@ function ProjectForm({ form, folder, projects, onJob, onCancel, onForm, busy }) 
             ${taken && html`<div class="error">${form.project} already has ${target}.</div>`}
             ${missing.length > 0 && html`<div class="error">${form.project} has no ${missing.join(", ")}, which ${picked.database} links to: add
               ${missing.length === 1 ? "it" : "them"} to this project first (the biosphere and impact methods: <i>Brightway repository</i>).</div>`}
-            <p class="muted small">Its processes and exchanges are copied, linked to the same databases of this project. About a minute for ecoinvent.</p>
+            <${InfoTip} text="Its processes and exchanges are copied, linked to the same databases of this project. About a minute for ecoinvent." label="About the copy" />
             ${actions("Copy the database", !picked || !target || taken || missing.length > 0)}
           </form>
         </div>`;
@@ -998,10 +1003,9 @@ function ProjectForm({ form, folder, projects, onJob, onCancel, onForm, busy }) 
                 ${versions.map((v) => html`<option value=${v}>${defaultsLabel(v)}</option>`)}
                 <option value="bundled">${defaultsLabel("bundled")}</option>
               </select></label>
-            <p class="muted small">${here ? "Its biosphere is already in this project: only impact methods that are missing are added."
+            <${InfoTip} label="About the repository" text=${`${here ? "Its biosphere is already in this project: only the missing impact methods are added."
               : repoVersion === "bundled" ? "A few minutes, offline."
-                : `ecoinvent's elementary flows and impact methods of ${repoVersion}, from files.brightway.dev (about 20 MB, 3 minutes).`}
-${" "}Databases imported afterwards can link to them.</p>
+                : `ecoinvent's elementary flows and impact methods of ${repoVersion}, from files.brightway.dev (about 20 MB, 3 minutes).`} Databases imported afterwards can link to them.`} />
             ${actions("Add from the repository", !repoVersion || here && repoVersion === "bundled")}
           </form>
         </div>`;
@@ -1012,9 +1016,8 @@ ${" "}Databases imported afterwards can link to them.</p>
       return html`
         <div class="project-form">${head}
           <form class="source-form" onSubmit=${submit("/api/brightway/remote/add", { folder, project: form.project, remote: remoteName })}>
-            <p class="muted small">${here ? `${remoteName} is already in this project.`
-              : html`${remoteName}: the Swiss LCI database of BAFU/UVEK (11,747 processes), with its elementary flows and
-                the 21 Ecological Scarcity 2021 methods, from files.brightway.dev (about 60 MB).`}</p>
+            <${InfoTip} label="About BAFU" text=${here ? `${remoteName} is already in this project.`
+              : `${remoteName}: the Swiss LCI database of BAFU/UVEK (11,747 processes), with its elementary flows and the 21 Ecological Scarcity 2021 methods, from files.brightway.dev (about 60 MB).`} />
             ${!here && otherMethods && html`<p class="note">BAFU has its own elementary flows: the methods already in this project
               score nothing on it, and its methods score nothing on the other databases.</p>`}
             ${actions("Add BAFU", here)}
@@ -1031,12 +1034,12 @@ ${" "}Databases imported afterwards can link to them.</p>
         <form class="source-form" onSubmit=${submit("/api/brightway/import", { folder, project: form.project, format: "ecospold2", path, database,
           biosphere, defaults: defaults ? chosenVersion : null })}>
           <label>ecoSpold2 release: the .7z archive, or the folder it was unpacked to
-            <${PathInput} value=${path} onChange=${setPath} accept=".7z" placeholder="e.g. C:\\Downloads\\ecoinvent 3.9.1_cutoff_ecoSpold02.7z" /></label>
-          <label>Database name <input value=${database} onInput=${(e) => setDatabase(e.target.value)} placeholder="e.g. ecoinvent-3.9.1-cutoff" /></label>
+            <${PathInput} value=${path} onChange=${setPath} accept=".7z" placeholder="Path of the .7z or the folder" /></label>
+          <label>Database name <input value=${database} onInput=${(e) => setDatabase(e.target.value)} placeholder="Database name" /></label>
           ${defaults && chosenVersion && (database.match(/\d+\.\d+/)?.[0] ?? minor(chosenVersion)) !== minor(chosenVersion) && html`
             <p class="note">The release is not ecoinvent ${minor(chosenVersion)}: with that biosphere, some elementary flows may
               not link and some impact factors may not match.</p>`}
-          <p class="muted small">About 10 minutes for ecoinvent; an archive is unpacked first (2.6 GB, deleted afterwards).</p>
+          <${InfoTip} text="About 10 minutes for ecoinvent; an archive is unpacked first (2.6 GB, deleted afterwards)." label="About the import" />
           ${actions("Import", !path || !database.trim() || !linked)}
         </form>
       </div>`;
@@ -1047,8 +1050,8 @@ ${" "}Databases imported afterwards can link to them.</p>
           link_to: linkTo, migrations: adapterList,
           unlinked: form.unlinked || "fail" })}>
           <label>SimaPro CSV export (processes)
-            <${PathInput} value=${path} onChange=${setPath} accept=".csv,.CSV" placeholder="e.g. C:\\Downloads\\AGB32_final.CSV" /></label>
-          <label>Database name <input value=${database} onInput=${(e) => setDatabase(e.target.value)} placeholder="e.g. agribalyse-3.2" /></label>
+            <${PathInput} value=${path} onChange=${setPath} accept=".csv,.CSV" placeholder="Path of the CSV" /></label>
+          <label>Database name <input value=${database} onInput=${(e) => setDatabase(e.target.value)} placeholder="Database name" /></label>
           <fieldset>
             <legend>Background databases its inputs link to</legend>
             ${processDbs.length ? processDbs.map((d) => html`
@@ -1057,9 +1060,7 @@ ${" "}Databases imported afterwards can link to them.</p>
           </fieldset>
           <details class="adapters" open=${adapterList.length > 0}>
             <summary>Adapters: ${adapterList.length ? [...migrations, ...custom.map((c) => c.name)].join(", ") : "none"}</summary>
-            <p class="muted small">Correspondence files from Départ de Sentier's randonneur_data (with PRé's SimaPro ↔ ecoinvent
-              names): they rename the SimaPro inputs and flows to those of the background database before linking. Those for
-              the background databases chosen above are ticked.</p>
+            <${InfoTip} label="About adapters" text="Correspondence files (randonneur_data, PRé's SimaPro to ecoinvent names): they rename the inputs and flows to those of the background database before linking. Those of the databases chosen above are ticked." />
             <div class="adapter-list">
               ${(adapters?.adapters || []).map((a) => html`
                 <label class="check" title=${a.description}><input type="checkbox" checked=${migrations.includes(a.name)}
@@ -1067,9 +1068,7 @@ ${" "}Databases imported afterwards can link to them.</p>
                   <span class="muted small">${a.source} → ${a.target}</span></label>`)}
             </div>
             <h5>Your own adapter</h5>
-            <p class="muted small">A file of your own, in randonneur's format (a datapackage in JSON with lists of
-              <code>replace</code> or <code>update</code> transformations, each with a <code>source</code> and a <code>target</code>:
-              name, reference product, location, unit…). It is applied to the inputs left unlinked, after the ones above.</p>
+            <${InfoTip} label="About your adapter" text="A file of your own in randonneur's format (a JSON datapackage of replace or update transformations with a source and a target). It is applied to the inputs left unlinked, after the others." />
             ${custom.map((c) => html`
               <div class="adapter-file" key=${c.path}>
                 <span><b>${c.name}</b> <span class="muted small">${Object.entries(c.transformations).map(([v, n]) => `${n} ${v}`).join(", ") || "nothing to apply"}</span></span>
@@ -1089,8 +1088,7 @@ ${" "}Databases imported afterwards can link to them.</p>
             <label class="check"><input type="radio" checked=${form.unlinked === "drop"} onChange=${() => onForm({ ...form, unlinked: "drop" })} />
               Import without them, and list them</label>
           </fieldset>
-          <p class="muted small">Needs internet access (unit definitions). A large export takes a while: about 15 minutes for
-            Agribalyse with its ecoinvent background.</p>
+          <${InfoTip} text="Needs internet access (unit definitions). A large export takes a while: about 15 minutes for Agribalyse with its ecoinvent background." label="About the import" />
           ${actions(form.unlinked === "drop" ? "Import without the unlinked exchanges" : "Import", !path || !database.trim() || !linked)}
         </form>
       </div>`;
@@ -1104,7 +1102,7 @@ ${" "}Databases imported afterwards can link to them.</p>
         <label>New name <input value=${name} onInput=${(e) => setName(e.target.value)} autofocus placeholder=${form.database} /></label>
         ${users.length > 0 && html`<div class="error">${`${users.join(", ")} ${users.length === 1 ? "links" : "link"} to it: it cannot be renamed while ${users.length === 1 ? "it does" : "they do"}.`}</div>`}
         ${taken && html`<div class="error">${form.project} already has ${name.trim()}.</div>`}
-        <p class="muted small">The links inside the database follow its name. A model already built from it stays in the app under the old name.</p>
+        <${InfoTip} text="The links inside the database follow its name. A model already built from it stays in the app under the old name." label="About renaming" />
         ${actions("Rename database", !name.trim() || name.trim() === form.database || taken || users.length > 0)}
       </form>`;
   }
@@ -1282,7 +1280,7 @@ function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
     ${!listed(jobAt) && jobBox}
     ${!sources ? (!error && html`<div class="empty">Looking for databases…</div>`) : html`
       <section>
-        <h3>Projects <span class="muted">Brightway 2.5 projects: the databases you imported with Brightway or Activity Browser</span></h3>
+        <h3>Projects <${InfoTip} text="Brightway 2.5 projects and their databases. Import into a project first (+ New project, then Add database), then open a database. Your own datasets: Edit mode." label="About projects" /></h3>
         <div class="load-folder">
           <select aria-label="Brightway data folder" value=${isKnown ? folder : "other"}
             onChange=${(e) => { if (e.target.value === "other") { setTyped(folder); setFolder(""); setProjects(null); } else setFolder(e.target.value); }}>
@@ -1310,7 +1308,7 @@ function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
               .sort((a, b) => rank(a) - rank(b)).map((p) => { const shown = unfolded.has(p.name) || form?.project === p.name || jobAt === p.name;
               const opened = p.databases.filter((d) => d.model?.key); return html`
               <tr class="project" key=${`p:${p.name}`}>
-                <td colspan="2"><button class="toggle" aria-expanded=${shown} aria-label=${shown ? "Fold the databases" : "Show the databases"}
+                <td colspan="2"><button class="fold-caret" aria-expanded=${shown} aria-label=${shown ? "Fold the databases" : "Show the databases"}
                     title=${shown ? "Fold the databases" : "Show the databases"} onClick=${() => toggleProject(p.name)}>${shown ? "▾" : "▸"}</button>
                   <b>${p.name}</b>
                   <span class="muted"> · ${!p.twofive ? "Brightway 2 project: lca_viewer reads Brightway 2.5 projects only (upgrade it in Activity Browser 3 or Brightway 2.5)"
@@ -1337,7 +1335,7 @@ function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
       </section>
       ${otherModels.length > 0 && html`
         <section>
-          <h3>Other models <span class="muted">built from files, or from a database that is not listed above any more</span></h3>
+          <h3>Other models <${InfoTip} text="Built from files, or from a database no longer listed." label="About other models" /></h3>
           <table class="load-table">
             ${otherModels.map((m) => html`
               <tr key=${m.path}>
@@ -1351,9 +1349,7 @@ function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
                 </td>
               </tr>`)}
           </table>
-        </section>`}
-      <p class="muted small">ecoSpold2 releases, SimaPro CSV exports and ecoinvent releases are imported into a project first
-        (<i>+ New project</i>, then <i>+ Add database</i>), then opened from it like any Brightway database. Your own datasets: <i>Edit</i> in the top bar (new processes, copies, changes: staged, then applied together).</p>`}`;
+        </section>`}`}`;
 
   if (!onClose) return html`<div class="load-page"><h2>Projects</h2>${content}</div>`;
   return html`
@@ -1371,11 +1367,11 @@ function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
 // ---------------------------------------------------------------- create dataset
 // A new process, entered as in SimaPro, written into a Brightway project (lca_viewer.editing)
 const DATASET_SECTIONS = [
-  ["technosphere", "Inputs from technosphere", "process", "Materials, fuels, electricity, transport… search a process"],
-  ["resource", "Inputs from nature", "resource", "Resources: search a flow, e.g. water river, occupation"],
-  ["emission", "Emissions", "emission", "To air, water or soil: search a flow and its compartment, e.g. methane air"],
-  ["waste", "Waste to treatment", "process", "The process treating the waste: amount of waste sent to it"],
-  ["avoided", "Avoided products", "process", "Products this process replaces, credited: search their process"],
+  ["technosphere", "Inputs from technosphere", "process", "Search a process"],
+  ["resource", "Inputs from nature", "resource", "Search a resource"],
+  ["emission", "Emissions", "emission", "Search an emission and its compartment"],
+  ["waste", "Waste to treatment", "process", "Search the process treating the waste"],
+  ["avoided", "Avoided products", "process", "Search the process it replaces"],
 ];
 const DOCUMENTATION_FIELDS = [
   ["technology", "Technology"], ["time period", "Time period"], ["geography", "Geography"],
@@ -1694,7 +1690,7 @@ function DatasetForm({ onClose, current, edit, initial, copyFrom: start, deleted
                       <option value="__new__">New database…</option>
                     </select></label>
                   ${draft.database === "__new__" && html`
-                    <label>Name of the new database <input value=${draft.newDatabase} placeholder="e.g. my datasets"
+                    <label>Name of the new database <input value=${draft.newDatabase} placeholder="Name"
                       onInput=${(e) => set({ newDatabase: e.target.value })} /></label>`}
                 </div>
                 <p class="muted small">Inputs and emissions are searched in project ${current.project}, in all its databases.</p>
@@ -1713,7 +1709,7 @@ function DatasetForm({ onClose, current, edit, initial, copyFrom: start, deleted
             <h3>Process</h3>
             <div class="dataset-process">
               <label class="grow">Name <input value=${draft.process.name} onInput=${(e) => setProcess({ name: e.target.value })}
-                placeholder="e.g. dairy farm, grass-based" /></label>
+                placeholder="Name" /></label>
               <label>Location <input class="short" value=${draft.process.location} onInput=${(e) => setProcess({ location: e.target.value })}
                 placeholder="GLO, FR, RER…" /></label>
             </div>
@@ -1735,7 +1731,7 @@ function DatasetForm({ onClose, current, edit, initial, copyFrom: start, deleted
               <tr><th>Name</th><th class="num">Amount</th><th>Unit</th>${several && html`<th class="num">Allocation %</th>`}<th>Comment</th><th></th></tr>
               ${draft.products.map((p, i) => html`
                 <tr key=${p.code || `new${i}`}>
-                  <td><input value=${p.name} onInput=${(e) => setProduct(i, { name: e.target.value })} placeholder=${i ? "co-product" : "e.g. raw milk"} /></td>
+                  <td><input value=${p.name} onInput=${(e) => setProduct(i, { name: e.target.value })} placeholder=${i ? "Co-product" : "Product"} /></td>
                   <td class="num"><input class="num" value=${p.amount} onInput=${(e) => setProduct(i, { amount: e.target.value })} /></td>
                   <td><input list="bw-units" value=${p.unit} onInput=${(e) => setProduct(i, { unit: e.target.value })} /></td>
                   ${several && html`<td class="num"><input class="num" value=${p.allocation} onInput=${(e) => setProduct(i, { allocation: e.target.value })} /></td>`}
@@ -2517,7 +2513,7 @@ function OthersPopup({ target, win, rest, rows, rootImpact, cutoff, cutoffBasis,
       footer=${html`
         <button onClick=${() => setShown(rest.members.map((m) => m.id), true)}>Show all</button>
         <button disabled=${!shownPins.length} onClick=${() => setShown(shownPins.map((m) => m.id), false)}>Hide restored</button>`}>
-      <p class="note">Tick a ${things} to restore it: shown in the tree and the contribution chart; untick to put it back in others. Click a ${things} for its details.</p>
+      <${InfoTip} text=${`Tick a ${things} to restore it in the tree and the chart; untick to put it back in others. Click one for its details.`} label="About others" />
       <div class="details-list">
         <table>
           <tbody>
@@ -2558,7 +2554,7 @@ function BundlePopup({ target, win, row, methodInfo, rootImpact, actions, onPart
       title=${html`${row.custom || row.label} <span class="loc-chip">${kind.toLowerCase()}</span>`}
       subtitle=${`${parts.length} ${things} · ${fmt(total)} ${methodInfo.unit} (${pct(rootImpact ? total / rootImpact : 0)} of the total)`}
       footer=${actions}>
-      <p class="note">Each member's own amount and impact, and its share of the ${kind.toLowerCase()} row.${sameUnit ? "" : ` The ${things} are of different kinds, so amounts do not add up.`} Click a ${things === "processes" ? "process" : "flow"} for its details.</p>
+      <${InfoTip} text=${`Each member's amount and impact, and its share of the ${kind.toLowerCase()} row.${sameUnit ? "" : ` The ${things} differ in kind: amounts do not add up.`} Click one for its details.`} label="About the members" />
       <div class="details-list">
         <table>
           <thead><tr>
@@ -3764,7 +3760,7 @@ function Fold({ id, title, open = true, force = false, actions, innerRef, childr
 }
 
 // ``shared``: { set } when the rules are those of a rule set of the workspace
-function GroupPanel({ info, rules, setRules, selectedRow, view, setView, shared }) {
+function GroupPanel({ info, rules, setRules, selectedRow, view, setView, shared, extras }) {
   const { editing } = useContext(EditorContext);
   const [editIndex, setEditIndex] = useState(null);  // the rule being changed in the form below, else null
   const [queryLocked, setQueryLocked] = useState(false);  // the rule edited has a query the builder cannot show
@@ -3788,19 +3784,10 @@ function GroupPanel({ info, rules, setRules, selectedRow, view, setView, shared 
     setBy(next === "flows" ? "compartment" : "location");
     setPreview(null);
   };
-  const [scope, setScope] = useState("*");
-
-  const scopeTarget = selectedRow && selectedRow.kind === "process" ? selectedRow : null;
   const add = (rule) => setRules([...rules, { scope: "*", ...rule }]);
   function addCustom() {
-    const ruleScope = scope === "selected" && scopeTarget && !flows ? scopeTarget.id : "*";
-    const where = flows ? { target: "flows" } : {};
-    if (kind === "named") {
-      if (!predicate) return;
-      add({ name: name.trim() || describePredicate(predicate), predicate, scope: ruleScope, ...where });
-    } else {
-      add({ by, scope: ruleScope, ...where });
-    }
+    if (!predicate) return;
+    add({ name: name.trim() || describePredicate(predicate), predicate, ...(flows ? { target: "flows" } : {}) });
     setName("");
   }
   // Change a rule: its form is the one of a new rule, filled in; the target, the kind and the scope stay as they were
@@ -3896,6 +3883,8 @@ function GroupPanel({ info, rules, setRules, selectedRow, view, setView, shared 
               <button onClick=${() => { setRules(rules.filter((_, j) => j !== i)); if (editIndex !== null) stopEdit(); }} aria-label="Remove rule">×</button>
             </li>`)}
         </ul>`}
+      ${extras?.attribution}
+      ${extras?.ruleSet}
 
       <${Fold} id="quick" title="Quick groups" open=${false}>
         <div class="row">${PRESETS.map((p) => html`<button onClick=${() => add(p.rule)}>${p.label}</button>`)}</div>
@@ -3908,32 +3897,16 @@ function GroupPanel({ info, rules, setRules, selectedRow, view, setView, shared 
           <button class=${flows ? "primary" : ""} aria-pressed=${flows} disabled=${editIndex !== null} onClick=${() => chooseTarget("flows")}>Elementary flows</button>
         </span>
       </div>
-      <div class="row">
-        <span class="segmented" role="group" aria-label="Kind of rule">
-          <button class=${kind === "named" ? "primary" : ""} aria-pressed=${kind === "named"} disabled=${editIndex !== null} onClick=${() => setKind("named")}>Named group from a query</button>
-          <button class=${kind === "by" ? "primary" : ""} aria-pressed=${kind === "by"} disabled=${editIndex !== null} onClick=${() => setKind("by")}>Group by a field</button>
-        </span>
-      </div>
       ${kind === "named" ? html`
         <div class="row"><input placeholder="Group name" value=${name} onInput=${(e) => setName(e.target.value)} aria-label="Group name" /></div>
         ${queryLocked
           ? html`<p class="note">This group was made from selected rows or a nested query: only its name can be changed here.</p>`
           : html`<${QueryBuilder} query=${query} setQuery=${setQuery} fields=${flows ? info.flow_query_fields : info.query_fields} flows=${flows} />`}
-        ${preview && !queryLocked && html`<p class="note">${`Matches ${preview.total} ${flows ? "flows" : "activities"} in the database, e.g. `
-          + preview.results.slice(0, 3).map((r) => `${r.name} (${r.location})`).join("; ")
-          + (preview.total > 3 ? "…" : "")}</p>`}
+        ${preview && !queryLocked && html`<p class="note" title=${preview.results.slice(0, 3).map((r) => `${r.name} (${r.location})`).join("; ") + (preview.total > 3 ? "…" : "")}>Matches ${preview.total} ${flows ? "flows" : "processes"}</p>`}
       ` : html`
         <div class="row"><select value=${by} onChange=${(e) => setBy(e.target.value)} aria-label="Group by field">
           ${(flows ? info.flow_query_fields : info.group_by_fields).map((f) => html`<option value=${f}>${fieldLabel(f, flows)}</option>`)}
         </select></div>`}
-      ${!flows && editIndex === null && html`<div class="row">
-        <span class="segmented" role="group" aria-label="Where the rule applies">
-          <button class=${scope === "*" ? "primary" : ""} aria-pressed=${scope === "*"} onClick=${() => setScope("*")}>Everywhere</button>
-          <button class=${scope === "selected" ? "primary" : ""} aria-pressed=${scope === "selected"} disabled=${!scopeTarget} onClick=${() => setScope("selected")}
-            title="Select one process row in the tree first">Only under the selected row</button>
-        </span>
-        ${scopeTarget && html`<span class="muted">${truncate(scopeTarget.label.split(" | ")[1], 40)}</span>`}
-      </div>`}
       <div class="row">
         ${editIndex !== null
           ? html`<button class="primary" onClick=${saveEdit}>Save rule</button><button onClick=${stopEdit}>Cancel</button>`
@@ -3976,6 +3949,91 @@ function namedGroups(rules) {
   return { groups, flowGroups, order: active.map(nameOf) };
 }
 
+// The Rules panel keeps these two next to its rules (the attribution, the rule set), made where the lens is known
+const ruleExtras = (lens) => ({
+  attribution: html`<${AttributionSwitch} rule=${lens.attribution} setRule=${lens.setAttribution} />`,
+  ruleSet: html`<${Fold} id="ruleset" title=${`Rule set · ${lens.set}`} open=${false} actions=${html`<${InfoTip} text=${RULE_SET_TIP} label="What a rule set is" />`}>
+    <${SetMenu} lens=${lens} />
+  <//>`,
+});
+// A small supply chain, attributed to the rules both ways, side by side: direct (each process's own emissions go to its own
+// rule) and first match (the first process of a rule on a path takes its whole supply chain)
+function AttributionPicture() {
+  const colors = { other: "#8a8a82", fert: "hsl(270 45% 58%)", elec: "hsl(178 50% 38%)", mach: "hsl(32 85% 50%)" };
+  const labels = { other: "other", fert: "fertilisers", elec: "electricity", mach: "machinery" };
+  const nodes = [
+    { id: "wheat", name: "Wheat", own: 4, rule: "other", x: 170, y: 0 },
+    { id: "fert", name: "Fertiliser", own: 2, rule: "fert", x: 50, y: 110, parent: "wheat" },
+    { id: "tractor", name: "Tractor", own: 2, rule: "mach", x: 290, y: 110, parent: "wheat" },
+    { id: "elec", name: "Electricity", own: 3, rule: "elec", x: 0, y: 220, parent: "fert" },
+    { id: "gas", name: "Natural gas", own: 1, rule: "other", x: 130, y: 220, parent: "fert" },
+  ];
+  const byId = Object.fromEntries(nodes.map((n) => [n.id, n]));
+  const chain = (n) => (n.parent ? [...chain(byId[n.parent]), n] : [n]);
+  const first = (n) => chain(n).find((m) => m.rule !== "other")?.rule || "other";
+  const W = 120, H = 46;
+  const panel = (x0, title, hint, owner) => {
+    const totals = {};
+    nodes.forEach((n) => { totals[owner(n)] = (totals[owner(n)] || 0) + n.own; });
+    const order = ["other", "fert", "elec", "mach"].filter((k) => totals[k]);
+    const sum = nodes.reduce((t, n) => t + n.own, 0);
+    let at = 0;
+    return html`
+      <g transform=${`translate(${x0} 0)`}>
+        <text x="0" y="22" font-size="19" font-weight="700" style=${{ fill: "var(--text)" }}>${title}</text>
+        <text x="0" y="44" font-size="13" style=${{ fill: "var(--muted)" }}>${hint}</text>
+        <g transform="translate(10 66)">
+          ${nodes.filter((n) => n.parent).map((n) => html`<line key=${`e${n.id}`} x1=${byId[n.parent].x + W / 2} y1=${byId[n.parent].y + H} x2=${n.x + W / 2} y2=${n.y}
+            style=${{ stroke: "var(--guide, #bbb)", strokeWidth: 2 }} />`)}
+          ${nodes.map((n) => {
+            const rule = owner(n), inherited = rule !== n.rule;
+            return html`<g key=${n.id}>
+              <rect x=${n.x} y=${n.y} width=${W} height=${H} rx="7" fill=${colors[rule]} fill-opacity=${inherited ? 0.55 : 1}
+                stroke=${colors[rule]} stroke-width="2" stroke-dasharray=${inherited ? "5 3" : undefined} />
+              <text x=${n.x + W / 2} y=${n.y + 19} text-anchor="middle" font-size="14" font-weight="700" fill="#fff">${n.name}</text>
+              <text x=${n.x + W / 2} y=${n.y + 37} text-anchor="middle" font-size="12" fill="#fff">own ${n.own}</text>
+            </g>`;
+          })}
+        </g>
+        <g transform="translate(10 380)">
+          <text x="0" y="0" font-size="13" font-weight="600" style=${{ fill: "var(--text)" }}>Score ${sum}, by rule</text>
+          ${order.map((k) => { const w = (400 * totals[k]) / sum, x = at; at += w; return html`<g key=${k}>
+            <rect x=${x} y="12" width=${w} height="26" fill=${colors[k]} />
+            <text x=${x + w / 2} y="30" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">${totals[k]}</text>
+          </g>`; })}
+          ${(() => { let lx = 0; return order.map((k) => { const x = lx; lx += 110; return html`<g key=${`l${k}`}>
+            <rect x=${x} y="48" width="11" height="11" fill=${colors[k]} /><text x=${x + 16} y="58" font-size="12" style=${{ fill: "var(--text)" }}>${labels[k]}</text></g>`; }); })()}
+        </g>
+      </g>`;
+  };
+  return html`
+    <svg viewBox="0 0 960 480" role="img" aria-label="Direct and first match attribution on a small supply chain" class="attribution-picture">
+      ${panel(0, "Direct", "Each process's own emissions go to its own rule.", (n) => n.rule)}
+      <line x1="480" y1="10" x2="480" y2="470" style=${{ stroke: "var(--border)", strokeWidth: 2 }} />
+      ${panel(500, "First match", "The first process of a rule on a path takes its whole supply chain.", first)}
+    </svg>`;
+}
+
+// The (i) that opens the picture, big, in a dialog
+function AttributionHelp() {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    const esc = (e) => e.key === "Escape" && setOpen(false);
+    document.addEventListener("keydown", esc);
+    return () => document.removeEventListener("keydown", esc);
+  }, [open]);
+  return html`
+    <button class="help-btn" aria-label="How attribution works" title="How the impacts go to the rules: click for a picture" onClick=${() => setOpen(true)}>i</button>
+    ${open && html`
+      <div class="modal-backdrop" onMouseDown=${(e) => e.target === e.currentTarget && setOpen(false)}>
+        <div class="load-dialog attribution-dialog" role="dialog" aria-label="Attribution of impacts to the rules">
+          <div class="info-head"><div class="info-title">Attribution</div><button onClick=${() => setOpen(false)} aria-label="Close">×</button></div>
+          <div class="load-body"><${AttributionPicture} /></div>
+        </div>
+      </div>`}`;
+}
+
 // How the impacts go to the rules, one choice for Rules contributions and for Compare (``rule``: "first_match" or "direct")
 function AttributionSwitch({ rule, setRule }) {
   return html`
@@ -3987,6 +4045,7 @@ function AttributionSwitch({ rule, setRule }) {
         <button class=${rule === "direct" ? "primary" : ""} onClick=${() => setRule("direct")}
           title="Direct: each process's own emissions go to its rule">Direct</button>
       </span>
+      <${AttributionHelp} />
     </div>`;
 }
 
@@ -4068,7 +4127,11 @@ function GlobalPanel({ info, root, amount, method, rules, view, rule, setRule, o
 
   return html`
     <div class="panel">
-      <${AttributionSwitch} rule=${rule} setRule=${setRule} />
+      <div class="view-group" role="group" aria-label="Attribution">
+        <span class="view-group-label">Attribute</span>
+        <b>${rule === "first_match" ? "First match" : "Direct"}</b>
+        <${AttributionHelp} />
+      </div>
       ${error && html`<div class="error">${error}</div>`}
       ${result && html`
         <${Chart} option=${option} height=${Math.max(200, entries.length * 34 + 60)}
@@ -4094,11 +4157,11 @@ function GlobalPanel({ info, root, amount, method, rules, view, rule, setRule, o
             <button onClick=${() => setGroup(null)} aria-label="Close">×</button>
           </div>
           ${contributors && html`
-            <p class="note">${contributors.flow_group
+            <${InfoTip} label="About the contributors" text=${`${contributors.flow_group
               ? `Processes emitting these flows outside the process groups${rule === "first_match" ? " and their supply chains" : ""} (their own emissions).`
               : contributors.cumulative
               ? "Each process with its supply chain (the first process of the group on each supply path)."
-              : `Each process's own emissions${group === "other" && Object.keys(flowGroups).length ? ", without the flows of the flow groups" : ""}.`} Click a process for its pop-up; right-click it (or double-click) to go to it in the tree, along its largest supply path.</p>
+              : `Each process's own emissions${group === "other" && Object.keys(flowGroups).length ? ", without the flows of the flow groups" : ""}.`} Click for its pop-up; right-click or double-click to go to it in the tree.`} />
             <div class="contributors-list">
               <table>
                 <thead><tr><th>Process</th><th class="num">${unit}</th><th class="pct">of group</th><th class="pct">of total</th></tr></thead>
@@ -4248,7 +4311,7 @@ function FlowPanel({ info, root, amount, method, onLocate, onInfo, onFlowInfo, r
             <button onClick=${() => setFlow(null)} aria-label="Close">×</button>
           </div>
           ${contributors && html`
-            <p class="note">Processes of the supply chain emitting it (their own emissions). Right-click a process to go to it in the tree (or double-click), see its details or its exchange of this flow (comment, uncertainty).</p>
+            <${InfoTip} text="Processes of the supply chain emitting it, by their own emissions. Right-click one: go to it in the tree, its details, or its exchange of this flow." label="About the emitters" />
             <div class="contributors-list">
               <table>
                 <thead><tr><th>Process</th><th class="num">${unit(flow.unit)}</th><th class="num">${methodUnit}</th><th class="pct">of flow</th><th class="pct">of total</th></tr></thead>
@@ -4451,13 +4514,8 @@ function LensPanel({ info, lens, tab, setTab, tabs, focusedTab, comparing, view,
         />`}
     </div>
     <div class="groups-panel" style=${{ display: tab === "groups" ? "" : "none" }}>
-      <div class="panel">
-        <${Fold} id="ruleset" title=${`Rule set · ${lens.set}`} open=${false} actions=${html`<${InfoTip} text=${RULE_SET_TIP} label="What a rule set is" />`}>
-          <${SetMenu} lens=${lens} />
-        <//>
-      </div>
       ${comparing && view && html`<${GroupPanel} info=${info} rules=${lens.rules} setRules=${lens.setRules} selectedRow=${null} view=${view.view} setView=${view.setView}
-        shared=${{ set: lens.set }} />`}
+        shared=${{ set: lens.set }} extras=${ruleExtras(lens)} />`}
       ${tabs.map((id) => html`<div key=${id} id=${`groups-${id}`} class="groups-slot" style=${{ display: id === focusedTab && !comparing ? "" : "none" }}></div>`)}
     </div>`;
 }
@@ -5278,7 +5336,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
       <${Portal} slot=${`groups-${id}`}>
         <${GroupPanel} info=${info} rules=${rules} setRules=${setRules} view=${view} setView=${setView}
           selectedRow=${selectedRows.length === 1 ? selectedRows[0] : null}
-          shared=${{ set: lens.set }} />
+          shared=${{ set: lens.set }} extras=${ruleExtras(lens)} />
       <//>`}
     </div>`;
 }
@@ -5431,7 +5489,7 @@ function CompareBars({ results, base, unitLabel, names, groupColor, mode, setMod
     o.yAxis = { ...o.yAxis, type: "category", inverse: true, data: results.map((r) => r.label),
       axisLabel: { color: cssVar("--text"), width: 240, overflow: "truncate" } };
     o.xAxis = { ...o.xAxis, type: "value", name: mode === "absolute" ? unitLabel : "%",
-      axisLabel: { color: cssVar("--muted"), formatter: mode === "absolute" ? undefined : (v) => `${v}%` } };
+      axisLabel: { color: cssVar("--muted"), formatter: mode === "absolute" ? fmtAxis : (v) => `${v}%` } };
     o.tooltip.formatter = (d) => {
       const r = results[d.dataIndex], v = r.groups[d.seriesName] || 0;
       return `${r.label}<br/>${d.marker}${d.seriesName}: <b>${fmt(v)} ${unitLabel}</b> (${pct(r.total ? v / r.total : 0)} of ${fmt(r.total)})`;
@@ -5480,13 +5538,13 @@ function CompareBars({ results, base, unitLabel, names, groupColor, mode, setMod
     </table>`;
 }
 
-function CompareDifference({ results, base, target, setTarget, unitLabel, names, zoom, setZoom, basis, setBasis, limit, setLimit }) {
+function CompareDifference({ results, base, target, setTarget, unitLabel, names, basis, setBasis, limit, setLimit }) {
   const noun = { groups: "Group", tree: "Row", flows: "Flow", activities: "Process" }[basis];
   const from = results[base], to = results[target];
   const rows = useMemo(() => waterfallRows(from, to, names), [from, to, names]);
-  // A small difference is invisible against two totals drawn from zero: zoom on the steps (the totals are cut)
+  // A small difference is invisible against two totals drawn from zero: the axis zooms on the steps (the totals are cut)
   const steps = rows.slice(1, -1);
-  const zoomed = steps.length > 0 && (zoom ?? Math.abs(to.total - from.total) < 0.25 * Math.max(Math.abs(from.total), Math.abs(to.total)));
+  const zoomed = steps.length > 0 && Math.abs(to.total - from.total) < 0.25 * Math.max(Math.abs(from.total), Math.abs(to.total));
   const option = useMemo(() => {
     const o = baseOption();
     const muted = cssVar("--muted"), up = cssVar("--bar-negative"), down = cssVar("--bar");
@@ -5497,7 +5555,7 @@ function CompareDifference({ results, base, target, setTarget, unitLabel, names,
     if (zoomed) {
       const lo = Math.min(...steps.map((s) => s.lo)), hi = Math.max(...steps.map((s) => s.hi)), pad = (hi - lo) * 0.3 || Math.abs(hi) * 0.1;
       o.xAxis = { ...o.xAxis, min: lo - pad, max: hi + pad,
-        axisLabel: { color: muted, formatter: (v) => String(Number(v.toPrecision(4))) } };
+        axisLabel: { color: muted, formatter: fmtAxis } };
     }
     o.tooltip.formatter = (d) => {
       const r = rows[d.dataIndex];
@@ -5534,15 +5592,11 @@ function CompareDifference({ results, base, target, setTarget, unitLabel, names,
       <span style="flex:1"></span>
       <button onClick=${exportCsv}>Export CSV</button>
     </div>
-    <div class="row">
-      <span class="muted">From the baseline</span><b title=${from.label}>${truncate(from.label, 40)}</b>
-      <span class="muted">to</span>
-      <select value=${target} onChange=${(e) => setTarget(Number(e.target.value))} aria-label="Compared with the baseline">
+    ${results.length > 2 && html`<div class="row">
+      <select value=${target} onChange=${(e) => setTarget(Number(e.target.value))} aria-label="Compared with the baseline" title="The tab read against the baseline">
         ${results.map((r, i) => i !== base && html`<option value=${i}>${r.label}</option>`)}
       </select>
-      <label title="The axis starts near the steps, so that a small difference is visible; the two totals are then cut"><input type="checkbox" checked=${zoomed} disabled=${!steps.length}
-        onChange=${(e) => setZoom(e.target.checked)} /> Zoom on the steps</label>
-    </div>
+    </div>`}
     <p class="note">
       <b>${truncate(to.label, 50)}</b> is <b>${signedPct(relative(to.total, from.total))}</b> (${signed(change)} ${unitLabel}) against the baseline${lead
         ? html`; the largest step is <b>${lead.name}</b> (${signed(lead.delta)} ${unitLabel})` : ""}.
@@ -5589,7 +5643,7 @@ function MethodTree({ info, main, setMain, selected, setSelected }) {
         return html`
           <div class="method-family" key=${family}>
             <div class="method-head">
-              <button class="caret" onClick=${() => toggleOpen(family)} aria-expanded=${expanded} aria-label=${`${expanded ? "Fold" : "Unfold"} ${family}`}>${expanded ? "▾" : "▸"}</button>
+              <button class="fold-caret" onClick=${() => toggleOpen(family)} aria-expanded=${expanded} aria-label=${`${expanded ? "Fold" : "Unfold"} ${family}`}>${expanded ? "▾" : "▸"}</button>
               <input type="checkbox" checked=${n === shown.length} ref=${(el) => el && (el.indeterminate = n > 0 && n < shown.length)}
                 onChange=${(e) => tick(shown, e.target.checked)} aria-label=${`All of ${family}`} title="The whole family, shown together" />
               <span class="name" onClick=${() => toggleOpen(family)}>${family}</span>
@@ -5654,8 +5708,7 @@ function CompareMethods({ results, base, info, methods, sorted, setSorted }) {
     ${methods.length === 0
       ? html`<div class="empty">Tick the methods to show in the <i>Methods</i> panel, by family or one by one.</div>`
       : html`
-        <p class="note">Total score of each process in the ${methods.length} impact categories chosen, as a change against the baseline
-          (orange: higher, green: lower; the colour stops at ±100 %). The values are in the tooltip and the CSV.</p>
+        <${InfoTip} text="Each process's score in the chosen impact categories, as a change against the baseline: orange higher, green lower, to ±100 %. Values in the tooltip and the CSV." label="About the heat map" />
         <${Chart} option=${option} height=${Math.max(240, rows.length * 28 + 130)} />`}`;
 }
 
@@ -5810,25 +5863,10 @@ function ComparisonView({ info, tabs, compare, setCompare }) {
         <div class="tabs" role="tablist">
           ${COMPARE_PANELS.map(([k, label]) => html`<button role="tab" class=${panel === k ? "active" : ""} onClick=${() => set({ panel: k })}>${label}</button>`)}
         </div>
-        <div class="compare-info">
-        <p class="note">Method: <b>${methodLabel(info.methods[method])}</b> · ${heatMethods.length} ${heatMethods.length === 1 ? "method" : "methods"} in <i>Impact categories</i>
-          · <button class="link" onClick=${() => lens.show("methods")}>Methods panel</button>
-          · <button class="link" onClick=${() => lens.show("processes")}>Processes panel</button></p>
-        ${basis === "groups" && html`
-          <${AttributionSwitch} rule=${rule} setRule=${lens.setAttribution} />
-          <p class="note">${Object.keys(groups).length + Object.keys(flowGroups).length} groups, from the rule set <b>${lens.set}</b> of the workspace
-            (<i>Rules</i> panel).
-            <button class="link" onClick=${() => lens.show("groups")}>Edit the group rules</button></p>`}
-        ${basis === "tree" && html`
-          <p class="note">Each tab's tree as displayed in View mode (its expanded rows, groups, merges, restored rows and cut-off), at this method.
-            Bars are lined up by process, so shape the trees alike to compare like with like: a process expanded in one tab and
-            collapsed in another appears as its inputs on one side and as one bar on the other.</p>`}
-        ${basis === "flows" && html`
-          <p class="note">The elementary flows of each process's whole inventory, one per substance (compartments added up),
-            the largest over all tabs and <i>other</i> for the rest.</p>`}
-        ${units.length > 1 && html`<p class="warning">The processes are in ${units.join(", ")}: compare them only if they deliver an equivalent function.</p>`}
-        ${substituted.length > 0 && basis !== "tree" && html`<p class="warning">Substitutions made in the tree of ${substituted.map((t) => labels[t.id]).join(", ")} are not applied here (they are in <i>By tree</i>).</p>`}
-        </div>
+        ${(units.length > 1 || (substituted.length > 0 && basis !== "tree")) && html`<div class="compare-info">
+          ${units.length > 1 && html`<p class="warning">The processes are in ${units.join(", ")}: compare them only if they deliver an equivalent function.</p>`}
+          ${substituted.length > 0 && basis !== "tree" && html`<p class="warning">Substitutions made in ${substituted.map((t) => labels[t.id]).join(", ")} are not applied here, only in Processes · Current view.</p>`}
+        </div>`}
         <div class="panel">
           ${chosen.length < 2 ? html`<div class="empty">Tick at least two tabs to compare.</div>`
             : error ? html`<div class="error">${error}</div>`
@@ -5837,7 +5875,7 @@ function ComparisonView({ info, tabs, compare, setCompare }) {
                 mode=${compare.mode || "absolute"} setMode=${(mode) => set({ mode })} basis=${basis} setBasis=${(b) => set({ basis: b })}
                 limit=${limit} setLimit=${(n) => set({ limit: n })} />`
             : panel === "difference" ? html`<${CompareDifference} results=${results} base=${base} target=${target} setTarget=${(t) => set({ target: t })}
-                unitLabel=${unitLabel} names=${names} zoom=${compare.zoom} setZoom=${(zoom) => set({ zoom })}
+                unitLabel=${unitLabel} names=${names}
                 basis=${basis} setBasis=${(b) => set({ basis: b })} limit=${limit} setLimit=${(n) => set({ limit: n })} />`
             : html`<${CompareMethods} results=${results} base=${base} info=${info} methods=${heatMethods}
                 sorted=${!!compare.sorted} setSorted=${(sorted) => set({ sorted })} />`}

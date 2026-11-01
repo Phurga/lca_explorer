@@ -118,8 +118,9 @@ API in `src/lca_viewer/server.py`.
     the change against the baseline.
   - *Difference*: a waterfall from the baseline's total to another tab's, one step per
     group, row or flow (largest first; orange adds, green takes away; the steps add up to the
-    difference exactly). *Zoom on the steps* (on by default when the difference is
-    under 25 % of the totals) starts the axis near the steps; the totals are then cut.
+    difference exactly). The axis starts near the steps when the difference is
+    under 25 % of the totals (the totals are then cut). With more than two tabs, a menu
+    chooses the tab read against the baseline.
   - *Impact categories*: a heat map of tabs × the methods ticked in the *Methods* panel
     (the methods shown together; the family of the first method to begin with); the
     active method is the one of *Compare contribution* and *Difference*. Each cell is the change against the baseline
@@ -233,8 +234,8 @@ API in `src/lca_viewer/server.py`.
   the side panel's *Rules* panel, now here: it shows the rules of the tab in focus, and
   those of the workspace's set in Compare mode). The **Rule set** header and
   **Active rules** carry an (i) with what the texts said; a rule shows one line of its text, the whole
-  rule in a tooltip. Rules under one row of a tree (*Only under the selected row*) mean
-  nothing to other trees, so they stay in their tab (marked *this tab only*). *Reset view*
+  rule in a tooltip. Rules limited to one row of a tree (from older views) mean
+  nothing to other trees, so they stay in their tab (marked *this tab only*); new rules apply everywhere. *Reset view*
   clears a tab's own groups, merges and names, not the shared set. Loading a view file
   applies its tree, not its method or its set of rules (a notice says so). The explorer
   inside a pop-up takes the method of its tab, with rules of its own.

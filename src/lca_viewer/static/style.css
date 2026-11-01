@@ -222,14 +222,12 @@ section { display: flex; flex-direction: column; min-height: 0; border-right: 1p
   font-size: 11px; color: var(--group); border: 1px solid var(--group); border-radius: 10px;
   padding: 0 6px; margin-left: 6px; cursor: pointer; background: none;
 }
-/* Row actions (merge, merged ×, ungroup, pinned ×) only on the hovered or selected row,
-   drawn over the end of the label so that it keeps its width */
-.tree .name { position: relative; }
+/* Row actions (merge, merged ×, ungroup, pinned ×) only on the hovered or selected row, after the label:
+   the label gives them the room (it is cut with an ellipsis), so they never cover its text */
+.tree .name .label { min-width: 0; }
 .tree .row-actions {
-  display: none; position: absolute; right: 0; top: 50%; transform: translateY(-50%);
-  padding-left: 6px; background: var(--hover);
+  display: none; flex: none; margin-left: auto; padding-left: 6px;
 }
-.tree tr.selected .row-actions { background: var(--selected); }
 .tree tr:hover .row-actions, .tree tr.selected .row-actions, .tree .row-actions:focus-within { display: flex; }
 /* not over the name being edited */
 .tree .row-actions.renaming { display: none !important; }
@@ -282,7 +280,6 @@ section { display: flex; flex-direction: column; min-height: 0; border-right: 1p
 .method-head .name, .method-row .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
 .method-row { padding-left: 24px; }
 .method-row:hover { background: var(--hover); }
-.method-head .caret { border: none; background: none; padding: 0 3px; color: var(--muted); }
 .method-head .count { font-weight: 400; font-size: 11px; }
 .method-tree input[type=checkbox], .method-legend input[type=checkbox] { accent-color: var(--accent); }
 .method-tree input.main, .method-legend input.main { accent-color: var(--bar-negative); }
@@ -872,7 +869,7 @@ textarea.editing { width: 100%; box-sizing: border-box; }
 
 /* The view options in groups */
 .view-group { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin: 4px 0; }
-.view-group-label { flex: none; width: 64px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.view-group-label { flex: none; min-width: 72px; white-space: nowrap; margin-right: 4px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
 /* The colour bar of a row by flow type: its name on hover */
 .tree tr td:first-child { position: relative; }
 .tree .type-bar { position: absolute; left: 0; top: 0; bottom: 0; width: 7px; z-index: 1; }
@@ -882,7 +879,6 @@ textarea.editing { width: 100%; box-sizing: border-box; }
 .has-key:hover .key-hint, .has-key:focus-visible .key-hint { text-decoration: underline; }
 
 /* Projects: a folded project shows a line */
-.load-table tr.project .toggle { border: none; background: none; padding: 0 4px; color: var(--muted); }
 
 /* The Processes panel: windows to drop into, a notice to undo a close */
 .window-head { display: flex; align-items: center; justify-content: space-between; }
@@ -902,4 +898,11 @@ textarea.editing { width: 100%; box-sizing: border-box; }
 .fold-head { display: flex; align-items: center; gap: 6px; margin: 8px 0 4px; font-size: 13px; }
 .fold-toggle { border: none; background: none; padding: 2px 4px 2px 0; font: inherit; font-weight: 600; color: var(--text); display: inline-flex; gap: 4px; align-items: center; }
 .fold-toggle:hover { color: var(--accent); }
-.fold-toggle .caret { color: var(--muted); font-size: 11px; width: 10px; }
+
+/* The picture of the attribution */
+.attribution-dialog { width: min(1040px, 96vw); }
+.attribution-picture { width: 100%; height: auto; display: block; }
+
+/* One caret for every list or section that folds */
+.fold-caret, .fold-toggle .caret { border: none; background: none; padding: 0 2px; color: var(--muted); font-size: 12px; line-height: 1; display: inline-block; width: 16px; text-align: center; cursor: pointer; }
+.fold-caret:hover, .fold-toggle:hover .caret { color: var(--accent); }
