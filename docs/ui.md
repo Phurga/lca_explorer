@@ -112,18 +112,18 @@ API in `src/lca_viewer/server.py`.
   - *By flows*: the elementary flows of the whole inventory (`basis: "flows"`), one per
     substance, the largest *n* over all tabs (5 to 40) and *other* for the rest.
   A row a tab does not have shows as – in the table.
-  - *Compare contribution*: one stacked bar per tab, in the unit, as % of the
+  - *Compare contributions*: one stacked bar per tab, in the unit, as % of the
     baseline's total, or each as its own 100 %; the table under it has a value and a
     share column per tab (numbers right-aligned, the totals in the same columns) and
     the change against the baseline.
-  - *Difference*: a waterfall from the baseline's total to another tab's, one step per
+  - *Cascade*: a waterfall from the baseline's total to another tab's, one step per
     group, row or flow (largest first; orange adds, green takes away; the steps add up to the
     difference exactly). The axis starts near the steps when the difference is
     under 25 % of the totals (the totals are then cut). With more than two tabs, a menu
     chooses the tab read against the baseline.
-  - *Impact categories*: a heat map of tabs × the methods ticked in the *Methods* panel
+  - *Multi indicator matrix*: a heat map of tabs × the methods ticked in the *Methods* panel
     (the methods shown together; the family of the first method to begin with); the
-    active method is the one of *Compare contribution* and *Difference*. Each cell is the change against the baseline
+    active method is the one of *Compare contributions* and *Cascade*. Each cell is the change against the baseline
     (the colour stops at ±100 %; values in the tooltip), optionally with the largest
     difference first.
   Decision: a mode of its own, not a panel of the side panel: the side panel shows
@@ -193,19 +193,17 @@ API in `src/lca_viewer/server.py`.
 - **Top bar**: in the middle, the **search** of a process, like a command palette
   (Ctrl/⌘ + K focuses it; Enter makes the result the process of the tab in
   focus, Ctrl/⌘ + Enter opens it in a new tab); the mode switch is at the right.
-- **Status bar** (bottom of the page). Decision: the **View options** and **Shortcuts**
-  buttons took room in the top bar for what one rarely changes; they are icons at the right
-  of the status bar. *View options* (sliders; key v in View mode) opens a **pane above the
-  status bar** with the options of **the tab in focus**, the one of the window (split pane)
-  used last (the pane names it, and its window): *Display* (List / Tree / Sankey, Collapse,
+- **Status bar** (bottom of the page): the active method and the rule set at the left, the
+  **Shortcuts** icon at the right. The **view options** are the top of the first panel of the side
+  panel, *Custom view* (key v in View mode), with the options of **the tab in focus**, the one of
+  the window (split pane) used last: *Display* (List / Tree / Sankey, Collapse,
   Reset view), *Cut-off*, *View file* (Save, Load, Copy) and *Rows* (*Group by rules*, a switch that
   applies or not the rules of the Rules panel to the tree, which keep their place in the panel (adding a rule,
   or grouping rows, while it is off switches it on, since the group would not show); group by
   product, split by flow type, hide others, names, colours, columns). Each tab has its own options, so in a
   split the windows can show the same process in a list and as a Sankey; the pane follows the
   window clicked. The options of the last tab changed are what a new tab starts with. The
-  pane is not shown in Compare mode, stays open until hidden (× or the same key), and is
-  remembered. The tabs have no header any more: the options were above each tree, and now
+  panel is not shown in Compare mode. The tabs have no header any more: the options were above each tree, and now
   are in one place. *Shortcuts* (keyboard) lists the keys. At the left, the icon that shows
   or hides the left panel, and the active method and the rule set in use, which open it.
 - **Left panel: Processes, Methods and Rules** (hidden and shown with its icon, the
@@ -228,7 +226,7 @@ API in `src/lca_viewer/server.py`.
   it is dropped for now, which keeps the page simpler, and can come back. *Methods* is one
   list nested by family (fold, filter box): the round mark is the
   **active method** (tree, charts, totals, comparison), the ticks the methods **shown
-  together** (the *Several methods* chart, the *Impact categories* heat map; default: the
+  together** (the *Several methods* chart, the *Multi indicator matrix*; default: the
   family of the method). *Rules* lists the **rule sets** (*New*, *Copy*, *Rename*,
   *Delete*); one is in use, and its rules are built below the list (the form that was in
   the side panel's *Rules* panel, now here: it shows the rules of the tab in focus, and
@@ -348,7 +346,7 @@ API in `src/lca_viewer/server.py`.
   themselves carry no key hints (what a tab of the side panel shows is in a popup on its
   name). Four keys work anywhere (not while typing, in a
   pop-up or in a dialog): **v** goes to View mode, and in View mode
-  shows or hides the view options pane; **Ctrl/⌘ + ←** and **→** hide or show the left and the right panel; **e** goes to Edit mode (a Brightway-built database;
+  shows the *Custom view* panel; **Ctrl/⌘ + ←** and **→** hide or show the left and the right panel; **e** goes to Edit mode (a Brightway-built database;
   once in Edit mode, **e** is the tree's, below); **c** goes to Compare mode; **s** goes to
   the search of the top bar (as Ctrl/⌘ + K). The key of the
   exchange pop-up is **i** (info), which was **c** before.
@@ -409,7 +407,7 @@ API in `src/lca_viewer/server.py`.
   Ctrl/⌘-click select, right-click opens the pop-up, drag pans, wheel zooms;
   row actions are in the selection bar and the pop-ups. Always a tree drawn
   left to right: the Cycles and orientation controls are hidden here.
-- **View bar** (now the *Rows* of the view options pane): *Group by rules* (on by default), *Group by product*, *Split by flow type* (below each
+- **View bar** (the *Rows* of the *Custom view* panel): *Group by rules* (on by default), *Group by product*, *Split by flow type* (below each
   row, the rows in the sections of the form of a new process, as in the flow type colours, with a
   heading each: inputs from technosphere, inputs from nature, emissions, direct emissions, waste
   to treatment, others; the order inside a section is kept), *Hide others* (the others
@@ -509,11 +507,12 @@ API in `src/lca_viewer/server.py`.
   id). For a substance spread over several compartments, chips switch between
   them. API: `/api/flow/{index}?method=&activities=`.
 - **Side panel — tabs** (what each shows is explained in a popup on its name, not in the panel):
-  - *Process contribution* (the former contribution chart): **single indicator**, the bars of
-    the main method, or **multi indicator**, the methods ticked in the Methods panel as 100 % stacked
-    bars; CSV export. Under the single-indicator chart, the whole list of what each process contributes by
-    its own emissions (direct contributions, wherever it is in the supply chain), largest first, 100 rows
-    and *Show all* (`/api/global/contributors` with no group). See [charts.md](charts.md).
+  - *Custom view*: the view options (above), then the chart of the tree's rows: **single indicator**, the
+    bars of the main method, or **multi indicator**, the methods ticked in the Methods panel as 100 % stacked
+    bars; CSV export.
+  - *Process contribution*: what each process contributes by its own emissions (direct contributions, wherever
+    it is in the supply chain), as a chart and as the table of the same rows, largest first; the **Top** field
+    sets how many (the rest in one row; `/api/global/contributors` with no group). See [charts.md](charts.md).
   - *Flow contribution*: the score split by elementary flow: the whole
     inventory of the process (B·s) times the current method's
     characterisation factors, so it sums to the total. *By substance*
@@ -617,7 +616,7 @@ so tabs and splits come back on reload; a view saved before tabs existed
 opens as the first tab. A tab moved to another pane is rebuilt from its
 saved state (selection and undo are not kept).
 
-**Save ▾** (in the view options pane) downloads the view as JSON; the arrow menu offers *Load view…*
+**Save ▾** (in the *Custom view* panel) downloads the view as JSON; the arrow menu offers *Load view…*
 and *Copy view as JSON*. Files are `version` 2: `cutoff` is a fraction, as in
 `/api/rows` (0.05 for the 5 % shown in the page); version 1 files stored the
 percentage and still load. The `labels` of a file (`p:<activity>`, `f:<flow>`,

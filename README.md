@@ -51,7 +51,7 @@ your Brightway (v2.5) project folder.
 </tr>
 <tr>
 <td><a href="docs/img/gallery/09-split-views.png"><img src="docs/img/gallery/09-split-views.png" alt="Split views"></a><br><b>Split screens and tabs</b>: several process views at once; save and load views.</td>
-<td><a href="docs/img/gallery/10-compare.png"><img src="docs/img/gallery/10-compare.png" alt="Compare contribution"></a><br><b>Compare</b>: contributions of several processes side by side, by group, tree or flow.</td>
+<td><a href="docs/img/gallery/10-compare.png"><img src="docs/img/gallery/10-compare.png" alt="Compare contributions"></a><br><b>Compare</b>: contributions of several processes side by side, by group, tree or flow.</td>
 </tr>
 <tr>
 <td><a href="docs/img/gallery/11-compare-difference.png"><img src="docs/img/gallery/11-compare-difference.png" alt="Compare difference"></a><br><b>Thematic differences</b>: what makes one process differ from another, step by step.</td>

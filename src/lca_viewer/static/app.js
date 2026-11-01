@@ -48,7 +48,19 @@ function fmtAxis(v) {
   return String(Number(v.toPrecision(3)));
 }
 const pct = (x) => `${(x * 100).toFixed(1)}%`;
-const methodLabel = (m) => m.name.join(" | ");
+// How the impact methods are named in the results (set in the Methods panel): the family, the indicator (category and
+// indicator), the unit after the name, and the unit written with symbols (CO₂ eq, m³)
+const DEFAULT_NAME_FORMAT = { family: true, indicator: true, unit: true, symbol: false };
+let nameFormat = DEFAULT_NAME_FORMAT;
+const prettyUnit = (u) => u.replace(/\bm([23])\b/g, (_, d) => (d === "2" ? "m²" : "m³"))
+  .replace(/([A-Z][a-z]?)(\d+)(?!\d)/g, (_, el, d) => el + [...d].map((c) => "₀₁₂₃₄₅₆₇₈₉"[c]).join(""))
+  .replace(/([A-Za-z])\+/g, "$1⁺").replace(/-Eq\b/g, " eq");
+const methodLabel = (m) => {
+  const parts = [nameFormat.family && m.name[0], nameFormat.indicator && m.name.slice(1).join(" | ")].filter(Boolean);
+  return (parts.length ? parts : [m.name.join(" | ")]).join(" | ");
+};
+// A method with its unit, for the titles and the headers of files
+const methodTitle = (m) => `${methodLabel(m)}${nameFormat.unit ? ` [${m.unit}]` : ""}`;
 const productOf = (rowId) => Number(rowId.split("/").pop());
 // The reference product of a process row: its label starts with it ("product | name | location")
 const productNameOf = (row) => (row.kind === "process" ? row.label.split(" | ")[0] : "");
@@ -1800,13 +1812,7 @@ function SidePanelIcon({ open, left }) {
       ${open && html`<rect x=${left ? 2.3 : 10} y="3.3" width="3.7" height="9.4" fill="currentColor" stroke="none" />`}
     </svg>`;
 }
-// The icons of the status bar: the options of the view (sliders) and the keyboard shortcuts
-function SlidersIcon() {
-  return html`
-    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round">
-      <path d="M2 4.5h12M2 11.5h12" /><circle cx="5.5" cy="4.5" r="1.7" fill="var(--panel)" /><circle cx="10.5" cy="11.5" r="1.7" fill="var(--panel)" />
-    </svg>`;
-}
+// The icon of the keyboard shortcuts in the status bar
 function KeyboardIcon() {
   return html`
     <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round">
@@ -2994,7 +3000,7 @@ function FlowInfoPopup({ target, win, method, methods, onClose, onOpen, onBack }
   ].filter(Boolean) : [];
   const shown = tabs.some((t) => t.id === tab) ? tab : tabs[0]?.id;
   const words = filter.toLowerCase().split(/\s+/).filter(Boolean);
-  const factors = info ? info.factors.filter((f) => words.every((w) => methodLabel(methods[f.method]).toLowerCase().includes(w))) : [];
+  const factors = info ? info.factors.filter((f) => words.every((w) => methods[f.method].name.join(" | ").toLowerCase().includes(w))) : [];
   const body = useRef(null);
   return html`
     <${PopupWindow} target=${target} win=${win} label="Elementary flow information" onClose=${onClose} onBack=${onBack}
@@ -3539,7 +3545,8 @@ function RecipeEditor({ recipe, setRecipe, example }) {
 // ---------------------------------------------------------------- chart panel
 // What each tab of the side panel shows, in a popup on its name
 const PANEL_TIPS = {
-  chart: "What each row of the tree adds to the score. Expand or group rows to change the bars.",
+  view: "How the tree is shown (display, cut-off, rows), and the chart of its rows.",
+  chart: "What each process of the supply chain adds by its own emissions, wherever it is in the tree.",
   flows: "Which substances drive the score, and which processes emit them.",
   groups: "Bundle rows into named groups to see what electricity, transport or fertilisers weigh.",
   processes: "Your open tabs: compare, reorder, close. Drop a process here to open it.",
@@ -3547,7 +3554,7 @@ const PANEL_TIPS = {
   global: "The score split by your rules over the whole supply chain, to see what each rule weighs.",
 };
 
-function ChartPanel({ data, info, method, chartMethods, onPickMethods, view, root, amount, onInfo }) {
+function ChartPanel({ data, info, method, chartMethods, onPickMethods, view }) {
   const { naming, recipe } = view;
   const [mode, setMode] = useState("single");
 
@@ -3567,7 +3574,7 @@ function ChartPanel({ data, info, method, chartMethods, onPickMethods, view, roo
     const shown = items.map((p) => fitLabel(p.main, p.qual, LABEL_WIDTH));
     o.grid = { ...o.grid, containLabel: false, top: 36, bottom: 28,
       left: Math.max(...shown.map(([m, q]) => textWidth(q ? `${m} ${q}` : m))) + 16 };
-    o.title = { text: `${methodLabel(info.methods[method])} [${unit}]`, textStyle: { fontSize: 12, color: cssVar("--muted") } };
+    o.title = { text: methodTitle(info.methods[method]), textStyle: { fontSize: 12, color: cssVar("--muted") } };
     o.yAxis = {
       ...o.yAxis, type: "category", data: items.map((_, i) => String(i)),
       axisLabel: {
@@ -3618,7 +3625,7 @@ function ChartPanel({ data, info, method, chartMethods, onPickMethods, view, roo
 
   function exportCsv() {
     const quote = (v) => `"${String(v).replace(/"/g, '""')}"`;
-    const header = ["row", "kind", "merged rows", ...data.methods.map((m) => quote(`${methodLabel(info.methods[m])} [${info.methods[m].unit}]`))];
+    const header = ["row", "kind", "merged rows", ...data.methods.map((m) => quote(methodTitle(info.methods[m])))];
     const lines = parts.map((p) => [quote(p.label), p.kind, p.rows.length, ...p.impacts].join(","));
     download("contributions.csv", [header.join(","), ...lines].join("\n"), "text/csv");
   }
@@ -3635,8 +3642,7 @@ function ChartPanel({ data, info, method, chartMethods, onPickMethods, view, roo
       </div>
       ${mode === "single"
         ? html`
-          <${Chart} option=${singleOption} height=${Math.max(260, parts.length * 26 + 60)} />
-          ${root && html`<${DirectContributions} info=${info} root=${root} amount=${amount} method=${method} onInfo=${onInfo} />`}`
+          <${Chart} option=${singleOption} height=${Math.max(260, parts.length * 26 + 60)} />`
         : html`
           <div class="row">
             <button onClick=${onPickMethods} title="Tick the methods in the Methods panel">${chartMethods.length} ${chartMethods.length === 1 ? "method" : "methods"} shown together</button>
@@ -3647,13 +3653,19 @@ function ChartPanel({ data, info, method, chartMethods, onPickMethods, view, roo
     </div>`;
 }
 
+// The number of bars and rows of a contribution panel: the largest ``value``, the rest in one row
+function TopField({ value, onValue, what }) {
+  return html`<label class="top-field" title=${`The number of ${what} listed: the largest ones, the rest in one row`}>Top
+    <${NumberInput} class="cutoff" value=${value} min=${1} step=${5} onValue=${onValue} aria-label=${`Top ${what}`} /></label>`;
+}
+
 // What each process of the supply chain contributes by its own emissions (the direct contributions, wherever it is in the
-// tree), largest first: the whole list, from /api/global/contributors with no group (everything is "other")
-function DirectContributions({ info, root, amount, method, onInfo }) {
-  const [limit, setLimit] = useState(100);
+// tree), largest first, as a chart and as the table of the same rows: from /api/global/contributors with no group
+// (everything is "other")
+function ProcessContributions({ info, root, amount, method, onInfo }) {
+  const [limit, setLimit] = useState(20);
   const [found, setFound] = useState(null);
   const [error, setError] = useState(null);
-  useEffect(() => { setLimit(100); }, [root.index, amount, method]);
   useEffect(() => {
     let live = true;
     setError(null);
@@ -3661,27 +3673,44 @@ function DirectContributions({ info, root, amount, method, onInfo }) {
       .then((f) => live && setFound(f)).catch((e) => live && setError(e.message));
     return () => { live = false; };
   }, [root.index, amount, method, limit]);
+  const unitLabel = info.methods[method].unit;
+  const shown = found?.contributors || [];
+  const share = (v) => pct(found?.total ? v / found.total : 0);
+  const rows = found ? [...shown.map((c) => [`${c.name} (${c.location})`, c.impact, c]),
+    ...(found.others.count > 0 ? [[`${found.others.count} more`, found.others.impact, null]] : [])] : [];
+  const option = useMemo(() => {
+    const o = baseOption();
+    o.yAxis = { ...o.yAxis, type: "category", data: rows.map(([n]) => n), inverse: true,
+      axisLabel: { ...o.yAxis.axisLabel, width: 240, overflow: "truncate" } };
+    o.xAxis = { ...o.xAxis, type: "value", name: unitLabel };
+    o.tooltip.valueFormatter = (v) => `${fmt(v)} ${unitLabel} (${share(v)})`;
+    o.series = [{ type: "bar", data: rows.map(([, v, c]) => ({ value: v,
+        itemStyle: { color: cssVar(!c ? "--muted" : v < 0 ? "--bar-negative" : "--bar") } })),
+      label: { show: true, position: "right", formatter: (d) => share(d.value), color: cssVar("--muted") } }];
+    return o;
+  }, [found, unitLabel]);
   if (error) return html`<div class="error">${error}</div>`;
   if (!found) return html`<div class="muted">…</div>`;
-  const unitLabel = info.methods[method].unit;
-  const shown = found.contributors;
   return html`
-    <table class="results chart-results direct-contributions">
-      <thead><tr><th>Process <span class="muted">· direct contributions</span></th><th class="num">${unitLabel}</th><th class="num">Share</th></tr></thead>
-      <tbody>${shown.map((c) => html`
-        <tr key=${c.index} class="clickable" ...${dragProcess(c.index)} title=${`${c.reference_product ?? ""} | ${c.name} | ${c.location}: right-click for its details`}
-            onContextMenu=${(e) => { e.preventDefault(); onInfo?.(c.index, e.clientX, e.clientY); }}>
-          <td>${c.name} <span class="loc-chip">${c.location}</span></td>
-          <td class="num">${fmt(c.impact)}</td>
-          <td class="num">${pct(found.total ? c.impact / found.total : 0)}</td>
-        </tr>`)}
-      </tbody>
-      <tfoot>
-        ${found.others.count > 0 && html`<tr><td class="muted">${found.others.count} more</td><td class="num">${fmt(found.others.impact)}</td><td class="num">${pct(found.total ? found.others.impact / found.total : 0)}</td></tr>`}
-        <tr><th>Total · ${found.count} ${found.count === 1 ? "process" : "processes"}</th><th class="num">${fmt(found.total)}</th><th class="num">100%</th></tr>
-      </tfoot>
-    </table>
-    ${found.count > shown.length && html`<button class="link" onClick=${() => setLimit(1000000)}>Show all ${found.count}</button>`}`;
+    <div class="panel">
+      <div class="row"><${TopField} value=${limit} onValue=${setLimit} what="processes" /></div>
+      <${Chart} option=${option} height=${Math.max(200, rows.length * 26 + 60)} />
+      <table class="results chart-results direct-contributions">
+        <thead><tr><th>Process <span class="muted">· direct contributions</span></th><th class="num">${unitLabel}</th><th class="num">Share</th></tr></thead>
+        <tbody>${shown.map((c) => html`
+          <tr key=${c.index} class="clickable" ...${dragProcess(c.index)} title=${`${c.reference_product ?? ""} | ${c.name} | ${c.location}: right-click for its details`}
+              onContextMenu=${(e) => { e.preventDefault(); onInfo?.(c.index, e.clientX, e.clientY); }}>
+            <td>${c.name} <span class="loc-chip">${c.location}</span></td>
+            <td class="num">${fmt(c.impact)}</td>
+            <td class="num">${share(c.impact)}</td>
+          </tr>`)}
+        </tbody>
+        <tfoot>
+          ${found.others.count > 0 && html`<tr><td class="muted">${found.others.count} more</td><td class="num">${fmt(found.others.impact)}</td><td class="num">${share(found.others.impact)}</td></tr>`}
+          <tr><th>Total · ${found.count} ${found.count === 1 ? "process" : "processes"}</th><th class="num">${fmt(found.total)}</th><th class="num">100%</th></tr>
+        </tfoot>
+      </table>
+    </div>`;
 }
 
 // ---------------------------------------------------------------- grouping panel
@@ -4090,7 +4119,7 @@ function GlobalPanel({ info, root, amount, method, rules, view, rule, setRule, o
   const ofTotal = (v) => pct(total ? v / total : 0);
   const ofGroup = (v) => pct(contributors?.total ? v / contributors.total : 0);
   const quote = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-  const methodName = `${methodLabel(info.methods[k])} [${unit}]`;
+  const methodName = methodTitle(info.methods[k]);
   const fileName = (what) => `group-contributions-${what}-${(root?.name || "").replace(/[^A-Za-z0-9]+/g, "-").slice(0, 40)}.csv`;
   function exportGroups() {
     const lines = entries.map(([n, v]) => [quote(n), n in flowGroups ? "flow group" : n === "other" ? "other" : "process group",
@@ -4193,6 +4222,7 @@ function GlobalPanel({ info, root, amount, method, rules, view, rule, setRule, o
 // score. Clicking a flow lists the processes emitting it.
 function FlowPanel({ info, root, amount, method, onLocate, onInfo, onFlowInfo, rules, setRules, view }) {
   const [by, setBy] = useState("substance");
+  const [top, setTop] = useState(25);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
   const [flow, setFlow] = useState(null);
@@ -4206,10 +4236,10 @@ function FlowPanel({ info, root, amount, method, onLocate, onInfo, onFlowInfo, r
   useEffect(() => {
     let cancelled = false;
     setError(null);
-    request("/api/flows", { root: root.index, amount, method, by, limit: 25, flow_groups: flowGroups })
+    request("/api/flows", { root: root.index, amount, method, by, limit: top, flow_groups: flowGroups })
       .then((d) => !cancelled && setResult(d)).catch((e) => !cancelled && setError(e.message));
     return () => { cancelled = true; };
-  }, [root, amount, method, by, flowGroups]);
+  }, [root, amount, method, by, top, flowGroups]);
   useEffect(() => setFlow(null), [root, by]);
   // Processes emitting the chosen flow (all its compartments, by substance)
   useEffect(() => {
@@ -4265,6 +4295,7 @@ function FlowPanel({ info, root, amount, method, onLocate, onInfo, onFlowInfo, r
           <button class=${by === "flow" ? "primary" : ""} onClick=${() => setBy("flow")}
             title="One row per flow (substance and compartment)">By flow</button>
         </span>
+        <${TopField} value=${top} onValue=${setTop} what=${by === "substance" ? "substances" : "flows"} />
       </div>
       ${error && html`<div class="error">${error}</div>`}
       ${result && html`
@@ -4355,7 +4386,7 @@ function Portal({ slot, children }) {
 // ---------------------------------------------------------------- lens: impact methods and group rules
 // The impact methods and the group rules are chosen once for the workspace and shared by all tabs (the Methods and
 // Rules panel on the left). The options of the view (display, cut-off, names, colours, columns…) belong to each tab
-// (the view options pane at the bottom shows those of the tab in focus). Methods: the *active* method (tree, charts, totals) and the ones *shown together* (the several
+// (the Custom view panel of the side panel shows those of the tab in focus). Methods: the *active* method (tree, charts, totals) and the ones *shown together* (the several
 // methods chart, the heat map). Rules: named sets, one of them active; rules scoped to a row of one tree stay in
 // their tab. Kept per database in ``localStorage``, by method name (positions change when a model is rebuilt).
 const LENS_KEY = `${STORAGE_KEY}.lens`;
@@ -4425,13 +4456,14 @@ function initLens(info, seed) {
   return {
     method, chartMethods: chart ? chart.filter((k) => k >= 0) : familyOf(info, method), sets, set: stored?.set in sets ? stored.set : Object.keys(sets)[0],
     attribution: stored?.attribution === "direct" ? "direct" : "first_match",  // of the impacts to the rules: Rules contributions and Compare
+    nameFormat: { ...DEFAULT_NAME_FORMAT, ...(stored?.nameFormat || {}) },
   };
 }
 function saveLens(info, lens) {
   try {
     localStorage.setItem(LENS_KEY, JSON.stringify({ method: info.methods[lens.method]?.name,
       chartMethods: lens.chartMethods.map((k) => info.methods[k]?.name).filter(Boolean), sets: lens.sets, set: lens.set,
-      attribution: lens.attribution }));
+      attribution: lens.attribution, nameFormat: lens.nameFormat }));
   } catch { /* storage unavailable */ }
 }
 
@@ -4447,10 +4479,18 @@ const methodSummary = (info, method, chartMethods) => {
 
 // The impact methods in one list nested by family: the round mark is the active method, the ticks the methods shown
 // together. ``note``: what a change here applies to.
-function MethodMenu({ info, method, setMethod, chartMethods, setChartMethods, note }) {
+function MethodMenu({ info, method, setMethod, chartMethods, setChartMethods, note, format, setFormat }) {
   return html`
     <div class="lens-menu">
       ${note && html`<p class="note">${note}</p>`}
+      ${format && html`<${Fold} id="nameformat" title="Name in results" open=${false}
+        actions=${html`<${InfoTip} text="How a method is named in titles, headers and files. Family: EF v3.1. Indicator: its category and indicator. Symbol: CO₂ eq, m³." label="About the name" />`}>
+        <div class="row">
+          ${[["family", "Family"], ["indicator", "Indicator"], ["unit", "Unit"], ["symbol", "Symbol"]].map(([k, label]) => html`
+            <label><input type="checkbox" checked=${format[k]} onChange=${(e) => setFormat({ ...format, [k]: e.target.checked })} /> ${label}</label>`)}
+        </div>
+        <p class="note">${methodTitle(info.methods[method])}</p>
+      <//>`}
       <p class="method-legend muted"><input type="radio" class="main" checked disabled aria-hidden="true" /> main method, for single indicator
         <input type="checkbox" checked disabled aria-hidden="true" /> multi indicator</p>
       <${MethodTree} info=${info} main=${method} setMain=${setMethod} selected=${chartMethods} setSelected=${setChartMethods} />
@@ -4511,7 +4551,7 @@ function LensPanel({ info, lens, tab, setTab, tabs, focusedTab, comparing, view,
     </div>
     <div class="panel" style=${{ display: tab === "methods" ? "" : "none" }}>
       ${methods && html`<${MethodMenu} info=${info} method=${lens.method} setMethod=${lens.setMethod} chartMethods=${lens.chartMethods} setChartMethods=${lens.setChartMethods}
-        />`}
+        format=${lens.nameFormat} setFormat=${lens.setNameFormat} />`}
     </div>
     <div class="groups-panel" style=${{ display: tab === "groups" ? "" : "none" }}>
       ${comparing && view && html`<${GroupPanel} info=${info} rules=${lens.rules} setRules=${lens.setRules} selectedRow=${null} view=${view.view} setView=${view.setView}
@@ -4624,7 +4664,12 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
   const data = useMemo(() => (view.hideOthers ? { ...allData, rows: withoutOthers(allData.rows) } : allData),
     [allData, view.hideOthers]);
   const [error, setError] = useState(null);
-  const [tab, setTab] = useState("chart");
+  const [tab, setTab] = useState("view");
+  useEffect(() => {
+    const show = () => keyboardOwner === id && setTab("view");
+    document.addEventListener("lca:custom-view", show);
+    return () => document.removeEventListener("lca:custom-view", show);
+  }, [id]);
   const [groupName, setGroupName] = useState("");
 
   useEffect(() => {
@@ -5252,6 +5297,28 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
     title="Collapse the tree, clear restored rows and rows moved to others, and remove this tab's groups, merges and custom names (undoable); the rule set of the workspace stays">Reset view</button>`;
   const viewBar = html`<${ViewBar} view=${view} setView=${setDisplayView}
     example=${(() => { const r = data.rows.find((x) => x.kind === "process" && x.depth > 0); return r ? rowNames(r, rowsById, view) : null; })()} />`;
+  const viewOptions = html`<div class="view-options">
+          <section>
+            <h3>Display</h3>
+            <div class="row">
+              <div class="segmented" role="group" aria-label="Display">
+                <button class=${display === "list" ? "primary" : ""} onClick=${() => setDisplay("list")}>List</button>
+                <button class=${display === "graph" ? "primary" : ""} onClick=${() => setDisplay("graph")}>Tree</button>
+                <button class=${display === "sankey" ? "primary" : ""} onClick=${() => setDisplay("sankey")}
+                  title="The tree as a flowchart: bands as thick as the impact flowing from each supplier to its user">Sankey</button>
+              </div>
+              ${collapseButton}${resetButton}
+            </div>
+            <h3>Cut-off</h3>
+            <div class="row">${cutoffControls}</div>
+            <h3>View file</h3>
+            <div class="row"><${SaveMenu} disabled=${!root} onSave=${exportView} onLoad=${loadView} onCopy=${copyView} /></div>
+          </section>
+          <section class="rows-options">
+            <h3>Rows</h3>
+            ${viewBar}
+          </section>
+        </div>`;
   return html`
     <div class=${`fu-view ${embedded ? "embedded" : ""}`} ref=${box} style=${{ display: visible ? "" : "none" }}>
         <section class="tree-section" ref=${treeSection} onMouseDown=${() => { if (!embedded) keyboardOwner = id; }}>
@@ -5292,15 +5359,17 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
         </section>
       ${!embedded && html`<${Portal} slot=${`side-${id}`}>
         <section class="side">
-          <div class="tabs" role="tablist" onKeyDown=${tabKeys(["chart", "flows", "global"], tab, setTab)}>
-            ${[["chart", "Process contribution"], ["flows", "Flow contribution"], ["global", "Rules contributions"]].map(([key, label]) => html`
+          <div class="tabs" role="tablist" onKeyDown=${tabKeys(["view", "chart", "flows", "global"], tab, setTab)}>
+            ${[["view", "Custom view"], ["chart", "Process contribution"], ["flows", "Flow contribution"], ["global", "Rules contributions"]].map(([key, label]) => html`
               <${TabButton} role="tab" class=${tab === key ? "active" : ""} onClick=${() => setTab(key)} tip=${PANEL_TIPS[key]}>${label}<//>`)}
             <span class="spacer"></span>
             <button class="collapse-side" onClick=${onCollapseSide} title="Hide the side panel (Ctrl/⌘ + →)" aria-label="Hide the side panel"><${SidePanelIcon} open /></button>
           </div>
-          ${tab === "chart" && allData.rows.length > 0 && html`<${ChartPanel} key=${editing ? "edit" : "view"} data=${allData} info=${info} method=${method}
-              chartMethods=${chartMethods} onPickMethods=${() => lens.show("methods")} view=${view}
-              root=${root} amount=${amount} onInfo=${(index, x, y) => openInfo({ index, row: null, x, y })} />`}
+          ${tab === "view" && html`${viewOptions}`}
+          ${tab === "view" && allData.rows.length > 0 && html`<${ChartPanel} key=${editing ? "edit" : "view"} data=${allData} info=${info} method=${method}
+              chartMethods=${chartMethods} onPickMethods=${() => lens.show("methods")} view=${view} />`}
+          ${tab === "chart" && root && html`<${ProcessContributions} info=${info} root=${root} amount=${amount} method=${method}
+              onInfo=${(index, x, y) => openInfo({ index, row: null, x, y })} />`}
           ${tab === "flows" && root && html`<${FlowPanel} info=${info} root=${root} amount=${amount} method=${method}
               onLocate=${goTo} onInfo=${(index, x, y) => openInfo({ index, row: null, x, y })} onFlowInfo=${showFlowInfo}
               rules=${rules} setRules=${setRules} view=${view} />`}
@@ -5309,31 +5378,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
               onLocate=${goTo} onInfo=${(index, x, y) => openInfo({ index, row: null, x, y })} />`}
         </section>
       <//>`}
-      ${!embedded && html`<${Portal} slot=${`view-${id}`}>
-        <div class="view-options">
-          <section>
-            <h3>Display</h3>
-            <div class="row">
-              <div class="segmented" role="group" aria-label="Display">
-                <button class=${display === "list" ? "primary" : ""} onClick=${() => setDisplay("list")}>List</button>
-                <button class=${display === "graph" ? "primary" : ""} onClick=${() => setDisplay("graph")}>Tree</button>
-                <button class=${display === "sankey" ? "primary" : ""} onClick=${() => setDisplay("sankey")}
-                  title="The tree as a flowchart: bands as thick as the impact flowing from each supplier to its user">Sankey</button>
-              </div>
-              ${collapseButton}${resetButton}
-            </div>
-            <h3>Cut-off</h3>
-            <div class="row">${cutoffControls}</div>
-            <h3>View file</h3>
-            <div class="row"><${SaveMenu} disabled=${!root} onSave=${exportView} onLoad=${loadView} onCopy=${copyView} /></div>
-          </section>
-          <section class="rows-options">
-            <h3>Rows</h3>
-            ${viewBar}
-          </section>
-        </div>
-      <//>
-      <${Portal} slot=${`groups-${id}`}>
+      ${!embedded && html`<${Portal} slot=${`groups-${id}`}>
         <${GroupPanel} info=${info} rules=${rules} setRules=${setRules} view=${view} setView=${setView}
           selectedRow=${selectedRows.length === 1 ? selectedRows[0] : null}
           shared=${{ set: lens.set }} extras=${ruleExtras(lens)} />
@@ -5346,12 +5391,13 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
 // makes the difference between two of them (waterfall) and every impact category at once (heat
 // map). All three come from /api/compare, computed on the matrices: the cut-off, expansion,
 // merges and substitutions of a tab do not enter into it, only its process and amount.
-const COMPARE_PANELS = [["groups", "Compare contribution"], ["difference", "Difference"], ["methods", "Impact categories"]];
+const COMPARE_PANELS = [["groups", "Compare contributions"], ["difference", "Cascade"], ["methods", "Multi indicator matrix"]];
 // What the bars of the first two panels are split into: the groups (rules and quick groups), the rows of each
 // tab's displayed tree (View mode), or the elementary flows
 const COMPARE_BASES = [["groups", "By groups"], ["tree", "By tree"], ["flows", "By flows"]];
 const compareColor = (i) => PALETTE[i % PALETTE.length];
 const OTHER_GROUP = "other";
+const TOTAL_BAR = "Total";  // the one bar of a tab with no breakdown
 const relative = (value, base) => (base ? (value - base) / Math.abs(base) : value ? null : 0);
 const signed = (x) => `${x > 0 ? "+" : x < 0 ? "−" : ""}${fmt(Math.abs(x))}`;
 const signedPct = (r) => (r == null ? "n/a" : `${r > 0 ? "+" : r < 0 ? "−" : ""}${Math.abs(r * 100).toFixed(Math.abs(r) < 0.1 ? 1 : 0)} %`);
@@ -5433,14 +5479,14 @@ function treeEntries(entries, rowsOf, roots) {
 
 // The breakdown of the bars: by rules, by flows, or by processes (the rows of each tab's view, or what each process
 // contributes by its own emissions). One at a time.
-function CompareBasis({ basis, setBasis, limit, setLimit }) {
-  const kind = basis === "groups" ? "groups" : basis === "flows" ? "flows" : "processes";
+function CompareBasis({ basis, setBasis, limit, setLimit, none }) {
+  const kind = basis === "none" ? "none" : basis === "groups" ? "groups" : basis === "flows" ? "flows" : "processes";
   const choose = (k) => setBasis(k === "processes" ? (basis === "activities" ? "activities" : "tree") : k);
   return html`
     <div class="view-group" role="group" aria-label="Breakdown">
       <span class="view-group-label">Breakdown</span>
       <span class="segmented">
-        ${[["groups", "Rules", "The groups of your rules (Rules panel)"], ["flows", "Flows", "The elementary flows of the whole inventory, one per substance"],
+        ${[...(none ? [["none", "None", "No breakdown: one bar of the total for each tab"]] : []), ["groups", "Rules", "The groups of your rules (Rules panel)"], ["flows", "Flows", "The elementary flows of the whole inventory, one per substance"],
           ["processes", "Processes", "Processes: the rows of each tab, or what each process emits"]].map(([k, label, hint]) => html`
           <button class=${kind === k ? "primary" : ""} onClick=${() => choose(k)} title=${hint}>${label}</button>`)}
       </span>
@@ -5474,7 +5520,7 @@ function waterfallRows(from, to, names) {
 }
 
 function CompareBars({ results, base, unitLabel, names, groupColor, mode, setMode, basis, setBasis, limit, setLimit }) {
-  const noun = { groups: "Group", tree: "Row", flows: "Flow", activities: "Process" }[basis];
+  const noun = { none: "Total", groups: "Group", tree: "Row", flows: "Flow", activities: "Process" }[basis];
   const baseTotal = Math.abs(results[base].total);
   const value = (r, g) => {
     const v = r.groups[g] || 0;
@@ -5507,7 +5553,7 @@ function CompareBars({ results, base, unitLabel, names, groupColor, mode, setMod
   };
   return html`
     <div class="row">
-      <${CompareBasis} basis=${basis} setBasis=${setBasis} limit=${limit} setLimit=${setLimit} />
+      <${CompareBasis} none basis=${basis} setBasis=${setBasis} limit=${limit} setLimit=${setLimit} />
       <span style="flex:1"></span>
       <button onClick=${exportCsv}>Export CSV</button>
     </div>
@@ -5817,8 +5863,9 @@ function ComparisonView({ info, tabs, compare, setCompare }) {
   const heatMethods = lens.chartMethods;
   // What the bars are split into: groups, the tabs' displayed trees (asked of /api/rows tab by tab; /api/compare then
   // only gives the totals) or elementary flows
-  const basis = compare.basis || "groups";
+  const basis = panel !== "groups" && compare.basis === "none" ? "groups" : compare.basis || "groups";
   const limit = compare.limit || 15;
+  const noBreakdown = basis === "none";
   const body = { entries: chosen.map((t) => ({ root: t.state.root.index, amount: t.state.amount })), method, methods: heatMethods, rule,
     basis: basis === "flows" ? "flows" : basis === "activities" ? "activities" : "groups", limit, groups: basis === "groups" ? groups : {}, flow_groups: basis === "groups" ? flowGroups : {},
     order: basis === "groups" ? order : [] };
@@ -5835,7 +5882,7 @@ function ComparisonView({ info, tabs, compare, setCompare }) {
       .catch((e) => !cancelled && setError(e.message));
     return () => { cancelled = true; };
   }, [key]);
-  const ready = data?.key === key ? data.entries : null;
+  const ready = data?.key === key ? (noBreakdown ? data.entries.map((e) => ({ ...e, groups: { [TOTAL_BAR]: e.total } })) : data.entries) : null;
   const results = ready ? chosen.map((t, i) => ({ id: t.id, label: labels[t.id], color: compareColor(tabs.indexOf(t)), ...ready[i] })) : null;
   const names = useMemo(() => {
     if (!results) return [];
@@ -5846,7 +5893,7 @@ function ComparisonView({ info, tabs, compare, setCompare }) {
   }, [results]);
 
   const ruleColors = useMemo(() => { try { return JSON.parse(loadPreference("ruleColors", "{}")) || {}; } catch { return {}; } }, []);
-  const groupColor = (g) => (g === OTHER_GROUP ? cssVar("--muted") : colorOf(g.replace(/ \(flows\)$/, ""), ruleColors));
+  const groupColor = (g) => (g === OTHER_GROUP ? cssVar("--muted") : g === TOTAL_BAR && noBreakdown ? cssVar("--bar") : colorOf(g.replace(/ \(flows\)$/, ""), ruleColors));
   const target = chosen.length > 1 && compare.target !== base && compare.target < chosen.length ? compare.target : base === 0 ? 1 : 0;
   const unitLabel = info.methods[method].unit;
   const units = [...new Set(chosen.map((t) => unit(t.state.root.unit)).filter(Boolean))];
@@ -6063,7 +6110,7 @@ function LayoutView({ node, renderPane, onResize }) {
 const SHORTCUTS = [
   ["Anywhere", [
     ["Ctrl/⌘ + K", "Search a process in the top bar: Enter shows it in the tab, Ctrl/⌘ + Enter opens it in a new tab"],
-    ["v", "View mode; when already in View mode, show or hide the view options"],
+    ["v", "View mode; when already in View mode, the Custom view panel (view options)"],
     ["e", "Edit mode (a Brightway-built database); when already in Edit mode, open the form of the selected process, as below"],
     ["c", "Compare mode"],
     ["s", "Search a process in the top bar (as Ctrl/⌘ + K)"],
@@ -6131,9 +6178,12 @@ function ShortcutsDialog({ onClose }) {
 }
 
 function App() {
-  const [info, setInfo] = useState(null);
+  const [rawInfo, setInfo] = useState(null);
   // The impact methods and group rules of the workspace, which the tabs follow (see the lens above FUView)
   const [lens, setLens] = useState(null);
+  nameFormat = lens?.nameFormat || DEFAULT_NAME_FORMAT;
+  const info = useMemo(() => (rawInfo && nameFormat.symbol
+    ? { ...rawInfo, methods: rawInfo.methods.map((m) => ({ ...m, unit: prettyUnit(m.unit) })) } : rawInfo), [rawInfo, nameFormat.symbol]);
   useEffect(() => { if (lens && info) saveLens(info, lens); }, [lens]);
   const [error, setError] = useState(null);
   // Databases loaded in the server; null: a server without the Projects dialog (one model, plain URLs)
@@ -6179,9 +6229,6 @@ function App() {
   const [leftOpen, setLeftOpen] = useState(() => loadPreference("leftOpen", "1") === "1");
   const [leftWidth, setLeftWidth] = useState(() => Number(loadPreference("leftWidth", "0")) || 380);
   const [leftTab, setLeftTab] = useState(() => { const t = loadPreference("leftTab", "processes"); return t === "compare" || t === "view" ? "processes" : t; });
-  // The options of the view of the tab in focus, in a pane above the status bar
-  const [viewOpen, setViewOpen] = useState(() => loadPreference("viewOpen", "0") === "1");
-  useEffect(() => savePreference("viewOpen", viewOpen ? "1" : "0"), [viewOpen]);
   useEffect(() => savePreference("leftOpen", leftOpen ? "1" : "0"), [leftOpen]);
   useEffect(() => savePreference("leftWidth", String(leftWidth)), [leftWidth]);
   useEffect(() => savePreference("leftTab", leftTab), [leftTab]);
@@ -6203,15 +6250,19 @@ function App() {
   // Where the open database was built from (Brightway): the project that is edited
   const origin = databases?.find((d) => d.key === DATABASE)?.brightway || null;
   const editing = mode === "edit" && !!origin;
-  // v: View mode, or in View mode the view options pane; e: Edit mode (in Edit mode the tree's e opens the form of the
+  // v: View mode, or in View mode the Custom view panel; e: Edit mode (in Edit mode the tree's e opens the form of the
   // process); c: Compare mode; s: the search of the top bar. Not while typing, in a pop-up or in a dialog.
   useEffect(() => {
     const onKey = (e) => {
       if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || e.defaultPrevented) return;
       if (e.target.closest?.("input, textarea, select, [contenteditable], .info-popup") || document.querySelector(".modal-backdrop")) return;
       if (e.key === "v") {
+        // the Custom view tab of the side panel (View mode)
         if (mode !== "view") setMode("view");
-        else setViewOpen((open) => !open);
+        else {
+          setSideOpen(true);
+          document.dispatchEvent(new CustomEvent("lca:custom-view"));
+        }
       } else if (e.key === "e") {
         if (editing || !origin) return;
         setMode("edit");
@@ -6444,6 +6495,7 @@ function App() {
     setMethod: (method) => setLens((l) => ({ ...l, method })),
     setChartMethods: (chartMethods) => setLens((l) => ({ ...l, chartMethods })),
     setAttribution: (attribution) => setLens((l) => ({ ...l, attribution })),
+    setNameFormat: (format) => setLens((l) => ({ ...l, nameFormat: format })),
     setRules: (rules) => setLens((l) => ({ ...l, sets: { ...l.sets, [l.set]: rules } })),
     chooseSet: (set) => setLens((l) => ({ ...l, set })),
     addSet: (name, copy) => setLens((l) => { const n = freshName(name, l.sets); return { ...l, set: n, sets: { ...l.sets, [n]: copy ? l.sets[l.set] : [] } }; }),
@@ -6500,9 +6552,6 @@ function App() {
   const allTabs = panesOf(layout).flatMap((p) => p.tabs);
   const showStaged = !editing && !!origin && pending.length > 0;
   const focusedTab = activeTabOf(focus);
-  // The tab the view options are about: its process, and its window when the workspace is split
-  const viewTitle = (titles[focusedTab] ? `${titles[focusedTab].name} (${titles[focusedTab].location})` : "the tab in focus")
-    + (panesOf(layout).length > 1 ? ` · window ${panesOf(layout).findIndex((pane) => pane.id === focus) + 1}` : "");
   const compareTabs = allTabs.filter((id) => states.current[id]?.root).map((id) => ({ id, state: states.current[id], title: titles[id] }));
   function startSideResize(e) {
     e.preventDefault();
@@ -6573,14 +6622,6 @@ function App() {
         <button onClick=${reopenClosed}>Undo</button>
         <button class="link" onClick=${() => setToast(null)} aria-label="Dismiss">×</button>
       </div>`}
-      <div class="bottom-pane" style=${{ display: viewOpen && !comparing ? "" : "none" }}>
-        <div class="bottom-head">
-          <b>View options</b><span class="muted" title="The options belong to the tab in focus, the one of the window used last">of ${viewTitle}</span>
-          <span class="spacer"></span>
-          <button onClick=${() => setViewOpen(false)} title="Hide the view options (v)" aria-label="Hide the view options">×</button>
-        </div>
-        ${allTabs.map((id) => html`<div key=${id} id=${`view-${id}`} class="view-slot" style=${{ display: id === focusedTab ? "" : "none" }}></div>`)}
-      </div>
       <footer class="status-bar">
         <button class=${`status-button ${leftOpen ? "on" : ""}`} onClick=${() => setLeftOpen(!leftOpen)} aria-pressed=${leftOpen}
           title="Left panel: processes, methods, rules (Ctrl/⌘ + ←)"><${SidePanelIcon} left open=${leftOpen} /></button>
@@ -6588,8 +6629,6 @@ function App() {
           ${methodSummary(info, lens.method, lens.chartMethods)}</button>
         <button class="status-text" onClick=${() => lensApi.show("groups")} title="The rule set shared by all tabs">Rules: ${lens.set} · ${lensApi.rules.filter((r) => !r.disabled).length}</button>
         <span class="spacer"></span>
-        ${!comparing && html`<button class=${`status-button ${viewOpen ? "on" : ""}`} onClick=${() => setViewOpen(!viewOpen)} aria-pressed=${viewOpen}
-          aria-label="View options" title="View options: how this tab groups, names and colours rows (v)"><${SlidersIcon} /></button>`}
         <button class="status-button" onClick=${() => setShortcutsOpen(true)} aria-label="Shortcuts" title="Keyboard shortcuts"><${KeyboardIcon} /></button>
       </footer>
       </div>

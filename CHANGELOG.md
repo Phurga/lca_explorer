@@ -26,6 +26,13 @@ Changes on `dev`, not released yet.
   from a query, applied everywhere.
 - **Compare**: no method and rules header; the difference panel has no zoom option (the axis zooms by itself).
 - **Charts**: the axes use the numbers' rule of the tree (scientific from 10 000 and below 0.001).
+- **Side panel**: a first panel, *Custom view*, holds the view options (they left the pane above the status
+  bar) and the chart of the tree's rows; *Process contribution* charts what its table lists; the process and flow
+  panels have a **Top** field.
+- **Method names**: *Name in results* (Methods panel) sets how a method appears: family, indicator, unit, and the unit
+  with symbols (CO₂ eq, m³).
+- **Compare**: the panels are *Compare contributions*, *Cascade* and *Multi indicator matrix*; the breakdown of
+  *Compare contributions* can be *None* (one bar of the total for each tab).
 - Explanations are tooltips, not text on the page; one caret for every list or section that folds;
   the actions of a row never cover its name, and a label never runs into its buttons.
 - Shorter descriptions in the app's own words.
