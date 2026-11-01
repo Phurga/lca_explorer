@@ -188,7 +188,8 @@ API in `src/lca_viewer/server.py`.
   status bar** with the options of **the tab in focus**, the one of the window (split pane)
   used last (the pane names it, and its window): *Display* (List / Tree / Sankey, Collapse,
   Reset view), *Cut-off*, *View file* (Save, Load, Copy) and *Rows* (*Group by rules*, a switch that
-  applies or not the rules of the Rules panel to the tree, which keep their place in the panel; group by
+  applies or not the rules of the Rules panel to the tree, which keep their place in the panel (adding a rule,
+  or grouping rows, while it is off switches it on, since the group would not show); group by
   product, split by flow type, hide others, names, colours, columns). Each tab has its own options, so in a
   split the windows can show the same process in a list and as a Sankey; the pane follows the
   window clicked. The options of the last tab changed are what a new tab starts with. The
@@ -395,7 +396,7 @@ API in `src/lca_viewer/server.py`.
   row, the rows in the sections of the form of a new process, as in the flow type colours, with a
   heading each: inputs from technosphere, inputs from nature, emissions, direct emissions, waste
   to treatment, others; the order inside a section is kept), *Hide others* (the others
-  rows, and their boxes in the tree view and the Sankey, are left out; the chart keeps them), *Full / Short /
+  rows, with the rows of an expanded one, and their boxes in the tree view and the Sankey, are left out; the chart keeps them), *Full / Short /
   Custom* names, applied
   to the list, the tree view, the others panel and the chart; see
   [charts.md](charts.md); and the colours: *No colours*, *Group colours* or *Flow type colours*.

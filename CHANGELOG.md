@@ -9,6 +9,11 @@ latest release, new work happens on `dev`.
 
 Changes on `dev`, not released yet.
 
+- Fixed: *Hide others* left the rows of an expanded others row on screen (list, tree and Sankey).
+- Fixed: a selection kept rows that were no longer shown (hidden, collapsed, grouped away), so the selection bar and
+  the totals counted them.
+- Fixed: a rule added, or rows grouped, while *Group by rules* was off showed nothing; it is switched on.
+
 ## 1.2.0 - 2026-11-01
 
 - The *Groups* panel is now *Rules*, and *Group contributions* is *Rules contributions*.

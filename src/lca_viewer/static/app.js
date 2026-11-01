@@ -188,6 +188,18 @@ const SPLIT_SECTIONS = [
 const SECTION_LABELS = Object.fromEntries(SPLIT_SECTIONS);
 const SECTION_RANK = Object.fromEntries(SPLIT_SECTIONS.map(([key], i) => [key, i]));
 const sectionOf = (r) => (r.kind === "rest" ? "rest" : flowTypeOf(r));
+// Hide others: the others rows and what an expanded one shows below it (its members, and their own rows). The rows are
+// in display order, so what is below a row is what follows it, deeper.
+function withoutOthers(rows) {
+  const out = [];
+  let below = null;  // depth of the others row whose rows are being skipped
+  for (const r of rows) {
+    if (below !== null && r.depth > below) continue;
+    below = r.kind === "rest" ? r.depth : null;
+    if (below === null) out.push(r);
+  }
+  return out;
+}
 // The rows with the rows below each row ordered by section (the order inside a section is kept)
 function splitRows(rows) {
   const below = new Map();
@@ -4333,6 +4345,10 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
   const rules = useMemo(() => (embedded ? ownRules : [...lens.rules, ...ownRules]), [lens.rules, ownRules]);
   function setRules(next) {
     const list = typeof next === "function" ? next(rules) : next;
+    if (!embedded && list.length > rules.length && view.groupByRules === false) {
+      setView({ ...view, groupByRules: true });
+      setUndo({ message: "Group by rules is on again: the rule you added groups the tree." });
+    }
     if (embedded) { setOwnRules(list); return; }
     const shared = list.filter((r) => r.scope === "*");
     if (!sameJson(shared, lens.rules)) lens.setRules(shared);
@@ -4393,7 +4409,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
     return { ...rawData, rows: view.splitByType ? splitRows(rows) : rows };
   }, [rawData, labels, editing, view.splitByType]);
   // Hide others: the others rows are left out of the list, the tree and the Sankey (the chart keeps them)
-  const data = useMemo(() => (view.hideOthers ? { ...allData, rows: allData.rows.filter((r) => r.kind !== "rest") } : allData),
+  const data = useMemo(() => (view.hideOthers ? { ...allData, rows: withoutOthers(allData.rows) } : allData),
     [allData, view.hideOthers]);
   const [error, setError] = useState(null);
   const [tab, setTab] = useState("chart");
@@ -4592,6 +4608,12 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
 
   const rootImpact = data.rows[0]?.impacts[0] || 0;
   const rowsById = useMemo(() => new Map(data.rows.map((r) => [r.id, r])), [data]);
+  useEffect(() => {
+    setSelection((sel) => {
+      const shown = [...sel].filter((id) => rowsById.has(id));
+      return shown.length === sel.size ? sel : new Set(shown);
+    });
+  }, [rowsById]);
   const selectedRows = [...selection].map((id) => rowsById.get(id)).filter(Boolean);
   const selectedTotals = selectedProcessTotals(rowsById, selection);
   const siblings =selectedRows.length >= 2 && selectedRows.every((r) => ownerOf(r) === ownerOf(selectedRows[0]))
