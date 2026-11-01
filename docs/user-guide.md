@@ -23,7 +23,7 @@ create datasets, add Agribalyse, run it on a shared server, set it up by hand an
   add filters for the location, product or classification under the box; the **(i)** of a
   filter lists its values and what codes stand for); ↑/↓ and Enter to choose.
 - Pick the **impact method** in the *Methods* panel of the left panel (the round mark is the
-  active method, the ticks the ones shown together) and the group rules in its *Groups* tab (a rule
+  active method, the ticks the ones shown together) and the group rules in its *Rules* tab (a rule
   set shared by all tabs). The **amount** of each process is in its *Processes* tab. The
   **cut-off** and the other options of the view (List / Tree, names, colours…) are in the pane that
   the sliders icon of the status bar (or **v**) opens. **Ctrl/⌘ + ←** and **→** hide or show the left and the
@@ -32,7 +32,7 @@ create datasets, add Agribalyse, run it on a shared server, set it up by hand an
   view. Expand with ▸ or ±.
 - **Group / Merge**: Ctrl/⌘-click sibling rows, then *Group* (bundle them
   under one row) or *Merge* (one process with their inventories added,
-  common inputs summed); or use the *Group rules* tab (quick groups, group by
+  common inputs summed); or use the *Rules* panel (quick groups, group by
   location / activity type / ISIC, or your own filter).
 - **Right-click** a process for its description, metadata and main emissions,
   and *Used by*: which activities use its product, and how much each takes
@@ -52,7 +52,7 @@ create datasets, add Agribalyse, run it on a shared server, set it up by hand an
 - *Flow contribution* splits the score by elementary flow (substance, or
   substance and compartment) over the whole supply chain; click one to list
   the processes emitting it.
-- *Group contributions* answers "how much electricity / transport / … anywhere
+- *Rules contributions* answers "how much electricity / transport / … anywhere
   upstream?" using the named groups, and "how much N2O outside them?" with
   flow groups (*Add as a group* on a substance in *Flow contribution*). Click a group (e.g. *other*) to list
   the processes it is made of; right-click one and *Go to in tree* to open

@@ -9,6 +9,10 @@ latest release, new work happens on `dev`.
 
 Changes on `dev`, not released yet.
 
+- The *Groups* panel is now *Rules*, and *Group contributions* is *Rules contributions*.
+- A *Group by rules* switch in the view options turns the grouping of the tree by the rules on or off, without
+  touching the rules.
+
 ## 1.1.0 - 2026-10-30
 
 A new layout, and a much faster start.

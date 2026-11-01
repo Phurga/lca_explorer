@@ -74,7 +74,7 @@ API in `src/lca_viewer/server.py`.
   tabs stay mounted, so nothing is lost when going back). The tabs to
   compare are ticked in the **Processes** tab of the left panel, the first one (the radio
   marks the **baseline**, the others are read against it; all tabs by default); the impact
-  methods and the group rules are those of the workspace (see **Methods and Groups**
+  methods and the group rules are those of the workspace (see **Methods and Rules**
   below). Decision: a *Compared* column of its own in this mode was a third place for
   settings that the panel already holds, so the panel lists the tabs, and a strip over the
   panels keeps the attribution and the notes. Tabs are named by what tells them apart (the place when
@@ -82,9 +82,9 @@ API in `src/lca_viewer/server.py`.
   bars the same way, chosen with the switch **By groups / By tree / By flows** (shared
   by both):
   - *By groups*: the named rules of the workspace's rule set (process rules as groups,
-    flow rules as flow groups, as in *Group contributions*), and the attribution (*own
+    flow rules as flow groups, as in *Rules contributions*), and the attribution (*own
     emissions of each group*, or *whole supply chain below the first match*, see
-    [grouping.md](grouping.md)). The rules are edited in the *Groups* panel on the left (link under
+    [grouping.md](grouping.md)). The rules are edited in the *Rules* panel on the left (link under
     the groups): the same rule set as in the tabs that follow it, so a change there is seen in
     them and the other way round, without leaving Compare mode; a tab with rules of its own is not read (the
     page says so). A tab counts by
@@ -187,15 +187,16 @@ API in `src/lca_viewer/server.py`.
   of the status bar. *View options* (sliders; key v in View mode) opens a **pane above the
   status bar** with the options of **the tab in focus**, the one of the window (split pane)
   used last (the pane names it, and its window): *Display* (List / Tree / Sankey, Collapse,
-  Reset view), *Cut-off*, *View file* (Save, Load, Copy) and *Rows* (group by product, split
-  by flow type, hide others, names, colours, columns). Each tab has its own options, so in a
+  Reset view), *Cut-off*, *View file* (Save, Load, Copy) and *Rows* (*Group by rules*, a switch that
+  applies or not the rules of the Rules panel to the tree, which keep their place in the panel; group by
+  product, split by flow type, hide others, names, colours, columns). Each tab has its own options, so in a
   split the windows can show the same process in a list and as a Sankey; the pane follows the
   window clicked. The options of the last tab changed are what a new tab starts with. The
   pane is not shown in Compare mode, stays open until hidden (× or the same key), and is
   remembered. The tabs have no header any more: the options were above each tree, and now
   are in one place. *Shortcuts* (keyboard) lists the keys. At the left, the icon that shows
   or hides the left panel, and the active method and the rule set in use, which open it.
-- **Left panel: Processes, Methods and Groups** (hidden and shown with its icon, the
+- **Left panel: Processes, Methods and Rules** (hidden and shown with its icon, the
   status bar's, the edge of the page or Ctrl/⌘ + ←; the right panel with Ctrl/⌘ + →;
   resizable, in every mode). *Processes* lists the tabs open: the **amount** of the
   process of each (it was in the tab's header), the tick for the ones compared in
@@ -210,9 +211,9 @@ API in `src/lca_viewer/server.py`.
   list nested by family (fold, filter box): the round mark is the
   **active method** (tree, charts, totals, comparison), the ticks the methods **shown
   together** (the *Several methods* chart, the *Impact categories* heat map; default: the
-  family of the method). *Groups* lists the **rule sets** (*New*, *Copy*, *Rename*,
+  family of the method). *Rules* lists the **rule sets** (*New*, *Copy*, *Rename*,
   *Delete*); one is in use, and its rules are built below the list (the form that was in
-  the side panel's *Group rules* tab, now here: it shows the rules of the tab in focus, and
+  the side panel's *Rules* panel, now here: it shows the rules of the tab in focus, and
   those of the workspace's set in Compare mode). The **Rule set** header and
   **Active rules** carry an (i) with what the texts said; a rule shows one line of its text, the whole
   rule in a tooltip. Rules under one row of a tree (*Only under the selected row*) mean
@@ -390,7 +391,7 @@ API in `src/lca_viewer/server.py`.
   Ctrl/⌘-click select, right-click opens the pop-up, drag pans, wheel zooms;
   row actions are in the selection bar and the pop-ups. Always a tree drawn
   left to right: the Cycles and orientation controls are hidden here.
-- **View bar** (under the toolbar): *Group by product*, *Split by flow type* (below each
+- **View bar** (now the *Rows* of the view options pane): *Group by rules* (on by default), *Group by product*, *Split by flow type* (below each
   row, the rows in the sections of the form of a new process, as in the flow type colours, with a
   heading each: inputs from technosphere, inputs from nature, emissions, direct emissions, waste
   to treatment, others; the order inside a section is kept), *Hide others* (the others
@@ -497,7 +498,7 @@ API in `src/lca_viewer/server.py`.
     Right-click a substance or flow for its pop-up (below). API:
     `/api/flows`, `/api/flows/contributors` (`analysis.flow_contribution`,
     `flow_contributors`).
-  - *Group rules* (in the **left panel**, *Groups*, not in the side panel): active rules (reorder, **edit** — the form below is filled in with
+  - *Rules* (in the **left panel**, *Rules*, not in the side panel): active rules (reorder, **edit** — the form below is filled in with
     the rule, with *Save rule* and *Cancel*; a group made from selected rows or a nested
     query can only be renamed —, remove; the eye switches a rule off and on without losing
     it, crossed out while it is off; what rules do is in the **(i)** next to *Active rules*;
@@ -514,7 +515,7 @@ API in `src/lca_viewer/server.py`.
     the selected row. *Group elementary flows* makes the same kinds of rules
     on flows (substance, compartment, subcompartment, unit), which group the
     flows under direct emissions and split what the process groups leave in
-    *Group contributions*; "product / waste" (`flow_type`) is a field of
+    *Rules contributions*; "product / waste" (`flow_type`) is a field of
     processes, not of flows. Each rule has a colour swatch: click it to pick
     another colour (right-click resets it). The groups of a rule carry it in
     the tree, graph and Sankey, and the bars of the *Process contribution*,
@@ -524,7 +525,7 @@ API in `src/lca_viewer/server.py`.
     product (the root), technosphere input, waste (output to treatment),
     resource (input from nature), emission (output to nature) and direct
     emissions rows; *Group colours* goes back to the colours of groups.
-  - *Group contributions*: global grouping with the named groups, direct
+  - *Rules contributions*: global grouping with the named groups, direct
     (the default) or first-match attribution (see [grouping.md](grouping.md)),
     groups sorted by decreasing impact with *other* last.
     Named rules on elementary flows are **flow groups** ("flows" chip): process
@@ -535,7 +536,7 @@ API in `src/lca_viewer/server.py`.
     lists the processes it is made of; click one for its pop-up, right-click
     it (or double-click) for *Go to in tree* (opens and highlights it along its
     largest supply path) or *Details*. Each group has the colour of its rule
-    in *Group rules* (a swatch next to the rule), and its rows carry the same
+    in *Rules* (a swatch next to the rule), and its rows carry the same
     colour in the tree.
 
 ## Tree graph layout

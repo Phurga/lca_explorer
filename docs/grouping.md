@@ -99,12 +99,12 @@ parents. Groups of elementary flows have no merge chip: their amounts are
 already summed.
 
 A whole rule can be merged too (`GroupRule.merge`, the **merge** button in
-the Group rules tab): every group it makes, at any depth and in rows expanded
+the Rules panel): every group it makes, at any depth and in rows expanded
 later, is shown as a merged process instead. Those rows are marked
 "merged" without the × (unmerging one would change the rule everywhere; the
-button in the Group rules tab does it). A rule can also be **disabled**
+button in the Rules panel does it). A rule can also be **disabled**
 (`GroupRule.disabled`): kept in the list and the saved view but not applied,
-in the tree or in the *Group contributions* analysis, to compare with and
+in the tree or in the *Rules contributions* analysis, to compare with and
 without it.
 
 ![Merge](img/merge.png)
@@ -124,7 +124,7 @@ energy carriers or transport services among them):
   aircraft, ship… ("machine operation" excluded: it is a service in hours).
 
 On 1 kg of GLO wheat (feed), infrastructure is 10.0 % of EF 3.1 climate
-change (first-match rule, *Group contributions* tab). In the tree, like any
+change (first-match rule, *Rules contributions* tab). In the tree, like any
 named group, it only bundles two or more infrastructure siblings.
 
 ### Direct emissions: elementary flows
@@ -204,7 +204,7 @@ The two readings differ a lot, so charts must always state which rule is used.
 `supply_chain_contribution(..., flow_groups=...)` also takes groups of
 **elementary flows** ("how much N2O, outside the process groups?").
 Decision: **the order of the rules decides** (the API takes `order`, the names
-of the groups in the order of the Group rules tab; without it, process groups
+of the groups in the order of the Rules panel; without it, process groups
 come first, as before). What an activity emits goes to its activity group or to
 a flow group, whichever is listed first:
 
@@ -235,7 +235,7 @@ only (`method`).
 
 Reference example (EF 3.1 climate change, wheat grain feed), with
 pesticides / fertilisers / agricultural machinery and a *Dinitrogen
-monoxide* flow group: see the Group contributions tab; the flow group is the
+monoxide* flow group: see the Rules contributions tab; the flow group is the
 field N2O of the crops (the Flow contribution tab gives all N2O, 34.1 %).
 
 ### What a group is made of, and finding it in the tree

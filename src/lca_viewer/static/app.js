@@ -1874,7 +1874,7 @@ function ColumnMenu({ at, columns, onChange, onClose }) {
     </div>`;
 }
 
-const GROUP_LOCKED = "Grouped by a rule (Group rules tab): the group stays while the rule is active. Disable or remove the rule to ungroup.";
+const GROUP_LOCKED = "Grouped by a rule (Rules panel): the group stays while the rule is active. Disable or remove the rule to ungroup.";
 
 function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onUngroup, onRegroup, ungroupable, groupLocked, onMergeGroup, onUnpin, onPin, onMoveToOthers, onInfo, onUnmerge, onRevert, view, focus, renaming, onStartRename, onRename, onColumns }) {
   const byId = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
@@ -1955,7 +1955,7 @@ function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onU
                         <button class="chip merge" title="Merge into one process whose inventory is the union of the members'"
                           onClick=${(e) => { e.stopPropagation(); onMergeGroup(r); }}>merge</button>`}
                       ${r.kind === "merged" && !editing && (r.by_rule
-                        ? html`<span class="chip merge" title="Merged by a grouping rule (see the Group rules tab)">merged</span>`
+                        ? html`<span class="chip merge" title="Merged by a grouping rule (see the Rules panel)">merged</span>`
                         : html`<button class="chip merge" title="Split back into the original processes"
                             onClick=${(e) => { e.stopPropagation(); onUnmerge(r); }}>merged ×</button>`)}
                       ${r.pinned && html`
@@ -2547,6 +2547,8 @@ function ViewBar({ view, setView, example, embedded }) {
   return html`
     <div class="view-bar">
       <div class="row">
+        <button class=${view.groupByRules !== false ? "primary" : ""} onClick=${() => set({ groupByRules: view.groupByRules === false })} aria-pressed=${view.groupByRules !== false}
+          title="Bundle sibling rows under the groups of the rules (Rules panel): on or off, the rules stay as they are">Group by rules</button>
         <button class=${view.groupProducts ? "primary" : ""} onClick=${() => set({ groupProducts: !view.groupProducts })}
           title="Bundle sibling inputs of the same product (other regions or routes) under one row">Group by product</button>
         <button class=${view.splitByType ? "primary" : ""} onClick=${() => set({ splitByType: !view.splitByType })}
@@ -3455,7 +3457,7 @@ const PANEL_TIPS = {
   groups: "The rules that bundle sibling rows of the tree into groups: quick groups, and a form for new rules. The rule sets are shared by the tabs that follow the workspace.",
   processes: "The processes of the tabs open, and their amounts; tick the ones to compare in Compare mode, and mark the baseline the others are read against.",
   methods: "The impact methods: the active one (tree, charts, totals) and the ones shown together (the several methods chart, the Impact categories heat map).",
-  global: "Group contributions over the whole supply chain, using the named groups defined in the Group rules tab, which go by the order of the rules: "
+  global: "Rules contributions over the whole supply chain, using the named groups defined in the Rules panel, which go by the order of the rules: "
     + "a group of processes listed before a group of flows keeps every flow it reaches, a group of flows (a substance, added from the Flow contribution tab) listed before it takes its flows from it. "
     + "Process groups nest (electricity uses transport, which uses electricity), so the attribution of impacts is chosen in the panel.",
 };
@@ -3908,7 +3910,7 @@ function GlobalPanel({ info, root, amount, method, rules, view, onLocate, onInfo
         download(fileName(`group-${group.replace(/[^A-Za-z0-9]+/g, "-")}`), [header, ...lines].join("\n"), "text/csv");
       }).catch((e) => setError(e.message));
   }
-  // A group has the colour of its rule in the Group rules tab (and of its rows in the tree)
+  // A group has the colour of its rule in the Rules panel (and of its rows in the tree)
   const colorOfGroup = (n) => n === "other" ? cssVar("--muted")
     : view.groupColors ? colorOf(n.replace(/ \(flows\)$/, ""), view.ruleColors) : undefined;
   const option = useMemo(() => {
@@ -4109,7 +4111,7 @@ function FlowPanel({ info, root, amount, method, onLocate, onInfo, onFlowInfo, r
                 : { name: `${flow.name} (${flow.compartment})`, predicate: { flows: flow.flows }, target: "flows", scope: "*" };
               const exists = rules.some((r) => r.name === rule.name && r.target === "flows");
               return html`<button disabled=${exists} onClick=${() => setRules([...rules, rule])}
-                title="A flow group: in the Group contributions tab it takes these flows from what the process groups leave; in the tree it bundles them under direct emissions">
+                title="A flow group: in the Rules contributions tab it takes these flows from what the process groups leave; in the tree it bundles them under direct emissions">
                 ${exists ? "In groups" : "Add as a group"}</button>`;
             })()}
             <button onClick=${() => setFlow(null)} aria-label="Close">×</button>
@@ -4158,7 +4160,7 @@ function Portal({ slot, children }) {
 
 // ---------------------------------------------------------------- lens: impact methods and group rules
 // The impact methods and the group rules are chosen once for the workspace and shared by all tabs (the Methods and
-// Groups panel on the left). The options of the view (display, cut-off, names, colours, columns…) belong to each tab
+// Rules panel on the left). The options of the view (display, cut-off, names, colours, columns…) belong to each tab
 // (the view options pane at the bottom shows those of the tab in focus). Methods: the *active* method (tree, charts, totals) and the ones *shown together* (the several
 // methods chart, the heat map). Rules: named sets, one of them active; rules scoped to a row of one tree stay in
 // their tab. Kept per database in ``localStorage``, by method name (positions change when a model is rebuilt).
@@ -4173,6 +4175,7 @@ const initialView = (embedded) => ({
     flowMain: loadPreference("recipeFlowMain", DEFAULT_RECIPE.flowMain), flowSecondary: loadPreference("recipeFlowSecondary", DEFAULT_RECIPE.flowSecondary),
   },
   groupProducts: loadPreference("groupProducts", "0") === "1",
+  groupByRules: embedded || loadPreference("groupByRules", "1") === "1",  // the rules of the workspace (and the tab's) group the tree
   columns: (() => { try { const c = JSON.parse(loadPreference("columns", "null")); if (Array.isArray(c)) return c; } catch { /* the default */ } return DEFAULT_COLUMNS; })(),
   groupColors: loadPreference("groupColors", "1") === "1",
   colorBy: loadPreference("colorBy", "group"),  // "group" or "type" (flow type)
@@ -4188,6 +4191,7 @@ function saveViewPreferences({ view, display, orientation, cycles }) {
   savePreference("recipeFlowMain", view.recipe.flowMain ?? DEFAULT_RECIPE.flowMain);
   savePreference("recipeFlowSecondary", view.recipe.flowSecondary ?? DEFAULT_RECIPE.flowSecondary);
   savePreference("groupProducts", view.groupProducts ? "1" : "0");
+  savePreference("groupByRules", view.groupByRules ? "1" : "0");
   savePreference("columns", JSON.stringify(view.columns));
   savePreference("groupColors", view.groupColors ? "1" : "0");
   savePreference("colorBy", view.colorBy);
@@ -4265,14 +4269,14 @@ function SetMenu({ lens, onEdit }) {
 }
 
 // The left panel, where the processes (the processes of the tabs, their amounts, what is compared), the impact
-// methods and the group rules are chosen: *Processes*, *Methods* and *Groups* (the rule sets and the rules). The rules
+// methods and the group rules are chosen: *Processes*, *Methods* and *Rules* (the rule sets and the rules). The rules
 // shown are those of the tab in focus, which its own component puts in its slot (``groups-<tab id>``); in Compare mode
 // they are those of the workspace's set (``view``: a tab's view, where the colours picked for rules are kept).
 function LensPanel({ info, lens, tab, setTab, tabs, focusedTab, comparing, view, compareTabs, compare, setCompare, windows, onCollapse }) {
   const methods = lens.method < info.methods.length;
   return html`
     <div class="tabs" role="tablist">
-      ${[["processes", "Processes"], ["methods", "Methods"], ["groups", "Groups"]].map(([key, label]) => html`
+      ${[["processes", "Processes"], ["methods", "Methods"], ["groups", "Rules"]].map(([key, label]) => html`
         <${TabButton} role="tab" class=${tab === key ? "active" : ""} onClick=${() => setTab(key)} tip=${PANEL_TIPS[key]}>${label}<//>`)}
       <span class="spacer"></span>
       <button class="collapse-side" onClick=${onCollapse} title="Hide the panel" aria-label="Hide the panel"><${SidePanelIcon} open left /></button>
@@ -4501,7 +4505,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
       merges.length && plural(merges.length, "merge"), view.groupProducts && "group by product",
       Object.keys(substitutions).length && plural(Object.keys(substitutions).length, "replaced input"),
       Object.keys(labels).length && plural(Object.keys(labels).length, "custom name")].filter(Boolean).join(", ");
-    setUndo({ message: `View reset${removed ? ` (${removed} removed)` : ""}${!embedded && lens.rules.length ? `; the rule set ${lens.set} of the workspace stays (Groups panel)` : ""}.` });
+    setUndo({ message: `View reset${removed ? ` (${removed} removed)` : ""}${!embedded && lens.rules.length ? `; the rule set ${lens.set} of the workspace stays (Rules panel)` : ""}.` });
     setExpanded(new Set([String(root.index)]));
     setPinned(new Set());
     setOthers(new Set());
@@ -4548,7 +4552,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
   }
 
   const viewState = (exp = expanded) => ({
-    root: [root.index], amount, expanded: [...exp], rules: editing ? rules.map((r) => ({ ...r, merge: false })) : rules, cutoff: cutoffValue(cutoff, cutoffBasis), cutoff_basis: cutoffBasis, method, methods: chartMethods,
+    root: [root.index], amount, expanded: [...exp], rules: view.groupByRules === false ? [] : editing ? rules.map((r) => ({ ...r, merge: false })) : rules, cutoff: cutoffValue(cutoff, cutoffBasis), cutoff_basis: cutoffBasis, method, methods: chartMethods,
     pinned: [...pinned], others: [...others], merges: editing ? [] : merges, ungrouped: [...ungrouped],
     substitutions: editing ? {} : substitutions, group_products: view.groupProducts,
   });
@@ -4560,13 +4564,13 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
       .then((d) => { if (!cancelled) { setData(d); setError(null); } })
       .catch((e) => !cancelled && setError(e.message));
     return () => { cancelled = true; };
-  }, [root, amount, method, cutoff, cutoffBasis, expanded, rules, chartMethods, pinned, others, merges, ungrouped, substitutions, view.groupProducts, info, editing]);
+  }, [root, amount, method, cutoff, cutoffBasis, expanded, rules, chartMethods, pinned, others, merges, ungrouped, substitutions, view.groupProducts, view.groupByRules, info, editing]);
   // The tab's state is kept for the next visit (renaming does not reload the rows)
   useEffect(() => {
     if (!root || !info) return;
-    onSave(id, { root, amount, method, cutoff, cutoffBasis, expanded: [...expanded], rules, chartMethods, pinned: [...pinned], others: [...others], merges, ungrouped: [...ungrouped], substitutions, labels,
+    onSave(id, { root, amount, method, cutoff, cutoffBasis, expanded: [...expanded], rules, chartMethods, groupByRules: view.groupByRules, pinned: [...pinned], others: [...others], merges, ungrouped: [...ungrouped], substitutions, labels,
       layout: info.layout, methodName: info.methods[method]?.name, chartMethodNames: chartMethods.map((k) => info.methods[k]?.name) });
-  }, [root, amount, method, cutoff, cutoffBasis, expanded, rules, chartMethods, pinned, others, merges, ungrouped, substitutions, labels, info]);
+  }, [root, amount, method, cutoff, cutoffBasis, expanded, rules, chartMethods, view.groupByRules, pinned, others, merges, ungrouped, substitutions, labels, info]);
   function startRename(row) {
     if (editing || !labelKey(row)) return;
     // The tree and Sankey views have no inline editor: ask
@@ -4756,7 +4760,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
       model: { title: info.title, activities: info.activities },
       root, amount, method: info.methods[method].name, chartMethods: chartMethods.map((k) => info.methods[k].name),
       cutoff: +cutoffValue(cutoff, cutoffBasis).toFixed(8), cutoffBasis, expanded: [...expanded], rules, pinned: [...pinned], others: [...others], merges, ungrouped: [...ungrouped], substitutions, labels,
-      display: { naming: view.naming, recipe: view.recipe, groupProducts: view.groupProducts, splitByType: view.splitByType, hideOthers: view.hideOthers, columns: view.columns, groupColors: view.groupColors, colorBy: view.colorBy, ruleColors: view.ruleColors },
+      display: { naming: view.naming, recipe: view.recipe, groupProducts: view.groupProducts, groupByRules: view.groupByRules, splitByType: view.splitByType, hideOthers: view.hideOthers, columns: view.columns, groupColors: view.groupColors, colorBy: view.colorBy, ruleColors: view.ruleColors },
     };
   }
   function exportView() {
@@ -5064,7 +5068,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
       ${!embedded && html`<${Portal} slot=${`side-${id}`}>
         <section class="side">
           <div class="tabs" role="tablist">
-            ${[["chart", "Process contribution"], ["flows", "Flow contribution"], ["global", "Group contributions"]].map(([key, label]) => html`
+            ${[["chart", "Process contribution"], ["flows", "Flow contribution"], ["global", "Rules contributions"]].map(([key, label]) => html`
               <${TabButton} role="tab" class=${tab === key ? "active" : ""} onClick=${() => setTab(key)} tip=${PANEL_TIPS[key]}>${label}<//>`)}
             <span class="spacer"></span>
             <button class="collapse-side" onClick=${onCollapseSide} title="Hide the side panel" aria-label="Hide the side panel"><${SidePanelIcon} open /></button>
@@ -5149,7 +5153,7 @@ function compareLabels(tabs) {
 
 // The tree a tab displays, as /api/rows is asked for it (the method is the comparison's)
 const treeBody = (s, method) => ({
-  root: [s.root.index], amount: s.amount, expanded: s.expanded || [], rules: s.rules || [], cutoff: cutoffValue(s.cutoff, s.cutoffBasis),
+  root: [s.root.index], amount: s.amount, expanded: s.expanded || [], rules: s.groupByRules === false ? [] : s.rules || [], cutoff: cutoffValue(s.cutoff, s.cutoffBasis),
   cutoff_basis: s.cutoffBasis || "parent", method, methods: [], pinned: s.pinned || [], others: s.others || [], merges: s.merges || [],
   ungrouped: s.ungrouped || [], substitutions: s.substitutions || {}, group_products: loadPreference("groupProducts", "0") === "1",
 });
@@ -5522,14 +5526,14 @@ function ComparisonView({ info, tabs, compare, setCompare }) {
   const set = (patch) => setCompare((c) => ({ ...c, ...patch }));
   const { labels, chosen, baseline } = compareSelection(tabs, compare);
   const base = Math.max(0, chosen.indexOf(baseline));
-  // The method(s) and the group rules are those of the workspace (the Methods and Groups panel)
+  // The method(s) and the group rules are those of the workspace (the Methods and Rules panel)
   const lens = useContext(LensContext);
   const method = lens.method;
   const rule = compare.rule || "direct";
   const panel = compare.panel || "groups";
 
   // The groups of the comparison: the rule set of the workspace (named rules on processes, and on elementary flows
-  // as flow groups, as in the Group contributions tab); they are changed in the Group rules panel here
+  // as flow groups, as in the Rules contributions tab); they are changed in the Rules panel
   const rules = lens.rules;
   const { groups, flowGroups, order } = useMemo(() => namedGroups(rules), [rules]);
   // The methods of the heat map: those shown together
@@ -5594,7 +5598,7 @@ function ComparisonView({ info, tabs, compare, setCompare }) {
             </select>
           </label>
           <p class="note">${Object.keys(groups).length + Object.keys(flowGroups).length} groups, from the rule set <b>${lens.set}</b> of the workspace
-            (<i>Groups</i> panel).
+            (<i>Rules</i> panel).
             <button class="link" onClick=${() => lens.show("groups")}>Edit the group rules</button></p>`}
         ${basis === "tree" && html`
           <p class="note">Each tab's tree as displayed in View mode (its expanded rows, groups, merges, restored rows and cut-off), at this method.
@@ -6104,7 +6108,7 @@ function App() {
       return { ...l, set: n, sets: Object.fromEntries(Object.entries(l.sets).map(([k, v]) => [k === l.set ? n : k, v])) };
     }),
     deleteSet: () => setLens((l) => { const { [l.set]: gone, ...sets } = l.sets; return { ...l, sets, set: Object.keys(sets)[0] }; }),
-    // Show the Methods or Groups panel
+    // Show the Methods or Rules panel
     show: (what) => { setLeftTab(what); setLeftOpen(true); },
   };
   // ``centre``: the search of a process (a model is open), in the middle of the bar
@@ -6197,7 +6201,7 @@ function App() {
           <button onClick=${() => { setMode("edit"); setSideOpen(true); }}>Review and apply in Edit mode</button>
         </div>`}
       <div class="body">
-        ${!leftOpen && html`<button class="side-reopen left" onClick=${() => setLeftOpen(true)} title="Show the Methods and Groups panel" aria-label="Show the Methods and Groups panel"><${SidePanelIcon} left /></button>`}
+        ${!leftOpen && html`<button class="side-reopen left" onClick=${() => setLeftOpen(true)} title="Show the Processes, Methods and Rules panel" aria-label="Show the Processes, Methods and Rules panel"><${SidePanelIcon} left /></button>`}
         <aside class="leftbar" style=${{ width: `${leftWidth}px`, display: leftOpen ? "" : "none" }}>
           <${LensPanel} info=${info} lens=${lensApi} tab=${leftTab} setTab=${setLeftTab} tabs=${allTabs} focusedTab=${focusedTab} comparing=${comparing}
             view=${TAB_API[focusedTab] || Object.values(TAB_API)[0]} compareTabs=${compareTabs} compare=${compare} setCompare=${setCompare} onCollapse=${() => setLeftOpen(false)}
@@ -6232,7 +6236,7 @@ function App() {
           title="Show or hide the left panel: processes, view, methods and groups"><${SidePanelIcon} left open=${leftOpen} /></button>
         <button class="status-text" onClick=${() => lensApi.show("methods")} title=${methodLabel(info.methods[lens.method])}>
           ${methodSummary(info, lens.method, lens.chartMethods)}</button>
-        <button class="status-text" onClick=${() => lensApi.show("groups")} title="The rule set shared by all tabs">Groups: ${lens.set} · ${lensApi.rules.filter((r) => !r.disabled).length}</button>
+        <button class="status-text" onClick=${() => lensApi.show("groups")} title="The rule set shared by all tabs">Rules: ${lens.set} · ${lensApi.rules.filter((r) => !r.disabled).length}</button>
         <span class="spacer"></span>
         ${!comparing && html`<button class=${`status-button ${viewOpen ? "on" : ""}`} onClick=${() => setViewOpen(!viewOpen)} aria-pressed=${viewOpen}
           aria-label="View options" title="Show or hide the options of the view of the tab in focus: display, cut-off, grouping of rows, names and colours (v)"><${SlidersIcon} /></button>`}
