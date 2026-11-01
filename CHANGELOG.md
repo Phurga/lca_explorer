@@ -29,6 +29,10 @@ Changes on `dev`, not released yet.
 - **Side panel**: a first panel, *Custom view*, holds the view options (they left the pane above the status
   bar) and the chart of the tree's rows; *Process contribution* charts what its table lists; the process and flow
   panels have a **Top** field.
+- **Rule colours**: a palette to choose (*Colours* in the Rules panel); quick groups in use are filled with their colour.
+- **Processes panel**: *Open history* at the top of the list replaces *Reopen what I closed*: pick any closed tab or window.
+- **Tabs and pop-ups are one**: the first line of a tab shows the panels of the pop-up (Process, Used by, Alternatives,
+  Description, Metadata), the tree being the first.
 - **Method names**: *Name in results* (Methods panel) sets how a method appears: family, indicator, unit, and the unit
   with symbols (CO₂ eq, m³).
 - **Compare**: the panels are *Compare contributions*, *Cascade* and *Multi indicator matrix*; the breakdown of

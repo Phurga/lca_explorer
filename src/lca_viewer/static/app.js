@@ -143,8 +143,24 @@ const cutoffReason = (value, basis) => ({
 // hue, derived from the rule that made the group (its name, or the field of a group-by
 // rule) so that a group keeps its colour when others change, and matches its rule's swatch
 const hueOf = (key) => [...key].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 0);
+// The palette of the rules (set in the Rules panel, kept by the workspace): ``keys`` are the rules of the set in use, in
+// order; the palette gives its colours in that order ("auto": a hue derived from the name). ``paletteStamp`` changes with
+// either, for the memos that hold colours.
+let rulePalette = { name: "auto", keys: [] };
+let paletteStamp = "auto";
 // A colour picked in the Group rules tab (``picked``: key -> "#rrggbb", part of the view) wins
-const colorOf = (key, picked) => picked?.[key] || `hsl(${hueOf(key)} 55% 52%)`;
+function colorOf(key, picked) {
+  if (picked?.[key]) return picked[key];
+  const colors = RULE_PALETTES[rulePalette.name]?.colors;
+  if (!colors) return `hsl(${hueOf(key)} 55% 52%)`;
+  const i = rulePalette.keys.indexOf(key);
+  return colors[(i >= 0 ? i : hueOf(key)) % colors.length];
+}
+// Black or white, whichever reads on ``color``
+function textOn(color) {
+  const hex = colorHex(color), [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+  return 0.299 * r + 0.587 * g + 0.114 * b > 160 ? "#1f1f1f" : "#ffffff";
+}
 // "#rrggbb" of a colour, for the colour picker
 function colorHex(color) {
   if (color.startsWith("#")) return color;
@@ -347,6 +363,18 @@ const PALETTE = [
   "#7a9a3a", "#8c6d52", "#4c8a8f", "#d4a0c0", "#777777",
 ];
 const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const RULE_PALETTES = {
+  auto: { label: "Automatic", hint: "A hue derived from each rule's name", colors: null },
+  categorical: { label: "Categorical", hint: "The colours of the charts", colors: PALETTE.slice(0, 11) },
+  safe: { label: "Colour-blind safe", hint: "Eight colours told apart by most kinds of colour blindness (Okabe-Ito)",
+    colors: ["#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999"] },
+  vivid: { label: "Vivid", hint: "Saturated, far apart",
+    colors: ["#e6194b", "#3cb44b", "#4363d8", "#f58231", "#911eb4", "#46c0c0", "#f032e6", "#9aaa00", "#008080", "#9a6324"] },
+  soft: { label: "Soft", hint: "Pastel, for many groups",
+    colors: ["#8dd3c7", "#bebada", "#fb8072", "#80b1d3", "#fdb462", "#b3de69", "#fccde5", "#bc80bd", "#ccebc5", "#ffed6f"] },
+  earth: { label: "Earth", hint: "Greens, browns and ochres",
+    colors: ["#6b8e23", "#8b5a2b", "#cd853f", "#2e8b57", "#a0522d", "#bdb76b", "#556b2f", "#d2b48c", "#8fbc8f", "#b8860b"] },
+};
 
 // ---------------------------------------------------------------- number input
 // Applies the value while typing (after a short pause), not only on blur/Enter
@@ -1956,7 +1984,7 @@ function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onU
   const sections = new Map();  // row id -> the section of the last row seen below it
   const previous = { depth: 0 };  // the depth of the row before
   const span = 1 + COLUMNS.filter((c) => shown.has(c.id)).length;
-  const colors = useMemo(() => groupColors(rows, view), [rows, view.groupColors, view.colorBy, view.ruleColors]);
+  const colors = useMemo(() => groupColors(rows, view), [rows, view.groupColors, view.colorBy, view.ruleColors, paletteStamp]);
   const ctx = useContext(EditorContext);
   const editing = ctx.editing;
   const box = useRef(null);
@@ -2322,7 +2350,7 @@ function TreeGraph({ rows, rootImpact, shareBasis, selection, onToggle, onSelect
   const orientation = sankey ? "horizontal" : chosenOrientation;
   const cycles = chosenCycles && !sankey;
   const byId = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
-  const colors = useMemo(() => groupColors(rows, view), [rows, view.groupColors, view.colorBy, view.ruleColors]);
+  const colors = useMemo(() => groupColors(rows, view), [rows, view.groupColors, view.colorBy, view.ruleColors, paletteStamp]);
   const container = useRef(null);
   const drag = useRef(null);
   const [transform, setTransform] = useState({ k: 1, x: 16, y: 16 });
@@ -2843,7 +2871,7 @@ function PopupMenu({ items, label = "⋯", title = "Actions of this pop-up", cla
     <span class="popup-menu" ref=${box}>
       <button class=${className} onClick=${open} aria-label=${title} aria-expanded=${!!at} title=${title}>${label}</button>
       ${at && html`<div class="menu" role="menu" style=${{ position: "fixed", top: `${at.top}px`, left: `${at.left}px`, right: "auto", minWidth: "190px" }}>
-        ${items.map((it) => html`<button role="menuitem" key=${it.label} class=${it.danger ? "danger" : ""} disabled=${it.disabled} title=${it.title}
+        ${items.map((it) => html`<button role="menuitem" key=${it.key ?? it.label} class=${it.danger ? "danger" : ""} disabled=${it.disabled} title=${it.title}
           onClick=${() => { setAt(null); it.run(); }}>${it.label}</button>`)}
       </div>`}
     </span>`;
@@ -3075,7 +3103,13 @@ function suppliedTo(row, rowsById) {
 // Two pop-ups of a process: the activity's (Space, right-click: its exchanges, users, alternatives,
 // description, metadata) and the exchange's (i, (i): the amount in this tree and the comment and
 // uncertainty of the input, ``target.exchange``). ``onFollow(target)`` opens another in place.
-function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsById, onClose, onUseAsRoot, onOpenTab, root, amount, onFollow, onGoTo, onBack }) {
+// ``docked``: the same panels in a tab, under its first line: the tree (``treeSlot``) is the first panel, the pop-up's the
+// others; ``active``: the tab is the one shown (a hidden tab loads nothing)
+function DockedShell({ children }) {
+  return html`<div class="docked-panels">${children}</div>`;
+}
+function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsById, onClose, onUseAsRoot, onOpenTab, root, amount, onFollow, onGoTo, onBack, docked, active, treeSlot }) {
+  const idle = !!docked && !active;
   const exchange = !!target.exchange;
   const explorerKeys = useRef(null);  // set by the explorer of the Exchanges tab: asked first for the keys
   const [info, setInfo] = useState(null);
@@ -3089,9 +3123,10 @@ function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsByI
   const body = useRef(null);
   useEffect(() => setTab(null), [target.x, target.y]);
   useEffect(() => {
+    if (idle) return;
     setInfo(null);
     request(`/api/activity/${target.index}?method=${method}`).then(setInfo).catch((e) => setError(e.message));
-  }, [target.index, method]);
+  }, [target.index, method, idle]);
   useEffect(() => { setAllUsers(false); body.current?.scrollTo(0, 0); }, [target.index]);
   // Exchanges as in the dataset, and for a tree row, the parent's input of this product
   // (comment, uncertainty): ``link`` is [{ meta, inputs }], one per parent dataset using it
@@ -3102,9 +3137,9 @@ function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsByI
   const parentKey = parentMetas.map((m) => m.index).join(",");
   useEffect(() => {
     setExchanges(null);
-    if (exchange) return;
+    if (exchange || idle) return;
     request(`/api/activity/${target.index}/exchanges?method=${method}`).then(setExchanges).catch(() => setExchanges(null));
-  }, [target.index, method, exchange]);
+  }, [target.index, method, exchange, idle]);
   useEffect(() => {
     setLink(null);
     if (!exchange || !parentMetas.length) return;
@@ -3117,17 +3152,17 @@ function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsByI
   }, [target.index, parentKey, method, exchange]);
   useEffect(() => {
     setUsers(null);
-    if (exchange) return;
+    if (exchange || idle) return;
     const fu = root ? `&root=${root.index}&amount=${amount}` : "";
     request(`/api/activity/${target.index}/users?method=${method}&limit=${allUsers ? 1000 : 15}${fu}`)
       .then(setUsers).catch((e) => setError(e.message));
-  }, [target.index, method, root, amount, allUsers, exchange]);
+  }, [target.index, method, root, amount, allUsers, exchange, idle]);
   useEffect(() => {
     setAlternatives(null);
-    if (target.direct || exchange) return;
+    if (target.direct || exchange || idle) return;
     request(`/api/activity/${target.index}/alternatives?method=${method}`)
       .then(setAlternatives).catch(() => setAlternatives(null));
-  }, [target.index, method, exchange]);
+  }, [target.index, method, exchange, idle]);
   // Edit mode: the dataset as the project holds it (what the fields stand for), and what can be changed in place
   const ctx = useContext(EditorContext);
   const [ds, setDs] = useState(null);
@@ -3210,17 +3245,18 @@ function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsByI
   // opens on its emissions), then users, alternatives, description, metadata
   const hasDescription = ctx.editing || DETAIL_SECTIONS.some(([k]) => d[k])
     || (production && (production.comment || production.properties || production["production volume"]));
-  const tabs = info && !exchange ? [
-    exchanges?.available && { id: "exchanges", label: `Exchanges · ${(production ? 1 : 0) + exchanges.inputs.length + exchanges.flows.length}` },
-    { id: "users", label: `${users?.waste ? "Treats" : "Used by"}${users ? ` · ${users.count}` : ""}` },
+  const tabs = (info || docked) && !exchange ? [
+    docked ? { id: "exchanges", label: "Process" }
+      : exchanges?.available && { id: "exchanges", label: `Exchanges · ${(production ? 1 : 0) + exchanges.inputs.length + exchanges.flows.length}` },
+    info && { id: "users", label: `${users?.waste ? "Treats" : "Used by"}${users ? ` · ${users.count}` : ""}` },
     alternatives && !target.direct && { id: "alternatives", label: `Alternatives · ${alternatives.count}` },
-    hasDescription && { id: "description", label: "Description" },
-    { id: "metadata", label: "Metadata" },
+    info && hasDescription && { id: "description", label: "Description" },
+    info && { id: "metadata", label: "Metadata" },
   ].filter(Boolean) : [];
   const shown = exchange ? "tree" : tabs.some((t) => t.id === tab) ? tab : tabs[0]?.id;
   useEffect(() => { body.current?.scrollTo(0, 0); }, [shown]);
   return html`
-    <${PopupWindow} target=${target} win=${win} label=${exchange ? "Exchange information" : "Activity information"} onClose=${onClose} onBack=${onBack}
+    <${docked ? DockedShell : PopupWindow} target=${target} win=${win} label=${exchange ? "Exchange information" : "Activity information"} onClose=${onClose} onBack=${onBack}
       onDock=${info && !exchange ? (place) => { onOpenTab(info, place); onClose(); } : null}
       menu=${info && !exchange ? [
         { label: "Use in this tab", title: "Show this process in the tab in focus", run: () => { onUseAsRoot(info); onClose(); } },
@@ -3240,13 +3276,14 @@ function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsByI
         ${info && (exchange ? html`<div class="muted">Exchange · ${info.reference_product} · ${unit(info.unit)}</div>`
           : html`<div class="muted">${info.activity_type} · ${info.reference_product} · ${unit(info.unit)}</div>`)}`}>
       ${error && html`<div class="error">${error}</div>`}
-      ${info && html`
-        ${!exchange && html`<div class="tabs info-tabs" role="tablist">
+      ${(info || docked) && html`
+        ${!exchange && html`<div class="tabs info-tabs" role="tablist" onKeyDown=${docked ? tabKeys(tabs.map((t) => t.id), shown, setTab) : undefined}>
           ${tabs.map((t) => html`
             <button role="tab" aria-selected=${t.id === shown} class=${t.id === shown ? "active" : ""}
               onClick=${() => setTab(t.id)}>${t.label}</button>`)}
         </div>`}
-        <div class="info-body" ref=${body}>
+        ${docked && html`<div class="docked-tree" style=${{ display: shown === "exchanges" ? "" : "none" }}>${treeSlot}</div>`}
+        <div class="info-body" ref=${body} style=${docked && shown === "exchanges" ? { display: "none" } : null}>
           ${shown === "tree" && html`
             <section>
               <h4>${row ? "In this tree" : "Exchange"}</h4>
@@ -3266,11 +3303,11 @@ function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsByI
               ${link && !link.some((l) => l.inputs.some(hasExchangeMeta)) && html`
                 <p class="text muted">No comment or uncertainty recorded for this exchange.</p>`}
             </section>`}
-          ${exchanges?.available && html`
+          ${exchanges?.available && !docked && html`
             <${FUView} key=${target.index} id=${`exchanges-${target.index}`} info=${model} visible=${shown === "exchanges"}
               initial=${{ root: base, inherit: { method, chartMethods: [], cutoff: 500, cutoffBasis: "top", rules: [] } }}
               embedded=${{ method, onInfo: follow, onUse: useAsRoot, keys: explorerKeys }} onSave=${() => {}} onTitle=${() => {}} />`}
-          ${shown === "users" && users && html`
+          ${shown === "users" && users && info && html`
             <section>
               ${users.count === 0 ? html`<p class="text muted">No activity in the database uses this product.</p>` : html`
                 <table class="flows users plist">
@@ -3325,7 +3362,7 @@ function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsByI
                     ${p.comment && html`<span class="muted">· ${truncate(p.comment, 80)}</span>`}</td></tr>`)}
               </table>
             </section>`}`}
-          ${shown === "metadata" && html`
+          ${shown === "metadata" && info && html`
           <section>
             <h4>Metadata</h4>
             <table class="kv">
@@ -3566,7 +3603,7 @@ function ChartPanel({ data, info, method, chartMethods, onPickMethods, view }) {
   const unit = info.methods[method].unit;
   const total = parts.reduce((s, p) => s + p.impacts[0], 0);
   // Bars of rows in a group (or of the group) take the colour of its rule
-  const colors = useMemo(() => groupColors(data.rows, view), [data, view.groupColors, view.colorBy, view.ruleColors]);
+  const colors = useMemo(() => groupColors(data.rows, view), [data, view.groupColors, view.colorBy, view.ruleColors, paletteStamp]);
 
   const singleOption = useMemo(() => {
     const o = baseOption();
@@ -3913,10 +3950,17 @@ function GroupPanel({ info, rules, setRules, selectedRow, view, setView, shared,
             </li>`)}
         </ul>`}
       ${extras?.attribution}
+      ${extras?.palette}
       ${extras?.ruleSet}
 
       <${Fold} id="quick" title="Quick groups" open=${false}>
-        <div class="row">${PRESETS.map((p) => html`<button onClick=${() => add(p.rule)}>${p.label}</button>`)}</div>
+        <div class="row">${PRESETS.map((p) => {
+          const key = ruleKey(p.rule);
+          const used = view.groupColors && rules.some((r) => !r.disabled && r.target !== "flows" && ruleKey(r) === key);
+          const fill = used ? colorOf(key, view.ruleColors) : null;
+          return html`<button style=${used ? { background: fill, borderColor: fill, color: textOn(fill) } : null}
+            title=${used ? "In the active rules, in this colour" : undefined} onClick=${() => add(p.rule)}>${p.label}</button>`;
+        })}</div>
       <//>
 
       <${Fold} id="new" title=${editIndex !== null ? "Edit rule" : "New rule"} open=${false} force=${editIndex !== null} innerRef=${form}>
@@ -3978,8 +4022,23 @@ function namedGroups(rules) {
   return { groups, flowGroups, order: active.map(nameOf) };
 }
 
-// The Rules panel keeps these two next to its rules (the attribution, the rule set), made where the lens is known
+// The palette of the colours of the rules: a menu, with the first colours of the one chosen
+function PaletteSwitch({ palette, setPalette }) {
+  const current = RULE_PALETTES[palette] || RULE_PALETTES.auto;
+  return html`
+    <div class="view-group" role="group" aria-label="Palette of the rules">
+      <span class="view-group-label">Colours</span>
+      <select value=${palette} onChange=${(e) => setPalette(e.target.value)} aria-label="Palette of the rules" title=${current.hint}>
+        ${Object.entries(RULE_PALETTES).map(([key, q]) => html`<option value=${key} title=${q.hint}>${q.label}</option>`)}
+      </select>
+      <span class="palette-strip" aria-hidden="true">${(current.colors || [0, 60, 120, 180, 240, 300].map((h) => `hsl(${h} 55% 52%)`)).slice(0, 8)
+        .map((c) => html`<i style=${{ background: c }}></i>`)}</span>
+    </div>`;
+}
+
+// The Rules panel keeps these next to its rules (the attribution, the palette, the rule set), made where the lens is known
 const ruleExtras = (lens) => ({
+  palette: html`<${PaletteSwitch} palette=${lens.palette} setPalette=${lens.setPalette} />`,
   attribution: html`<${AttributionSwitch} rule=${lens.attribution} setRule=${lens.setAttribution} />`,
   ruleSet: html`<${Fold} id="ruleset" title=${`Rule set · ${lens.set}`} open=${false} actions=${html`<${InfoTip} text=${RULE_SET_TIP} label="What a rule set is" />`}>
     <${SetMenu} lens=${lens} />
@@ -4152,7 +4211,7 @@ function GlobalPanel({ info, root, amount, method, rules, view, rule, setRule, o
       })),
       label: { show: true, position: "right", formatter: (d) => pct(d.value / total), color: cssVar("--muted") } }];
     return o;
-  }, [result, k, group, view.groupColors, view.ruleColors]);
+  }, [result, k, group, view.groupColors, view.ruleColors, paletteStamp]);
 
   return html`
     <div class="panel">
@@ -4284,7 +4343,7 @@ function FlowPanel({ info, root, amount, method, onLocate, onInfo, onFlowInfo, r
       })),
       label: { show: true, position: "right", formatter: (d) => ofTotal(d.value), color: cssVar("--muted") } }];
     return o;
-  }, [result, flow, view.groupColors, view.ruleColors]);
+  }, [result, flow, view.groupColors, view.ruleColors, paletteStamp]);
 
   return html`
     <div class="panel">
@@ -4457,13 +4516,14 @@ function initLens(info, seed) {
     method, chartMethods: chart ? chart.filter((k) => k >= 0) : familyOf(info, method), sets, set: stored?.set in sets ? stored.set : Object.keys(sets)[0],
     attribution: stored?.attribution === "direct" ? "direct" : "first_match",  // of the impacts to the rules: Rules contributions and Compare
     nameFormat: { ...DEFAULT_NAME_FORMAT, ...(stored?.nameFormat || {}) },
+    palette: stored?.palette in RULE_PALETTES ? stored.palette : "auto",
   };
 }
 function saveLens(info, lens) {
   try {
     localStorage.setItem(LENS_KEY, JSON.stringify({ method: info.methods[lens.method]?.name,
       chartMethods: lens.chartMethods.map((k) => info.methods[k]?.name).filter(Boolean), sets: lens.sets, set: lens.set,
-      attribution: lens.attribution, nameFormat: lens.nameFormat }));
+      attribution: lens.attribution, nameFormat: lens.nameFormat, palette: lens.palette }));
   } catch { /* storage unavailable */ }
 }
 
@@ -5319,9 +5379,9 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
             ${viewBar}
           </section>
         </div>`;
-  return html`
-    <div class=${`fu-view ${embedded ? "embedded" : ""}`} ref=${box} style=${{ display: visible ? "" : "none" }}>
-        <section class="tree-section" ref=${treeSection} onMouseDown=${() => { if (!embedded) keyboardOwner = id; }}>
+  // The tree, the first panel of the process of the tab (its pop-up's panels are the others)
+  const treeNode = html`
+    <section class="tree-section" ref=${treeSection} onMouseDown=${() => { if (!embedded) keyboardOwner = id; }}>
           ${undo && html`
             <div class="notice" role="status">
               <span>${undo.message}</span>
@@ -5356,7 +5416,15 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
                 Selected (${selectedTotals.count} ${selectedTotals.count === 1 ? "process" : "processes"}): ${selectedTotals.amounts} · impact ${fmt(selectedTotals.impact)} ${methodInfo.unit}
               </span>`}
           </div>
-        </section>
+        </section>`;
+  return html`
+    <div class=${`fu-view ${embedded ? "embedded" : ""}`} ref=${box} style=${{ display: visible ? "" : "none" }}>
+      ${!embedded && root
+        ? html`<${InfoPopup} docked active=${visible} treeSlot=${treeNode} target=${{ index: root.index, row: null }} win=${{}} model=${info}
+            method=${method} methodInfo=${methodInfo} rootImpact=${rootImpact} rowsById=${rowsById} onClose=${() => {}} onBack=${null}
+            onUseAsRoot=${selectRoot} onOpenTab=${(r, place) => onOpenTab(id, r, place)} root=${root} amount=${amount}
+            onFollow=${(next) => openInfo(next)} onGoTo=${(index) => goTo(index)} />`
+        : treeNode}
       ${!embedded && html`<${Portal} slot=${`side-${id}`}>
         <section class="side">
           <div class="tabs" role="tablist" onKeyDown=${tabKeys(["view", "chart", "flows", "global"], tab, setTab)}>
@@ -5770,7 +5838,7 @@ function compareSelection(tabs, compare) {
 // process. Drag a process to another window, before another one, or to the zone for a new window; drop a process from a
 // row of the explorer or a panel to open it in a new tab. What each does is in its tooltip.
 // ``windows``: { panes, current: the pane used last, select(pane, tab), focus(pane), close(tab), closePane(pane), drag(tab),
-// move(tab, pane, zone, before), openProcess(index, pane, zone), reopen(), closed: how many closed ones are kept, dragging: tab }
+// move(tab, pane, zone, before), openProcess(index, pane, zone), reopen(at), history: [{ at, label }] of what was closed, dragging: tab }
 function ProcessesPanel({ tabs, compare, setCompare, windows }) {
   const { labels, fullLabels, common, chosen, baseline } = compareSelection(tabs, compare);
   const [over, setOver] = useState(null);  // where a drop would go: { pane, before } or { fresh: true }
@@ -5827,6 +5895,11 @@ function ProcessesPanel({ tabs, compare, setCompare, windows }) {
   return html`
     <div class="lens-menu" ...${target(windows.panes.find((q) => q.id === windows.current) || lastPane)}>
       ${common && html`<div class="muted compare-common" title=${common}>${common}</div>`}
+      <div class="row history-row">
+        <${PopupMenu} label="Open history ▾" title="Tabs and windows closed, the last first: bring one back" className=""
+          items=${windows.history.length ? windows.history.map((h) => ({ key: `h${h.at}`, label: truncate(h.label, 48), title: h.label, run: () => windows.reopen(h.at) }))
+            : [{ label: "Nothing closed yet", disabled: true, run: () => {} }]} />
+      </div>
       <div class="compare-tabs">
         ${tabs.length === 0 && html`<div class="muted">No process yet.</div>`}
         ${groups.map(({ pane, items }, n) => html`
@@ -5839,7 +5912,6 @@ function ProcessesPanel({ tabs, compare, setCompare, windows }) {
             ${items.map((t) => row(t, pane))}
           </div>`)}
         ${dragging && html`<div class="window-new ${over?.fresh ? "drop-here" : ""}" ...${fresh}>Drop here: a new window</div>`}
-        ${windows.closed > 0 && html`<button class="link" onClick=${windows.reopen} title="Bring back the last tab or window closed">↺ Reopen what I closed (${windows.closed})</button>`}
       </div>
     </div>`;
 }
@@ -6182,6 +6254,8 @@ function App() {
   // The impact methods and group rules of the workspace, which the tabs follow (see the lens above FUView)
   const [lens, setLens] = useState(null);
   nameFormat = lens?.nameFormat || DEFAULT_NAME_FORMAT;
+  rulePalette = { name: lens?.palette || "auto", keys: (lens?.sets[lens.set] || []).map((r) => r.by || r.name) };
+  paletteStamp = `${rulePalette.name}|${rulePalette.keys.join("|")}`;
   const info = useMemo(() => (rawInfo && nameFormat.symbol
     ? { ...rawInfo, methods: rawInfo.methods.map((m) => ({ ...m, unit: prettyUnit(m.unit) })) } : rawInfo), [rawInfo, nameFormat.symbol]);
   useEffect(() => { if (lens && info) saveLens(info, lens); }, [lens]);
@@ -6394,8 +6468,9 @@ function App() {
     clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => setToast(null), 12000);
   }
-  function reopenClosed() {
-    const list = closedStack.current.pop();
+  // ``at``: which of the closed ones (the last by default)
+  function reopenClosed(at = closedStack.current.length - 1) {
+    const [list] = closedStack.current.splice(at, 1);
     setClosedCount(closedStack.current.length);
     setToast(null);
     if (!list) return;
@@ -6472,7 +6547,7 @@ function App() {
         openTab(paneId, { inherit: states.current[activeTabOf(paneId)], root: found }, zone);
       } catch { /* not a process of this database */ }
     },
-    reopen: () => reopenClosed(),
+    reopen: (at) => reopenClosed(at),
     drag: (id) => { setDragging(id); if (!id) setDrop(null); },
     move: (id, paneId, zone, before) => {
       setDragging(null);
@@ -6496,6 +6571,7 @@ function App() {
     setChartMethods: (chartMethods) => setLens((l) => ({ ...l, chartMethods })),
     setAttribution: (attribution) => setLens((l) => ({ ...l, attribution })),
     setNameFormat: (format) => setLens((l) => ({ ...l, nameFormat: format })),
+    setPalette: (palette) => setLens((l) => ({ ...l, palette })),
     setRules: (rules) => setLens((l) => ({ ...l, sets: { ...l.sets, [l.set]: rules } })),
     chooseSet: (set) => setLens((l) => ({ ...l, set })),
     addSet: (name, copy) => setLens((l) => { const n = freshName(name, l.sets); return { ...l, set: n, sets: { ...l.sets, [n]: copy ? l.sets[l.set] : [] } }; }),
@@ -6599,7 +6675,11 @@ function App() {
           <${LensPanel} info=${info} lens=${lensApi} tab=${leftTab} setTab=${setLeftTab} tabs=${allTabs} focusedTab=${focusedTab} comparing=${comparing}
             view=${TAB_API[focusedTab] || Object.values(TAB_API)[0]} compareTabs=${compareTabs} compare=${compare} setCompare=${setCompare} onCollapse=${() => setLeftOpen(false)}
             windows=${{ panes: panesOf(layout), current: focus, select: actions.select, focus: actions.focus, close: actions.close, drag: actions.drag, move: actions.move,
-              closePane: actions.closePane, openProcess: actions.openProcess, reopen: actions.reopen, closed: closedCount, dragging }} />
+              closePane: actions.closePane, openProcess: actions.openProcess, reopen: actions.reopen, dragging,
+              history: closedStack.current.map((list, at) => {
+                const roots = list.map((snap) => snap.state?.root).filter(Boolean);
+                return { at, label: list.length > 1 ? `${list.length} tabs: ${roots.map((r) => r.name).join(", ")}` : roots[0] ? `${roots[0].name} (${roots[0].location})` : "An empty tab" };
+              }).reverse() }} />
         </aside>
         ${leftOpen && html`<div class="side-resizer" onPointerDown=${startLeftResize} title="Drag to resize"></div>`}
         <div class="workspace" style=${{ display: comparing ? "none" : "" }}><${LayoutView} node=${layout} renderPane=${renderPane}

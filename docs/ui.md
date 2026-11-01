@@ -180,7 +180,9 @@ API in `src/lca_viewer/server.py`.
   between panes can be dragged. The two buttons at the right of a tab bar
   split right / down with a *copy* of the active tab, e.g. to compare one
   process under two methods. *Open in new tab* in the right-click
-  pop-up opens a process as the process of a new tab.
+  pop-up opens a process as the process of a new tab. A tab is a pop-up kept in the grid: the first
+  line of a tab shows the **panels of the pop-up** (*Process*, the tree; *Used by*; *Alternatives*;
+  *Description*; *Metadata*), and dragging a pop-up by its header onto the grid makes it a tab.
   Decision: one shared **side panel** on the right (process and flow
   contribution, group rules, group contributions), showing the active tab of the pane clicked
   last, as in Obsidian's sidebars, rather than one per pane: panes stay wide
@@ -218,7 +220,7 @@ API in `src/lca_viewer/server.py`.
   onto *Drop here: a new window*; a **×** on a window's header closes it with its tabs. A process dragged
   from a row of the explorer, of a panel or of a pop-up (the list of *Used by*, the direct contributions,
   the contributors of a rule or a flow) and dropped on the panel, on a tab list or on a window opens in a new
-  tab. Closing a tab or a window shows a notice with *Undo*, and the panel keeps *Reopen what I closed*. Decision: the impact
+  tab. Closing a tab or a window shows a notice with *Undo*, and the panel has an *Open history* menu at the top (what was closed, the last first: pick one to bring it back). Decision: the impact
   methods and the group rules are chosen once for the workspace and **shared by all
   tabs**, not per tab and per panel as before (a method list in the header, another in the
   *Process contribution* panel and a third in Compare mode; rules copied from tab to tab,
@@ -544,8 +546,10 @@ API in `src/lca_viewer/server.py`.
     on flows (substance, compartment, subcompartment, unit), which group the
     flows under direct emissions and split what the process groups leave in
     *Rules contributions*; "product / waste" (`flow_type`) is a field of
-    processes, not of flows. Each rule has a colour swatch: click it to pick
-    another colour (right-click resets it). The groups of a rule carry it in
+    processes, not of flows. The *Colours* menu of the Rules panel
+    picks a palette for the rules (automatic hues, categorical, colour-blind safe, vivid, soft, earth),
+    given in the order of the rules; each rule has a colour swatch: click it to pick
+    another colour (right-click resets it). A quick group in use is filled with its colour. The groups of a rule carry it in
     the tree, graph and Sankey, and the bars of the *Process contribution*,
     *Flow contribution* (a substance in a named flow group) and *Group
     contributions* charts; *No colours* in the view bar switches all colours off. *Flow type

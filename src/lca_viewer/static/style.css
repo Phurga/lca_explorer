@@ -906,3 +906,14 @@ textarea.editing { width: 100%; box-sizing: border-box; }
 
 .top-field { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; font-size: 12px; color: var(--muted); }
 .top-field input { width: 64px; }
+
+.palette-strip { display: inline-flex; gap: 2px; }
+.palette-strip i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+.history-row { margin-bottom: 6px; }
+
+/* A tab's process: its first line is the panels of the pop-up, the tree being the first */
+.docked-panels { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
+.docked-panels > .info-tabs { padding: 0 6px; border-bottom: 1px solid var(--border); flex: none; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; }
+.docked-panels > .info-tabs button { white-space: nowrap; flex: none; }
+.docked-panels > .docked-tree { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
+.docked-panels > .info-body { flex: 1; min-height: 0; }
