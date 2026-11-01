@@ -10,7 +10,26 @@ const STORAGE_KEY = DATABASE ? `lca_viewer.view.${DATABASE}` : "lca_viewer.view"
 
 // ---------------------------------------------------------------- helpers
 // The API of the database shown (under /db/<key>/)
-const request = (url, body) => serverRequest(url.startsWith("/api/") ? API_BASE + url : url, body);
+// The calculations that only read the model (the rows of a tree, the contributions, the comparison) keep their answer
+// for the same question: a panel opened again, or a comparison of what a tab already shows, does not calculate again.
+// ``clearAnswers`` when the model changes.
+const CACHED = /^\/api\/(rows|global|global\/contributors|flows|flows\/contributors|compare)$/;
+const answers = new Map();  // question -> { promise, value }
+const clearAnswers = () => answers.clear();
+function request(url, body) {
+  const full = url.startsWith("/api/") ? API_BASE + url : url;
+  if (body === undefined || !CACHED.test(url)) return serverRequest(full, body);
+  const key = full + JSON.stringify(body);
+  let entry = answers.get(key);
+  if (entry) { answers.delete(key); answers.set(key, entry); return entry.promise; }  // the most recent last
+  entry = { promise: null, value: undefined };
+  entry.promise = serverRequest(full, body).then((value) => { entry.value = value; return value; }, (e) => { answers.delete(key); throw e; });
+  answers.set(key, entry);
+  if (answers.size > 120) answers.delete(answers.keys().next().value);
+  return entry.promise;
+}
+// The answer to a question already asked, at once (undefined: not yet)
+const peek = (url, body) => (body ? answers.get((url.startsWith("/api/") ? API_BASE + url : url) + JSON.stringify(body))?.value : undefined);
 
 // The server's own API (databases loaded, Projects)
 async function serverRequest(url, body) {
@@ -48,19 +67,38 @@ function fmtAxis(v) {
   return String(Number(v.toPrecision(3)));
 }
 const pct = (x) => `${(x * 100).toFixed(1)}%`;
-// How the impact methods are named in the results (set in the Methods panel): the family, the indicator (category and
-// indicator), the unit after the name, and the unit written with symbols (CO₂ eq, m³)
-const DEFAULT_NAME_FORMAT = { family: true, indicator: true, unit: true, symbol: false };
+// How the impact methods are named in the results (set in the Methods panel): from parts (the family, the category, the
+// indicator, the unit after the name, the unit written with symbols: CO₂ eq, m³) or from a format of one's own with the
+// tokens {family}, {category}, {indicator} and {unit}
+const DEFAULT_NAME_FORMAT = { family: true, category: true, indicator: true, unit: true, symbol: false, mode: "parts", recipe: "{category} | {indicator} [{unit}]" };
+const METHOD_TOKENS = ["family", "category", "indicator", "unit"];
 let nameFormat = DEFAULT_NAME_FORMAT;
+let nameStamp = "";  // changes with the format, for the memos that hold names
 const prettyUnit = (u) => u.replace(/\bm([23])\b/g, (_, d) => (d === "2" ? "m²" : "m³"))
   .replace(/([A-Z][a-z]?)(\d+)(?!\d)/g, (_, el, d) => el + [...d].map((c) => "₀₁₂₃₄₅₆₇₈₉"[c]).join(""))
   .replace(/([A-Za-z])\+/g, "$1⁺").replace(/-Eq\b/g, " eq");
+// A format applied: empty brackets and separators left by an empty part are dropped
+function applyMethodRecipe(recipe, m) {
+  const values = { family: m.name[0] ?? "", category: m.name[1] ?? "", indicator: m.name.slice(2).join(" | "), unit: m.unit ?? "" };
+  return recipe.replace(/\{(\w+)\}/g, (token, key) => (key in values ? values[key] : token))
+    .replace(/\[\s*\]|\(\s*\)/g, "").replace(/(\s*\|\s*)+(?=\s*\|)/g, "").replace(/^[\s|,·-]+|[\s|,·-]+$/g, "").replace(/\s+/g, " ").trim();
+}
+const customName = () => nameFormat.mode === "custom";
+// The name of a method without its unit
 const methodLabel = (m) => {
-  const parts = [nameFormat.family && m.name[0], nameFormat.indicator && m.name.slice(1).join(" | ")].filter(Boolean);
+  if (customName()) return applyMethodRecipe(nameFormat.recipe.replace(/\s*\[?\{unit\}\]?/g, ""), m) || m.name.join(" | ");
+  const parts = [nameFormat.family && m.name[0], nameFormat.category && m.name[1], nameFormat.indicator && m.name.slice(2).join(" | ")].filter(Boolean);
   return (parts.length ? parts : [m.name.join(" | ")]).join(" | ");
 };
 // A method with its unit, for the titles and the headers of files
-const methodTitle = (m) => `${methodLabel(m)}${nameFormat.unit ? ` [${m.unit}]` : ""}`;
+const methodTitle = (m) => (customName() ? applyMethodRecipe(nameFormat.recipe, m) || m.name.join(" | ")
+  : `${methodLabel(m)}${nameFormat.unit ? ` [${m.unit}]` : ""}`);
+// A method as a row or a bar of the several methods (the family is the same for all of them: not repeated unless asked)
+const methodRow = (m) => {
+  if (customName()) return applyMethodRecipe(nameFormat.recipe, m) || m.name.join(" | ");
+  const parts = [nameFormat.category && m.name[1], nameFormat.indicator && m.name.slice(2).join(" | ")].filter(Boolean);
+  return parts.length ? parts.join(" | ") : m.name.slice(1).join(" | ") || m.name[0];
+};
 const productOf = (rowId) => Number(rowId.split("/").pop());
 // The reference product of a process row: its label starts with it ("product | name | location")
 const productNameOf = (row) => (row.kind === "process" ? row.label.split(" | ")[0] : "");
@@ -124,10 +162,10 @@ function shareOf(r, byId, rootImpact, basis) {
 // Cut-off modes (the menu next to the cut-off number). The number is a share in percent,
 // except for "top" where it is a count of rows. Shares are shown of the total only for "total".
 const CUTOFF_MODES = {
-  total: { label: "of total", unit: "%", hint: "Under each parent, the smallest children together weighing at most this share of the total go to others" },
-  parent: { label: "of parent", unit: "%", hint: "Under each parent, the smallest children together weighing at most this share of that parent go to others" },
-  cumulative: { label: "cumulative", unit: "%", hint: "Under each parent, the largest children are kept until together they reach this share of that parent; the rest go to others" },
-  top: { label: "largest", unit: "rows", hint: "Under each parent, only this many of the largest children are kept; the rest go to others" },
+  total: { label: "of total", unit: "%", hint: "Smallest rows, as a share of the total" },
+  parent: { label: "of parent", unit: "%", hint: "Smallest rows, as a share of their parent" },
+  cumulative: { label: "cumulative", unit: "%", hint: "Largest rows, until this share of the parent" },
+  top: { label: "largest", unit: "rows", hint: "This many largest rows" },
 };
 const CUTOFF_DEFAULTS = { total: 1, parent: 1, cumulative: 90, top: 5 };
 const cutoffValue = (value, basis) => (basis === "top" ? value : value / 100);
@@ -146,12 +184,12 @@ const hueOf = (key) => [...key].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 36
 // The palette of the rules (set in the Rules panel, kept by the workspace): ``keys`` are the rules of the set in use, in
 // order; the palette gives its colours in that order ("auto": a hue derived from the name). ``paletteStamp`` changes with
 // either, for the memos that hold colours.
-let rulePalette = { name: "auto", keys: [] };
+let rulePalette = { name: "auto", keys: [], own: {} };
 let paletteStamp = "auto";
 // A colour picked in the Group rules tab (``picked``: key -> "#rrggbb", part of the view) wins
 function colorOf(key, picked) {
   if (picked?.[key]) return picked[key];
-  const colors = RULE_PALETTES[rulePalette.name]?.colors;
+  const colors = RULE_PALETTES[rulePalette.name]?.colors || rulePalette.own[rulePalette.name];
   if (!colors) return `hsl(${hueOf(key)} 55% 52%)`;
   const i = rulePalette.keys.indexOf(key);
   return colors[(i >= 0 ? i : hueOf(key)) % colors.length];
@@ -201,6 +239,17 @@ const COLUMNS = [
     text: (r) => (r.exchanges || []).map((e) => e["variable name"]).filter(Boolean).join("; ") },
 ];
 const DEFAULT_COLUMNS = ["amount", "impact", "share"];
+// What a tab starts with when nothing was kept: a list, no cut-off, nothing grouped, full names, no colours, the comments shown
+// (a pop-up's explorer keeps the plain columns)
+const DEFAULT_VIEW_COLUMNS = [...DEFAULT_COLUMNS, "comment"];
+const DEFAULT_CUTOFF = 0;
+const DEFAULT_VIEW = {
+  naming: "full", splitByType: false, hideOthers: false, groupProducts: false, groupByRules: false, groupSubstance: false,
+  groupCompartment: false, groupSubcompartment: false, groupColors: false, colorBy: "group", columns: DEFAULT_VIEW_COLUMNS, ruleColors: {},
+};
+// The rules a workspace starts with
+const DEFAULT_RULE_LABELS = ["Transport", "Electricity", "Heat & fuels", "Infrastructure", "Waste treatment"];
+const defaultRules = () => DEFAULT_RULE_LABELS.map((label) => ({ scope: "*", ...PRESETS.find((q) => q.label === label).rule }));
 const columnText = (c, r) => (c.text ? c.text(r) : r[c.id]) || "";
 const fromNature = (compartment) => /resource/i.test(compartment || "");
 // The type of a row (a key of FLOW_TYPES); none for an others row. A group or merged row takes the type of its first member.
@@ -228,6 +277,7 @@ const sectionOf = (r) => (r.kind === "rest" ? "rest" : flowTypeOf(r));
 const flowRulesOf = (view) => [
   ...(view.groupSubstance ? [{ by: "name", target: "flows", scope: "*" }] : []),
   ...(view.groupCompartment ? [{ by: "compartment", target: "flows", scope: "*" }] : []),
+  ...(view.groupSubcompartment ? [{ by: "subcompartment", target: "flows", scope: "*" }] : []),
 ];
 // Hide others: the others rows and what an expanded one shows below it (its members, and their own rows). The rows are
 // in display order, so what is below a row is what follows it, deeper.
@@ -1355,7 +1405,7 @@ function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
                     : p.databases.length ? `${p.databases.filter((d) => d.processes).length} ${p.databases.filter((d) => d.processes).length === 1 ? "database" : "databases"}, ${count(p.methods)} impact methods` : "empty"}
                     ${opened.length > 0 && html` · <span class="loc-chip" title="Databases of this project that are open">${opened.map((d) => d.name).join(", ")} open</span>`}</span></td>
                 <td class="actions project-actions">
-                  <${PopupMenu} label="Options ▾" title="Options of this project" items=${[
+                  <${PopupMenu} label=${html`<${GearIcon} />`} className="gear-btn" title="Options of this project" items=${[
                     ...(p.twofive ? [{ label: "Add database…", title: "Import a database into this project: an ecoSpold2 release, a SimaPro CSV export, BAFU, ecoinvent with your account, or a copy of one of another project",
                       run: () => setForm({ kind: "add", project: p.name }) }] : []),
                     { label: "Delete project…", danger: true, title: "Delete this project", run: () => setForm({ kind: "delete", project: p.name }) }]} />
@@ -1368,7 +1418,7 @@ function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
                   <td class="indent">${d.name}${d.locked && html` <span class="loc-chip" title="What this database contains cannot be edited">🔒 locked</span>`}${d.model?.outdated && html`<div class="muted small">${d.model.outdated}${d.model.key ? ": close it to rebuild it" : ""}</div>`}</td>
                   <td class="num muted">${d.processes ? `${count(d.processes)} processes` : `${count(d.flows)} flows`}</td>
                   <td class="actions">${dbAction(p, d)}
-                    ${p.twofive && html`<${PopupMenu} label="Options ▾" title="Options of this database" items=${dbOptions(p, d)} />`}</td>
+                    ${p.twofive && html`<${PopupMenu} label=${html`<${GearIcon} />`} className="gear-btn" title="Options of this database" items=${dbOptions(p, d)} />`}</td>
                 </tr>`)}`; })}
           </table>
           ${!projects.projects.length && html`<p class="muted">No project in this folder yet: create one with <i>New project</i>.</p>`}`}
@@ -1999,7 +2049,7 @@ function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onU
     <div class="tree" ref=${box}>
       <table style=${{ minWidth: `${Math.max(460, 300 + COLUMNS.filter((c) => shown.has(c.id)).reduce((sum, c) => sum + c.width, 0))}px` }}>
         <colgroup><col />${COLUMNS.filter((c) => shown.has(c.id)).map((c) => html`<col key=${c.id} style=${{ width: `${c.width}px` }} />`)}</colgroup>
-        <thead title="Right-click to choose the columns" onContextMenu=${(e) => { e.preventDefault(); setColumnMenu({ x: e.clientX, y: e.clientY }); }}><tr><th>Process</th>
+        <thead title="Right-click to choose the columns" onContextMenu=${(e) => { e.preventDefault(); setColumnMenu({ x: e.clientX, y: e.clientY }); }}><tr><th>Supply chain</th>
           ${shown.has("amount") && html`<th class="num">Amount</th>`}${shown.has("impact") && html`<th class="num">Impact</th>`}
           ${shown.has("share") && html`<th title="Switched with the cut-off basis (total | parent)">Share of ${shareBasis === "parent" ? "parent" : "total"}</th>`}
           ${extra.map((c) => html`<th key=${c.id} title=${c.hint}>${c.label}</th>`)}</tr></thead>
@@ -2618,7 +2668,13 @@ function BundlePopup({ target, win, row, methodInfo, rootImpact, actions, onPart
 }
 
 // ---------------------------------------------------------------- save / load menu
-function SaveMenu({ disabled, onSave, onLoad, onCopy }) {
+function DiskIcon() {
+  return html`
+    <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round">
+      <path d="M2.5 2.5h9l2 2v9h-11z" /><path d="M5 2.5v3.5h5V2.5" /><path d="M5 13.5v-4h6v4" />
+    </svg>`;
+}
+function SaveMenu({ disabled, onSave, onLoad, onCopy, onDefaults, icon }) {
   const [open, setOpen] = useState(false);
   const box = useRef(null);
   const file = useRef(null);
@@ -2630,12 +2686,14 @@ function SaveMenu({ disabled, onSave, onLoad, onCopy }) {
   }, [open]);
   return html`
     <span class="split" ref=${box}>
-      <button disabled=${disabled} onClick=${onSave} title="Download this view (process, tree, groups, pins, names) as JSON">Save</button>
-      <button class="split-arrow" onClick=${() => setOpen(!open)} aria-label="More view options" aria-expanded=${open}>▾</button>
+      <button disabled=${disabled} onClick=${onSave} aria-label="Save the view" title="Save the view: process, tree, settings, rules, methods">${icon ? html`<${DiskIcon} />` : "Save"}</button>
+      <button class="split-arrow" onClick=${() => setOpen(!open)} aria-label="Load or copy a view" title="Load a view, copy it" aria-expanded=${open}>▾</button>
       ${open && html`
         <div class="menu" role="menu">
           <button role="menuitem" onClick=${() => { setOpen(false); file.current.click(); }}>Load view…</button>
           <button role="menuitem" disabled=${disabled} onClick=${() => { setOpen(false); onCopy(); }}>Copy view as JSON</button>
+          ${onDefaults && html`<button role="menuitem" title="List, no cut-off, nothing grouped, full names, no colours, comments shown; climate change as method, its family shown together, the default rules"
+            onClick=${() => { setOpen(false); onDefaults(); }}>Default settings</button>`}
         </div>`}
       <input type="file" accept=".json,application/json" ref=${file} style="display:none" aria-label="View file"
              onChange=${(e) => { const f = e.target.files[0]; e.target.value = ""; if (f) onLoad(f); }} />
@@ -2652,20 +2710,21 @@ function ViewBar({ view, setView, example }) {
     <div class="view-bar">
       <div class="view-group" role="group" aria-label="Group by">
         <span class="view-group-label">Group by</span>
-        ${toggle("groupByRules", "Rules", "Bundle rows under the groups of your rules (Rules panel)", view.groupByRules !== false)}
-        ${toggle("groupProducts", "Product", "Bundle the suppliers of one product: its regions and routes")}
-        ${toggle("groupSubstance", "Substance", "In direct emissions, bundle the flows of a substance")}
-        ${toggle("groupCompartment", "Compartment", "In direct emissions, bundle the flows by compartment: air, water, soil")}
+        ${toggle("groupByRules", "Rules", "By your rules", view.groupByRules !== false)}
+        ${toggle("groupProducts", "Product", "Suppliers of one product")}
+        ${toggle("groupSubstance", "Substance", "Flows of a substance")}
+        ${toggle("groupCompartment", "Compartment", "Flows by compartment")}
+        ${toggle("groupSubcompartment", "Subcompartment", "Flows by subcompartment")}
       </div>
       <div class="view-group" role="group" aria-label="Organize">
         <span class="view-group-label">Organize</span>
-        ${toggle("splitByType", "Split by type", "Sort the rows under a row in sections: technosphere inputs, nature inputs, emissions, waste")}
-        ${toggle("hideOthers", "Hide others", "Hide the 'others' rows, and what they hold, from the tree; the chart keeps them")}
+        ${toggle("splitByType", "Split by type", "Sections by exchange type")}
+        ${toggle("hideOthers", "Hide others", "No others rows in the tree")}
       </div>
       <div class="view-group" role="group" aria-label="Names">
         <span class="view-group-label">Names</span>
         <span class="segmented">
-          ${[["full", "Full", "Process, product and place"], ["short", "Short", "The main part of the name"], ["custom", "Custom", "A format of your own"]].map(([id, label, hint]) => html`
+          ${[["full", "Full", "Product, process, place"], ["short", "Short", "Main name"], ["custom", "Custom", "Your format"]].map(([id, label, hint]) => html`
             <button class=${view.naming === id ? "primary" : ""} title=${hint} onClick=${() => set({ naming: id })}>${label}</button>`)}
         </span>
       </div>
@@ -2673,8 +2732,8 @@ function ViewBar({ view, setView, example }) {
         <span class="view-group-label">Colours</span>
         <span class="segmented">
           ${[["none", "None", "No colours"],
-            ["group", "Rules", "Colour each group with the colour of its rule"],
-            ["type", "Flow type", "Colour rows by exchange: product, input, waste, resource, emission (hover a colour bar for its name)"]].map(([id, label, hint]) => html`
+            ["group", "Rules", "By rule"],
+            ["type", "Flow type", "By exchange type"]].map(([id, label, hint]) => html`
             <button class=${(view.groupColors ? view.colorBy || "group" : "none") === id ? "primary" : ""} title=${hint}
               onClick=${() => set(id === "none" ? { groupColors: false } : { colorBy: id, groupColors: true })}>${label}</button>`)}
         </span>
@@ -2854,6 +2913,13 @@ function dockAt(x, y, popup) {
 }
 
 // The ⋯ menu at the top right of a pop-up: ``items``: [{ label, run, title, disabled }]
+// The icon of an options menu (a gear)
+function GearIcon() {
+  return html`
+    <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round">
+      <circle cx="8" cy="8" r="2.2" /><path d="M8 1.5v1.7M8 12.8v1.7M1.5 8h1.7M12.8 8h1.7M3.4 3.4l1.2 1.2M11.4 11.4l1.2 1.2M12.6 3.4l-1.2 1.2M4.6 11.4l-1.2 1.2" />
+    </svg>`;
+}
 function PopupMenu({ items, label = "⋯", title = "Actions of this pop-up", className = "menu-btn" }) {
   const [at, setAt] = useState(null);
   const box = useRef(null);
@@ -3585,13 +3651,13 @@ const PANEL_TIPS = {
   view: "How the tree is shown (display, cut-off, rows), and the chart of its rows.",
   chart: "What each process of the supply chain adds by its own emissions, wherever it is in the tree.",
   flows: "Which substances drive the score, and which processes emit them.",
-  groups: "Bundle rows into named groups to see what electricity, transport or fertilisers weigh.",
+  groups: "Define rules on processes and elementary flows to define custom contribution analyses model structure",
   processes: "Your open tabs: compare, reorder, close. Drop a process here to open it.",
   methods: "The indicator of the tree and charts, and the ones to show together.",
   global: "The score split by your rules over the whole supply chain, to see what each rule weighs.",
 };
 
-function ChartPanel({ data, info, method, chartMethods, onPickMethods, view }) {
+function ChartPanel({ data, info, method, chartMethods, onPickMethods, view, header }) {
   const { naming, recipe } = view;
   const [mode, setMode] = useState("single");
 
@@ -3635,7 +3701,7 @@ function ChartPanel({ data, info, method, chartMethods, onPickMethods, view }) {
       label: { show: true, position: "right", formatter: (d) => fmt(d.value), color: cssVar("--muted") },
     }];
     return o;
-  }, [parts, method, colors]);
+  }, [parts, method, colors, nameStamp]);
 
   const multiOption = useMemo(() => {
     const o = baseOption();
@@ -3647,7 +3713,7 @@ function ChartPanel({ data, info, method, chartMethods, onPickMethods, view }) {
       segments.push({ name: `${rest.length} more rows`, impacts: data.methods.map((_, k) => rest.reduce((s, p) => s + p.impacts[k], 0)) });
     }
     const totals = positions.map((k) => parts.reduce((s, p) => s + p.impacts[k], 0));
-    const categories = positions.map((k) => truncate(info.methods[data.methods[k]].name.slice(1).join(" | "), 50));
+    const categories = positions.map((k) => truncate(methodRow(info.methods[data.methods[k]]), 50));
     o.legend = { type: "scroll", bottom: 0, textStyle: { color: cssVar("--text") } };
     o.grid.bottom = 40;
     o.yAxis = { ...o.yAxis, type: "category", data: categories, inverse: true };
@@ -3658,7 +3724,7 @@ function ChartPanel({ data, info, method, chartMethods, onPickMethods, view }) {
       data: positions.map((k, i) => (totals[i] ? (100 * s.impacts[k]) / totals[i] : 0)),
     }));
     return o;
-  }, [parts, chartMethods, data]);
+  }, [parts, chartMethods, data, nameStamp]);
 
   function exportCsv() {
     const quote = (v) => `"${String(v).replace(/"/g, '""')}"`;
@@ -3669,11 +3735,12 @@ function ChartPanel({ data, info, method, chartMethods, onPickMethods, view }) {
 
   return html`
     <div class="panel">
+      ${header}
       <div class="row">
         <button class=${mode === "single" ? "primary" : ""} onClick=${() => setMode("single")}
-          title="One bar for each row of the tree, in the main method">Single indicator</button>
+          title="Main method, by row">Single indicator</button>
         <button class=${mode === "multi" ? "primary" : ""} onClick=${() => setMode("multi")}
-          title="One 100 % bar for each method ticked in Methods">Multi indicator</button>
+          title="Methods ticked, as 100 %">Multi indicator</button>
         <span class="spacer" style="flex:1"></span>
         <button onClick=${exportCsv}>Export CSV</button>
       </div>
@@ -3701,7 +3768,7 @@ function TopField({ value, onValue, what }) {
 // (everything is "other")
 function ProcessContributions({ info, root, amount, method, onInfo }) {
   const [limit, setLimit] = useState(20);
-  const [found, setFound] = useState(null);
+  const [found, setFound] = useState(() => peek("/api/global/contributors", { root: root.index, amount, groups: {}, flow_groups: {}, order: [], rule: "direct", group: "other", method, limit: 20 }) ?? null);
   const [error, setError] = useState(null);
   useEffect(() => {
     let live = true;
@@ -3850,7 +3917,14 @@ function GroupPanel({ info, rules, setRules, selectedRow, view, setView, shared,
     setBy(next === "flows" ? "compartment" : "location");
     setPreview(null);
   };
-  const add = (rule) => setRules([...rules, { scope: "*", ...rule }]);
+  // A rule is not in the set twice: a named rule that exists comes as a copy (a number after the name, so a colour of its
+  // own), a group-by rule that exists is not added again
+  const nameTaken = (n, except = null) => rules.some((r, j) => j !== except && (r.name === n || (r.by && r.by === n)));
+  const uniqueName = (base, except = null) => { let n = base, k = 1; while (nameTaken(n, except)) n = `${base} ${++k}`; return n; };
+  const add = (rule) => {
+    if (rule.by && rules.some((r) => r.by === rule.by && (r.target || "processes") === (rule.target || "processes"))) return;
+    setRules([...rules, { scope: "*", ...rule, ...(rule.by ? {} : { name: uniqueName(rule.name) }) }]);
+  };
   function addCustom() {
     if (!predicate) return;
     add({ name: name.trim() || describePredicate(predicate), predicate, ...(flows ? { target: "flows" } : {}) });
@@ -3882,10 +3956,17 @@ function GroupPanel({ info, rules, setRules, selectedRow, view, setView, shared,
   }
   function saveEdit() {
     const r = rules[editIndex];
-    const next = r.by ? { ...r, by } : { ...r, name: name.trim() || r.name, ...(queryLocked || !predicate ? {} : { predicate }) };
+    const next = r.by ? { ...r, by } : { ...r, name: uniqueName(name.trim() || r.name, editIndex), ...(queryLocked || !predicate ? {} : { predicate }) };
     setRules(rules.map((x, j) => (j === editIndex ? next : x)));
     stopEdit();
   }
+  // Esc leaves the change of a rule
+  useEffect(() => {
+    if (editIndex === null) return;
+    const key = (e) => { if (e.key === "Escape" && !e.defaultPrevented && !document.querySelector(".modal-backdrop")) stopEdit(); };
+    document.addEventListener("keydown", key);
+    return () => document.removeEventListener("keydown", key);
+  }, [editIndex]);
   // A rule's colour: picked here (kept in the view), or derived from its name
   const ruleKey = (r) => r.by || r.name;
   const pickColor = (key, color) => {
@@ -3920,8 +4001,9 @@ function GroupPanel({ info, rules, setRules, selectedRow, view, setView, shared,
 
   return html`
     <div class="panel">
-      <h3 class="rules-head">Active rules <${InfoTip} text=${RULES_TIP} label="How rules work" />
-        ${rules.length > 1 && html`<button class="link" onClick=${() => { setRules([]); stopEdit(); }}>remove all</button>`}</h3>
+      ${extras?.attribution}
+      <${Fold} id="active" title="Active rules" actions=${html`<${InfoTip} text=${RULES_TIP} label="How rules work" />
+        ${rules.length > 1 && html`<button class="link" onClick=${() => { setRules([]); stopEdit(); }}>remove all</button>`}`}>
       ${rules.length === 0 ? null : html`
         <ul class="rules">
           ${rules.map((r, i) => html`
@@ -3930,27 +4012,29 @@ function GroupPanel({ info, rules, setRules, selectedRow, view, setView, shared,
               draggable=${rules.length > 1}
               onDragStart=${(e) => { e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", String(i)); setDragging(i); }}
               onDragOver=${(e) => onDragOver(e, i)} onDrop=${onDrop}
-              onDragEnd=${() => { setDragging(null); setDropAt(null); }}>
+              onDragEnd=${() => { setDragging(null); setDropAt(null); }}
+              onContextMenu=${(e) => { e.preventDefault(); startEdit(i); }}>
               ${rules.length > 1 && html`<span class="grip" title="Drag to reorder (rules apply in list order)" aria-hidden="true">⠿</span>`}
               ${!(r.target === "flows" && r.by) && !r.merge && view.groupColors && html`
                 <input type="color" class="swatch" value=${colorHex(colorOf(ruleKey(r), view.ruleColors))}
                   onInput=${(e) => pickColor(ruleKey(r), e.target.value)}
-                  onContextMenu=${(e) => { e.preventDefault(); pickColor(ruleKey(r), null); }}
+                  onContextMenu=${(e) => { e.preventDefault(); e.stopPropagation(); pickColor(ruleKey(r), null); }}
                   title="Colour of this rule's groups in the tree and the charts: click to change, right-click to reset" />`}
               <span class="desc" title=${ruleText(r)}>
                 <span class="line">${r.target === "flows" && "flows: "}${r.by ? html`<b>group by ${r.by === "name" && r.target === "flows" ? "substance" : r.by}</b>` : html`<b>${r.name}</b> <small>← ${describePredicate(r.predicate)}</small>`}</span>
                 <span class="line"><small>${r.scope === "*" ? "everywhere in the tree" : `under ${r.scope} · this tab only`}${r.merge ? " · merged" : ""}${r.disabled ? " · disabled" : ""}</small></span>
               </span>
               <button class=${editIndex === i ? "primary" : ""} onClick=${() => (editIndex === i ? stopEdit() : startEdit(i))}
-                aria-label="Edit rule" title="Edit this rule">✎</button>
+                aria-label="Edit rule" title="Edit this rule (or right-click it); Esc leaves it">✎</button>
               <button class="icon-btn" onClick=${() => toggle(i, "disabled")} aria-pressed=${!!r.disabled}
                 aria-label=${r.disabled ? "Enable rule" : "Disable rule"}
                 title=${r.disabled ? "Disabled: apply this rule again" : "Stop applying this rule, keeping it in the list"}><${EyeIcon} off=${!!r.disabled} /></button>
               <button onClick=${() => { setRules(rules.filter((_, j) => j !== i)); if (editIndex !== null) stopEdit(); }} aria-label="Remove rule">×</button>
             </li>`)}
         </ul>`}
-      ${extras?.attribution}
-      ${extras?.palette}
+      <//>
+      ${extras?.palette && html`<${PaletteSwitch} ...${extras.palette} customized=${Object.keys(view.ruleColors || {}).length > 0}
+        clearCustom=${() => Object.keys(view.ruleColors || {}).length && setView({ ...view, ruleColors: {} })} />`}
       ${extras?.ruleSet}
 
       <${Fold} id="quick" title="Quick groups" open=${false}>
@@ -3966,8 +4050,8 @@ function GroupPanel({ info, rules, setRules, selectedRow, view, setView, shared,
       <${Fold} id="new" title=${editIndex !== null ? "Edit rule" : "New rule"} open=${false} force=${editIndex !== null} innerRef=${form}>
       <div class="row">
         <span class="segmented" role="group" aria-label="What the rule groups">
-          <button class=${!flows ? "primary" : ""} aria-pressed=${!flows} disabled=${editIndex !== null} onClick=${() => chooseTarget("processes")}>Processes</button>
-          <button class=${flows ? "primary" : ""} aria-pressed=${flows} disabled=${editIndex !== null} onClick=${() => chooseTarget("flows")}>Elementary flows</button>
+          <button class=${!flows ? "primary" : ""} aria-pressed=${!flows} disabled=${editIndex !== null} title="Rule on processes" onClick=${() => chooseTarget("processes")}>Processes</button>
+          <button class=${flows ? "primary" : ""} aria-pressed=${flows} disabled=${editIndex !== null} title="Rule on elementary flows" onClick=${() => chooseTarget("flows")}>Elementary flows</button>
         </span>
       </div>
       ${kind === "named" ? html`
@@ -4022,23 +4106,42 @@ function namedGroups(rules) {
   return { groups, flowGroups, order: active.map(nameOf) };
 }
 
-// The palette of the colours of the rules: a menu, with the first colours of the one chosen
-function PaletteSwitch({ palette, setPalette }) {
-  const current = RULE_PALETTES[palette] || RULE_PALETTES.auto;
+// The palette of the colours of the rules: a menu, with the first colours of the one chosen. A colour picked on a rule makes
+// the palette "Custom" (choosing a palette again clears the colours picked); "Add palette…" makes one of the user's own.
+function PaletteSwitch({ palette, setPalette, palettes, addPalette, customized, clearCustom }) {
+  const all = { ...RULE_PALETTES, ...Object.fromEntries(Object.entries(palettes).map(([n, colors]) => [n, { label: n, hint: "Your palette", colors }])) };
+  const current = all[palette] || RULE_PALETTES.auto;
+  const [adding, setAdding] = useState(null);  // the palette being made: { name, colors }
+  const choose = (value) => {
+    if (value === "__add__") { setAdding({ name: "", colors: PALETTE.slice(0, 5) }); return; }
+    clearCustom();
+    setPalette(value);
+  };
+  const strip = (colors) => (colors || [0, 60, 120, 180, 240, 300].map((h) => `hsl(${h} 55% 52%)`)).slice(0, 8);
   return html`
     <div class="view-group" role="group" aria-label="Palette of the rules">
       <span class="view-group-label">Colours</span>
-      <select value=${palette} onChange=${(e) => setPalette(e.target.value)} aria-label="Palette of the rules" title=${current.hint}>
-        ${Object.entries(RULE_PALETTES).map(([key, q]) => html`<option value=${key} title=${q.hint}>${q.label}</option>`)}
+      <select value=${customized ? "__custom__" : palette} onChange=${(e) => choose(e.target.value)} aria-label="Palette of the rules" title=${customized ? "Colours picked on rules" : current.hint}>
+        ${customized && html`<option value="__custom__">Custom</option>`}
+        ${Object.entries(all).map(([key, q]) => html`<option value=${key} title=${q.hint}>${q.label}</option>`)}
+        <option value="__add__">Add palette…</option>
       </select>
-      <span class="palette-strip" aria-hidden="true">${(current.colors || [0, 60, 120, 180, 240, 300].map((h) => `hsl(${h} 55% 52%)`)).slice(0, 8)
-        .map((c) => html`<i style=${{ background: c }}></i>`)}</span>
-    </div>`;
+      <span class="palette-strip" aria-hidden="true">${strip(current.colors).map((c) => html`<i style=${{ background: c }}></i>`)}</span>
+    </div>
+    ${adding && html`
+      <div class="view-group palette-form" role="group" aria-label="New palette">
+        <input placeholder="Name" value=${adding.name} onInput=${(e) => setAdding({ ...adding, name: e.target.value })} aria-label="Name of the palette" />
+        ${adding.colors.map((c, i) => html`<input type="color" class="swatch" key=${i} value=${colorHex(c)} aria-label=${`Colour ${i + 1}`}
+          onInput=${(e) => setAdding({ ...adding, colors: adding.colors.map((x, j) => (j === i ? e.target.value : x)) })} />`)}
+        <button onClick=${() => setAdding({ ...adding, colors: [...adding.colors, PALETTE[adding.colors.length % PALETTE.length]] })} title="One more colour" aria-label="One more colour">+</button>
+        <button class="primary" disabled=${!adding.name.trim()} onClick=${() => { clearCustom(); addPalette(adding.name.trim(), adding.colors); setAdding(null); }}>Add</button>
+        <button onClick=${() => setAdding(null)}>Cancel</button>
+      </div>`}`;
 }
 
 // The Rules panel keeps these next to its rules (the attribution, the palette, the rule set), made where the lens is known
 const ruleExtras = (lens) => ({
-  palette: html`<${PaletteSwitch} palette=${lens.palette} setPalette=${lens.setPalette} />`,
+  palette: { palette: lens.palette, setPalette: lens.setPalette, palettes: lens.palettes, addPalette: lens.addPalette },
   attribution: html`<${AttributionSwitch} rule=${lens.attribution} setRule=${lens.setAttribution} />`,
   ruleSet: html`<${Fold} id="ruleset" title=${`Rule set · ${lens.set}`} open=${false} actions=${html`<${InfoTip} text=${RULE_SET_TIP} label="What a rule set is" />`}>
     <${SetMenu} lens=${lens} />
@@ -4126,26 +4229,26 @@ function AttributionHelp() {
 function AttributionSwitch({ rule, setRule }) {
   return html`
     <div class="view-group" role="group" aria-label="Attribution">
-      <span class="view-group-label">Attribute</span>
+      <span class="view-group-label">Attribution rule</span>
       <span class="segmented">
         <button class=${rule === "first_match" ? "primary" : ""} onClick=${() => setRule("first_match")}
-          title="First match: the first process of a rule on each supply path takes its whole supply chain">First match</button>
+          title="The first process of a rule takes its supply chain">First match</button>
         <button class=${rule === "direct" ? "primary" : ""} onClick=${() => setRule("direct")}
-          title="Direct: each process's own emissions go to its rule">Direct</button>
+          title="Own emissions only">Direct</button>
       </span>
       <${AttributionHelp} />
     </div>`;
 }
 
 function GlobalPanel({ info, root, amount, method, rules, view, rule, setRule, onLocate, onInfo }) {
-  const [result, setResult] = useState(null);
+  // Named rules on activities are activity groups, named rules on elementary flows flow groups; they go by the order of the rules
+  const { groups, flowGroups, order } = useMemo(() => namedGroups(rules), [rules]);
+  const k = method;
+  const [result, setResult] = useState(() => peek("/api/global", root && { root: root.index, amount, groups, flow_groups: flowGroups, order, rule, method: k }) ?? null);
   const [error, setError] = useState(null);
   const [group, setGroup] = useState(null);
   const [contributors, setContributors] = useState(null);
   const contributorsBox = useRef(null);
-  // Named rules on activities are activity groups, named rules on elementary flows flow groups; they go by the order of the rules
-  const { groups, flowGroups, order } = useMemo(() => namedGroups(rules), [rules]);
-  const k = method;
 
   useEffect(() => {
     if (!root) return;
@@ -4216,7 +4319,7 @@ function GlobalPanel({ info, root, amount, method, rules, view, rule, setRule, o
   return html`
     <div class="panel">
       <div class="view-group" role="group" aria-label="Attribution">
-        <span class="view-group-label">Attribute</span>
+        <span class="view-group-label">Attribution rule</span>
         <b>${rule === "first_match" ? "First match" : "Direct"}</b>
         <${AttributionHelp} />
       </div>
@@ -4280,7 +4383,11 @@ function GlobalPanel({ info, root, amount, method, rules, view, rule, setRule, o
 // The whole inventory of the process, characterised: which substances make the
 // score. Clicking a flow lists the processes emitting it.
 function FlowPanel({ info, root, amount, method, onLocate, onInfo, onFlowInfo, rules, setRules, view }) {
-  const [by, setBy] = useState("substance");
+  // The rows follow the Group by of the view: the substance, the compartment, the subcompartment; none: one row per flow
+  const keys = [view.groupSubstance && "name", view.groupCompartment && "compartment", view.groupSubcompartment && "subcompartment"].filter(Boolean);
+  const by = keys.join("+") || "flow";
+  const withName = keys.length === 0 || keys.includes("name");
+  const things = !keys.length ? "flows" : withName ? "substances" : "groups";
   const [top, setTop] = useState(25);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
@@ -4295,11 +4402,12 @@ function FlowPanel({ info, root, amount, method, onLocate, onInfo, onFlowInfo, r
   useEffect(() => {
     let cancelled = false;
     setError(null);
-    request("/api/flows", { root: root.index, amount, method, by, limit: top, flow_groups: flowGroups })
+    request("/api/flows", { root: root.index, amount, method, by: "flow", ...(keys.length ? { keys } : {}), limit: top, flow_groups: flowGroups })
       .then((d) => !cancelled && setResult(d)).catch((e) => !cancelled && setError(e.message));
     return () => { cancelled = true; };
   }, [root, amount, method, by, top, flowGroups]);
   useEffect(() => setFlow(null), [root, by]);
+  const label = (it) => (withName && (!keys.length || keys.some((k) => k !== "name")) && it.compartment ? `${it.name} (${it.compartment})` : it.name);
   // Processes emitting the chosen flow (all its compartments, by substance)
   useEffect(() => {
     setContributors(null);
@@ -4324,9 +4432,8 @@ function FlowPanel({ info, root, amount, method, onLocate, onInfo, onFlowInfo, r
   const keyOf = (it) => it.flows.join(",");
   const isChosen = (it) => flow && keyOf(flow) === keyOf(it);
   const choose = (it) => setFlow(isChosen(it) ? null : it);
-  const things = by === "substance" ? "substances" : "flows";
   const entries = result ? [
-    ...result.items.map((it) => [by === "flow" ? `${it.name} (${it.compartment})` : it.name, it.impact, it]),
+    ...result.items.map((it) => [label(it), it.impact, it]),
     ...(result.others.count ? [[`others (${result.others.count} ${things})`, result.others.impact, null]] : []),
   ] : [];
   const option = useMemo(() => {
@@ -4348,13 +4455,8 @@ function FlowPanel({ info, root, amount, method, onLocate, onInfo, onFlowInfo, r
   return html`
     <div class="panel">
       <div class="row">
-        <span class="segmented" role="group" aria-label="Flow grouping">
-          <button class=${by === "substance" ? "primary" : ""} onClick=${() => setBy("substance")}
-            title="One row per substance, compartments summed">By substance</button>
-          <button class=${by === "flow" ? "primary" : ""} onClick=${() => setBy("flow")}
-            title="One row per flow (substance and compartment)">By flow</button>
-        </span>
-        <${TopField} value=${top} onValue=${setTop} what=${by === "substance" ? "substances" : "flows"} />
+        <span class="muted" title="Set in the Custom view: Group by">${keys.length ? `By ${keys.map((k) => (k === "name" ? "substance" : k)).join(", ")}` : "By flow"}</span>
+        <${TopField} value=${top} onValue=${setTop} what=${things} />
       </div>
       ${error && html`<div class="error">${error}</div>`}
       ${result && html`
@@ -4362,14 +4464,14 @@ function FlowPanel({ info, root, amount, method, onLocate, onInfo, onFlowInfo, r
           onClick=${(e) => { const name = e.componentType === "yAxis" ? e.value : e.name; const it = entries.find(([n]) => n === name)?.[2]; if (it) choose(it); }} />
         <table class="results flow-results">
           <thead><tr>
-            <th>${by === "substance" ? "Substance" : "Flow"} <span class="muted">· click for the processes emitting it</span></th>
+            <th>${!keys.length ? "Flow" : withName ? "Substance" : keys.join(", ")} <span class="muted">· click for the processes emitting it</span></th>
             <th class="num">amount</th><th class="num">${methodUnit}</th><th class="num">Share</th>
           </tr></thead>
           <tbody>${result.items.map((it) => html`
             <tr key=${keyOf(it)} class="clickable ${isChosen(it) ? "selected" : ""}" onClick=${() => choose(it)}
                 onContextMenu=${(e) => onFlowInfo(flowTarget(it), e)} title="Click for the processes emitting it, right-click for its details">
               <td>${isChosen(it) ? "▾" : "▸"} ${colorOfItem(it) && html`<span class="swatch" style=${{ background: colorOfItem(it) }} title=${`In the group ${it.group}`}></span>`}${it.name} <span class="muted">${it.compartment}</span></td>
-              <td class="num">${fmtAmount(it.amount)} ${unit(it.unit)}</td><td class="num">${fmt(it.impact)}</td><td class="num">${ofTotal(it.impact)}</td>
+              <td class="num">${it.unit ? `${fmtAmount(it.amount)} ${unit(it.unit)}` : ""}</td><td class="num">${fmt(it.impact)}</td><td class="num">${ofTotal(it.impact)}</td>
             </tr>`)}
             ${result.others.count > 0 && html`
               <tr class="muted">
@@ -4454,7 +4556,7 @@ const LENS_KEY = `${STORAGE_KEY}.lens`;
 // process, whatever the options of the tabs are
 const PLAIN_VIEW = {
   naming: "full", splitByType: true, hideOthers: false, groupProducts: false, groupByRules: true, groupSubstance: false,
-  groupCompartment: false, groupColors: false, colorBy: "group",
+  groupCompartment: false, groupSubcompartment: false, groupColors: false, colorBy: "group",
 };
 const initialView = (embedded) => (embedded
   ? { ...PLAIN_VIEW, recipe: { ...DEFAULT_RECIPE }, columns: [...DEFAULT_COLUMNS], ruleColors: {} } : preferredView());
@@ -4467,11 +4569,12 @@ const preferredView = () => ({
     flowMain: loadPreference("recipeFlowMain", DEFAULT_RECIPE.flowMain), flowSecondary: loadPreference("recipeFlowSecondary", DEFAULT_RECIPE.flowSecondary),
   },
   groupProducts: loadPreference("groupProducts", "0") === "1",
-  groupByRules: loadPreference("groupByRules", "1") === "1",  // the rules of the workspace (and the tab's) group the tree
+  groupByRules: loadPreference("groupByRules", "0") === "1",  // the rules of the workspace (and the tab's) group the tree
   groupSubstance: loadPreference("groupSubstance", "0") === "1",  // the flows of direct emissions, by substance
   groupCompartment: loadPreference("groupCompartment", "0") === "1",  // … and by compartment
-  columns: (() => { try { const c = JSON.parse(loadPreference("columns", "null")); if (Array.isArray(c)) return c; } catch { /* the default */ } return DEFAULT_COLUMNS; })(),
-  groupColors: loadPreference("groupColors", "1") === "1",
+  groupSubcompartment: loadPreference("groupSubcompartment", "0") === "1",  // … and by subcompartment
+  columns: (() => { try { const c = JSON.parse(loadPreference("columns", "null")); if (Array.isArray(c)) return c; } catch { /* the default */ } return DEFAULT_VIEW_COLUMNS; })(),
+  groupColors: loadPreference("groupColors", "0") === "1",
   colorBy: loadPreference("colorBy", "group"),  // "group" or "type" (flow type)
   // colours picked for rules, by rule name (or field, for a group-by rule)
   ruleColors: (() => { try { return JSON.parse(loadPreference("ruleColors", "{}")) || {}; } catch { return {}; } })(),
@@ -4488,6 +4591,7 @@ function saveViewPreferences({ view, display, orientation, cycles }) {
   savePreference("groupByRules", view.groupByRules ? "1" : "0");
   savePreference("groupSubstance", view.groupSubstance ? "1" : "0");
   savePreference("groupCompartment", view.groupCompartment ? "1" : "0");
+  savePreference("groupSubcompartment", view.groupSubcompartment ? "1" : "0");
   savePreference("columns", JSON.stringify(view.columns));
   savePreference("groupColors", view.groupColors ? "1" : "0");
   savePreference("colorBy", view.colorBy);
@@ -4511,19 +4615,21 @@ function initLens(info, seed) {
   if (method < 0) method = info.default_method;
   const chart = stored ? (stored.chartMethods || []).map((n) => methodNamed(info, n))
     : seed?.chartMethods ? seed.chartMethods.map((k, n) => seeded(seed.chartMethodNames?.[n], k)) : null;
-  const sets = stored?.sets && Object.keys(stored.sets).length ? stored.sets : { Default: (seed?.rules || []).filter((r) => r.scope === "*") };
+  const seeded_rules = (seed?.rules || []).filter((r) => r.scope === "*");
+  const sets = stored?.sets && Object.keys(stored.sets).length ? stored.sets : { Default: seeded_rules.length ? seeded_rules : defaultRules() };
   return {
     method, chartMethods: chart ? chart.filter((k) => k >= 0) : familyOf(info, method), sets, set: stored?.set in sets ? stored.set : Object.keys(sets)[0],
     attribution: stored?.attribution === "direct" ? "direct" : "first_match",  // of the impacts to the rules: Rules contributions and Compare
     nameFormat: { ...DEFAULT_NAME_FORMAT, ...(stored?.nameFormat || {}) },
-    palette: stored?.palette in RULE_PALETTES ? stored.palette : "auto",
+    palettes: stored?.palettes && typeof stored.palettes === "object" ? stored.palettes : {},  // the user's own: name -> colours
+    palette: stored?.palette in RULE_PALETTES || stored?.palette in (stored?.palettes || {}) ? stored.palette : "auto",
   };
 }
 function saveLens(info, lens) {
   try {
     localStorage.setItem(LENS_KEY, JSON.stringify({ method: info.methods[lens.method]?.name,
       chartMethods: lens.chartMethods.map((k) => info.methods[k]?.name).filter(Boolean), sets: lens.sets, set: lens.set,
-      attribution: lens.attribution, nameFormat: lens.nameFormat, palette: lens.palette }));
+      attribution: lens.attribution, nameFormat: lens.nameFormat, palette: lens.palette, palettes: lens.palettes }));
   } catch { /* storage unavailable */ }
 }
 
@@ -4544,11 +4650,26 @@ function MethodMenu({ info, method, setMethod, chartMethods, setChartMethods, no
     <div class="lens-menu">
       ${note && html`<p class="note">${note}</p>`}
       ${format && html`<${Fold} id="nameformat" title="Name in results" open=${false}
-        actions=${html`<${InfoTip} text="How a method is named in titles, headers and files. Family: EF v3.1. Indicator: its category and indicator. Symbol: CO₂ eq, m³." label="About the name" />`}>
-        <div class="row">
-          ${[["family", "Family"], ["indicator", "Indicator"], ["unit", "Unit"], ["symbol", "Symbol"]].map(([k, label]) => html`
-            <label><input type="checkbox" checked=${format[k]} onChange=${(e) => setFormat({ ...format, [k]: e.target.checked })} /> ${label}</label>`)}
+        actions=${html`<${InfoTip} text="How a method is named in titles, headers, files and the several-methods charts" label="About the name" />`}>
+        <div class="view-group" role="group" aria-label="Name format">
+          <span class="segmented">
+            ${[["parts", "Parts", "Pick the parts"], ["custom", "Custom", "Your format"]].map(([k, label, hint]) => html`
+              <button class=${format.mode === k ? "primary" : ""} title=${hint} onClick=${() => setFormat({ ...format, mode: k })}>${label}</button>`)}
+          </span>
+          <label title="CO₂ eq, m³"><input type="checkbox" checked=${format.symbol} onChange=${(e) => setFormat({ ...format, symbol: e.target.checked })} /> Symbols</label>
         </div>
+        ${format.mode === "parts" ? html`
+          <div class="row">
+            ${[["family", "Family", "EF v3.1"], ["category", "Category", "Climate change"], ["indicator", "Indicator", "GWP100"], ["unit", "Unit", "kg CO₂ eq"]].map(([k, label, hint]) => html`
+              <label title=${hint}><input type="checkbox" checked=${format[k]} onChange=${(e) => setFormat({ ...format, [k]: e.target.checked })} /> ${label}</label>`)}
+          </div>` : html`
+          <div class="row">
+            <input class="recipe-input" value=${format.recipe} onInput=${(e) => setFormat({ ...format, recipe: e.target.value })} aria-label="Format of the method names" />
+          </div>
+          <div class="row tokens">
+            ${METHOD_TOKENS.map((t) => html`<button class="token" onClick=${() => setFormat({ ...format, recipe: `${format.recipe} {${t}}`.trim() })}>{${t}}</button>`)}
+            <button onClick=${() => setFormat({ ...format, recipe: DEFAULT_NAME_FORMAT.recipe })} title="The default format">Default</button>
+          </div>`}
         <p class="note">${methodTitle(info.methods[method])}</p>
       <//>`}
       <p class="method-legend muted"><input type="radio" class="main" checked disabled aria-hidden="true" /> main method, for single indicator
@@ -4668,7 +4789,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
   }
   // The options of the view (cut-off, display, names, colours, columns…) are the tab's own; the ones of the last tab
   // changed are the preferences that a new tab starts with
-  const [cutoff, setCutoff] = useState(1);
+  const [cutoff, setCutoff] = useState(DEFAULT_CUTOFF);
   const [cutoffBasis, setCutoffBasis] = useState("parent");
   const [view, setView] = useState(() => initialView(embedded));
   const [display, setDisplay] = useState(() => (embedded ? "list" : loadPreference("display", "list")));
@@ -4897,13 +5018,13 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
       .then((d) => { if (!cancelled) { setData(d); setError(null); } })
       .catch((e) => !cancelled && setError(e.message));
     return () => { cancelled = true; };
-  }, [root, amount, method, cutoff, cutoffBasis, expanded, rules, chartMethods, pinned, others, merges, ungrouped, substitutions, view.groupProducts, view.groupByRules, view.groupSubstance, view.groupCompartment, info, editing]);
+  }, [root, amount, method, cutoff, cutoffBasis, expanded, rules, chartMethods, pinned, others, merges, ungrouped, substitutions, view.groupProducts, view.groupByRules, view.groupSubstance, view.groupCompartment, view.groupSubcompartment, info, editing]);
   // The tab's state is kept for the next visit (renaming does not reload the rows)
   useEffect(() => {
     if (!root || !info) return;
-    onSave(id, { root, amount, method, cutoff, cutoffBasis, expanded: [...expanded], rules, chartMethods, groupByRules: view.groupByRules, groupSubstance: view.groupSubstance, groupCompartment: view.groupCompartment, pinned: [...pinned], others: [...others], merges, ungrouped: [...ungrouped], substitutions, labels,
+    onSave(id, { root, amount, method, cutoff, cutoffBasis, expanded: [...expanded], rules, chartMethods, groupByRules: view.groupByRules, groupSubstance: view.groupSubstance, groupCompartment: view.groupCompartment, groupSubcompartment: view.groupSubcompartment, pinned: [...pinned], others: [...others], merges, ungrouped: [...ungrouped], substitutions, labels,
       layout: info.layout, methodName: info.methods[method]?.name, chartMethodNames: chartMethods.map((k) => info.methods[k]?.name) });
-  }, [root, amount, method, cutoff, cutoffBasis, expanded, rules, chartMethods, view.groupByRules, view.groupSubstance, view.groupCompartment, pinned, others, merges, ungrouped, substitutions, labels, info]);
+  }, [root, amount, method, cutoff, cutoffBasis, expanded, rules, chartMethods, view.groupByRules, view.groupSubstance, view.groupCompartment, view.groupSubcompartment, pinned, others, merges, ungrouped, substitutions, labels, info]);
   function startRename(row) {
     if (editing || !labelKey(row)) return;
     // The tree and Sankey views have no inline editor: ask
@@ -5099,7 +5220,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
       model: { title: info.title, activities: info.activities },
       root, amount, method: info.methods[method].name, chartMethods: chartMethods.map((k) => info.methods[k].name),
       cutoff: +cutoffValue(cutoff, cutoffBasis).toFixed(8), cutoffBasis, expanded: [...expanded], rules, pinned: [...pinned], others: [...others], merges, ungrouped: [...ungrouped], substitutions, labels,
-      display: { naming: view.naming, recipe: view.recipe, groupProducts: view.groupProducts, groupByRules: view.groupByRules, groupSubstance: view.groupSubstance, groupCompartment: view.groupCompartment, splitByType: view.splitByType, hideOthers: view.hideOthers, columns: view.columns, groupColors: view.groupColors, colorBy: view.colorBy, ruleColors: view.ruleColors },
+      display: { naming: view.naming, recipe: view.recipe, groupProducts: view.groupProducts, groupByRules: view.groupByRules, groupSubstance: view.groupSubstance, groupCompartment: view.groupCompartment, groupSubcompartment: view.groupSubcompartment, splitByType: view.splitByType, hideOthers: view.hideOthers, columns: view.columns, groupColors: view.groupColors, colorBy: view.colorBy, ruleColors: view.ruleColors },
     };
   }
   function exportView() {
@@ -5110,6 +5231,15 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
     try { await navigator.clipboard.writeText(JSON.stringify(viewFile(), null, 2)); setUndo({ message: "View copied to the clipboard as JSON." }); }
     catch { setError("The browser did not allow copying to the clipboard."); }
   }
+  // The settings of a first start (the view of this tab, and the method, the rules and the names of the workspace)
+  function loadDefaults() {
+    setView({ ...DEFAULT_VIEW, recipe: { ...DEFAULT_RECIPE } });
+    setDisplay("list");
+    setCutoff(DEFAULT_CUTOFF);
+    setCutoffBasis("parent");
+    if (!embedded) lens.resetDefaults();
+    setUndo({ message: "Default settings loaded." });
+  }
   async function loadView(file) {
     try {
       const saved = JSON.parse(await file.text());
@@ -5118,13 +5248,21 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
       const found = await locateRoot(saved.root);
       if (!found) throw new Error(`${saved.root.name} (${saved.root.location}) is not in this database.`);
       const { target, same: sameModel } = found;
+      // The method, the methods shown together and the rules of the file are the workspace's now (the rules as a set of their own)
+      if (!embedded) {
+        const named = (names) => (names || []).map((n) => methodNamed(info, n)).filter((i) => i >= 0);
+        if (saved.method && methodNamed(info, saved.method) >= 0) lens.setMethod(methodNamed(info, saved.method));
+        if (saved.chartMethods && named(saved.chartMethods).length) lens.setChartMethods(named(saved.chartMethods));
+        const shared = (saved.rules || []).filter((r) => r.scope === "*");
+        if (shared.length && !sameJson(shared, lens.rules)) lens.loadSet(file.name.replace(/\.json$/i, "").replace(/^lca-view-/, ""), shared);
+      }
       setUndo({
-        message: `View loaded from ${file.name}${sameModel ? "" : " — saved from another model: expansions, pins, moved rows, merges and names were not restored"}; its method and group rules are those of the workspace here.`,
+        message: `View loaded from ${file.name}: its settings, rules and methods${sameModel ? "" : " — saved from another model: expansions, pins, moved rows, merges and names were not restored"}.`,
       });
       setRoot(target);
       setAmount(saved.amount ?? 1);
       // A share is saved as a fraction (version 2), "top n" as its count
-      setCutoff(saved.cutoff === undefined ? 1 : saved.cutoffBasis === "top" || saved.version < 2 ? saved.cutoff : +(saved.cutoff * 100).toFixed(6));
+      setCutoff(saved.cutoff === undefined ? DEFAULT_CUTOFF : saved.cutoffBasis === "top" || saved.version < 2 ? saved.cutoff : +(saved.cutoff * 100).toFixed(6));
       setCutoffBasis(saved.cutoffBasis || "parent");
       setOwnRules(sameModel ? (saved.rules || []).filter((r) => r.scope !== "*") : []);
       setExpanded(new Set(sameModel ? saved.expanded : [String(target.index)]));
@@ -5137,7 +5275,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
       if (saved.display) {
         // Views saved before the columns menu have a Comments switch
         const { comments, ...display } = saved.display;
-        setView({ ...view, ...display, ...(!display.columns && comments ? { columns: [...DEFAULT_COLUMNS, "comment"] } : {}) });
+        setView({ ...DEFAULT_VIEW, recipe: view.recipe, ...display, ...(!display.columns && comments ? { columns: [...DEFAULT_COLUMNS, "comment"] } : {}) });
       }
       setSelection(new Set());
       setError(null);
@@ -5352,33 +5490,36 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
       onChange=${(e) => changeCutoffMode(e.target.value)}>
       ${Object.entries(CUTOFF_MODES).map(([key, mode]) => html`<option value=${key} title=${mode.hint}>${mode.label}</option>`)}
     </select>`;
-  const collapseButton = html`<button onClick=${() => setExpanded(new Set(root ? [String(root.index)] : []))} title="Collapse everything below the root">Collapse</button>`;
+  const cutoffBare = html`
+    <label><${NumberInput} class="cutoff" value=${cutoff} min=${cutoffBasis === "top" ? 1 : 0} max=${cutoffBasis === "top" ? undefined : 100}
+      step=${cutoffBasis === "top" ? 1 : 0.5} onValue=${(v) => changeCutoff(v)} aria-label="Cut-off"
+      title="Changing the cut-off resets pinned rows and rows moved to others" /> ${CUTOFF_MODES[cutoffBasis].unit}</label>
+    <select class="cutoff-mode" aria-label="Cut-off mode" value=${cutoffBasis} title=${CUTOFF_MODES[cutoffBasis].hint}
+      onChange=${(e) => changeCutoffMode(e.target.value)}>
+      ${Object.entries(CUTOFF_MODES).map(([key, mode]) => html`<option value=${key} title=${mode.hint}>${mode.label}</option>`)}
+    </select>`;
   const resetButton = html`<button onClick=${resetView} disabled=${!root}
-    title="Collapse the tree, clear restored rows and rows moved to others, and remove this tab's groups, merges and custom names (undoable); the rule set of the workspace stays">Reset view</button>`;
+    title="Back to the process alone: tree collapsed, restored and moved rows cleared, this tab's groups, merges and names removed (undoable)">Reset</button>`;
   const viewBar = html`<${ViewBar} view=${view} setView=${setDisplayView}
     example=${(() => { const r = data.rows.find((x) => x.kind === "process" && x.depth > 0); return r ? rowNames(r, rowsById, view) : null; })()} />`;
-  const viewOptions = html`<div class="view-options">
-          <section>
-            <h3>Display</h3>
-            <div class="row">
-              <div class="segmented" role="group" aria-label="Display">
-                <button class=${display === "list" ? "primary" : ""} onClick=${() => setDisplay("list")}>List</button>
-                <button class=${display === "graph" ? "primary" : ""} onClick=${() => setDisplay("graph")}>Tree</button>
-                <button class=${display === "sankey" ? "primary" : ""} onClick=${() => setDisplay("sankey")}
-                  title="The tree as a flowchart: bands as thick as the impact flowing from each supplier to its user">Sankey</button>
-              </div>
-              ${collapseButton}${resetButton}
-            </div>
-            <h3>Cut-off</h3>
-            <div class="row">${cutoffControls}</div>
-            <h3>View file</h3>
-            <div class="row"><${SaveMenu} disabled=${!root} onSave=${exportView} onLoad=${loadView} onCopy=${copyView} /></div>
-          </section>
-          <section class="rows-options">
-            <h3>Rows</h3>
-            ${viewBar}
-          </section>
-        </div>`;
+  const viewOptions = html`
+    <${Fold} id="viewoptions" title="Options" actions=${html`<span style="flex:1"></span><${SaveMenu} icon disabled=${!root} onSave=${exportView} onLoad=${loadView} onCopy=${copyView} onDefaults=${loadDefaults} />`}>
+      <div class="view-options">
+        <div class="view-group" role="group" aria-label="Display">
+          <span class="view-group-label">Display</span>
+          <span class="segmented">
+            ${[["list", "List", "Table"], ["graph", "Tree", "Boxes"], ["sankey", "Sankey", "Bands"]].map(([k, label, hint]) => html`
+              <button class=${display === k ? "primary" : ""} title=${hint} onClick=${() => setDisplay(k)}>${label}</button>`)}
+          </span>
+          ${resetButton}
+        </div>
+        <div class="view-group" role="group" aria-label="Cut-off">
+          <span class="view-group-label">Cut-off</span>
+          ${cutoffBare}
+        </div>
+        ${viewBar}
+      </div>
+    <//>`;
   // The tree, the first panel of the process of the tab (its pop-up's panels are the others)
   const treeNode = html`
     <section class="tree-section" ref=${treeSection} onMouseDown=${() => { if (!embedded) keyboardOwner = id; }}>
@@ -5408,7 +5549,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
               <button onClick=${() => setSelection(new Set())} aria-label="Clear selection">×</button>
             </div>`}
           <div class="toolbar"><span class="hint">
-            ${root ? `Total: ${fmt(rootImpact)} ${methodInfo.unit} — ${methodLabel(methodInfo)}` : ""}
+            ${root ? `Total: ${fmt(rootImpact)} ${methodInfo.unit}` : ""}
           </span>
             ${selectedTotals.count > 0 && html`
               <span class="spacer"></span>
@@ -5433,9 +5574,10 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
             <span class="spacer"></span>
             <button class="collapse-side" onClick=${onCollapseSide} title="Hide the side panel (Ctrl/⌘ + →)" aria-label="Hide the side panel"><${SidePanelIcon} open /></button>
           </div>
-          ${tab === "view" && html`${viewOptions}`}
-          ${tab === "view" && allData.rows.length > 0 && html`<${ChartPanel} key=${editing ? "edit" : "view"} data=${allData} info=${info} method=${method}
-              chartMethods=${chartMethods} onPickMethods=${() => lens.show("methods")} view=${view} />`}
+          ${tab === "view" && (allData.rows.length > 0
+            ? html`<${ChartPanel} key=${editing ? "edit" : "view"} data=${allData} info=${info} method=${method}
+                chartMethods=${chartMethods} onPickMethods=${() => lens.show("methods")} view=${view} header=${viewOptions} />`
+            : html`<div class="panel">${viewOptions}</div>`)}
           ${tab === "chart" && root && html`<${ProcessContributions} info=${info} root=${root} amount=${amount} method=${method}
               onInfo=${(index, x, y) => openInfo({ index, row: null, x, y })} />`}
           ${tab === "flows" && root && html`<${FlowPanel} info=${info} root=${root} amount=${amount} method=${method}
@@ -5495,7 +5637,7 @@ function compareLabels(tabs) {
 // The tree a tab displays, as /api/rows is asked for it (the method is the comparison's)
 const treeBody = (s, method) => ({
   root: [s.root.index], amount: s.amount, expanded: s.expanded || [], rules: [...(s.groupByRules === false ? [] : s.rules || []), ...flowRulesOf(s)], cutoff: cutoffValue(s.cutoff, s.cutoffBasis),
-  cutoff_basis: s.cutoffBasis || "parent", method, methods: [], pinned: s.pinned || [], others: s.others || [], merges: s.merges || [],
+  cutoff_basis: s.cutoffBasis || "parent", method, methods: s.chartMethods || [], pinned: s.pinned || [], others: s.others || [], merges: s.merges || [],
   ungrouped: s.ungrouped || [], substitutions: s.substitutions || {}, group_products: loadPreference("groupProducts", "0") === "1",
 });
 
@@ -5548,24 +5690,16 @@ function treeEntries(entries, rowsOf, roots) {
 // The breakdown of the bars: by rules, by flows, or by processes (the rows of each tab's view, or what each process
 // contributes by its own emissions). One at a time.
 function CompareBasis({ basis, setBasis, limit, setLimit, none }) {
-  const kind = basis === "none" ? "none" : basis === "groups" ? "groups" : basis === "flows" ? "flows" : "processes";
-  const choose = (k) => setBasis(k === "processes" ? (basis === "activities" ? "activities" : "tree") : k);
   return html`
     <div class="view-group" role="group" aria-label="Breakdown">
       <span class="view-group-label">Breakdown</span>
       <span class="segmented">
-        ${[...(none ? [["none", "None", "No breakdown: one bar of the total for each tab"]] : []), ["groups", "Rules", "The groups of your rules (Rules panel)"], ["flows", "Flows", "The elementary flows of the whole inventory, one per substance"],
-          ["processes", "Processes", "Processes: the rows of each tab, or what each process emits"]].map(([k, label, hint]) => html`
-          <button class=${kind === k ? "primary" : ""} onClick=${() => choose(k)} title=${hint}>${label}</button>`)}
+        ${[...(none ? [["none", "None", "Total only"]] : []), ["groups", "Rules", "By rule"], ["flows", "Flows", "By elementary flow"],
+          ["tree", "Custom view", "Rows of each tab's view"], ["activities", "Activity", "By process, own emissions"]].map(([k, label, hint]) => html`
+          <button class=${basis === k ? "primary" : ""} onClick=${() => setBasis(k)} title=${hint}>${label}</button>`)}
       </span>
-      ${kind === "processes" && html`
-        <span class="segmented" role="group" aria-label="Processes">
-          ${[["tree", "Current view", "The rows each tab shows in View mode, lined up by process"], ["activities", "Activity content", "Each process by its own emissions, wherever it is in the supply chain"]].map(([k, label, hint]) => html`
-            <button class=${basis === k ? "primary" : ""} onClick=${() => setBasis(k)} title=${hint}>${label}</button>`)}
-        </span>`}
       ${(basis === "flows" || basis === "activities") && html`
-        <label class="muted">largest <select value=${limit} onChange=${(e) => setLimit(Number(e.target.value))} aria-label="Number of bars shown">
-          ${[5, 10, 15, 25, 40].map((n) => html`<option value=${n}>${n}</option>`)}</select></label>`}
+        <${TopField} value=${limit} onValue=${setLimit} what="bars" />`}
     </div>`;
 }
 
@@ -5628,7 +5762,7 @@ function CompareBars({ results, base, unitLabel, names, groupColor, mode, setMod
     <div class="view-group" role="group" aria-label="Scale">
       <span class="view-group-label">Scale</span>
       <span class="segmented">
-        ${[["absolute", unitLabel, "The impact, in its unit"], ["baseline", "% of baseline", "Each bar as a share of the baseline's total"], ["own", "Each 100 %", "Each bar as 100 %: its own composition"]].map(([key, label, hint]) => html`
+        ${[["absolute", unitLabel, "Impact"], ["baseline", "% of baseline", "Share of the baseline"], ["own", "Each 100 %", "Own composition"]].map(([key, label, hint]) => html`
           <button class=${mode === key ? "primary" : ""} title=${hint} onClick=${() => setMode(key)}>${label}</button>`)}
       </span>
     </div>
@@ -5790,7 +5924,7 @@ function CompareMethods({ results, base, info, methods, sorted, setSorted }) {
     o.grid = { left: 8, right: 16, top: 70, bottom: 44, containLabel: true };
     o.xAxis = { type: "category", position: "top", data: results.map((r) => r.label), splitArea: { show: false },
       axisLabel: { color: cssVar("--text"), interval: 0, width: 150, overflow: "truncate" } };
-    o.yAxis = { type: "category", inverse: true, data: rows.map((r) => info.methods[r.k].name.slice(1).join(" | ") || info.methods[r.k].name[0]),
+    o.yAxis = { type: "category", inverse: true, data: rows.map((r) => methodRow(info.methods[r.k])),
       axisLabel: { color: cssVar("--text"), width: 320, overflow: "truncate" } };
     o.visualMap = { min: -1, max: 1, calculable: false, orient: "horizontal", left: "center", bottom: 0, itemWidth: 12, itemHeight: 160,
       textStyle: { color: cssVar("--muted") }, formatter: (v) => `${v > 0 ? "+" : ""}${Math.round(v * 100)} %`,
@@ -5806,7 +5940,7 @@ function CompareMethods({ results, base, info, methods, sorted, setSorted }) {
       label: { show: true, color: cssVar("--text"), formatter: (d) => (d.value[0] === base ? "baseline" : signedPct(rows[d.value[1]].changes[d.value[0]])) },
     }];
     return o;
-  }, [rows, results, base, info]);
+  }, [rows, results, base, info, nameStamp]);
   const exportCsv = () => {
     const header = ["method", "unit", ...results.flatMap((r) => [csvQuote(r.label), csvQuote(`${r.label}: vs baseline`)])].join(",");
     const lines = rows.map((row) => [csvQuote(methodLabel(info.methods[row.k])), csvQuote(info.methods[row.k].unit),
@@ -5984,7 +6118,7 @@ function ComparisonView({ info, tabs, compare, setCompare }) {
         </div>
         ${(units.length > 1 || (substituted.length > 0 && basis !== "tree")) && html`<div class="compare-info">
           ${units.length > 1 && html`<p class="warning">The processes are in ${units.join(", ")}: compare them only if they deliver an equivalent function.</p>`}
-          ${substituted.length > 0 && basis !== "tree" && html`<p class="warning">Substitutions made in ${substituted.map((t) => labels[t.id]).join(", ")} are not applied here, only in Processes · Current view.</p>`}
+          ${substituted.length > 0 && basis !== "tree" && html`<p class="warning">Substitutions made in ${substituted.map((t) => labels[t.id]).join(", ")} are not applied here, only in the Custom view.</p>`}
         </div>`}
         <div class="panel">
           ${chosen.length < 2 ? html`<div class="empty">Tick at least two tabs to compare.</div>`
@@ -6254,8 +6388,9 @@ function App() {
   // The impact methods and group rules of the workspace, which the tabs follow (see the lens above FUView)
   const [lens, setLens] = useState(null);
   nameFormat = lens?.nameFormat || DEFAULT_NAME_FORMAT;
-  rulePalette = { name: lens?.palette || "auto", keys: (lens?.sets[lens.set] || []).map((r) => r.by || r.name) };
-  paletteStamp = `${rulePalette.name}|${rulePalette.keys.join("|")}`;
+  nameStamp = JSON.stringify(nameFormat);
+  rulePalette = { name: lens?.palette || "auto", keys: (lens?.sets[lens.set] || []).map((r) => r.by || r.name), own: lens?.palettes || {} };
+  paletteStamp = `${rulePalette.name}|${rulePalette.keys.join("|")}|${JSON.stringify(rulePalette.own[rulePalette.name] || "")}`;
   const info = useMemo(() => (rawInfo && nameFormat.symbol
     ? { ...rawInfo, methods: rawInfo.methods.map((m) => ({ ...m, unit: prettyUnit(m.unit) })) } : rawInfo), [rawInfo, nameFormat.symbol]);
   useEffect(() => { if (lens && info) saveLens(info, lens); }, [lens]);
@@ -6415,6 +6550,7 @@ function App() {
     });
   }, []);
   const showDatabase = () => {
+    clearAnswers();
     request("/api/info").then((i) => {
       const saved = loadWorkspace();
       let seed = null;  // a workspace saved before the lens: its first tab gives the method and the rules
@@ -6572,8 +6708,14 @@ function App() {
     setAttribution: (attribution) => setLens((l) => ({ ...l, attribution })),
     setNameFormat: (format) => setLens((l) => ({ ...l, nameFormat: format })),
     setPalette: (palette) => setLens((l) => ({ ...l, palette })),
+    addPalette: (name, colors) => setLens((l) => { const n = freshName(name, { ...RULE_PALETTES, ...l.palettes }); return { ...l, palettes: { ...l.palettes, [n]: colors }, palette: n }; }),
     setRules: (rules) => setLens((l) => ({ ...l, sets: { ...l.sets, [l.set]: rules } })),
     chooseSet: (set) => setLens((l) => ({ ...l, set })),
+    // The rules of a view file as a set of their own, now in use
+    loadSet: (name, rules) => setLens((l) => { const n = freshName(name, l.sets); return { ...l, set: n, sets: { ...l.sets, [n]: rules } }; }),
+    // The settings of a first start: the method, the methods shown together, the rules, the names and the palette
+    resetDefaults: () => setLens((l) => ({ ...l, method: info.default_method, chartMethods: familyOf(info, info.default_method),
+      sets: { ...l.sets, Default: defaultRules() }, set: "Default", palette: "auto", nameFormat: DEFAULT_NAME_FORMAT, attribution: "first_match" })),
     addSet: (name, copy) => setLens((l) => { const n = freshName(name, l.sets); return { ...l, set: n, sets: { ...l.sets, [n]: copy ? l.sets[l.set] : [] } }; }),
     renameSet: (name) => setLens((l) => {
       const n = freshName(name, l.sets);

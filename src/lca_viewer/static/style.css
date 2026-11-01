@@ -841,10 +841,12 @@ textarea.editing { width: 100%; box-sizing: border-box; }
 .process-row { padding: 3px 0 6px; border-bottom: 1px solid var(--border); }
 .process-row .amount-line { display: flex; align-items: center; gap: 6px; padding-left: 22px; color: var(--muted); font-size: 12px; }
 .process-row.off .amount-line { opacity: .6; }
-/* The options of the view: the top of the Custom view panel */
+/* The options of the view: the top of the Custom view panel, a label and its settings on each line */
 .bottom { display: flex; flex-direction: column; min-width: 0; }
-.view-options { display: flex; flex-direction: column; gap: 2px; padding: 0 0 8px; margin-bottom: 8px; border-bottom: 1px solid var(--border); min-width: 0; }
-.view-options section { min-width: 0; }
+.view-options { display: flex; flex-direction: column; gap: 2px; padding: 0 0 6px; min-width: 0; }
+.view-options .view-bar { padding: 0; }
+.view-options .view-group { margin: 3px 0; }
+.view-options .cutoff { width: 56px; }
 .view-options h3 { font-size: 12px; margin: 8px 0 4px; color: var(--muted); font-weight: 600; }
 .view-options .row { margin-bottom: 4px; }
 .view-options .view-bar { padding: 0; }
@@ -917,3 +919,9 @@ textarea.editing { width: 100%; box-sizing: border-box; }
 .docked-panels > .info-tabs button { white-space: nowrap; flex: none; }
 .docked-panels > .docked-tree { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
 .docked-panels > .info-body { flex: 1; min-height: 0; }
+
+.palette-form { gap: 4px; }
+.palette-form input:not([type=color]) { width: 110px; }
+.gear-btn { border: none; background: none; padding: 4px 6px; color: var(--muted); display: inline-flex; align-items: center; border-radius: 6px; }
+.gear-btn:hover { color: var(--accent); background: var(--hover); }
+.recipe-input { flex: 1; min-width: 0; }

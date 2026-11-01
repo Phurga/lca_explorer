@@ -171,6 +171,25 @@ def test_flow_contribution_sums_to_the_score_and_merges_compartments(flows_model
     assert by_substance["items"][0]["impact"] >= by_substance["items"][1]["impact"]
 
 
+def test_flow_contribution_groups_by_chosen_fields(flows_model):
+    from fastapi.testclient import TestClient
+    from lca_viewer.server import create_app
+
+    client = TestClient(create_app(flows_model))
+    score = flows_model.score(0)[0]
+    by_compartment = client.post("/api/flows", json={"root": 0, "method": 0, "keys": ["compartment"]}).json()
+    assert by_compartment["total"] == pytest.approx(score)
+    assert sum(it["impact"] for it in by_compartment["items"]) == pytest.approx(score)
+    assert {it["name"] for it in by_compartment["items"]} == {"air"}
+    assert all(it["unit"] == "" for it in by_compartment["items"])
+    by_sub = client.post("/api/flows", json={"root": 0, "method": 0, "keys": ["subcompartment"]}).json()
+    assert {it["name"] for it in by_sub["items"]} >= {"urban air close to ground", "non-urban air or from high stacks"}
+    both = client.post("/api/flows", json={"root": 0, "method": 0, "keys": ["name", "compartment"]}).json()
+    co2 = next(it for it in both["items"] if it["name"] == "Carbon dioxide, fossil")
+    assert sorted(co2["flows"]) == [0, 1] and co2["compartment"] == "air"
+    assert client.post("/api/flows", json={"root": 0, "method": 0, "keys": ["location"]}).status_code == 400
+
+
 def test_flow_contributors_are_the_emitting_processes(flows_model):
     from fastapi.testclient import TestClient
     from lca_viewer.server import create_app

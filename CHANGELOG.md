@@ -9,6 +9,11 @@ latest release, new work happens on `dev`.
 
 Changes on `dev`, not released yet.
 
+## 1.3.0 - 2026-11-02
+
+A process and its pop-up are one thing, the options sit in the side panel, and the rules and methods can be tuned.
+
+- **Compare**: the number of bars (*Top*) is a field you type in, as in View mode.
 - **View options**: headers *Group by* (rules, product, substance, compartment) and *Organize* (split by type,
   hide others), with one-word buttons.
 - **Projects**: the last one opened first, its databases folded (a click shows them).
@@ -29,6 +34,20 @@ Changes on `dev`, not released yet.
 - **Side panel**: a first panel, *Custom view*, holds the view options (they left the pane above the status
   bar) and the chart of the tree's rows; *Process contribution* charts what its table lists; the process and flow
   panels have a **Top** field.
+- **Method names**: *Name in results* has a *category* part and a *Custom* format (`{family} {category} {indicator}
+  {unit}`, as the custom process names); the name applies to the titles, files, and the several-methods chart and matrix.
+- **Defaults**: a first start shows a list with no cut-off, nothing grouped, full names, no colours and the comments;
+  climate change is the main method, its family shown together, with five default rules (*Default settings* in the
+  save menu brings them back). Loading a view file applies its settings, rules and methods.
+- **Custom view**: one line per setting, folded when the chart needs the room, a save icon; no *Collapse* button.
+- **Rules panel**: the *Attribution rule* at the top; *Active rules* folds; Esc leaves a change; right-click a rule to
+  change it; a rule that exists comes as a copy (*transport 2*); the palette is *Custom* once a colour is picked, and
+  *Add palette…* makes your own.
+- **Flow contribution** follows *Group by* (*Substance*, *Compartment*, new *Subcompartment*).
+- **Compare**: one breakdown switch (*None*, *Rules*, *Flows*, *Custom view*, *Activity*); the answers of the
+  calculations are kept, so a panel opened again, or the Custom view breakdown of what a tab shows, does not calculate again.
+- Shorter hover texts on the settings; the tree's header is *Supply chain* and its status line gives the unit only;
+  the Projects options are an icon.
 - **Rule colours**: a palette to choose (*Colours* in the Rules panel); quick groups in use are filled with their colour.
 - **Processes panel**: *Open history* at the top of the list replaces *Reopen what I closed*: pick any closed tab or window.
 - **Tabs and pop-ups are one**: the first line of a tab shows the panels of the pop-up (Process, Used by, Alternatives,

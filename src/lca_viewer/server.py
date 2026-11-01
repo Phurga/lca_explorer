@@ -129,6 +129,9 @@ class FlowsRequest(BaseModel):
     method: int = 0
     by: str = "substance"
     """"substance": compartments summed (one row per name and unit); "flow": one row per flow."""
+    keys: list[str] | None = None
+    """Group by these fields instead (``name``, ``compartment``, ``subcompartment``): one row per combination (the unit
+    goes with the name)."""
     limit: int = 25
     flow_groups: dict[str, dict] = {}
     """Named groups of flows: each item says which one it falls in (the first, in order)."""
@@ -678,12 +681,31 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
         functional unit, characterised, largest |impact| first."""
         if req.by not in ("substance", "flow"):
             raise HTTPException(400, f"Unknown grouping {req.by!r}")
+        if req.keys is not None and (not req.keys or any(k not in ("name", "compartment", "subcompartment") for k in req.keys)):
+            raise HTTPException(400, f"Unknown grouping {req.keys!r}")
         amounts, impacts = flow_contribution(model, req.root, req.method, req.amount)
         table = pd.DataFrame({"name": flows["name"], "compartment": flows["compartment"],
                               "subcompartment": flows["subcompartment"], "unit": flows["unit"],
                               "amount": amounts, "impact": impacts})
         table = table[table["impact"] != 0]
-        if req.by == "substance":
+        if req.keys is not None:
+            table = table.fillna({"compartment": "", "subcompartment": ""})
+            columns = [*req.keys, *(["unit"] if "name" in req.keys else [])]
+            items = []
+            for key, g in table.groupby(columns, sort=False):
+                values = dict(zip(columns, key if isinstance(key, tuple) else (key,)))
+                places = ", ".join(str(values[c]) for c in ("compartment", "subcompartment") if c in values and values[c])
+                if "name" in values:
+                    place = places if places else (f"{g['compartment'].nunique()} compartments" if g["compartment"].nunique() > 1
+                                                    else ", ".join(c for c in (g["compartment"].iat[0], g["subcompartment"].iat[0]) if c))
+                    name = values["name"]
+                else:
+                    place, name = "", places or "(unspecified)"
+                items.append({"name": name, "compartment": place, "unit": values.get("unit", ""),
+                              "amount": float(g["amount"].sum()) if "name" in values else 0.0, "impact": float(g["impact"].sum()),
+                              "flows": [int(i) for i in g.index],
+                              "compartments": [", ".join(c for c in cs if c) for cs in zip(g["compartment"], g["subcompartment"])]})
+        elif req.by == "substance":
             keys = ["name", "unit"]
             items = [{"name": name, "compartment": f"{len(g)} compartments" if len(g) > 1
                       else ", ".join(c for c in (g["compartment"].iat[0], g["subcompartment"].iat[0]) if c),

@@ -239,6 +239,9 @@ API in `src/lca_viewer/server.py`.
   clears a tab's own groups, merges and names, not the shared set. Loading a view file
   applies its tree, not its method or its set of rules (a notice says so). The explorer
   inside a pop-up takes the method of its tab, with rules of its own.
+  *Name in results* (a section of the Methods panel) sets how a method is named in the titles, the files, the
+  several-methods chart and the matrix: parts (family, category, indicator, unit, symbols such as CO₂ eq) or a
+  custom format with the tokens `{family}`, `{category}`, `{indicator}` and `{unit}`.
   Kept per database in `localStorage` (by method name, so a rebuilt model finds them);
   a workspace saved before takes the method and rules of its first tab; rules that other
   tabs had of their own are dropped.
