@@ -99,7 +99,16 @@ def rename_project(name: str, to: str) -> None:
 
     copy_project(name, to)
     bd.projects.set_current(to, update=False)
-    bd.projects.delete_project(name, delete_dir=True)
+    try:
+        bd.projects.delete_project(name, delete_dir=True)
+    except Exception as e:
+        if name not in bd.projects:  # gone from the list, only its folder is left (a file in use): renamed all the same
+            print(f"Project {name} is now {to}; its old folder could not be removed ({e})", flush=True)
+            return
+        # the old project is whole: the copy goes, so that nothing is left half done and the rename can be tried again
+        bd.projects.set_current(name, update=False)
+        bd.projects.delete_project(to, delete_dir=True)
+        raise SystemExit(f"{name} could not be deleted ({e}): it keeps its name") from e
     print(f"Project {name} is now {to}", flush=True)
 
 

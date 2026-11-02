@@ -391,7 +391,7 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
                 "moved": r.moved,
             }
             matched = r.rule_group if r.kind in ("group", "merged") else (
-                view.matching_rule(r, rendered_by_id.get(r.parent)) if r.kind in ("process", "flow") else None)
+                view.matching_rule(r) if r.kind in ("process", "flow") else None)
             if matched:
                 out["rule"] = matched  # the rule that makes the group or matches the row: its colour, grouped or not
             if r.kind == "process":
@@ -776,6 +776,8 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
         contribution of a process, reversed: its flows), largest first."""
         if not (0 <= req.root < model.size and 0 <= req.activity < model.size):
             raise HTTPException(404, "No such activity")
+        if not 0 <= req.method < len(model.methods):
+            raise HTTPException(404, f"No method {req.method}")
         level = float(model.supply(req.root, req.amount)[req.activity])
         amounts = model.B[:, req.activity].toarray().ravel() * level
         impacts = amounts * model.methods[req.method].cfs
@@ -1322,6 +1324,19 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
         except FileNotFoundError:
             return []
 
+    def project_in(folder: str, name: str) -> None:
+        if name not in project_names(folder):
+            raise HTTPException(404, f"No project {name!r} in {folder}")
+
+    def new_project_name(folder: str, name: str, empty: str) -> str:
+        """``name`` stripped, for a project to make in ``folder``: not empty (``empty``: the message), not taken."""
+        name = name.strip()
+        if not name:
+            raise HTTPException(400, empty)
+        if name in project_names(folder):
+            raise HTTPException(400, f"Project {name!r} already exists in {folder}")
+        return name
+
     def ours(line: str):
         """The progress lines of lca_viewer.editing, not Brightway's own messages."""
         return line if line.startswith(("Created project", "Installing", "Deleted", "Restor", "Downloading", "Writing",
@@ -1336,11 +1351,7 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
     @app.post("/api/brightway/projects")
     def create_project(req: ProjectRequest):
         folder = folder_of(req.folder)
-        name = req.name.strip()
-        if not name:
-            raise HTTPException(400, "Give the project a name")
-        if name in project_names(folder):
-            raise HTTPException(400, f"Project {name!r} already exists in {folder}")
+        name = new_project_name(folder, req.name, "Give the project a name")
 
         def work(job):
             cli(job, folder, ["project", "create", name, *(["--setup"] if req.setup else [])], ours)
@@ -1354,8 +1365,7 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
         folder = folder_of(req.folder)
         if req.confirm != req.project:
             raise HTTPException(400, "Type the project's name to confirm")
-        if req.project not in project_names(folder):
-            raise HTTPException(404, f"No project {req.project!r} in {folder}")
+        project_in(folder, req.project)
 
         def work(job):
             cli(job, folder, ["project", "delete", req.project], ours)
@@ -1363,20 +1373,12 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
 
         return start(f"project {req.project}", ("delete", folder, req.project), work)
 
-    def project_in(folder: str, name: str) -> None:
-        if name not in project_names(folder):
-            raise HTTPException(404, f"No project {name!r} in {folder}")
-
     @app.post("/api/brightway/projects/rename")
     def rename_project(req: RenameProjectRequest):
         """Rename a project, unless a model built from one of its databases is open."""
         folder = folder_of(req.folder)
-        new_name = req.new_name.strip()
         project_in(folder, req.project)
-        if not new_name:
-            raise HTTPException(400, "Give the project a new name")
-        if new_name in project_names(folder):
-            raise HTTPException(400, f"Project {new_name!r} already exists in {folder}")
+        new_name = new_project_name(folder, req.new_name, "Give the project a new name")
         if any((built_from(m) or ())[:2] == (folder, req.project) and loaded_key(m["path"]) for m in sources.catalog(data)):
             raise HTTPException(400, f"A database of {req.project} is open: close it first")
 
@@ -1390,12 +1392,8 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
     def copy_project(req: RenameProjectRequest):
         """A copy of a project, with its databases and impact methods, under another name."""
         folder = folder_of(req.folder)
-        new_name = req.new_name.strip()
         project_in(folder, req.project)
-        if not new_name:
-            raise HTTPException(400, "Give the copy a name")
-        if new_name in project_names(folder):
-            raise HTTPException(400, f"Project {new_name!r} already exists in {folder}")
+        new_name = new_project_name(folder, req.new_name, "Give the copy a name")
 
         def work(job):
             cli(job, folder, ["project", "copy", req.project, "--to", new_name], ours)
@@ -1497,8 +1495,7 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
         folder = folder_of(req.folder)
         if not re.fullmatch(r"bundled|\d+(\.\d+)+", req.version):
             raise HTTPException(400, f"Unknown default biosphere {req.version!r}")
-        if req.project not in project_names(folder):
-            raise HTTPException(404, f"No project {req.project!r} in {folder}")
+        project_in(folder, req.project)
 
         def work(job):
             cli(job, folder, ["defaults", req.version, "--project", req.project, "--data", str(data)], ours)
@@ -1518,8 +1515,7 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
         folder = folder_of(req.folder)
         if req.remote not in sources.remote_projects():
             raise HTTPException(404, f"No project {req.remote!r} on files.brightway.dev")
-        if req.project not in project_names(folder):
-            raise HTTPException(404, f"No project {req.project!r} in {folder}")
+        project_in(folder, req.project)
 
         def work(job):
             cli(job, folder, ["add-remote", req.remote, "--project", req.project, "--data", str(data)], ours)
@@ -1623,8 +1619,7 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
             raise HTTPException(404, f"Nothing at {path}")
         if not database:
             raise HTTPException(400, "Give the new database a name")
-        if req.project not in project_names(folder):
-            raise HTTPException(404, f"No project {req.project!r} in {folder}")
+        project_in(folder, req.project)
         report = data / f"import-{sources.slug(database)}-unlinked.csv"
         # Adapters: labels of randonneur_data's, or files of the user's (randonneur datapackages in JSON)
         from .importing import is_adapter_file
@@ -1760,8 +1755,7 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
         local_only(request)
         folder = folder_of(req.folder)
         project = req.project
-        if project not in project_names(folder):
-            raise HTTPException(404, f"No project {project!r} in {folder}")
+        project_in(folder, project)
         found = account()
         if not found:
             raise HTTPException(401, "Log in to ecoinvent first")
@@ -1870,8 +1864,7 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
         import json
 
         folder = folder_of(req.folder)
-        if req.project not in project_names(folder):
-            raise HTTPException(404, f"No project {req.project!r} in {folder}")
+        project_in(folder, req.project)
         everything = locked_all()
         names = set(everything.get(f"{folder}\n{req.project}", []))
         (names.add if req.locked else names.discard)(req.database)
@@ -1938,8 +1931,7 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
         import tempfile
 
         folder = folder_of(req.folder)
-        if req.project not in project_names(folder):
-            raise HTTPException(404, f"No project {req.project!r} in {folder}")
+        project_in(folder, req.project)
         changes = pending_read(folder, req.project)
         if not changes:
             raise HTTPException(400, "No change is staged")
@@ -1986,8 +1978,7 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
         import json
 
         folder = folder_of(req.folder)
-        if req.project not in project_names(folder):
-            raise HTTPException(404, f"No project {req.project!r} in {folder}")
+        project_in(folder, req.project)
         check_unlocked(folder, req.project, {req.database})
         try:
             sources.read_dataset(folder, req.project, req.database, req.code)
@@ -2010,8 +2001,7 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
         import tempfile
 
         folder = folder_of(req.folder)
-        if req.project not in project_names(folder):
-            raise HTTPException(404, f"No project {req.project!r} in {folder}")
+        project_in(folder, req.project)
         check_unlocked(folder, req.project, touched_by({"spec": req.spec}))
 
         def work(job):

@@ -82,11 +82,11 @@ class Row:
     by_rule: bool = False
     """For "merged" rows: made by a grouping rule with ``merge`` (not by ``View.merges``)."""
     by_product: bool = False
+    """For "group" rows: made by ``View.group_products`` (not by a rule)."""
     rule_group: str | None = None
+    """For a group made by a rule of the Rules panel: the rule (its name, or the field of a group-by rule)."""
     claimed: bool = False
     """A rule took this row or one above it (under first match, what is below it is the rule's: no further grouping)."""
-    """For a group made by a rule of the Rules panel: the rule (its name, or the field of a group-by rule)."""
-    """For "group" rows: made by ``View.group_products`` (not by a rule)."""
     regroup: str | None = None
     """For process rows: the "group by product" row the user ungrouped them from (its id),
     so that they can be put back in it."""
@@ -250,7 +250,7 @@ class View:
         """Whether a rule takes ``row`` under first match: it is a group a rule made, or a process a rule matches."""
         if self.attribution != "first_match":
             return False
-        return row.rule_group is not None or (row.kind == "process" and self.matching_rule(row, None, self.rules) is not None)
+        return row.rule_group is not None or (row.kind == "process" and self.matching_rule(row, self.rules) is not None)
 
     def _render(self, row: Row, out: list[Row], inherited: bool = False) -> None:
         row.claimed = inherited or self._claims(row)
@@ -317,7 +317,7 @@ class View:
                 continue
             if parent.claimed and rule.scope == ROOT_SCOPE and not rule.plain:
                 continue  # first match: below the row a rule took, the rules group no more
-            if flows and rule.owner is not None and not self._owned(rule, parent):
+            if flows and rule.owner is not None and not self._owned(rule, parent.sources):
                 continue
             bundle = self._rule_merged_row if rule.merge and not flows else self._group_row
             if rule.predicate is not None:
@@ -461,35 +461,36 @@ class View:
             below[i] = True
         return below
 
-    def matching_rule(self, row: Row, parent: Row | None = None, rules: list[GroupRule] | None = None) -> str | None:
+    def matching_rule(self, row: Row, rules: list[GroupRule] | None = None) -> str | None:
         """The name of the first rule, in list order, whose query matches the process (or elementary flow) of ``row``.
 
-        A process (or a flow) that a rule matches takes its colour even when it is alone and no group was made; a flow
-        rule with an owner needs ``parent``, the direct emissions row above the flow."""
+        A process (or a flow) that a rule matches takes its colour even when it is alone and no group was made (a rule
+        with ``merge`` too: a lone process is not merged); a flow rule with an owner also needs the processes emitting
+        the flow (``row.sources``) to match."""
         if row.node is None or row.kind not in ("process", "flow"):
             return None
         flows = row.kind == "flow"
         for rule in self.colour_rules if rules is None else rules:
-            if rule.disabled or rule.predicate is None or rule.merge or (rule.target == "flows") != flows:
+            if rule.disabled or rule.predicate is None or (rule.target == "flows") != flows:
                 continue
             if rule.scope != ROOT_SCOPE and not row.id.startswith(rule.scope + "/"):
                 continue
-            if flows and rule.owner is not None and (parent is None or not self._owned(rule, parent)):
+            if flows and rule.owner is not None and not self._owned(rule, row.sources):
                 continue
             index = row.node.flow if flows else row.node.product
             if index is not None and bool(self._mask(rule)[index]):
                 return rule.name or "group"
         return None
 
-    def _owned(self, rule: GroupRule, direct: Row) -> bool:
-        """Whether the process whose direct emissions row is ``direct`` matches the owner predicate of ``rule``."""
-        owner = direct.id.rsplit("/", 2)[-2] if "/" in direct.id else ""
-        if not owner.isdigit():
+    def _owned(self, rule: GroupRule, sources: list[tuple[int, float]] | None) -> bool:
+        """Whether the processes emitting some flows (``sources``: the (activity, operation level) pairs of a direct
+        row and of every row below it) match the owner predicate of ``rule``; all of them, for a merged process."""
+        if not sources:
             return False
         key = ("owner", id(rule))
         if key not in self._masks:
             self._masks[key] = evaluate(rule.owner, self._activities)
-        return bool(self._masks[key][int(owner)])
+        return all(bool(self._masks[key][j]) for j, _ in sources)
 
     def _mask(self, rule: GroupRule) -> np.ndarray:
         key = id(rule)

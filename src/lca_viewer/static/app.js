@@ -3541,7 +3541,7 @@ function chartItems(rows, byId) {
     .sort((a, b) => Math.abs(b.impacts[0]) - Math.abs(a.impacts[0]));
 }
 
-function nameItem(item, naming, recipe, byId, withEmitter = false) {
+function nameItem(item, naming, recipe, byId, withEmitter = true) {
   const names = baseNameItem(item, naming, recipe, byId, withEmitter);
   // A custom name replaces the main part; the grey qualifier still tells where it is
   if (item.rows.length !== 1) return names;
@@ -3558,8 +3558,8 @@ function nameItem(item, naming, recipe, byId, withEmitter = false) {
   }
   return names;
 }
-// ``withEmitter``: a flow says whose direct emissions it is (when the rows are split by type); else only the flow
-function baseNameItem(item, naming, recipe, byId, withEmitter = false) {
+// ``withEmitter``: a flow says whose direct emissions it is (the chart leaves it out unless its rows are split by type)
+function baseNameItem(item, naming, recipe, byId, withEmitter = true) {
   const { kind, metas, parentMetas, rows } = item;
   const many = rows.length > 1;
   const pick = (field) => joinValues(metas.map((m) => m[field]));
@@ -3632,7 +3632,7 @@ function legendOf(items, colors, byId, view) {
   return out;
 }
 
-function nameItems(items, naming, recipe, byId, withEmitter = false) {
+function nameItems(items, naming, recipe, byId, withEmitter = true) {
   const named = items.map((item) => ({ ...item, ...nameItem(item, naming, recipe, byId, withEmitter) }));
   // Rows that still read the same get the activity name, then a number, as qualifiers
   const text = (it) => `${it.main}|${it.qual}`;
@@ -3846,17 +3846,21 @@ const LIST_CUTS = {
   total: { label: "Cut-off", unit: "%", hint: "Rows under this share of the total go to others", default: 1, step: 0.5, max: 100 },
   cumulative: { label: "Cumulative", unit: "%", hint: "The largest rows until this share of the total", default: 90, step: 5, max: 100 },
 };
-// ``items`` largest first: { shown, rest }
-function cutList(items, size, { mode, value }) {
+// ``items`` largest first: { shown, rest }. As the cut-offs of the Custom view: *Cut-off* takes the share of the total
+// (``total``, the score the Share column divides by), *Cumulative* of all the rows together, those the server did not list
+// (``unlisted``: their |impact|) included
+function cutList(items, size, { mode, value }, { total = 0, unlisted = 0 } = {}) {
   if (mode === "top") return { shown: items.slice(0, value), rest: items.slice(value) };
-  const total = items.reduce((t, it) => t + Math.abs(size(it)), 0) || 1;
+  const magnitudes = items.map((it) => Math.abs(size(it)));
   if (mode === "total") {
+    const budget = (value / 100) * Math.abs(total);
     let cut = items.length, under = 0;
-    while (cut > 0 && (under + Math.abs(size(items[cut - 1]))) / total <= value / 100) under += Math.abs(size(items[--cut]));
+    while (cut > 0 && under + magnitudes[cut - 1] <= budget) under += magnitudes[--cut];
     return { shown: items.slice(0, Math.max(cut, 1)), rest: items.slice(Math.max(cut, 1)) };
   }
+  const budget = (value / 100) * (magnitudes.reduce((t, m) => t + m, 0) + Math.abs(unlisted));
   let kept = 0, reached = 0;
-  while (kept < items.length && reached / total < value / 100) reached += Math.abs(size(items[kept++]));
+  while (kept < items.length && reached < budget) reached += magnitudes[kept++];
   return { shown: items.slice(0, kept), rest: items.slice(kept) };
 }
 // What the server is asked for to cut a list here: the rows themselves for the shares, a number of them for the top
@@ -3900,7 +3904,7 @@ function ProcessContributions({ info, root, amount, method, onInfo }) {
   }, [chosen, root.index, amount, method]);
   useEffect(() => { chosenRow.current?.scrollIntoView({ block: "nearest", behavior: "smooth" }); }, [chosen]);
   const unitLabel = info.methods[method].unit;
-  const split = found && cutList(found.contributors, (c) => c.impact, cut);
+  const split = found && cutList(found.contributors, (c) => c.impact, cut, { total: found.total, unlisted: found.others.impact });
   const shown = split?.shown || [];
   const others = found && { count: found.others.count + split.rest.length, impact: found.others.impact + split.rest.reduce((t, c) => t + c.impact, 0) };
   const share = (v) => pct(found?.total ? v / found.total : 0);
@@ -4047,6 +4051,7 @@ function GroupPanel({ info, rules, setRules, selectedRow, view, setView, shared,
   const [by, setBy] = useState("location");
   const [query, setQuery] = useState(() => emptyQuery("name", "contains"));
   const [ownerQuery, setOwnerQuery] = useState(null);  // a flow rule on the emissions of some processes only: their query
+  const [ownerLocked, setOwnerLocked] = useState(false);  // the rule edited has an owner query the builder cannot show: kept
   const [preview, setPreview] = useState(null);
   const predicate = useMemo(() => toPredicate(query), [query]);
   const ownerPredicate = useMemo(() => (ownerQuery ? toPredicate(ownerQuery) : null), [ownerQuery]);
@@ -4091,7 +4096,9 @@ function GroupPanel({ info, rules, setRules, selectedRow, view, setView, shared,
       const q = queryOf(r.predicate);
       setQueryLocked(!q);
       setQuery(q || emptyQuery("name", "contains"));
-      setOwnerQuery(r.owner ? queryOf(r.owner) || emptyQuery("name", "contains") : null);
+      const owner = r.owner ? queryOf(r.owner) : null;
+      setOwnerLocked(!!r.owner && !owner);
+      setOwnerQuery(owner);
     }
     setTimeout(() => form.current?.scrollIntoView({ block: "start", behavior: "smooth" }));
   }
@@ -4099,13 +4106,14 @@ function GroupPanel({ info, rules, setRules, selectedRow, view, setView, shared,
     setEditIndex(null);
     setQueryLocked(false);
     setOwnerQuery(null);
+    setOwnerLocked(false);
     setName("");
     setQuery(emptyQuery("name", "contains"));
   }
   function saveEdit() {
     const r = rules[editIndex];
     const { owner: before, ...rest } = r;
-    const owner = r.target === "flows" ? (ownerPredicate ?? undefined) : before;
+    const owner = r.target === "flows" && !ownerLocked ? (ownerPredicate ?? undefined) : before;
     const next = r.by ? { ...r, by } : { ...rest, name: uniqueName(name.trim() || r.name, editIndex), ...(queryLocked || !predicate ? {} : { predicate }), ...(owner ? { owner } : {}) };
     setRules(rules.map((x, j) => (j === editIndex ? next : x)));
     stopEdit();
@@ -4209,7 +4217,8 @@ function GroupPanel({ info, rules, setRules, selectedRow, view, setView, shared,
         ${queryLocked
           ? html`<p class="note">This group was made from selected rows or a nested query: only its name can be changed here.</p>`
           : html`<${QueryBuilder} query=${query} setQuery=${setQuery} fields=${flows ? info.flow_query_fields : info.query_fields} flows=${flows} />`}
-        ${flows && !queryLocked && (ownerQuery
+        ${flows && ownerLocked && html`<p class="note">Its owning process query cannot be shown here: it is kept as it is.</p>`}
+        ${flows && !queryLocked && !ownerLocked && (ownerQuery
           ? html`
             <div class="owner-query" role="group" aria-label="Owning process">
               <div class="row"><span class="view-group-label" title="Only the emissions of the processes that match">Of processes</span>
@@ -4591,7 +4600,7 @@ function FlowPanel({ info, root, amount, method, onLocate, onInfo, onFlowInfo, r
   const keyOf = (it) => it.flows.join(",");
   const isChosen = (it) => flow && keyOf(flow) === keyOf(it);
   const choose = (it) => setFlow(isChosen(it) ? null : it);
-  const split = result && cutList(result.items, (it) => it.impact, cut);
+  const split = result && cutList(result.items, (it) => it.impact, cut, { total: result.total, unlisted: result.others.impact });
   const shown = split?.shown || [];
   const others = result && { count: result.others.count + split.rest.length, impact: result.others.impact + split.rest.reduce((t, it) => t + it.impact, 0) };
   const entries = result ? [
@@ -6282,7 +6291,8 @@ function ComparisonView({ info, tabs, compare, setCompare }) {
   const filtered = (entries) => {
     const all = [...new Set(entries.flatMap((e) => Object.keys(e.groups)))].filter((g) => g !== OTHER_GROUP);
     const size = (g) => entries.reduce((t, e) => t + Math.abs(e.groups[g] || 0), 0);
-    const { shown } = cutList(all.map((g) => ({ g, size: size(g) })).sort((a, b) => b.size - a.size), (it) => it.size, cut);
+    const { shown } = cutList(all.map((g) => ({ g, size: size(g) })).sort((a, b) => b.size - a.size), (it) => it.size, cut,
+      { total: entries.reduce((t, e) => t + Math.abs(e.total), 0), unlisted: size(OTHER_GROUP) });
     const keep = new Set(shown.map((it) => it.g));
     return entries.map((e) => {
       const groups = {};

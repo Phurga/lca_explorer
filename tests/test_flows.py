@@ -256,6 +256,22 @@ def test_rows_say_which_rule_matches_them_grouped_or_not(flows_model):
     assert all("rule" not in r for r in disabled)
 
 
+def test_an_owner_rule_colours_its_flows_below_others_rows_too(flows_model):
+    from fastapi.testclient import TestClient
+    from lca_viewer.server import create_app
+
+    co2 = {"field": "name", "op": "eq", "value": "Carbon dioxide, fossil"}
+    rule = {"name": "CO2 FR", "predicate": co2, "target": "flows", "owner": {"field": "location", "op": "eq", "value": "FR"}}
+    client = TestClient(create_app(flows_model))
+    # one flow (the N2O) shown under each direct row, the CO2 in an others row, expanded: below it, not below the direct row
+    state = {"root": [0], "amount": 1.0, "expanded": ["0", "0/1", "0/1/-1", "0/1/-1/rest", "0/2", "0/2/-1", "0/2/-1/rest"],
+             "rules": [], "colour_rules": [rule], "method": 0, "cutoff": 1, "cutoff_basis": "top"}
+    rows = client.post("/api/rows", json=state).json()["rows"]
+    co2_rows = [r for r in rows if r["kind"] == "flow" and r["label"].startswith("Carbon dioxide")]
+    assert co2_rows and all(r["parent"].endswith("/rest") for r in co2_rows)
+    assert all((r.get("rule") == "CO2 FR") is r["id"].startswith("0/1/") for r in co2_rows)
+
+
 def test_only_groups_of_the_rules_panel_have_a_rule_to_colour_them(flows_model):
     from fastapi.testclient import TestClient
     from lca_viewer.server import create_app

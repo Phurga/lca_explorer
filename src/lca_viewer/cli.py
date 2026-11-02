@@ -161,10 +161,10 @@ def project(args) -> None:
         editing.create_project(args.name, setup=args.setup)
     elif args.action == "delete":
         editing.delete_project(args.name)
-    elif args.action == "copy":
-        editing.copy_project(args.name, args.to)
-    elif args.action == "rename":
-        editing.rename_project(args.name, args.to)
+    elif args.action in ("copy", "rename"):
+        if not args.name or not args.to:
+            raise SystemExit(f"project {args.action}: give the project and the new name (--to)")
+        (editing.copy_project if args.action == "copy" else editing.rename_project)(args.name, args.to)
     else:
         editing.restore_project(args.file, args.name)
 
