@@ -13,7 +13,7 @@ const STORAGE_KEY = DATABASE ? `lca_viewer.view.${DATABASE}` : "lca_viewer.view"
 // The calculations that only read the model (the rows of a tree, the contributions, the comparison) keep their answer
 // for the same question: a panel opened again, or a comparison of what a tab already shows, does not calculate again.
 // ``clearAnswers`` when the model changes.
-const CACHED = /^\/api\/(rows|global|global\/contributors|flows|flows\/contributors|compare)$/;
+const CACHED = /^\/api\/(rows|global|global\/contributors|flows|flows\/contributors|flows\/of-process|compare)$/;
 const answers = new Map();  // question -> { promise, value }
 const clearAnswers = () => answers.clear();
 function request(url, body) {
@@ -443,17 +443,19 @@ function NumberInput({ value, onValue, min, max, step, delay = 400, ...props }) 
 }
 
 // ---------------------------------------------------------------- chart
-function Chart({ option, height = 420, onClick }) {
+// ``exportRef``: where the chart is given to its export menu
+function Chart({ option, height = 420, onClick, exportRef }) {
   const ref = useRef(null);
   const chart = useRef(null);
   const clickHandler = useRef(onClick);
   clickHandler.current = onClick;
   useEffect(() => {
     chart.current = echarts.init(ref.current);
+    if (exportRef) exportRef.current = chart.current;
     chart.current.on("click", (e) => clickHandler.current?.(e));
     const observer = new ResizeObserver(() => chart.current.resize());
     observer.observe(ref.current);
-    return () => { observer.disconnect(); chart.current.dispose(); };
+    return () => { observer.disconnect(); if (exportRef) exportRef.current = null; chart.current.dispose(); };
   }, []);
   useEffect(() => { chart.current?.setOption(option, true); }, [option]);
   return html`<div class="chart" style=${{ height: `${height}px` }} ref=${ref}></div>`;
@@ -465,7 +467,6 @@ function baseOption() {
     color: PALETTE,
     textStyle: { color: text, fontFamily: cssVar("--font") },
     grid: { left: 8, right: 64, top: 36, bottom: 8, containLabel: true },
-    toolbox: { right: 8, feature: { saveAsImage: { title: "PNG", pixelRatio: 2 } } },
     tooltip: { trigger: "item", confine: true },
     xAxis: { axisLabel: { color: muted, formatter: fmtAxis, hideOverlap: true }, splitLine: { lineStyle: { color: border } } },
     yAxis: { axisLabel: { color: text }, axisLine: { lineStyle: { color: border } } },
@@ -2688,6 +2689,26 @@ function ResetIcon() {
       <path d="M2.5 8a5.5 5.5 0 1 0 1.8-4.1" /><path d="M2.5 2.5v3h3" />
     </svg>`;
 }
+function DownloadIcon() {
+  return html`
+    <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M8 2v8M4.8 7.2 8 10.4l3.2-3.2" /><path d="M2.5 11.5v2h11v-2" />
+    </svg>`;
+}
+// The export of a panel, one icon: the chart as a PNG (legend included) and the table as a CSV file
+function ExportMenu({ chart, csv, name = "chart" }) {
+  const items = [
+    ...(chart ? [{ key: "png", label: "Chart as PNG", title: "The chart as an image, with its legend", run: () => {
+      if (!chart.current) return;
+      const a = document.createElement("a");
+      a.href = chart.current.getDataURL({ type: "png", pixelRatio: 2, backgroundColor: cssVar("--panel") });
+      a.download = `${name}.png`;
+      a.click();
+    } }] : []),
+    ...(csv ? [{ key: "csv", label: "Table as CSV", title: "The table as a file", run: csv }] : []),
+  ];
+  return html`<${PopupMenu} label=${html`<${DownloadIcon} />`} className="icon-plain" title="Export" items=${items} />`;
+}
 function DiskIcon() {
   return html`
     <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round">
@@ -3699,7 +3720,7 @@ const PANEL_TIPS = {
   view: "How the tree is shown (display, cut-off, rows), and the chart of its rows.",
   chart: "What each process of the supply chain adds by its own emissions, wherever it is in the tree.",
   flows: "Which substances drive the score, and which processes emit them.",
-  groups: "Define rules on processes and elementary flows to define custom contribution analyses model structure",
+  groups: "Group processes by your own criteria, beyond how individual flow or process contribute.",
   processes: "Your open tabs: compare, reorder, close. Drop a process here to open it.",
   methods: "The indicator of the tree and charts, and the ones to show together.",
   global: "The score split by your rules over the whole supply chain, to see what each rule weighs.",
@@ -3707,6 +3728,7 @@ const PANEL_TIPS = {
 
 function ChartPanel({ data, info, method, chartMethods, onPickMethods, view, header }) {
   const { naming, recipe } = view;
+  const chartRef = useRef(null);
   const [mode, setMode] = useState("single");
 
   const byId = useMemo(() => new Map(data.rows.map((r) => [r.id, r])), [data]);
@@ -3771,8 +3793,10 @@ function ChartPanel({ data, info, method, chartMethods, onPickMethods, view, hea
     }
     const totals = positions.map((k) => parts.reduce((s, p) => s + p.impacts[k], 0));
     const categories = positions.map((k) => truncate(methodRow(info.methods[data.methods[k]]), 50));
-    o.legend = { type: "scroll", bottom: 0, textStyle: { color: cssVar("--text") } };
-    o.grid.bottom = 40;
+    const lines = Math.max(1, Math.ceil(segments.reduce((w, k) => w + textWidth(k.name) + 34, 0) / 460));
+    o.legend = { type: "plain", bottom: 4, left: "center", width: "92%", selectedMode: false, itemWidth: 12, itemHeight: 12, itemGap: 14,
+      icon: "roundRect", textStyle: { color: cssVar("--text"), fontSize: 11 } };
+    o.grid.bottom = 28 + lines * 20;
     o.yAxis = { ...o.yAxis, type: "category", data: categories, inverse: true };
     o.xAxis = { ...o.xAxis, type: "value", axisLabel: { color: cssVar("--muted"), formatter: (v) => `${v}%` } };
     o.tooltip.valueFormatter = (v) => `${v.toFixed(1)}%`;
@@ -3799,18 +3823,18 @@ function ChartPanel({ data, info, method, chartMethods, onPickMethods, view, hea
         <button class=${mode === "multi" ? "primary" : ""} onClick=${() => setMode("multi")}
           title="Methods ticked, as 100 %">Multi indicator</button>
         <span class="spacer" style="flex:1"></span>
-        <button onClick=${exportCsv}>Export CSV</button>
+        <${ExportMenu} chart=${chartRef} csv=${exportCsv} name="contributions" />
       </div>
       ${mode === "single"
         ? html`
-          <${Chart} option=${singleOption} height=${Math.max(260, parts.length * 26 + 60) + (singleOption.legend ? 24 * Math.max(0, (singleOption.grid.bottom - 28) / 20) : 0)} />`
+          <${Chart} exportRef=${chartRef} option=${singleOption} height=${Math.max(260, parts.length * 26 + 60) + (singleOption.legend ? 24 * Math.max(0, (singleOption.grid.bottom - 28) / 20) : 0)} />`
         : html`
           <div class="row">
             <button onClick=${onPickMethods} title="Tick the methods in the Methods panel">${chartMethods.length} ${chartMethods.length === 1 ? "method" : "methods"} shown together</button>
           </div>
           ${chartMethods.length === 0
             ? html`<div class="empty">Select methods to compare.</div>`
-            : html`<${Chart} option=${multiOption} height=${Math.max(300, chartMethods.length * 28 + 120)} />`}`}
+            : html`<${Chart} exportRef=${chartRef} option=${multiOption} height=${Math.max(300, chartMethods.length * 28 + 120) + Math.max(0, multiOption.grid.bottom - 40)} />`}`}
     </div>`;
 }
 
@@ -3857,6 +3881,8 @@ function ProcessContributions({ info, root, amount, method, onInfo }) {
   const [error, setError] = useState(null);
   const [chosen, setChosen] = useState(null);  // the activity chosen
   const chosenRow = useRef(null);
+  const chartRef = useRef(null);
+  const [inner, setInner] = useState(null);  // the flows of the process chosen: its contribution, reversed
   useEffect(() => {
     let live = true;
     setError(null);
@@ -3865,6 +3891,13 @@ function ProcessContributions({ info, root, amount, method, onInfo }) {
     return () => { live = false; };
   }, [root.index, amount, method, cut.mode, cutLimit(cut)]);
   useEffect(() => setChosen(null), [root.index, method]);
+  useEffect(() => {
+    setInner(null);
+    if (chosen === null) return;
+    let live = true;
+    request("/api/flows/of-process", { root: root.index, amount, method, activity: chosen, limit: 12 }).then((d) => live && setInner(d)).catch(() => live && setInner({ flows: [], others: { count: 0, impact: 0 }, total: 0 }));
+    return () => { live = false; };
+  }, [chosen, root.index, amount, method]);
   useEffect(() => { chosenRow.current?.scrollIntoView({ block: "nearest", behavior: "smooth" }); }, [chosen]);
   const unitLabel = info.methods[method].unit;
   const split = found && cutList(found.contributors, (c) => c.impact, cut);
@@ -3874,6 +3907,12 @@ function ProcessContributions({ info, root, amount, method, onInfo }) {
   const rows = found ? [...shown.map((c) => [`${c.name} (${c.location})`, c.impact, c]),
     ...(others.count > 0 ? [[`${others.count} more`, others.impact, null]] : [])] : [];
   const choose = (c) => setChosen(chosen === c.index ? null : c.index);
+  function exportCsv() {
+    const quote = (v) => `"${String(v).replace(/"/g, '""')}"`;
+    const lines = [...shown.map((c) => [quote(c.name), quote(c.location), c.impact, found.total ? c.impact / found.total : 0].join(",")),
+      ...(others.count > 0 ? [[quote(`${others.count} more`), "", others.impact, found.total ? others.impact / found.total : 0].join(",")] : [])];
+    download("process-contributions.csv", [`# ${unitLabel}`, ["process", "location", "impact", "share"].join(","), ...lines].join("\n"), "text/csv");
+  }
   const option = useMemo(() => {
     const o = baseOption();
     o.yAxis = { ...o.yAxis, type: "category", data: rows.map(([n]) => n), inverse: true, triggerEvent: true,
@@ -3889,20 +3928,28 @@ function ProcessContributions({ info, root, amount, method, onInfo }) {
   if (!found) return html`<${Waiting} text="Computing…" />`;
   return html`
     <div class="panel">
-      <div class="row"><${CutField} cut=${cut} setCut=${setCut} what="processes" /></div>
-      <${Chart} option=${option} height=${Math.max(200, rows.length * 26 + 60)}
+      <div class="row"><${CutField} cut=${cut} setCut=${setCut} what="processes" /><${ExportMenu} chart=${chartRef} csv=${exportCsv} name="process-contributions" /></div>
+      <${Chart} exportRef=${chartRef} option=${option} height=${Math.max(200, rows.length * 26 + 60)}
         onClick=${(e) => { const i = e.componentType === "yAxis" ? rows.findIndex(([n]) => n === e.value) : e.dataIndex; const c = rows[i]?.[2]; if (c) choose(c); }} />
       <table class="results chart-results direct-contributions">
         <thead><tr><th>Process <span class="muted">· direct contributions</span></th><th class="num">${unitLabel}</th><th class="num">Share</th></tr></thead>
         <tbody>${shown.map((c) => html`
-          <tr key=${c.index} class=${`clickable ${chosen === c.index ? "selected" : ""}`} ref=${chosen === c.index ? chosenRow : null} ...${dragProcess(c.index)}
-              title=${`${c.reference_product ?? ""} | ${c.name} | ${c.location}: click to find it in the chart, right-click for its details`}
-              onClick=${() => choose(c)}
-              onContextMenu=${(e) => { e.preventDefault(); onInfo?.(c.index, e.clientX, e.clientY); }}>
-            <td>${c.name} <span class="loc-chip">${c.location}</span></td>
-            <td class="num">${fmt(c.impact)}</td>
-            <td class="num">${share(c.impact)}</td>
-          </tr>`)}
+          <${Fragment} key=${c.index}>
+            <tr class=${`clickable ${chosen === c.index ? "selected" : ""}`} ref=${chosen === c.index ? chosenRow : null} ...${dragProcess(c.index)}
+                title=${`${c.reference_product ?? ""} | ${c.name} | ${c.location}: click for the flows it is made of, right-click for its details`}
+                onClick=${() => choose(c)}
+                onContextMenu=${(e) => { e.preventDefault(); onInfo?.(c.index, e.clientX, e.clientY); }}>
+              <td>${chosen === c.index ? "▾" : "▸"} ${c.name} <span class="loc-chip">${c.location}</span></td>
+              <td class="num">${fmt(c.impact)}</td>
+              <td class="num">${share(c.impact)}</td>
+            </tr>
+            ${chosen === c.index && (inner
+              ? html`${inner.flows.map((f) => html`
+                  <tr class="sub" key=${f.flow}><td>${f.name} <span class="muted">${f.compartment}</span></td>
+                    <td class="num">${fmt(f.impact)}</td><td class="num muted" title="Of this process's contribution">${pct(inner.total ? f.impact / inner.total : 0)}</td></tr>`)}
+                  ${inner.others.count > 0 && html`<tr class="sub muted"><td>+ ${inner.others.count} more flows</td><td class="num">${fmt(inner.others.impact)}</td><td></td></tr>`}`
+              : html`<tr class="sub"><td colspan="3"><${Waiting} text="Computing…" /></td></tr>`)}
+          <//>`)}
         </tbody>
         <tfoot>
           ${others.count > 0 && html`<tr><td class="muted">${others.count} more</td><td class="num">${fmt(others.impact)}</td><td class="num">${share(others.impact)}</td></tr>`}
@@ -4362,6 +4409,7 @@ function GlobalPanel({ info, root, amount, method, rules, view, rule, setRule, o
   const [group, setGroup] = useState(null);
   const [contributors, setContributors] = useState(null);
   const contributorsBox = useRef(null);
+  const chartRef = useRef(null);
 
   useEffect(() => {
     if (!root) return;
@@ -4438,11 +4486,11 @@ function GlobalPanel({ info, root, amount, method, rules, view, rule, setRule, o
       </div>
       ${error && html`<div class="error">${error}</div>`}
       ${result && html`
-        <${Chart} option=${option} height=${Math.max(200, entries.length * 34 + 60)}
+        <${Chart} exportRef=${chartRef} option=${option} height=${Math.max(200, entries.length * 34 + 60)}
           onClick=${(e) => choose(e.componentType === "yAxis" ? e.value : e.name)} />
         <table class="results">
           <thead><tr><th>Group <span class="muted">· click to see its processes</span>
-            <button class="link" onClick=${exportGroups} title="Download this table as CSV">Export CSV</button></th>
+            <${ExportMenu} chart=${chartRef} csv=${exportGroups} name="rules-contributions" /></th>
             <th class="num">${unit}</th><th class="num">Share</th></tr></thead>
           <tbody>${entries.map(([n, v]) => html`
             <tr class="clickable ${n === group ? "selected" : ""}" onClick=${() => choose(n)}>
@@ -4457,7 +4505,7 @@ function GlobalPanel({ info, root, amount, method, rules, view, rule, setRule, o
             <span class="details-title"><b>${group}</b>${contributors
               ? `: ${contributors.count} ${contributors.count === 1 ? "process" : "processes"} · ${fmt(contributors.total)} ${unit} (${ofTotal(contributors.total)})`
               : " …"}</span>
-            ${contributors && html`<button onClick=${exportContributors} title="Download every process of this group as CSV">Export CSV</button>`}
+            ${contributors && html`<${ExportMenu} csv=${exportContributors} />`}
             <button onClick=${() => setGroup(null)} aria-label="Close">×</button>
           </div>
           ${contributors && html`
@@ -4503,6 +4551,7 @@ function FlowPanel({ info, root, amount, method, onLocate, onInfo, onFlowInfo, r
   const withName = keys.length === 0 || keys.includes("name");
   const things = !keys.length ? "flows" : withName ? "substances" : "groups";
   const [cut, setCut] = useState({ mode: "top", value: 25 });
+  const chartRef = useRef(null);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
   const [flow, setFlow] = useState(null);
@@ -4549,6 +4598,12 @@ function FlowPanel({ info, root, amount, method, onLocate, onInfo, onFlowInfo, r
     ...shown.map((it) => [label(it), it.impact, it]),
     ...(others.count ? [[`others (${others.count} ${things})`, others.impact, null]] : []),
   ] : [];
+  function exportCsv() {
+    const quote = (v) => `"${String(v).replace(/"/g, '""')}"`;
+    const lines = [...shown.map((it) => [quote(it.name), quote(it.compartment), it.unit, it.amount, it.impact, total ? it.impact / total : 0].join(",")),
+      ...(others.count > 0 ? [[quote(`${others.count} more`), "", "", "", others.impact, total ? others.impact / total : 0].join(",")] : [])];
+    download("flow-contributions.csv", [`# ${methodUnit}`, ["name", "compartment", "unit", "amount", "impact", "share"].join(","), ...lines].join("\n"), "text/csv");
+  }
   const option = useMemo(() => {
     const o = baseOption();
     o.yAxis = { ...o.yAxis, type: "category", data: entries.map(([n]) => n), inverse: true, triggerEvent: true,
@@ -4574,10 +4629,11 @@ function FlowPanel({ info, root, amount, method, onLocate, onInfo, onFlowInfo, r
             <button class=${grouped[k] ? "primary" : ""} aria-pressed=${grouped[k]} title=${hint} onClick=${() => setGrouped({ ...grouped, [k]: !grouped[k] })}>${label}</button>`)}
         </div>
         <${CutField} cut=${cut} setCut=${setCut} what=${things} />
+        <${ExportMenu} chart=${chartRef} csv=${exportCsv} name="flow-contributions" />
       </div>
       ${error && html`<div class="error">${error}</div>`}
       ${result && html`
-        <${Chart} option=${option} height=${Math.max(200, entries.length * 26 + 60)}
+        <${Chart} exportRef=${chartRef} option=${option} height=${Math.max(200, entries.length * 26 + 60)}
           onClick=${(e) => { const name = e.componentType === "yAxis" ? e.value : e.name; const it = entries.find(([n]) => n === name)?.[2]; if (it) choose(it); }} />
         <table class="results flow-results">
           <thead><tr>
@@ -5826,7 +5882,7 @@ function CompareBasis({ basis, setBasis, cut, setCut, none }) {
       <span class="view-group-label">Breakdown</span>
       <span class="segmented">
         ${[...(none ? [["none", "None", "Total only"]] : []), ["groups", "Rules", "By rule"], ["flows", "Flows", "By elementary flow"],
-          ["tree", "Custom view", "Rows of each tab's view"], ["activities", "Activity", "By process, own emissions"]].map(([k, label, hint]) => html`
+          ["tree", "Custom view", "Rows of each tab's view"], ["activities", "Each content", "Own emissions and each input, first tier only"]].map(([k, label, hint]) => html`
           <button class=${basis === k ? "primary" : ""} onClick=${() => setBasis(k)} title=${hint}>${label}</button>`)}
       </span>
       ${(basis === "flows" || basis === "activities") && html`<${CutField} cut=${cut} setCut=${setCut} what="bars" />`}
@@ -5852,8 +5908,9 @@ function waterfallRows(from, to, names) {
 }
 
 function CompareBars({ results, base, unitLabel, names, groupColor, mode, setMode, basis, setBasis, cut, setCut }) {
-  const noun = { none: "Total", groups: "Group", tree: "Row", flows: "Flow", activities: "Process" }[basis];
+  const noun = { none: "Total", groups: "Group", tree: "Row", flows: "Flow", activities: "Content" }[basis];
   const baseTotal = Math.abs(results[base].total);
+  const chartRef = useRef(null);
   const value = (r, g) => {
     const v = r.groups[g] || 0;
     if (mode === "baseline") return baseTotal ? (100 * v) / baseTotal : 0;
@@ -5887,7 +5944,7 @@ function CompareBars({ results, base, unitLabel, names, groupColor, mode, setMod
     <div class="row">
       <${CompareBasis} none basis=${basis} setBasis=${setBasis} cut=${cut} setCut=${setCut} />
       <span style="flex:1"></span>
-      <button onClick=${exportCsv}>Export CSV</button>
+      <${ExportMenu} chart=${chartRef} csv=${exportCsv} name="compare-contributions" />
     </div>
     <div class="view-group" role="group" aria-label="Scale">
       <span class="view-group-label">Scale</span>
@@ -5896,7 +5953,7 @@ function CompareBars({ results, base, unitLabel, names, groupColor, mode, setMod
           <button class=${mode === key ? "primary" : ""} title=${hint} onClick=${() => setMode(key)}>${label}</button>`)}
       </span>
     </div>
-    <${Chart} option=${option} height=${Math.max(200, results.length * 54 + 90)} />
+    <${Chart} exportRef=${chartRef} option=${option} height=${Math.max(200, results.length * 54 + 90)} />
     <table class="results compare-table">
       <thead>
         <tr><th rowspan="2">${noun} <span class="muted">· ${unitLabel}</span></th>
@@ -5917,8 +5974,9 @@ function CompareBars({ results, base, unitLabel, names, groupColor, mode, setMod
 }
 
 function CompareDifference({ results, base, target, setTarget, unitLabel, names, basis, setBasis, cut, setCut }) {
-  const noun = { groups: "Group", tree: "Row", flows: "Flow", activities: "Process" }[basis];
+  const noun = { groups: "Group", tree: "Row", flows: "Flow", activities: "Content" }[basis];
   const from = results[base], to = results[target];
+  const chartRef = useRef(null);
   const rows = useMemo(() => waterfallRows(from, to, names), [from, to, names]);
   // A small difference is invisible against two totals drawn from zero: the axis zooms on the steps (the totals are cut)
   const steps = rows.slice(1, -1);
@@ -5968,7 +6026,7 @@ function CompareDifference({ results, base, target, setTarget, unitLabel, names,
     <div class="row">
       <${CompareBasis} basis=${basis} setBasis=${setBasis} cut=${cut} setCut=${setCut} />
       <span style="flex:1"></span>
-      <button onClick=${exportCsv}>Export CSV</button>
+      <${ExportMenu} chart=${chartRef} csv=${exportCsv} name="cascade" />
     </div>
     ${results.length > 2 && html`<div class="row">
       <select value=${target} onChange=${(e) => setTarget(Number(e.target.value))} aria-label="Compared with the baseline" title="The tab read against the baseline">
@@ -5981,7 +6039,7 @@ function CompareDifference({ results, base, target, setTarget, unitLabel, names,
       Orange steps add to the score, green ones take away from it.
       ${basis === "groups" && names.length < 2 && " Add groups (left) to see which parts of the supply chain make the difference."}
     </p>
-    <${Chart} option=${option} height=${Math.max(200, rows.length * 34 + 60)} />
+    <${Chart} exportRef=${chartRef} option=${option} height=${Math.max(200, rows.length * 34 + 60)} />
     <table class="results compare-table">
       <thead><tr><th>${noun}</th><th class="num" title=${from.label}>${truncate(from.label, 24)}</th><th class="num" title=${to.label}>${truncate(to.label, 24)}</th>
         <th class="num">Difference</th><th class="num">Of the total difference</th></tr></thead>
@@ -6041,6 +6099,7 @@ function MethodTree({ info, main, setMain, selected, setSelected }) {
 }
 
 function CompareMethods({ results, base, info, methods, sorted, setSorted }) {
+  const chartRef = useRef(null);
   const rows = useMemo(() => {
     const list = methods.map((k, j) => {
       const changes = results.map((r) => relative(r.totals[j], results[base].totals[j]));
@@ -6081,13 +6140,13 @@ function CompareMethods({ results, base, info, methods, sorted, setSorted }) {
     <div class="row">
       <label><input type="checkbox" checked=${sorted} onChange=${(e) => setSorted(e.target.checked)} /> Largest difference first</label>
       <span style="flex:1"></span>
-      <button onClick=${exportCsv}>Export CSV</button>
+      <${ExportMenu} chart=${chartRef} csv=${exportCsv} name="multi-indicator-matrix" />
     </div>
     ${methods.length === 0
       ? html`<div class="empty">Tick the methods to show in the <i>Methods</i> panel, by family or one by one.</div>`
       : html`
         <${InfoTip} text="Each process's score in the chosen impact categories, as a change against the baseline: orange higher, green lower, to ±100 %. Values in the tooltip and the CSV." label="About the heat map" />
-        <${Chart} option=${option} height=${Math.max(240, rows.length * 28 + 130)} />`}`;
+        <${Chart} exportRef=${chartRef} option=${option} height=${Math.max(240, rows.length * 28 + 130)} />`}`;
 }
 
 // The tabs of the comparison (``compare.chosen``, all by default) and the baseline (``compare.baseline``, the first by default)

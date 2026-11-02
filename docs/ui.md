@@ -16,7 +16,7 @@ API in `src/lca_viewer/server.py`.
 - **Vendored** in `static/vendor/` (Preact 10.24, htm 3.1, ECharts 5.5): the
   app works offline, which matters for a local-first tool handling licensed
   data.
-- **ECharts**: horizontal bars, 100 % stacked bars, PNG export built in, and
+- **ECharts**: horizontal bars, 100 % stacked bars, PNG export from each panel's export icon, and
   later maps / Sankey for phases 5.
 - If the UI grows (virtualised tree for thousands of rows, more panels),
   migrate to Vite + TypeScript; the API does not change.

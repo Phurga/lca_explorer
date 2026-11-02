@@ -66,16 +66,26 @@ def test_bad_requests(client):
     assert post(client, entries=[{"root": 0}], rule="nope").status_code == 400
 
 
-def test_activities_basis_splits_by_what_each_process_emits(client):
-    # 1 kg bread: wheat 0.4 kg x 2 CO2, flour 0.8 kg x 0.5 CO2, bread 0.3 CO2
+def test_activities_basis_is_the_first_tier_only(client):
+    # 1 kg bread: wheat 0.4 kg x 2 CO2, flour 0.8 kg x 0.5 CO2, bread 0.3 CO2. Inside the bread: its own emissions and
+    # the flour with the wheat in it; the wheat is not a content of the bread, only of the flour
     entries = [{"root": 2}, {"root": 1, "amount": 2.0}]
     first, second = post(client, entries=entries, basis="activities").json()["entries"]
-    assert first["groups"] == pytest.approx({"wheat (world)": 0.8, "flour (world)": 0.4, "bread (world)": 0.3})
-    assert second["groups"] == pytest.approx({"wheat (world)": 2.0, "flour (world)": 1.0})
+    assert first["groups"] == pytest.approx({"direct emissions": 0.3, "flour (world)": 1.2})
+    assert second["groups"] == pytest.approx({"direct emissions": 1.0, "wheat (world)": 2.0})
     assert first["total"] == pytest.approx(1.5) and second["total"] == pytest.approx(3.0)
 
 
 def test_activities_basis_folds_the_rest_into_other(client):
     [entry] = post(client, entries=[{"root": 2}], basis="activities", limit=1).json()["entries"]
-    assert entry["groups"] == pytest.approx({"wheat (world)": 0.8, "other": 0.7})
+    assert entry["groups"] == pytest.approx({"flour (world)": 1.2, "other": 0.3})
     assert entry["total"] == pytest.approx(1.5)
+
+
+def test_flows_of_a_process_of_the_supply_chain(client):
+    # the wheat of 1 kg bread emits 0.4 kg x (CO2 factor 2.0): its own emissions are its contribution
+    body = {"root": 2, "method": 0, "activity": 0}
+    found = client.post("/api/flows/of-process", json=body).json()
+    assert found["total"] == pytest.approx(0.8) and found["count"] >= 1
+    assert sum(f["impact"] for f in found["flows"]) + found["others"]["impact"] == pytest.approx(found["total"])
+    assert client.post("/api/flows/of-process", json={**body, "activity": 99}).status_code == 404

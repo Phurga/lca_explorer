@@ -152,6 +152,15 @@ class FlowContributorsRequest(BaseModel):
     limit: int = 50
 
 
+class ProcessFlowsRequest(BaseModel):
+    root: int
+    amount: float = 1.0
+    method: int = 0
+    activity: int
+    """The process, in the supply chain of ``root``, whose own emissions are split by elementary flow."""
+    limit: int = 25
+
+
 class LocateRequest(ViewState):
     product: int
     groups: dict[str, dict] = {}
@@ -636,23 +645,39 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
                       **({OTHER: rest} if (rest := sum(v for n, v in parts.items() if n not in shown)) else {})}
                      for parts in split]
         elif req.basis == "activities":
-            # each process by its own emissions, wherever it is in the supply chain; the ``limit`` weighing most over all
+            # what is inside each product, the first tier only: its own emissions and each input with its supply chain
+            # (not the processes further down: those are in the input's share); the ``limit`` weighing most over all
             # entries, and *other* for the rest
-            direct = [model.supply(e.root, e.amount) * model.U[req.method] for e in req.entries]
-            weight = sum(np.abs(d) for d in direct)
-            top = [int(j) for j in np.argsort(-weight)[: max(req.limit, 0)] if weight[j] > 0]
+            contents: list[dict] = []
+            for e in req.entries:
+                tree = Tree(model, e.root, e.amount)
+                parts: dict = {}
+                for node in tree.children(tree.root):
+                    value = float(node.impacts[req.method])
+                    if value:
+                        key = "direct emissions" if node.is_direct else int(node.product)
+                        parts[key] = parts.get(key, 0.0) + value
+                contents.append(parts)
+            weight: dict = {}
+            for parts in contents:
+                for key, value in parts.items():
+                    weight[key] = weight.get(key, 0.0) + abs(value)
+            top = sorted(weight, key=lambda k: -weight[k])[: max(req.limit, 0)]
             label = {}
-            for j in top:
-                m = meta(j)
+            for key in top:
+                if key == "direct emissions":
+                    label[key] = key
+                    continue
+                m = meta(key)
                 name = f"{m['name']} ({m['location']})"
-                label[j] = name if name not in label.values() else f"{name} #{j}"
+                label[key] = name if name not in label.values() else f"{name} #{key}"
             split = []
-            for d in direct:
-                parts = {label[j]: float(d[j]) for j in top if d[j] != 0}
-                rest = float(d.sum() - sum(d[j] for j in top))
-                if abs(rest) > 1e-12 * max(abs(float(d.sum())), 1e-300):
-                    parts[OTHER] = rest
-                split.append(parts)
+            for parts in contents:
+                kept = {label[k]: v for k, v in parts.items() if k in label}
+                rest = sum(v for k, v in parts.items() if k not in label)
+                if abs(rest) > 1e-12 * max(abs(sum(parts.values())), 1e-300):
+                    kept[OTHER] = rest
+                split.append(kept)
         else:
             split = [{name: float(v[0]) for name, v in supply_chain_contribution(
                 model, e.root, req.groups, req.rule, e.amount, req.flow_groups, [req.method], req.order or None,
@@ -743,6 +768,26 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
             "count": len(items),
             "items": shown,
             "others": {"count": len(rest), "impact": sum(it["impact"] for it in rest)},
+        }
+
+    @app.post("/api/flows/of-process")
+    def flows_of_process(req: ProcessFlowsRequest):
+        """The elementary flows behind what one process of the supply chain contributes by its own emissions (the
+        contribution of a process, reversed: its flows), largest first."""
+        if not (0 <= req.root < model.size and 0 <= req.activity < model.size):
+            raise HTTPException(404, "No such activity")
+        level = float(model.supply(req.root, req.amount)[req.activity])
+        amounts = model.B[:, req.activity].toarray().ravel() * level
+        impacts = amounts * model.methods[req.method].cfs
+        order = [int(f) for f in np.argsort(-np.abs(impacts)) if impacts[f] != 0]
+        shown, rest = order[: max(req.limit, 0)], order[max(req.limit, 0):]
+        return {
+            "total": float(impacts.sum()),
+            "count": len(order),
+            "flows": [{"flow": f, "name": flows["name"].iat[f],
+                       "compartment": ", ".join(c for c in (flows["compartment"].iat[f], flows["subcompartment"].iat[f]) if c),
+                       "unit": flows["unit"].iat[f], "amount": float(amounts[f]), "impact": float(impacts[f])} for f in shown],
+            "others": {"count": len(rest), "impact": float(impacts[rest].sum()) if rest else 0.0},
         }
 
     @app.post("/api/flows/contributors")

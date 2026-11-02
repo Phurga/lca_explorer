@@ -67,7 +67,7 @@ rich-text labels with `containLabel`).
 
 ## Export
 
-- PNG from the chart toolbox (2× resolution).
+- Export: one icon in each panel, *Chart as PNG* (2× resolution, legend included) and *Table as CSV*.
 - CSV of the frontier with impacts for all methods requested.
 
 ## Next

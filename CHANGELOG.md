@@ -38,6 +38,12 @@ Changes on `dev`, not released yet.
 - The chart legend no longer thins the bars; the Methods list fills the pane; the arrows of the folds are bigger and as
   strong as their header; a tooltip starts under the start of its header.
 - **Projects**: the (i) of a form (add a database, rename, copy…) is next to its title, not floating under the fields.
+- **Compare**: the *Activity* breakdown is *Each content*: the own emissions of each product and each of its inputs
+  with their supply chain, the first tier only (it used to list every process of the supply chain by its own emissions).
+- **Export**: one icon in each panel: the chart as a PNG (legend included) and the table as a CSV file; the chart's
+  own toolbox is gone. The several-indicator chart has the legend of the single one, every key shown.
+- **Process contribution**: a click on a row opens the elementary flows its contribution is made of.
+- Rules tooltip: "Group processes by your own criteria, beyond how individual flow or process contribute."
 - Chart axes drop labels that would overlap.
 - README: use the latest release for a stable version; screenshots and wording follow the current interface.
 

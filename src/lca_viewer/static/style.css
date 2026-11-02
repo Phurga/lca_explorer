@@ -954,3 +954,6 @@ textarea.editing { width: 100%; box-sizing: border-box; }
 .cut-field input { width: 56px; }
 .cut-field .cut-mode { border: none; background: none; padding: 2px 4px; color: var(--muted); font: inherit; font-weight: 600; }
 .cut-field .cut-mode:hover { color: var(--accent); }
+/* A row of a table opened below another: what it is made of */
+.chart-results tr.sub td { font-size: 11px; padding-top: 1px; padding-bottom: 1px; }
+.chart-results tr.sub td:first-child { padding-left: 24px; }
