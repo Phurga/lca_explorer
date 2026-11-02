@@ -14,6 +14,23 @@ Changes on `dev`, not released yet.
 - Fixed: *Colours: Rules* only coloured the rows inside a group, so nothing was coloured with *Group by rules* off (the
   default), and a process a rule matches but that has no sibling to group with stayed grey. A row a rule matches now takes
   its colour, grouped or not, and what is below it inherits it.
+- Fixed: the groups of *Group by* product, substance, compartment and subcompartment were coloured with colours that no rule
+  has (and, with a palette, with the colour of another rule). Only the groups a rule makes, and rows a rule matches,
+  have a rule's colour.
+- **Group by**: *Rules*, *Product*, *Substance* and a **By…** menu (location, activity type, ISIC division, CPC section,
+  compartment, subcompartment…) replace the *Compartment* and *Subcompartment* buttons and the quick groups *By location*,
+  *By activity type*, *By ISIC division*.
+- **First match**: with this attribution rule the rules stop grouping below the first row a rule takes (the supply
+  chain below it is the rule's); with *Direct* they group all the way down, as before.
+- **Custom view**: the single indicator chart has a legend of its colours (the rules, or the flow types), in the PNG too;
+  a flow in it no longer says "direct: <process>" unless the rows are split by type; *Reset* is an icon next to *Save*;
+  *Split by type* has no heading for the others rows.
+- **Process tab**: ↑ on the top row of the tree goes to the panel selection (Process, Used by…), ↓ comes back.
+- **Methods**: the legend of the selection is the (i) of the *Method selection* header; *Name in results* is *Name display*, without
+  the symbols option (removed).
+- **Rules**: the palette (*Colours*) is under the attribution rule, above *Active rules*; *Fertilisers* also takes the packaging for fertilisers.
+- **Projects**: rename and copy a project (its menu is now an icon of three dots); the tooltips are above the window.
+- **Pages wait with a moving mark**; an (i) tells on hover, a (?) acts when clicked.
 - Chart axes drop labels that would overlap.
 - README: use the latest release for a stable version; screenshots and wording follow the current interface.
 

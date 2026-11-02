@@ -52,6 +52,8 @@ class ViewState(BaseModel):
     amount: float = 1.0
     expanded: list[str] = []
     rules: list[dict] = []
+    attribution: str = "direct"
+    """``first_match``: the rules do not group below the first row a rule takes (see ``View.attribution``)."""
     colour_rules: list[dict] = []
     """The rules that colour the rows (each row says which of them matches it, grouped or not), whether or not they group."""
     cutoff: float = 0.0
@@ -379,10 +381,10 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
                 "pinned": r.pinned,
                 "moved": r.moved,
             }
-            if r.kind in ("process", "flow"):
-                matched = view.matching_rule(r, rendered_by_id.get(r.parent))
-                if matched:
-                    out["rule"] = matched  # the rule that matches it: its colour, grouped or not
+            matched = r.rule_group if r.kind in ("group", "merged") else (
+                view.matching_rule(r, rendered_by_id.get(r.parent)) if r.kind in ("process", "flow") else None)
+            if matched:
+                out["rule"] = matched  # the rule that makes the group or matches the row: its colour, grouped or not
             if r.kind == "process":
                 out["meta"] = meta(r.node.product)
                 out["replaced"] = r.replaced
@@ -826,6 +828,12 @@ class DeleteProjectRequest(BaseModel):
     project: str
     confirm: str
     """The project's name again, typed by the user."""
+
+
+class RenameProjectRequest(BaseModel):
+    folder: str
+    project: str
+    new_name: str
 
 
 class DeleteDatabaseRequest(BaseModel):
@@ -1309,6 +1317,46 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
             return {"message": f"Project {req.project} deleted"}
 
         return start(f"project {req.project}", ("delete", folder, req.project), work)
+
+    def project_in(folder: str, name: str) -> None:
+        if name not in project_names(folder):
+            raise HTTPException(404, f"No project {name!r} in {folder}")
+
+    @app.post("/api/brightway/projects/rename")
+    def rename_project(req: RenameProjectRequest):
+        """Rename a project, unless a model built from one of its databases is open."""
+        folder = folder_of(req.folder)
+        new_name = req.new_name.strip()
+        project_in(folder, req.project)
+        if not new_name:
+            raise HTTPException(400, "Give the project a new name")
+        if new_name in project_names(folder):
+            raise HTTPException(400, f"Project {new_name!r} already exists in {folder}")
+        if any((built_from(m) or ())[:2] == (folder, req.project) and loaded_key(m["path"]) for m in sources.catalog(data)):
+            raise HTTPException(400, f"A database of {req.project} is open: close it first")
+
+        def work(job):
+            cli(job, folder, ["project", "rename", req.project, "--to", new_name], ours)
+            return {"message": f"{req.project} is now {new_name}"}
+
+        return start(f"project {req.project}", ("rename-project", folder, req.project), work)
+
+    @app.post("/api/brightway/projects/copy")
+    def copy_project(req: RenameProjectRequest):
+        """A copy of a project, with its databases and impact methods, under another name."""
+        folder = folder_of(req.folder)
+        new_name = req.new_name.strip()
+        project_in(folder, req.project)
+        if not new_name:
+            raise HTTPException(400, "Give the copy a name")
+        if new_name in project_names(folder):
+            raise HTTPException(400, f"Project {new_name!r} already exists in {folder}")
+
+        def work(job):
+            cli(job, folder, ["project", "copy", req.project, "--to", new_name], ours)
+            return {"message": f"{new_name} is a copy of {req.project}"}
+
+        return start(f"project {new_name}", ("copy-project", folder, new_name), work)
 
     @app.post("/api/brightway/databases/delete")
     def delete_database(req: DeleteDatabaseRequest):

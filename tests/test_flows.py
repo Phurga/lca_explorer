@@ -256,6 +256,37 @@ def test_rows_say_which_rule_matches_them_grouped_or_not(flows_model):
     assert all("rule" not in r for r in disabled)
 
 
+def test_only_groups_of_the_rules_panel_have_a_rule_to_colour_them(flows_model):
+    from fastapi.testclient import TestClient
+    from lca_viewer.server import create_app
+
+    client = TestClient(create_app(flows_model))
+    state = {"root": [0], "amount": 1.0, "expanded": ["0", "0/1", "0/1/-1"], "method": 0, "cutoff": 0}
+    by_name = {"by": "name", "target": "flows", "scope": "*"}
+    for extra, coloured in (({}, True), ({"plain": True}, False)):  # a rule, or a grouping of the view options
+        rows = client.post("/api/rows", json={**state, "rules": [{**by_name, **extra}]}).json()["rows"]
+        groups = [r for r in rows if r["kind"] == "group"]
+        assert groups
+        assert all(("rule" in g) is coloured for g in groups)
+        assert all(g["rule"] == "name" for g in groups if coloured)
+
+
+def test_first_match_stops_the_grouping_below_the_row_a_rule_took(flows_model):
+    market = GroupRule(name="market", predicate={"field": "name", "op": "eq", "value": "market for wheat"})
+    farms = GroupRule(name="farms", predicate={"field": "name", "op": "eq", "value": "wheat production"})
+    for attribution, grouped in (("direct", True), ("first_match", False)):
+        view = View(Tree(flows_model, 0), rules=[market, farms], attribution=attribution)
+        view.expand("0")
+        groups = [r for r in view.rows() if r.kind == "group"]
+        # the market is matched by the first rule: under first match its supply chain is the rule's, no more groups below
+        assert bool(groups) is grouped
+        assert np.allclose(sum(r.impacts for r in view.frontier()), view.tree.root.impacts)
+    # a rule of the user's own, on one row, still groups there
+    view = View(Tree(flows_model, 0), rules=[market, GroupRule(**{**farms.to_dict(), "scope": "0"})], attribution="first_match")
+    view.expand("0")
+    assert any(r.kind == "group" for r in view.rows())
+
+
 def test_flow_contributors_are_the_emitting_processes(flows_model):
     from fastapi.testclient import TestClient
     from lca_viewer.server import create_app

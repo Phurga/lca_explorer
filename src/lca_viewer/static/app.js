@@ -68,15 +68,12 @@ function fmtAxis(v) {
 }
 const pct = (x) => `${(x * 100).toFixed(1)}%`;
 // How the impact methods are named in the results (set in the Methods panel): from parts (the family, the category, the
-// indicator, the unit after the name, the unit written with symbols: CO₂ eq, m³) or from a format of one's own with the
+// indicator, the unit after the name) or from a format of one's own with the
 // tokens {family}, {category}, {indicator} and {unit}
-const DEFAULT_NAME_FORMAT = { family: true, category: true, indicator: true, unit: true, symbol: false, mode: "parts", recipe: "{category} | {indicator} [{unit}]" };
+const DEFAULT_NAME_FORMAT = { family: true, category: true, indicator: true, unit: true, mode: "parts", recipe: "{category} | {indicator} [{unit}]" };
 const METHOD_TOKENS = ["family", "category", "indicator", "unit"];
 let nameFormat = DEFAULT_NAME_FORMAT;
 let nameStamp = "";  // changes with the format, for the memos that hold names
-const prettyUnit = (u) => u.replace(/\bm([23])\b/g, (_, d) => (d === "2" ? "m²" : "m³"))
-  .replace(/([A-Z][a-z]?)(\d+)(?!\d)/g, (_, el, d) => el + [...d].map((c) => "₀₁₂₃₄₅₆₇₈₉"[c]).join(""))
-  .replace(/([A-Za-z])\+/g, "$1⁺").replace(/-Eq\b/g, " eq");
 // A format applied: empty brackets and separators left by an empty part are dropped
 function applyMethodRecipe(recipe, m) {
   const values = { family: m.name[0] ?? "", category: m.name[1] ?? "", indicator: m.name.slice(2).join(" | "), unit: m.unit ?? "" };
@@ -209,10 +206,6 @@ function colorHex(color) {
   };
   return `#${f(0)}${f(8)}${f(4)}`;
 }
-const groupKey = (id) => {
-  const name = id.slice(id.lastIndexOf("/g:") + 3);
-  return /^\w+: /.test(name) ? name.slice(0, name.indexOf(":")) : name;
-};
 // Colour mode "type" (``view.colorBy``): a row is coloured by the kind of exchange it stands for
 const FLOW_TYPES = {
   product: { label: "Product", hint: "The process itself: its reference product, an output", color: "hsl(270 45% 58%)" },
@@ -245,7 +238,7 @@ const DEFAULT_VIEW_COLUMNS = [...DEFAULT_COLUMNS, "comment"];
 const DEFAULT_CUTOFF = 0;
 const DEFAULT_VIEW = {
   naming: "full", splitByType: false, hideOthers: false, groupProducts: false, groupByRules: false, groupSubstance: false,
-  groupCompartment: false, groupSubcompartment: false, groupColors: false, colorBy: "group", columns: DEFAULT_VIEW_COLUMNS, ruleColors: {},
+  groupCompartment: false, groupSubcompartment: false, groupFields: [], groupColors: false, colorBy: "group", columns: DEFAULT_VIEW_COLUMNS, ruleColors: {},
 };
 // The rules a workspace starts with
 const DEFAULT_RULE_LABELS = ["Transport", "Electricity", "Heat & fuels", "Infrastructure", "Waste treatment"];
@@ -264,20 +257,22 @@ function flowTypeOf(r) {
 }
 // "Split by flow type": below each row, the rows are in the sections of the form of a new process (and the types of the
 // flow type colours), the list showing a heading for each: inputs from technosphere, inputs from nature, emissions,
-// direct emissions, waste to treatment, others
+// direct emissions, waste to treatment (the others rows come last, with no heading)
 const SPLIT_SECTIONS = [
   ["technosphere", "Inputs from technosphere"], ["resource", "Inputs from nature"], ["emission", "Emissions"],
-  ["direct", "Direct emissions"], ["waste", "Waste to treatment"], ["rest", "Others"],
+  ["direct", "Direct emissions"], ["waste", "Waste to treatment"],
 ];
 const SECTION_LABELS = Object.fromEntries(SPLIT_SECTIONS);
-const SECTION_RANK = Object.fromEntries(SPLIT_SECTIONS.map(([key], i) => [key, i]));
+const SECTION_RANK = { ...Object.fromEntries(SPLIT_SECTIONS.map(([key], i) => [key, i])), rest: SPLIT_SECTIONS.length };  // the others rows last, with no heading of their own
 const sectionOf = (r) => (r.kind === "rest" ? "rest" : flowTypeOf(r));
 // The groups of the flows of a direct emissions row asked for by the options of the view (Group by substance, by
 // compartment): rules on the elementary flows, applied after the others
 const flowRulesOf = (view) => [
-  ...(view.groupSubstance ? [{ by: "name", target: "flows", scope: "*" }] : []),
-  ...(view.groupCompartment ? [{ by: "compartment", target: "flows", scope: "*" }] : []),
-  ...(view.groupSubcompartment ? [{ by: "subcompartment", target: "flows", scope: "*" }] : []),
+  ...(view.groupSubstance ? [{ by: "name", target: "flows", scope: "*", plain: true }] : []),
+  ...(view.groupCompartment ? [{ by: "compartment", target: "flows", scope: "*", plain: true }] : []),
+  ...(view.groupSubcompartment ? [{ by: "subcompartment", target: "flows", scope: "*", plain: true }] : []),
+  // the fields of the By... menu: groups of processes by their location, activity type...
+  ...(view.groupFields || []).map((by) => ({ by, scope: "*", plain: true })),
 ];
 // Hide others: the others rows and what an expanded one shows below it (its members, and their own rows). The rows are
 // in display order, so what is below a row is what follows it, deeper.
@@ -318,8 +313,9 @@ function groupColors(rows, view) {
     return colors;
   }
   for (const r of rows) {
-    if (r.kind === "group") colors.set(r.id, colorOf(groupKey(r.id), view.ruleColors));
-    else if (r.rule) colors.set(r.id, colorOf(r.rule, view.ruleColors));  // a row a rule matches, grouped or not
+    // The group a rule of the Rules panel makes, a row it matches (grouped or not): its colour; groups of the view options
+    // (product, substance, compartment) have none
+    if (r.rule) colors.set(r.id, colorOf(r.rule, view.ruleColors));
     else if (colors.has(r.parent)) colors.set(r.id, colors.get(r.parent));
   }
   return colors;
@@ -554,6 +550,9 @@ function InfoTip({ text, label = "What this is" }) {
   return html`<button class="help-btn" aria-label=${label} ...${tipProps}>i</button>${popup}`;
 }
 
+// What the page says while it waits: an animated mark and the text
+const Waiting = ({ text }) => html`<div class="empty waiting" role="status"><span class="spinner" aria-hidden="true"></span> ${text}</div>`;
+
 const SHORT_FIELDS = new Set(["unit", "activity_type", "flow_type", "database", "compartment"]);
 // ISIC and CPC classes are written "code:name" in the data, so a code is matched on the start of it
 const CLASS_FIELDS = new Set(["isic", "cpc"]);
@@ -600,9 +599,9 @@ function FieldHelp({ condition, flows, source, onPick }) {
   return html`
     <span class="help" onMouseEnter=${() => { clearTimeout(leave.current); setHover(true); }}
           onMouseLeave=${() => { clearTimeout(leave.current); leave.current = setTimeout(() => setHover(false), 200); }}>
-      <button ref=${button} class=${`help-btn ${pinned ? "on" : ""}`} aria-label=${`Values of ${fieldLabel(field, flows)}`} aria-expanded=${shown}
+      <button ref=${button} class=${`help-btn action ${pinned ? "on" : ""}`} aria-label=${`Values of ${fieldLabel(field, flows)}`} aria-expanded=${shown}
         title=${CLASS_FIELDS.has(field) || field === "location" || field.endsWith("division") || field.endsWith("section") ? "Codes and what they stand for" : "The values of this field"}
-        onClick=${() => setPinned(!pinned)}>i</button>
+        onClick=${() => setPinned(!pinned)}>?</button>
       ${shown && at && html`<${BodyPortal}>
         <div class="help-menu" role="dialog" aria-label=${`Values of ${fieldLabel(field, flows)}`}
              onMouseEnter=${() => { clearTimeout(leave.current); setHover(true); }}
@@ -1197,6 +1196,16 @@ function ProjectForm({ form, folder, projects, onJob, onCancel, onForm, busy }) 
         ${actions("Rename database", !name.trim() || name.trim() === form.database || taken || users.length > 0)}
       </form>`;
   }
+  if (form.kind === "renameProject" || form.kind === "copyProject") {
+    const rename = form.kind === "renameProject";
+    return html`
+      <form class="project-form" onSubmit=${submit(`/api/brightway/projects/${rename ? "rename" : "copy"}`, { folder, project: form.project, new_name: name.trim() })}>
+        <h4>${rename ? "Rename" : "Copy"} ${form.project}</h4>
+        <label>${rename ? "New name" : "Name of the copy"} <input value=${name} onInput=${(e) => setName(e.target.value)} autofocus placeholder=${form.project} /></label>
+        <${InfoTip} text=${rename ? "A model already built from it stays in the app under the old project name." : "Its databases and impact methods are copied: it can take a while."} label="About this" />
+        ${actions(rename ? "Rename project" : "Copy project", !name.trim() || name.trim() === form.project)}
+      </form>`;
+  }
   if (form.kind === "removeDb") {
     const users = (project?.databases || []).filter((d) => d.depends.includes(form.database)).map((d) => d.name);
     return html`
@@ -1369,7 +1378,7 @@ function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
     ${missing && html`<p class="load-missing">The database <b>${missing}</b> is not loaded (the server was restarted, or it was closed). Load it again below.</p>`}
     ${error && html`<div class="error">${error}</div>`}
     ${!listed(jobAt) && jobBox}
-    ${!sources ? (!error && html`<div class="empty">Looking for databases…</div>`) : html`
+    ${!sources ? (!error && html`<${Waiting} text="Looking for databases…" />`) : html`
       <section>
         <h3>Projects <${InfoTip} text="Brightway 2.5 projects and their databases. Import into a project first (+ New project, then Add database), then open a database. Your own datasets: Edit mode." label="About projects" /></h3>
         <div class="load-folder">
@@ -1392,7 +1401,7 @@ function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
           </div>`}
         ${!listed(form?.project) && projectForm}
         ${projectsError && html`<div class="error">${projectsError}</div>`}
-        ${folder && !projects && !projectsError && html`<div class="empty">Reading the projects…</div>`}
+        ${folder && !projects && !projectsError && html`<${Waiting} text="Reading the projects…" />`}
         ${projects && html`
           <table class="load-table">
             ${projects.projects.filter((p) => p.databases.length || p.twofive)
@@ -1409,6 +1418,9 @@ function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
                   <${PopupMenu} label=${html`<${GearIcon} />`} className="gear-btn" title="Options of this project" items=${[
                     ...(p.twofive ? [{ label: "Add database…", title: "Import a database into this project: an ecoSpold2 release, a SimaPro CSV export, BAFU, ecoinvent with your account, or a copy of one of another project",
                       run: () => setForm({ kind: "add", project: p.name }) }] : []),
+                    ...(p.twofive ? [
+                      { label: "Rename…", disabled: busy, title: "Give the project another name", run: () => setForm({ kind: "renameProject", project: p.name }) },
+                      { label: "Copy…", disabled: busy, title: "A copy of the project, with its databases", run: () => setForm({ kind: "copyProject", project: p.name }) }] : []),
                     { label: "Delete project…", danger: true, title: "Delete this project", run: () => setForm({ kind: "delete", project: p.name }) }]} />
                 </td>
               </tr>
@@ -2669,6 +2681,12 @@ function BundlePopup({ target, win, row, methodInfo, rootImpact, actions, onPart
 }
 
 // ---------------------------------------------------------------- save / load menu
+function ResetIcon() {
+  return html`
+    <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M2.5 8a5.5 5.5 0 1 0 1.8-4.1" /><path d="M2.5 2.5v3h3" />
+    </svg>`;
+}
 function DiskIcon() {
   return html`
     <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round">
@@ -2703,7 +2721,7 @@ function SaveMenu({ disabled, onSave, onLoad, onCopy, onDefaults, icon }) {
 
 // ---------------------------------------------------------------- view bar (group by, organize, names, colours)
 // The headers say what the buttons are for, so the buttons are one word
-function ViewBar({ view, setView, example }) {
+function ViewBar({ view, setView, example, fields = [] }) {
   const set = (patch) => setView({ ...view, ...patch });
   const toggle = (key, label, title, on = !!view[key]) => html`
     <button class=${on ? "primary" : ""} onClick=${() => set({ [key]: !on })} aria-pressed=${on} title=${title}>${label}</button>`;
@@ -2714,8 +2732,13 @@ function ViewBar({ view, setView, example }) {
         ${toggle("groupByRules", "Rules", "By your rules", view.groupByRules !== false)}
         ${toggle("groupProducts", "Product", "Suppliers of one product")}
         ${toggle("groupSubstance", "Substance", "Flows of a substance")}
-        ${toggle("groupCompartment", "Compartment", "Flows by compartment")}
-        ${toggle("groupSubcompartment", "Subcompartment", "Flows by subcompartment")}
+        <${PopupMenu} label="By…" className=${[...(view.groupFields || []), view.groupCompartment && "c", view.groupSubcompartment && "s"].some(Boolean) ? "primary" : ""}
+          title="Group by another criterion: location, activity type, compartment…" items=${[
+            ...fields.map((f) => ({ key: f, label: `${(view.groupFields || []).includes(f) ? "✓ " : "   "}${fieldLabel(f, false)}`,
+              run: () => set({ groupFields: (view.groupFields || []).includes(f) ? view.groupFields.filter((x) => x !== f) : [...(view.groupFields || []), f] }) })),
+            { key: "compartment", label: `${view.groupCompartment ? "✓ " : "   "}Compartment (flows)`, run: () => set({ groupCompartment: !view.groupCompartment }) },
+            { key: "subcompartment", label: `${view.groupSubcompartment ? "✓ " : "   "}Subcompartment (flows)`, run: () => set({ groupSubcompartment: !view.groupSubcompartment }) },
+          ]} />
       </div>
       <div class="view-group" role="group" aria-label="Organize">
         <span class="view-group-label">Organize</span>
@@ -2914,11 +2937,11 @@ function dockAt(x, y, popup) {
 }
 
 // The ⋯ menu at the top right of a pop-up: ``items``: [{ label, run, title, disabled }]
-// The icon of an options menu (a gear)
+// The icon of an options menu (three dots)
 function GearIcon() {
   return html`
-    <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round">
-      <circle cx="8" cy="8" r="2.2" /><path d="M8 1.5v1.7M8 12.8v1.7M1.5 8h1.7M12.8 8h1.7M3.4 3.4l1.2 1.2M11.4 11.4l1.2 1.2M12.6 3.4l-1.2 1.2M4.6 11.4l-1.2 1.2" />
+    <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true" fill="currentColor">
+      <circle cx="3" cy="8" r="1.4" /><circle cx="8" cy="8" r="1.4" /><circle cx="13" cy="8" r="1.4" />
     </svg>`;
 }
 function PopupMenu({ items, label = "⋯", title = "Actions of this pop-up", className = "menu-btn" }) {
@@ -3175,7 +3198,7 @@ function suppliedTo(row, rowsById) {
 function DockedShell({ children }) {
   return html`<div class="docked-panels">${children}</div>`;
 }
-function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsById, onClose, onUseAsRoot, onOpenTab, root, amount, onFollow, onGoTo, onBack, docked, active, treeSlot }) {
+function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsById, onClose, onUseAsRoot, onOpenTab, root, amount, onFollow, onGoTo, onBack, docked, active, treeSlot, onDown }) {
   const idle = !!docked && !active;
   const exchange = !!target.exchange;
   const explorerKeys = useRef(null);  // set by the explorer of the Exchanges tab: asked first for the keys
@@ -3344,7 +3367,9 @@ function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsByI
           : html`<div class="muted">${info.activity_type} · ${info.reference_product} · ${unit(info.unit)}</div>`)}`}>
       ${error && html`<div class="error">${error}</div>`}
       ${(info || docked) && html`
-        ${!exchange && html`<div class="tabs info-tabs" role="tablist" onKeyDown=${docked ? tabKeys(tabs.map((t) => t.id), shown, setTab) : undefined}>
+        ${!exchange && html`<div class="tabs info-tabs" role="tablist" onKeyDown=${docked ? ((e) => {
+          if (e.key === "ArrowDown") { e.preventDefault(); e.stopPropagation(); onDown?.(); } else tabKeys(tabs.map((t) => t.id), shown, setTab)(e);
+        }) : undefined}>
           ${tabs.map((t) => html`
             <button role="tab" aria-selected=${t.id === shown} class=${t.id === shown ? "active" : ""}
               onClick=${() => setTab(t.id)}>${t.label}</button>`)}
@@ -3494,8 +3519,8 @@ function chartItems(rows, byId) {
     .sort((a, b) => Math.abs(b.impacts[0]) - Math.abs(a.impacts[0]));
 }
 
-function nameItem(item, naming, recipe, byId) {
-  const names = baseNameItem(item, naming, recipe, byId);
+function nameItem(item, naming, recipe, byId, withEmitter = false) {
+  const names = baseNameItem(item, naming, recipe, byId, withEmitter);
   // A custom name replaces the main part; the grey qualifier still tells where it is
   if (item.rows.length !== 1) return names;
   const [row] = item.rows;
@@ -3507,11 +3532,12 @@ function nameItem(item, naming, recipe, byId) {
     let p = byId.get(row.parent);
     while (p && p.kind !== "process" && p.kind !== "merged") p = byId.get(p.parent);
     if (p?.custom && row.kind === "rest") return { ...names, main: `others under ${p.custom}, direct` };
-    if (p?.custom) return { ...names, qual: [`direct: ${p.custom}`, row.kind === "flow" && flowNames(row.flow, naming, recipe).qual].filter(Boolean).join(" · ") };
+    if (p?.custom) return { ...names, qual: [withEmitter && `direct: ${p.custom}`, row.kind === "flow" && flowNames(row.flow, naming, recipe).qual].filter(Boolean).join(" · ") };
   }
   return names;
 }
-function baseNameItem(item, naming, recipe, byId) {
+// ``withEmitter``: a flow says whose direct emissions it is (when the rows are split by type); else only the flow
+function baseNameItem(item, naming, recipe, byId, withEmitter = false) {
   const { kind, metas, parentMetas, rows } = item;
   const many = rows.length > 1;
   const pick = (field) => joinValues(metas.map((m) => m[field]));
@@ -3523,7 +3549,7 @@ function baseNameItem(item, naming, recipe, byId) {
     if (kind === "rest") return { main: `others under ${emitter}, direct`, qual: "" };
     const flow = kind === "flow" && flowNames(rows[0].flow, naming, recipe);
     // the emitter first: labels that do not fit lose the end of the qualifier
-    return { main: flow ? flow.main : rows[0].label, qual: [`direct: ${emitter}`, flow && flow.qual].filter(Boolean).join(" · ") };
+    return { main: flow ? flow.main : rows[0].label, qual: [withEmitter && `direct: ${emitter}`, flow && flow.qual].filter(Boolean).join(" · ") };
   }
   if (kind === "group") return { main: rows[0].label, qual: many ? `${rows.length} groups` : "" };
   if (kind === "rest") {
@@ -3564,8 +3590,28 @@ function baseRowNames(r, byId, view) {
   return nameItem({ kind: r.kind, rows: [r], metas, parentMetas: parent?.meta ? [parent.meta] : [] }, view.naming, view.recipe, byId);
 }
 
-function nameItems(items, naming, recipe, byId) {
-  const named = items.map((item) => ({ ...item, ...nameItem(item, naming, recipe, byId) }));
+// The colours of the bars of a chart, each with what it stands for: a rule of the Rules panel, or a type of exchange; the
+// bars with no colour are "no rule"
+function legendOf(items, colors, byId, view) {
+  if (!view.groupColors) return [];
+  const keys = new Map();
+  let plain = false;
+  for (const p of items.slice().reverse()) {
+    const [row] = p.rows;
+    const colour = colors.get(row.id);
+    if (!colour) { plain = true; continue; }
+    let name;
+    if (view.colorBy === "type") { const t = flowTypeOf(row); name = t ? FLOW_TYPES[t].label : null; }
+    else { let r = row; while (r && !r.rule) r = byId.get(r.parent); name = r?.rule; }
+    if (name && !keys.has(name)) keys.set(name, colour);
+  }
+  const out = [...keys].map(([name, color]) => ({ name, color }));
+  if (out.length && plain) out.push({ name: view.colorBy === "type" ? "other" : "no rule", color: cssVar("--bar") });
+  return out;
+}
+
+function nameItems(items, naming, recipe, byId, withEmitter = false) {
+  const named = items.map((item) => ({ ...item, ...nameItem(item, naming, recipe, byId, withEmitter) }));
   // Rows that still read the same get the activity name, then a number, as qualifiers
   const text = (it) => `${it.main}|${it.qual}`;
   const count = (list) => list.reduce((m, it) => m.set(text(it), (m.get(text(it)) || 0) + 1), new Map());
@@ -3664,14 +3710,15 @@ function ChartPanel({ data, info, method, chartMethods, onPickMethods, view, hea
 
   const byId = useMemo(() => new Map(data.rows.map((r) => [r.id, r])), [data]);
   const parts = useMemo(
-    () => nameItems(chartItems(data.rows, byId), naming, recipe, byId),
-    [data, byId, naming, recipe],
+    () => nameItems(chartItems(data.rows, byId), naming, recipe, byId, !!view.splitByType),
+    [data, byId, naming, recipe, view.splitByType],
   );
   const unit = info.methods[method].unit;
   const total = parts.reduce((s, p) => s + p.impacts[0], 0);
   // Bars of rows in a group (or of the group) take the colour of its rule
   const colors = useMemo(() => groupColors(data.rows, view), [data, view.groupColors, view.colorBy, view.ruleColors, paletteStamp]);
 
+  let legendKeys = [];
   const singleOption = useMemo(() => {
     const o = baseOption();
     const items = [...parts].reverse();
@@ -3679,6 +3726,14 @@ function ChartPanel({ data, info, method, chartMethods, onPickMethods, view, hea
     o.grid = { ...o.grid, containLabel: false, top: 36, bottom: 28,
       left: Math.max(...shown.map(([m, q]) => textWidth(q ? `${m} ${q}` : m))) + 16 };
     o.title = { text: methodTitle(info.methods[method]), textStyle: { fontSize: 12, color: cssVar("--muted") } };
+    // The legend of the colours: the rules (or the flow types) of the bars, wrapped on as many lines as it needs, in the image too
+    legendKeys = legendOf(items, colors, byId, view);
+    if (legendKeys.length) {
+      const lines = Math.max(1, Math.ceil(legendKeys.reduce((w, k) => w + textWidth(k.name) + 34, 0) / 460));
+      o.legend = { type: "plain", bottom: 4, left: "center", width: "92%", selectedMode: false, itemWidth: 12, itemHeight: 12, itemGap: 14,
+        icon: "roundRect", textStyle: { color: cssVar("--text"), fontSize: 11 }, data: legendKeys.map((k) => ({ name: k.name, itemStyle: { color: k.color } })) };
+      o.grid = { ...o.grid, bottom: 28 + lines * 20 };
+    }
     o.yAxis = {
       ...o.yAxis, type: "category", data: items.map((_, i) => String(i)),
       axisLabel: {
@@ -3700,7 +3755,7 @@ function ChartPanel({ data, info, method, chartMethods, onPickMethods, view, hea
         itemStyle: { color: colors.get(p.rows[0].id) || (p.impacts[0] < 0 ? cssVar("--bar-negative") : cssVar("--bar")) },
       })),
       label: { show: true, position: "right", formatter: (d) => fmt(d.value), color: cssVar("--muted") },
-    }];
+    }, ...legendKeys.map((k) => ({ type: "bar", name: k.name, data: [], silent: true, itemStyle: { color: k.color } }))];  // the keys of the legend
     return o;
   }, [parts, method, colors, nameStamp]);
 
@@ -3747,7 +3802,7 @@ function ChartPanel({ data, info, method, chartMethods, onPickMethods, view, hea
       </div>
       ${mode === "single"
         ? html`
-          <${Chart} option=${singleOption} height=${Math.max(260, parts.length * 26 + 60)} />`
+          <${Chart} option=${singleOption} height=${Math.max(260, parts.length * 26 + 60) + (singleOption.legend ? 24 * Math.max(0, (singleOption.grid.bottom - 28) / 20) : 0)} />`
         : html`
           <div class="row">
             <button onClick=${onPickMethods} title="Tick the methods in the Methods panel">${chartMethods.length} ${chartMethods.length === 1 ? "method" : "methods"} shown together</button>
@@ -3795,7 +3850,7 @@ function ProcessContributions({ info, root, amount, method, onInfo }) {
     return o;
   }, [found, unitLabel]);
   if (error) return html`<div class="error">${error}</div>`;
-  if (!found) return html`<div class="muted">…</div>`;
+  if (!found) return html`<${Waiting} text="Computing…" />`;
   return html`
     <div class="panel">
       <div class="row"><${TopField} value=${limit} onValue=${setLimit} what="processes" /></div>
@@ -3840,7 +3895,10 @@ const PRESETS = [
     { field: "cpc", op: "regex", value: "^3466" },
     { field: "reference_product", op: "regex", value: "^pesticide" },
   ] } } },
-  { label: "Fertilisers", rule: { name: "fertilisers", predicate: { field: "cpc", op: "regex", value: "^346[1-5]" } } },
+  { label: "Fertilisers", rule: { name: "fertilisers", predicate: { any: [
+    { field: "cpc", op: "regex", value: "^346[1-5]" },
+    { field: "reference_product", op: "startswith", value: "packaging, for fertiliser" },
+  ] } } },
   // The machines, and the field operations that use them (tillage, sowing, harvesting, …)
   { label: "Agricultural machinery", rule: { name: "agricultural machinery", predicate: { field: "reference_product", op: "regex",
     value: "^(tractor, 4-wheel, agricultural|harvester|agricultural machinery|agricultural trailer|liquid manure tank trailer"
@@ -3849,9 +3907,6 @@ const PRESETS = [
       + "|field leveling|limestone and gypsum application|liquid manure spreading|solid manure loading and spreading"
       + "|sugarcane (loading|transfer)|transport, tractor and trailer|diesel, burned in agricultural machinery"
       + "|petrol, unleaded, burned in machinery)" } } },
-  { label: "By location", rule: { by: "location" } },
-  { label: "By activity type", rule: { by: "activity_type" } },
-  { label: "By ISIC division", rule: { by: "isic_division" } },
 ];
 
 const RULES_TIP = "Rules bundle rows into groups, in list order: the first rule that matches takes a process. Shared by all tabs. Numbers never change.";
@@ -4011,6 +4066,8 @@ function GroupPanel({ info, rules, setRules, selectedRow, view, setView, shared,
   return html`
     <div class="panel">
       ${extras?.attribution}
+      ${extras?.palette && html`<${PaletteSwitch} ...${extras.palette} customized=${Object.keys(view.ruleColors || {}).length > 0}
+        clearCustom=${() => Object.keys(view.ruleColors || {}).length && setView({ ...view, ruleColors: {} })} />`}
       <${Fold} id="active" title="Active rules" actions=${html`<${InfoTip} text=${RULES_TIP} label="How rules work" />
         ${rules.length > 1 && html`<button class="link" onClick=${() => { setRules([]); stopEdit(); }}>remove all</button>`}`}>
       ${rules.length === 0 ? null : html`
@@ -4042,8 +4099,6 @@ function GroupPanel({ info, rules, setRules, selectedRow, view, setView, shared,
             </li>`)}
         </ul>`}
       <//>
-      ${extras?.palette && html`<${PaletteSwitch} ...${extras.palette} customized=${Object.keys(view.ruleColors || {}).length > 0}
-        clearCustom=${() => Object.keys(view.ruleColors || {}).length && setView({ ...view, ruleColors: {} })} />`}
       ${extras?.ruleSet}
 
       <${Fold} id="quick" title="Quick groups" open=${false}>
@@ -4234,7 +4289,7 @@ function AttributionHelp() {
     return () => document.removeEventListener("keydown", esc);
   }, [open]);
   return html`
-    <button class="help-btn" aria-label="How attribution works" title="How the impacts go to the rules: click for a picture" onClick=${() => setOpen(true)}>i</button>
+    <button class="help-btn action" aria-label="How attribution works" title="Click for a picture" onClick=${() => setOpen(true)}>?</button>
     ${open && html`
       <div class="modal-backdrop" onMouseDown=${(e) => e.target === e.currentTarget && setOpen(false)}>
         <div class="load-dialog attribution-dialog" role="dialog" aria-label="Attribution of impacts to the rules">
@@ -4575,7 +4630,7 @@ const LENS_KEY = `${STORAGE_KEY}.lens`;
 // process, whatever the options of the tabs are
 const PLAIN_VIEW = {
   naming: "full", splitByType: true, hideOthers: false, groupProducts: false, groupByRules: true, groupSubstance: false,
-  groupCompartment: false, groupSubcompartment: false, groupColors: false, colorBy: "group",
+  groupCompartment: false, groupSubcompartment: false, groupFields: [], groupColors: false, colorBy: "group",
 };
 const initialView = (embedded) => (embedded
   ? { ...PLAIN_VIEW, recipe: { ...DEFAULT_RECIPE }, columns: [...DEFAULT_COLUMNS], ruleColors: {} } : preferredView());
@@ -4592,6 +4647,7 @@ const preferredView = () => ({
   groupSubstance: loadPreference("groupSubstance", "0") === "1",  // the flows of direct emissions, by substance
   groupCompartment: loadPreference("groupCompartment", "0") === "1",  // … and by compartment
   groupSubcompartment: loadPreference("groupSubcompartment", "0") === "1",  // … and by subcompartment
+  groupFields: (() => { try { const f = JSON.parse(loadPreference("groupFields", "[]")); if (Array.isArray(f)) return f; } catch { /* none */ } return []; })(),
   columns: (() => { try { const c = JSON.parse(loadPreference("columns", "null")); if (Array.isArray(c)) return c; } catch { /* the default */ } return DEFAULT_VIEW_COLUMNS; })(),
   groupColors: loadPreference("groupColors", "0") === "1",
   colorBy: loadPreference("colorBy", "group"),  // "group" or "type" (flow type)
@@ -4611,6 +4667,7 @@ function saveViewPreferences({ view, display, orientation, cycles }) {
   savePreference("groupSubstance", view.groupSubstance ? "1" : "0");
   savePreference("groupCompartment", view.groupCompartment ? "1" : "0");
   savePreference("groupSubcompartment", view.groupSubcompartment ? "1" : "0");
+  savePreference("groupFields", JSON.stringify(view.groupFields || []));
   savePreference("columns", JSON.stringify(view.columns));
   savePreference("groupColors", view.groupColors ? "1" : "0");
   savePreference("colorBy", view.colorBy);
@@ -4668,14 +4725,13 @@ function MethodMenu({ info, method, setMethod, chartMethods, setChartMethods, no
   return html`
     <div class="lens-menu">
       ${note && html`<p class="note">${note}</p>`}
-      ${format && html`<${Fold} id="nameformat" title="Name in results" open=${false}
+      ${format && html`<${Fold} id="nameformat" title="Name display" open=${false}
         actions=${html`<${InfoTip} text="How a method is named in titles, headers, files and the several-methods charts" label="About the name" />`}>
         <div class="view-group" role="group" aria-label="Name format">
           <span class="segmented">
             ${[["parts", "Parts", "Pick the parts"], ["custom", "Custom", "Your format"]].map(([k, label, hint]) => html`
               <button class=${format.mode === k ? "primary" : ""} title=${hint} onClick=${() => setFormat({ ...format, mode: k })}>${label}</button>`)}
           </span>
-          <label title="CO₂ eq, m³"><input type="checkbox" checked=${format.symbol} onChange=${(e) => setFormat({ ...format, symbol: e.target.checked })} /> Symbols</label>
         </div>
         ${format.mode === "parts" ? html`
           <div class="row">
@@ -4691,8 +4747,8 @@ function MethodMenu({ info, method, setMethod, chartMethods, setChartMethods, no
           </div>`}
         <p class="note">${methodTitle(info.methods[method])}</p>
       <//>`}
-      <p class="method-legend muted"><input type="radio" class="main" checked disabled aria-hidden="true" /> main method, for single indicator
-        <input type="checkbox" checked disabled aria-hidden="true" /> multi indicator</p>
+      <h3 class="fold-head method-selection">Method selection
+        <${InfoTip} text="Legend. Round mark: the main method, for the single indicator, the tree and the charts. Tick: shown together, in the multi indicator charts and the matrix." label="Legend of the method selection" /></h3>
       <${MethodTree} info=${info} main=${method} setMain=${setMethod} selected=${chartMethods} setSelected=${setChartMethods} />
     </div>`;
 }
@@ -5029,6 +5085,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
     pinned: [...pinned], others: [...others], merges: editing ? [] : merges, ungrouped: [...ungrouped],
     substitutions: editing ? {} : substitutions, group_products: view.groupProducts,
     colour_rules: editing ? rules.map((r) => ({ ...r, merge: false })) : rules,
+    attribution: lens.attribution,
   });
 
   useEffect(() => {
@@ -5038,13 +5095,13 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
       .then((d) => { if (!cancelled) { setData(d); setError(null); } })
       .catch((e) => !cancelled && setError(e.message));
     return () => { cancelled = true; };
-  }, [root, amount, method, cutoff, cutoffBasis, expanded, rules, chartMethods, pinned, others, merges, ungrouped, substitutions, view.groupProducts, view.groupByRules, view.groupSubstance, view.groupCompartment, view.groupSubcompartment, info, editing]);
+  }, [root, amount, method, lens.attribution, cutoff, cutoffBasis, expanded, rules, chartMethods, pinned, others, merges, ungrouped, substitutions, view.groupProducts, view.groupByRules, view.groupSubstance, view.groupCompartment, view.groupSubcompartment, view.groupFields, info, editing]);
   // The tab's state is kept for the next visit (renaming does not reload the rows)
   useEffect(() => {
     if (!root || !info) return;
-    onSave(id, { root, amount, method, cutoff, cutoffBasis, expanded: [...expanded], rules, chartMethods, groupByRules: view.groupByRules, groupSubstance: view.groupSubstance, groupCompartment: view.groupCompartment, groupSubcompartment: view.groupSubcompartment, pinned: [...pinned], others: [...others], merges, ungrouped: [...ungrouped], substitutions, labels,
+    onSave(id, { root, amount, method, cutoff, cutoffBasis, expanded: [...expanded], rules, chartMethods, groupByRules: view.groupByRules, groupSubstance: view.groupSubstance, groupCompartment: view.groupCompartment, groupSubcompartment: view.groupSubcompartment, groupFields: view.groupFields, pinned: [...pinned], others: [...others], merges, ungrouped: [...ungrouped], substitutions, labels,
       layout: info.layout, methodName: info.methods[method]?.name, chartMethodNames: chartMethods.map((k) => info.methods[k]?.name) });
-  }, [root, amount, method, cutoff, cutoffBasis, expanded, rules, chartMethods, view.groupByRules, view.groupSubstance, view.groupCompartment, view.groupSubcompartment, pinned, others, merges, ungrouped, substitutions, labels, info]);
+  }, [root, amount, method, cutoff, cutoffBasis, expanded, rules, chartMethods, view.groupByRules, view.groupSubstance, view.groupCompartment, view.groupSubcompartment, view.groupFields, pinned, others, merges, ungrouped, substitutions, labels, info]);
   function startRename(row) {
     if (editing || !labelKey(row)) return;
     // The tree and Sankey views have no inline editor: ask
@@ -5240,7 +5297,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
       model: { title: info.title, activities: info.activities },
       root, amount, method: info.methods[method].name, chartMethods: chartMethods.map((k) => info.methods[k].name),
       cutoff: +cutoffValue(cutoff, cutoffBasis).toFixed(8), cutoffBasis, expanded: [...expanded], rules, pinned: [...pinned], others: [...others], merges, ungrouped: [...ungrouped], substitutions, labels,
-      display: { naming: view.naming, recipe: view.recipe, groupProducts: view.groupProducts, groupByRules: view.groupByRules, groupSubstance: view.groupSubstance, groupCompartment: view.groupCompartment, groupSubcompartment: view.groupSubcompartment, splitByType: view.splitByType, hideOthers: view.hideOthers, columns: view.columns, groupColors: view.groupColors, colorBy: view.colorBy, ruleColors: view.ruleColors },
+      display: { naming: view.naming, recipe: view.recipe, groupProducts: view.groupProducts, groupByRules: view.groupByRules, groupSubstance: view.groupSubstance, groupCompartment: view.groupCompartment, groupSubcompartment: view.groupSubcompartment, groupFields: view.groupFields, splitByType: view.splitByType, hideOthers: view.hideOthers, columns: view.columns, groupColors: view.groupColors, colorBy: view.colorBy, ruleColors: view.ruleColors },
     };
   }
   function exportView() {
@@ -5370,6 +5427,10 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
           ? (() => { const siblings = rows.filter((r) => r.parent === row.parent); return siblings[siblings.indexOf(row) + (key === "ArrowDown" ? 1 : -1)]; })()
           : rows[found + (key === "ArrowDown" ? 1 : -1)];
         if (next) moveTo(next);
+        else if (key === "ArrowUp" && !embedded) {  // above the top row: the panel selection (Process, Used by…)
+          setSelection(new Set());
+          treeSection.current?.closest(".docked-panels")?.querySelector(".info-tabs button.active")?.focus();
+        }
         return true;
       }
       case "ArrowRight":
@@ -5451,7 +5512,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
     if (embedded) return;
     const onKey = (e) => {
       // A pop-up that has the focus has its own keys
-      if (keyboardOwner !== id || e.target.closest?.("input, textarea, select, [contenteditable], .info-popup")) return;
+      if (keyboardOwner !== id || e.target.closest?.("input, textarea, select, [contenteditable], .info-popup, .docked-panels > .info-tabs")) return;
       // A tree button clicked last (▸, a chip) would also react to Space
       if (document.activeElement?.tagName === "BUTTON" && treeSection.current?.contains(document.activeElement)) document.activeElement.blur();
       if (treeKey.current(e)) e.preventDefault();
@@ -5518,12 +5579,12 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
       onChange=${(e) => changeCutoffMode(e.target.value)}>
       ${Object.entries(CUTOFF_MODES).map(([key, mode]) => html`<option value=${key} title=${mode.hint}>${mode.label}</option>`)}
     </select>`;
-  const resetButton = html`<button onClick=${resetView} disabled=${!root}
-    title="Back to the process alone: tree collapsed, restored and moved rows cleared, this tab's groups, merges and names removed (undoable)">Reset</button>`;
-  const viewBar = html`<${ViewBar} view=${view} setView=${setDisplayView}
+  const viewBar = html`<${ViewBar} view=${view} setView=${setDisplayView} fields=${info.group_by_fields}
     example=${(() => { const r = data.rows.find((x) => x.kind === "process" && x.depth > 0); return r ? rowNames(r, rowsById, view) : null; })()} />`;
   const viewOptions = html`
-    <${Fold} id="viewoptions" title="Options" actions=${html`<span style="flex:1"></span><${SaveMenu} icon disabled=${!root} onSave=${exportView} onLoad=${loadView} onCopy=${copyView} onDefaults=${loadDefaults} />`}>
+    <${Fold} id="viewoptions" title="Options" actions=${html`<span style="flex:1"></span>
+      <button class="icon-plain" disabled=${!root} onClick=${resetView} aria-label="Reset the view" title="Reset: the process alone, undoable"><${ResetIcon} /></button>
+      <${SaveMenu} icon disabled=${!root} onSave=${exportView} onLoad=${loadView} onCopy=${copyView} onDefaults=${loadDefaults} />`}>
       <div class="view-options">
         <div class="view-group" role="group" aria-label="Display">
           <span class="view-group-label">Display</span>
@@ -5531,7 +5592,6 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
             ${[["list", "List", "Table"], ["graph", "Tree", "Boxes"], ["sankey", "Sankey", "Bands"]].map(([k, label, hint]) => html`
               <button class=${display === k ? "primary" : ""} title=${hint} onClick=${() => setDisplay(k)}>${label}</button>`)}
           </span>
-          ${resetButton}
         </div>
         <div class="view-group" role="group" aria-label="Cut-off">
           <span class="view-group-label">Cut-off</span>
@@ -5584,7 +5644,13 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
         ? html`<${InfoPopup} docked active=${visible} treeSlot=${treeNode} target=${{ index: root.index, row: null }} win=${{}} model=${info}
             method=${method} methodInfo=${methodInfo} rootImpact=${rootImpact} rowsById=${rowsById} onClose=${() => {}} onBack=${null}
             onUseAsRoot=${selectRoot} onOpenTab=${(r, place) => onOpenTab(id, r, place)} root=${root} amount=${amount}
-            onFollow=${(next) => openInfo(next)} onGoTo=${(index) => goTo(index)} />`
+            onFollow=${(next) => openInfo(next)} onGoTo=${(index) => goTo(index)}
+            onDown=${() => {  // ↓ on the panel selection: back to the tree, on its top row
+              keyboardOwner = id;
+              document.activeElement?.blur();
+              const top = data.rows[0];
+              if (top) { cursor.current = { id: top.id, index: 0 }; anchor.current = top.id; setSelection(new Set([top.id])); }
+            }} />`
         : treeNode}
       ${!embedded && html`<${Portal} slot=${`side-${id}`}>
         <section class="side">
@@ -5655,11 +5721,12 @@ function compareLabels(tabs) {
 }
 
 // The tree a tab displays, as /api/rows is asked for it (the method is the comparison's)
-const treeBody = (s, method) => ({
+const treeBody = (s, method, attribution) => ({
   root: [s.root.index], amount: s.amount, expanded: s.expanded || [], rules: [...(s.groupByRules === false ? [] : s.rules || []), ...flowRulesOf(s)], cutoff: cutoffValue(s.cutoff, s.cutoffBasis),
   cutoff_basis: s.cutoffBasis || "parent", method, methods: s.chartMethods || [], pinned: s.pinned || [], others: s.others || [], merges: s.merges || [],
   ungrouped: s.ungrouped || [], substitutions: s.substitutions || {}, group_products: loadPreference("groupProducts", "0") === "1",
   colour_rules: s.rules || [],
+  attribution,
 });
 
 // A bar of a tab's tree: what it stands for (the same in every tab, so that bars line up) and its name. A process counts
@@ -6096,7 +6163,7 @@ function ComparisonView({ info, tabs, compare, setCompare }) {
   const body = { entries: chosen.map((t) => ({ root: t.state.root.index, amount: t.state.amount })), method, methods: heatMethods, rule,
     basis: basis === "flows" ? "flows" : basis === "activities" ? "activities" : "groups", limit, groups: basis === "groups" ? groups : {}, flow_groups: basis === "groups" ? flowGroups : {}, flow_owners: basis === "groups" ? flowOwners : {},
     order: basis === "groups" ? order : [] };
-  const trees = basis === "tree" ? chosen.map((t) => treeBody(t.state, method)) : null;
+  const trees = basis === "tree" ? chosen.map((t) => treeBody(t.state, method, rule)) : null;
   const key = JSON.stringify([body, trees]);
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
@@ -6120,7 +6187,7 @@ function ComparisonView({ info, tabs, compare, setCompare }) {
   }, [results]);
 
   const ruleColors = useMemo(() => { try { return JSON.parse(loadPreference("ruleColors", "{}")) || {}; } catch { return {}; } }, []);
-  const groupColor = (g) => (g === OTHER_GROUP ? cssVar("--muted") : g === TOTAL_BAR && noBreakdown ? cssVar("--bar") : colorOf(g.replace(/ \(flows\)$/, ""), ruleColors));
+  const groupColor = (g) => (g === OTHER_GROUP ? cssVar("--muted") : g === TOTAL_BAR && noBreakdown ? cssVar("--bar") : colorOf(g.replace(/ \(flows\)$/, "").replace(/^(\w+): .*$/, "$1"), ruleColors));  // "location: FR": the rule "location"
   const target = chosen.length > 1 && compare.target !== base && compare.target < chosen.length ? compare.target : base === 0 ? 1 : 0;
   const unitLabel = info.methods[method].unit;
   const units = [...new Set(chosen.map((t) => unit(t.state.root.unit)).filter(Boolean))];
@@ -6144,7 +6211,7 @@ function ComparisonView({ info, tabs, compare, setCompare }) {
         <div class="panel">
           ${chosen.length < 2 ? html`<div class="empty">Tick at least two tabs to compare.</div>`
             : error ? html`<div class="error">${error}</div>`
-            : !results ? html`<div class="empty">Computing…</div>`
+            : !results ? html`<${Waiting} text="Computing…" />`
             : panel === "groups" ? html`<${CompareBars} results=${results} base=${base} unitLabel=${unitLabel} names=${names} groupColor=${groupColor}
                 mode=${compare.mode || "absolute"} setMode=${(mode) => set({ mode })} basis=${basis} setBasis=${(b) => set({ basis: b })}
                 limit=${limit} setLimit=${(n) => set({ limit: n })} />`
@@ -6405,15 +6472,13 @@ function ShortcutsDialog({ onClose }) {
 }
 
 function App() {
-  const [rawInfo, setInfo] = useState(null);
+  const [info, setInfo] = useState(null);
   // The impact methods and group rules of the workspace, which the tabs follow (see the lens above FUView)
   const [lens, setLens] = useState(null);
   nameFormat = lens?.nameFormat || DEFAULT_NAME_FORMAT;
   nameStamp = JSON.stringify(nameFormat);
   rulePalette = { name: lens?.palette || "auto", keys: (lens?.sets[lens.set] || []).map((r) => r.by || r.name), own: lens?.palettes || {} };
   paletteStamp = `${rulePalette.name}|${rulePalette.keys.join("|")}|${JSON.stringify(rulePalette.own[rulePalette.name] || "")}`;
-  const info = useMemo(() => (rawInfo && nameFormat.symbol
-    ? { ...rawInfo, methods: rawInfo.methods.map((m) => ({ ...m, unit: prettyUnit(m.unit) })) } : rawInfo), [rawInfo, nameFormat.symbol]);
   useEffect(() => { if (lens && info) saveLens(info, lens); }, [lens]);
   const [error, setError] = useState(null);
   // Databases loaded in the server; null: a server without the Projects dialog (one model, plain URLs)
@@ -6787,7 +6852,7 @@ function App() {
         <div class="welcome"><${LoadDatabase} missing=${DATABASE && decodeURIComponent(DATABASE)} /></div>
       </div>`;
   }
-  if (!info || !layout || !lens) return html`<div class="empty">${error || "Loading model…"}</div>`;
+  if (!info || !layout || !lens) return error ? html`<div class="empty">${error}</div>` : html`<${Waiting} text="Loading model…" />`;
   const allTabs = panesOf(layout).flatMap((p) => p.tabs);
   const showStaged = !editing && !!origin && pending.length > 0;
   const focusedTab = activeTabOf(focus);

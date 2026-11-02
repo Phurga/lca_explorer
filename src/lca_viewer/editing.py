@@ -77,6 +77,32 @@ def create_project(name: str, setup: bool = False) -> None:
         print(f"{len(bd.methods)} impact methods installed", flush=True)
 
 
+def copy_project(name: str, to: str) -> None:
+    """A copy of a project (all its databases and impact methods) under another name."""
+    import bw2data as bd
+
+    if name not in bd.projects:
+        raise SystemExit(f"No project {name!r}")
+    if not to.strip():
+        raise SystemExit("Give the copy a name")
+    if to in bd.projects:
+        raise SystemExit(f"Project {to!r} already exists")
+    bd.projects.set_current(name, update=False)
+    print(f"Copying project {name} as {to}", flush=True)
+    bd.projects.copy_project(to, switch=False)
+    print(f"Project {to} is ready", flush=True)
+
+
+def rename_project(name: str, to: str) -> None:
+    """Rename a project: a copy under the new name, then the old one is deleted."""
+    import bw2data as bd
+
+    copy_project(name, to)
+    bd.projects.set_current(to, update=False)
+    bd.projects.delete_project(name, delete_dir=True)
+    print(f"Project {name} is now {to}", flush=True)
+
+
 def delete_project(name: str) -> None:
     """Delete a project and its folder."""
     import bw2data as bd

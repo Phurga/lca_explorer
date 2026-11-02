@@ -970,3 +970,19 @@ def test_a_database_is_copied_from_another_project(project):
     assert "bg" in bd.databases and bd.databases["bg"]["depends"] == ["bio"]
     bd.projects.set_current("toy")
     assert len(bd.Database("bg")) == 3  # the original is untouched
+
+def test_copy_and_rename_a_project(project):
+    import bw2data as bd
+
+    editing.copy_project("toy", "toy copy")
+    assert "toy" in bd.projects and "toy copy" in bd.projects
+    bd.projects.set_current("toy copy", update=False)
+    assert set(bd.databases) == {"bio", "bg"}
+    with pytest.raises(SystemExit, match="already exists"):
+        editing.copy_project("toy", "toy copy")
+    with pytest.raises(SystemExit, match="No project"):
+        editing.copy_project("nope", "x")
+    editing.rename_project("toy copy", "renamed")
+    assert "toy copy" not in bd.projects and "renamed" in bd.projects and "toy" in bd.projects
+    bd.projects.set_current("renamed", update=False)
+    assert set(bd.databases) == {"bio", "bg"}

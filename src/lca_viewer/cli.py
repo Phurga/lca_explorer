@@ -161,6 +161,10 @@ def project(args) -> None:
         editing.create_project(args.name, setup=args.setup)
     elif args.action == "delete":
         editing.delete_project(args.name)
+    elif args.action == "copy":
+        editing.copy_project(args.name, args.to)
+    elif args.action == "rename":
+        editing.rename_project(args.name, args.to)
     else:
         editing.restore_project(args.file, args.name)
 
@@ -313,8 +317,9 @@ def main(argv=None) -> None:
 
     p = sub.add_parser("project", help="Create, delete or restore a Brightway project (in BRIGHTWAY2_DIR); "
                                        "init: create the data folder with a default project, as Brightway does")
-    p.add_argument("action", choices=["init", "create", "delete", "restore"])
+    p.add_argument("action", choices=["init", "create", "delete", "restore", "copy", "rename"])
     p.add_argument("name", nargs="?", help="Project name (for restore: default, the name in the archive)")
+    p.add_argument("--to", help="With copy or rename: the new name")
     p.add_argument("--file", help="Backup archive (.tar.gz) to restore, e.g. BAFU from files.brightway.dev")
     p.add_argument("--setup", action="store_true",
                    help="With create: install the biosphere and impact methods bundled with Brightway (ecoinvent 3.9)")

@@ -50,6 +50,9 @@ class GroupRule:
     disabled: bool | None = None
     merge: bool | None = None
     owner: dict | None = None
+    plain: bool | None = None
+    """Not a rule of the Rules panel but a grouping of the view options (by substance, by compartment): its groups are not
+    coloured as a rule's."""
 
     def to_dict(self) -> dict:
         return {k: v for k, v in self.__dict__.items() if v is not None}
@@ -79,6 +82,10 @@ class Row:
     by_rule: bool = False
     """For "merged" rows: made by a grouping rule with ``merge`` (not by ``View.merges``)."""
     by_product: bool = False
+    rule_group: str | None = None
+    claimed: bool = False
+    """A rule took this row or one above it (under first match, what is below it is the rule's: no further grouping)."""
+    """For a group made by a rule of the Rules panel: the rule (its name, or the field of a group-by rule)."""
     """For "group" rows: made by ``View.group_products`` (not by a rule)."""
     regroup: str | None = None
     """For process rows: the "group by product" row the user ungrouped them from (its id),
@@ -96,6 +103,9 @@ class View:
     tree: Tree
     expanded: set[str] = field(default_factory=set)
     rules: list[GroupRule] = field(default_factory=list)
+    attribution: str = "direct"
+    """``first_match``: the rules stop grouping below the first row a rule takes, as the contributions attribute the
+    whole supply chain of that row to the rule; ``direct``: they group all the way down."""
     colour_rules: list[GroupRule] = field(default_factory=list)
     """Rules that only colour (see :meth:`matching_rule`), not group."""
     cutoff: float = 0.0
@@ -165,6 +175,7 @@ class View:
             expanded=set(data.get("expanded", [])),
             rules=[GroupRule(**r) for r in data.get("rules", [])],
             colour_rules=[GroupRule(**r) for r in data.get("colour_rules", [])],
+            attribution=data.get("attribution", "direct"),
             cutoff=data.get("cutoff", 0.0),
             cutoff_basis=data.get("cutoff_basis", "parent"),
             method=data.get("method", 0),
@@ -235,12 +246,19 @@ class View:
         """Visible rows that are not expanded: they sum to the root."""
         return [r for r in self.rows() if not (r.expandable and r.expanded)]
 
-    def _render(self, row: Row, out: list[Row]) -> None:
+    def _claims(self, row: Row) -> bool:
+        """Whether a rule takes ``row`` under first match: it is a group a rule made, or a process a rule matches."""
+        if self.attribution != "first_match":
+            return False
+        return row.rule_group is not None or (row.kind == "process" and self.matching_rule(row, None, self.rules) is not None)
+
+    def _render(self, row: Row, out: list[Row], inherited: bool = False) -> None:
+        row.claimed = inherited or self._claims(row)
         out.append(row)
         if not (row.expandable and row.expanded):
             return
         for child in self._child_rows(row):
-            self._render(child, out)
+            self._render(child, out, row.claimed)
 
     def _child_rows(self, row: Row) -> list[Row]:
         if row.kind == "rest":
@@ -297,6 +315,8 @@ class View:
         for rule in ordered:
             if rule.disabled or (rule.target == "flows") != flows or rule.scope not in (ROOT_SCOPE, parent.id) or not free:
                 continue
+            if parent.claimed and rule.scope == ROOT_SCOPE and not rule.plain:
+                continue  # first match: below the row a rule took, the rules group no more
             if flows and rule.owner is not None and not self._owned(rule, parent):
                 continue
             bundle = self._rule_merged_row if rule.merge and not flows else self._group_row
@@ -304,7 +324,9 @@ class View:
                 mask = self._mask(rule)
                 members = [c for c in free if mask[index(c)]]
                 if len(members) > 1:
-                    rows.append(bundle(rule.name or "group", members, parent, depth))
+                    made = bundle(rule.name or "group", members, parent, depth)
+                    made.rule_group = None if rule.plain else rule.name or "group"
+                    rows.append(made)
                     free = [c for c in free if not mask[index(c)]]
             elif rule.by is not None:
                 column = table[rule.by]
@@ -316,7 +338,9 @@ class View:
                     if len(members) > 1:
                         # flows read better by value alone: "air", "Carbon dioxide, fossil"
                         name = (value or f"no {rule.by}") if flows else f"{rule.by}: {value}"
-                        rows.append(bundle(name, members, parent, depth))
+                        made = bundle(name, members, parent, depth)
+                        made.rule_group = None if rule.plain else rule.by
+                        rows.append(made)
                     else:
                         free.extend(members)
         regroup: dict = {}  # member node id -> the product group it was ungrouped from
@@ -437,7 +461,7 @@ class View:
             below[i] = True
         return below
 
-    def matching_rule(self, row: Row, parent: Row | None = None) -> str | None:
+    def matching_rule(self, row: Row, parent: Row | None = None, rules: list[GroupRule] | None = None) -> str | None:
         """The name of the first rule, in list order, whose query matches the process (or elementary flow) of ``row``.
 
         A process (or a flow) that a rule matches takes its colour even when it is alone and no group was made; a flow
@@ -445,7 +469,7 @@ class View:
         if row.node is None or row.kind not in ("process", "flow"):
             return None
         flows = row.kind == "flow"
-        for rule in self.colour_rules:
+        for rule in self.colour_rules if rules is None else rules:
             if rule.disabled or rule.predicate is None or rule.merge or (rule.target == "flows") != flows:
                 continue
             if rule.scope != ROOT_SCOPE and not row.id.startswith(rule.scope + "/"):

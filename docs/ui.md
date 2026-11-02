@@ -198,8 +198,8 @@ API in `src/lca_viewer/server.py`.
 - **Status bar** (bottom of the page): the active method and the rule set at the left, the
   **Shortcuts** icon at the right. The **view options** are the top of the first panel of the side
   panel, *Custom view* (key v in View mode), with the options of **the tab in focus**, the one of
-  the window (split pane) used last: *Display* (List / Tree / Sankey, Collapse,
-  Reset view), *Cut-off*, *View file* (Save, Load, Copy) and *Rows* (*Group by rules*, a switch that
+  the window (split pane) used last: *Display* (List / Tree / Sankey), *Cut-off*, and the *Rows* options; *Reset* and *Save* are icons at the top right
+  of the section (Save's arrow: Load, Copy, Default settings). *Group by*: *Rules*, a switch that
   applies or not the rules of the Rules panel to the tree, which keep their place in the panel (adding a rule,
   or grouping rows, while it is off switches it on, since the group would not show); group by
   product, split by flow type, hide others, names, colours, columns). Each tab has its own options, so in a
@@ -239,8 +239,8 @@ API in `src/lca_viewer/server.py`.
   clears a tab's own groups, merges and names, not the shared set. Loading a view file
   applies its tree, not its method or its set of rules (a notice says so). The explorer
   inside a pop-up takes the method of its tab, with rules of its own.
-  *Name in results* (a section of the Methods panel) sets how a method is named in the titles, the files, the
-  several-methods chart and the matrix: parts (family, category, indicator, unit, symbols such as CO₂ eq) or a
+  *Name display* (a section of the Methods panel) sets how a method is named in the titles, the files, the
+  several-methods chart and the matrix: parts (family, category, indicator, unit) or a
   custom format with the tokens `{family}`, `{category}`, `{indicator}` and `{unit}`.
   Kept per database in `localStorage` (by method name, so a rebuilt model finds them);
   a workspace saved before takes the method and rules of its first tab; rules that other
@@ -415,7 +415,7 @@ API in `src/lca_viewer/server.py`.
 - **View bar** (the *Rows* of the *Custom view* panel): *Group by rules* (on by default), *Group by product*, *Split by flow type* (below each
   row, the rows in the sections of the form of a new process, as in the flow type colours, with a
   heading each: inputs from technosphere, inputs from nature, emissions, direct emissions, waste
-  to treatment, others; the order inside a section is kept), *Hide others* (the others
+  to treatment; the others rows come last with no heading of their own; the order inside a section is kept), *Hide others* (the others
   rows, with the rows of an expanded one, and their boxes in the tree view and the Sankey, are left out; the chart keeps them), *Full / Short /
   Custom* names, applied
   to the list, the tree view, the others panel and the chart; see
@@ -560,7 +560,8 @@ API in `src/lca_viewer/server.py`.
     product (the root), technosphere input, waste (output to treatment),
     resource (input from nature), emission (output to nature) and direct
     emissions rows; *Rules colours* goes back to the colours of groups. A row that a rule matches takes the colour of the rule even when it is not in a group (the page sends the rules
-    to `/api/rows` as `colour_rules`; each row says which one matches it as `rule`), and what is below it inherits it.
+    to `/api/rows` as `colour_rules`; each row says which one matches it as `rule`), and what is below it inherits it. The groups of *Group by* product, substance, compartment or subcompartment are not rules: they have no colour of
+    their own (they take the one of the row above).
   - *Rules contributions*: global grouping with the named groups, direct
     (the default) or first-match attribution (see [grouping.md](grouping.md)),
     groups sorted by decreasing impact with *other* last.
