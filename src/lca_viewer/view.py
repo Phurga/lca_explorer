@@ -22,6 +22,38 @@ from .tree import DIRECT, Node, Tree
 ROOT_SCOPE = "*"
 
 
+CUTOFF_BASES = ("top", "total", "parent", "cumulative")
+
+
+def below_cutoff(magnitudes: list[float], basis: str, cutoff: float, total: float) -> list[bool]:
+    """Which rows (``magnitudes``: their |impact|, largest first) go to "others", for every list of the app.
+
+    ``top``: all but the ``cutoff`` largest (none when it is under 1); ``total``: the smallest rows that together weigh at
+    most ``cutoff`` (a fraction) of ``total``; ``parent``: the same, of all the rows together; ``cumulative``: the rows
+    after the largest ones that together reach ``cutoff`` of all the rows."""
+    below = [False] * len(magnitudes)
+    if basis == "top":
+        keep = round(cutoff)
+        return [i >= keep for i in range(len(magnitudes))] if keep >= 1 else below
+    if basis not in CUTOFF_BASES:
+        raise ValueError(f"Unknown cut-off basis {basis!r}")
+    budget = cutoff * (total if basis == "total" else sum(magnitudes))
+    if budget <= 0:
+        return below
+    cumulated = 0.0
+    if basis == "cumulative":
+        for i, magnitude in enumerate(magnitudes):
+            below[i] = cumulated >= budget
+            cumulated += magnitude
+        return below
+    for i in reversed(range(len(magnitudes))):
+        cumulated += magnitudes[i]
+        if cumulated > budget:
+            break
+        below[i] = True
+    return below
+
+
 @dataclass
 class GroupRule:
     """Bundle children of nodes in ``scope`` (a node id, or ``"*"`` for all nodes).
@@ -415,36 +447,10 @@ class View:
         return rows
 
     def _bottom_contributors(self, rows: list[Row]) -> list[bool]:
-        """Flags the smallest rows (``rows`` sorted by decreasing |impact|) whose
-        cumulative |impact| stays within ``cutoff`` of the siblings' total or of the root."""
-        below = [False] * len(rows)
-        magnitudes = [float(abs(r.impacts[self.method])) for r in rows]
-        if self.cutoff_basis == "top":
-            keep = round(self.cutoff)
-            return [i >= keep for i in range(len(rows))] if keep >= 1 else below
-        if self.cutoff_basis == "total":
-            reference = float(abs(self.tree.root.impacts[self.method]))
-        elif self.cutoff_basis in ("parent", "cumulative"):
-            reference = sum(magnitudes)
-        else:
-            raise ValueError(f"Unknown cut-off basis {self.cutoff_basis!r}")
-        budget = self.cutoff * reference
-        if budget <= 0:
-            return below
-        if self.cutoff_basis == "cumulative":
-            # The largest rows are kept until together they reach the budget
-            cumulated = 0.0
-            for i, magnitude in enumerate(magnitudes):
-                below[i] = cumulated >= budget
-                cumulated += magnitude
-            return below
-        cumulated = 0.0
-        for i in reversed(range(len(rows))):
-            cumulated += magnitudes[i]
-            if cumulated > budget:
-                break
-            below[i] = True
-        return below
+        """Flags the smallest rows (``rows`` sorted by decreasing |impact|) under the cut-off (see :func:`below_cutoff`):
+        a share of the root's score, or of the siblings together."""
+        return below_cutoff([float(abs(r.impacts[self.method])) for r in rows], self.cutoff_basis, self.cutoff,
+                            float(abs(self.tree.root.impacts[self.method])))
 
     def matching_rule(self, row: Row, rules: list[GroupRule] | None = None) -> str | None:
         """The name of the first rule, in list order, whose query matches the process (or elementary flow) of ``row``.
@@ -485,8 +491,7 @@ class View:
     def _process_row(self, node: Node, parent: str | None, depth: int = 0) -> Row:
         if node.flow is not None:
             f = self._flows.iloc[node.flow]
-            compartment = ", ".join(c for c in (f["compartment"], f["subcompartment"]) if c)
-            return Row(node.id, parent, depth, "flow", f"{f['name']} | {compartment}", node.amount, f["unit"],
+            return Row(node.id, parent, depth, "flow", f"{f['name']} | {f['place']}", node.amount, f["unit"],
                        node.impacts, False, False, node)
         if node.is_direct:
             return Row(node.id, parent, depth, "direct", "direct emissions", 0.0, "",

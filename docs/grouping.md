@@ -98,11 +98,8 @@ applying elsewhere ("group by location" everywhere) keeps grouping the other
 parents. Groups of elementary flows have no merge chip: their amounts are
 already summed.
 
-A whole rule can be merged too (`GroupRule.merge`, the **merge** button in
-the Rules panel): every group it makes, at any depth and in rows expanded
-later, is shown as a merged process instead. Those rows are marked
-"merged" without the × (unmerging one would change the rule everywhere; the
-button in the Rules panel does it). A rule can also be **disabled**
+A rule does not merge its groups (a view file of an older version with a rule's
+`merge` loads, as a rule that groups): a group is merged from its row. A rule can be **disabled**
 (`GroupRule.disabled`): kept in the list and the saved view but not applied,
 in the tree or in the *Rules contributions* analysis, to compare with and
 without it.

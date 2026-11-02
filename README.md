@@ -44,7 +44,7 @@ your Brightway (v2.5) project folder.
 </tr>
 <tr>
 <td><a href="docs/img/gallery/03-tree-graph.png"><img src="docs/img/gallery/03-tree-graph.png" alt="Tree view"></a><br><b>Tree view</b>: the supply chain as nodes and edges.</td>
-<td><a href="docs/img/gallery/04-rules.png"><img src="docs/img/gallery/04-rules.png" alt="Rules"></a><br><b>Rules</b>: the attribution rule, the active rules, a colour palette, quick groups, and your own rules from a query or a field.</td>
+<td><a href="docs/img/gallery/04-rules.png"><img src="docs/img/gallery/04-rules.png" alt="Rules"></a><br><b>Rules</b>: the attribution rule, the active rules, quick groups, and your own rules from a query or a field.</td>
 </tr>
 <tr>
 <td><a href="docs/img/gallery/05-rules-contributions.png"><img src="docs/img/gallery/05-rules-contributions.png" alt="Rules contributions"></a><br><b>Rules contributions</b>: how much electricity, transport, fertilisers... anywhere upstream, by your rules.</td>

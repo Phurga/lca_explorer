@@ -146,9 +146,8 @@ API in `src/lca_viewer/server.py`.
   the page reloads in View mode.
 - **Edit mode and the view.** `EditorContext` carries what the pop-ups and the tree need
   (mode, project, staged changes, locked databases, whether the impacts are stale). In Edit mode
-  `FUView` sends `merges: []`, `substitutions: {}`, rules with `merge` off, and applies no custom
-  names (they stay in the tab, for View). Conflicts found: a grouping rule's *merge* acts on the
-  tree, not the data, so it is off too; pins, cut-off and groups stay but act on impacts that may
+  `FUView` sends `merges: []`, `substitutions: {}`, and applies no custom
+  names (they stay in the tab, for View). Pins, cut-off and groups stay but act on impacts that may
   be stale (greyed: `.app.stale .impact`). Edit mode is plum (`.app.editing` redefines the accent,
   bar and background variables, an EDIT MODE badge and an underlined top bar), View mode green. In
   View mode with changes staged, the Edit button reads *Edit (n staged)* and a warning under the top
@@ -195,7 +194,8 @@ API in `src/lca_viewer/server.py`.
 - **Top bar**: in the middle, the **search** of a process, like a command palette
   (Ctrl/⌘ + K focuses it; Enter makes the result the process of the tab in
   focus, Ctrl/⌘ + Enter opens it in a new tab); the mode switch is at the right.
-- **Status bar** (bottom of the page): the active method and the rule set at the left, the
+- **Status bar** (bottom of the page): the active method and the rule set at the left, the **Settings** icon (the
+  colours of the rules) and the
   **Shortcuts** icon at the right. The **view options** are the top of the first panel of the side
   panel, *Custom view* (key v in View mode), with the options of **the tab in focus**, the one of
   the window (split pane) used last: *Display* (List / Tree / Sankey), *Cut-off*, and the *Rows* options; *Reset* and *Save* are icons at the top right
@@ -550,10 +550,14 @@ API in `src/lca_viewer/server.py`.
     on flows (substance, compartment, subcompartment, unit), which group the
     flows under direct emissions and split what the process groups leave in
     *Rules contributions*; "product / waste" (`flow_type`) is a field of
-    processes, not of flows. The *Colours* menu of the Rules panel
-    picks a palette for the rules (automatic hues, categorical, colour-blind safe, vivid, soft, earth),
-    given in the order of the rules; each rule has a colour swatch: click it to pick
-    another colour (right-click resets it). A quick group in use is filled with its colour. The groups of a rule carry it in
+    processes, not of flows. The colours of the rules are settings of the workspace, the same in every tab, chart
+    and comparison: the **Settings** pop-up (the palette icon of the status bar) picks a palette (automatic hues,
+    categorical, colour-blind safe, vivid, soft, earth), given in the order of the rules, and lists the rules with
+    their colour, to pick another one (*reset* goes back to the palette's; choosing a palette clears them). Each rule
+    of the Rules panel has its swatch too: click it to pick a colour, right-click resets it. They are kept with the
+    rule sets (`lens.ruleColors`), not in the views. A group of the analyses (*Rules contributions*, Compare) and a
+    bar of a tab's tree in Compare take the colour of their rule (`namedGroups(…).ruleOf`, the `rule` of the rows),
+    whatever their name. A quick group in use is filled with its colour. The groups of a rule carry it in
     the tree, graph and Sankey, and the bars of the *Process contribution*,
     *Flow contribution* (a substance in a named flow group) and *Group
     contributions* charts; *No colours* in the view bar switches all colours off. *Flow type
@@ -631,9 +635,7 @@ and *Copy view as JSON*. Files are `version` 2: `cutoff` is a fraction, as in
 `/api/rows` (0.05 for the 5 % shown in the page); version 1 files stored the
 percentage and still load. The `labels` of a file (`p:<activity>`, `f:<flow>`,
 `r:<row id>`) can be sent to `/api/rows` too: the rows they name come back with
-the name as `custom`. `GET /api/lookup?name=&location=` says whether an
-activity exists, and lists the same name in other places or the closest names
-(`matches`, `same_name`, `similar`). Saved files record the model (title, size), the
+the name as `custom`. Saved files record the model (title, size), the
 process's name and location, method names and the naming settings,
 besides positions. Node ids are positions in the model, so on load, if the
 process is not at the same position (view saved from another model

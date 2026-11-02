@@ -1064,7 +1064,7 @@ def test_locate_api_returns_the_view_changes(grouping_model):
     found = client.post("/api/locate", json={**state, "product": 5, "groups": groups, "rule": "first_match"}).json()
     assert found["target"] == "0/2/5"
 
-    listed = client.post("/api/global/contributors", json={"root": 0, "groups": GROUPS, "group": "other", "limit": 2}).json()
+    listed = client.post("/api/global/contributors", json={"root": 0, "groups": GROUPS, "group": "other", "cut": {"mode": "top", "value": 2}}).json()
     assert len(listed["contributors"]) == 2 and listed["others"]["count"] == listed["count"] - 2
     assert not listed["cumulative"]
     total = sum(c["impact"] for c in listed["contributors"]) + listed["others"]["impact"]

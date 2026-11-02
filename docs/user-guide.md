@@ -180,7 +180,7 @@ to View. The number of staged changes shows on the Edit button; they are kept by
   the other models listed in *Projects* (*outdated*).
 - **View-only features are left out in Edit mode**: merging, custom names and replacing a
   supplier by an alternative only change how the view looks, not the data, so they are hidden
-  and not applied (a grouping rule's *merge* shows as a plain group); they come back in View.
+  and not applied; they come back in View.
   Pins, cut-off and groups stay; they act on the impacts of the last build.
 - **Double-click a value to change it** (the process's name or location, its reference product,
   its unit, an input's amount, the description…), in the tree or in a pop-up. It is staged

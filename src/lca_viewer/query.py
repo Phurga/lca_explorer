@@ -64,6 +64,7 @@ def derived_flows(model) -> pd.DataFrame:
         categories = categories.map(lambda c: tuple(c) if isinstance(c, (tuple, list)) else ())
         df["compartment"] = categories.map(lambda c: c[0] if c else "")
         df["subcompartment"] = categories.map(lambda c: ", ".join(c[1:]))
+        df["place"] = categories.map(lambda c: ", ".join(x for x in c if x))  # what the lists write: "air, urban air…"
         if "unit" not in df:
             df["unit"] = ""
         model._derived_flows = df

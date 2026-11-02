@@ -711,7 +711,8 @@ def test_locked_databases_and_the_rebuild_they_require(project, tmp_path):
     edit_bg = {"kind": "edit", "title": "Edit electricity", "database": "bg", "code": "elec", "spec": as_spec(read)}
     refused = client.post("/api/brightway/pending", json={**where, "change": edit_bg})
     assert refused.status_code == 400 and "bg is locked" in refused.json()["detail"]
-    assert client.post("/api/brightway/dataset/delete", json={**where, "database": "bg", "code": "elec"}).status_code == 400
+    delete_bg = {"kind": "delete", "title": "Delete electricity", "database": "bg", "code": "elec"}
+    assert client.post("/api/brightway/pending", json={**where, "change": delete_bg}).status_code == 400
     into_bg = client.post("/api/brightway/dataset", json={**where, "spec": spec(database="bg", new_database=False)})
     assert into_bg.status_code == 400
 

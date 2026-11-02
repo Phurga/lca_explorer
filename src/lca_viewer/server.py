@@ -23,7 +23,7 @@ from .analysis import (OTHER, flow_contribution, flow_contributors, group_contri
 from .model import LCAModel
 from .query import derived_activities, derived_flows, evaluate, field_options, search, suggest_values
 from .tree import Tree
-from .view import View
+from .view import View, below_cutoff
 
 STATIC = Path(__file__).parent / "static"
 
@@ -45,6 +45,18 @@ FLOW_FIELDS = ["name", "compartment", "subcompartment", "unit"]
 # Recorded data of the exchange supplying a row that the list can show as columns (comments are sent apart)
 EXCHANGE_COLUMNS = ["uncertainty type", "loc", "scale", "scale without pedigree", "shape", "minimum", "maximum",
                     "pedigree", "formula", "variable name"]
+
+
+RULES = ("direct", "first_match")
+"""Attribution rules (see ``analysis``)."""
+
+
+class Cut(BaseModel):
+    """Which rows of a list are shown, the others summed in one row: as the cut-off of the Custom view (see
+    ``view.below_cutoff``): ``top`` the ``value`` largest (all under 1), ``total`` the rows under ``value`` (a fraction)
+    of the total go to others, ``cumulative`` the largest until together ``value`` of all the rows."""
+    mode: str = "top"
+    value: float = 25
 
 
 class ViewState(BaseModel):
@@ -115,14 +127,15 @@ class CompareRequest(BaseModel):
     """Methods whose total score is returned for every entry (the heat map)."""
     basis: str = "groups"
     """"groups": the groups of ``groups`` / ``flow_groups`` and *other*; "flows": the elementary flows (one
-    per substance), the ``limit`` weighing most over all entries and *other* for the rest."""
-    limit: int = 15
+    per substance); "activities": what is inside each product. For these two, the rows of all the entries together are
+    cut by ``cut`` and *other* takes the rest."""
+    cut: Cut = Cut(value=15)
 
 
 class ContributorsRequest(GlobalRequest):
     group: str
     method: int = 0
-    limit: int = 50
+    cut: Cut = Cut(value=50)
 
 
 class FlowsRequest(BaseModel):
@@ -134,9 +147,7 @@ class FlowsRequest(BaseModel):
     keys: list[str] | None = None
     """Group by these fields instead (``name``, ``compartment``, ``subcompartment``): one row per combination (the unit
     goes with the name)."""
-    limit: int = 25
-    flow_groups: dict[str, dict] = {}
-    """Named groups of flows: each item says which one it falls in (the first, in order)."""
+    cut: Cut = Cut()
 
 
 class FlowContributorsRequest(BaseModel):
@@ -144,7 +155,7 @@ class FlowContributorsRequest(BaseModel):
     amount: float = 1.0
     method: int = 0
     flows: list[int]
-    limit: int = 50
+    cut: Cut = Cut(value=50)
 
 
 class ProcessFlowsRequest(BaseModel):
@@ -153,7 +164,7 @@ class ProcessFlowsRequest(BaseModel):
     method: int = 0
     activity: int
     """The process, in the supply chain of ``root``, whose own emissions are split by elementary flow."""
-    limit: int = 25
+    cut: Cut = Cut()
 
 
 class LocateRequest(ViewState):
@@ -165,6 +176,24 @@ class LocateRequest(ViewState):
 
 def _floats(values: np.ndarray) -> list[float]:
     return [float(v) for v in values]
+
+
+def _listed(impacts, cut: Cut, total: float | None = None) -> tuple[list[int], list[int], dict]:
+    """The positions of ``impacts`` shown by ``cut``, largest |impact| first, the rest, and the *others* row of the rest
+    (``{"count", "impact"}``). ``total``: the score the shares are of (default: the sum). As in the tree, a single row
+    under the cut-off is shown as itself."""
+    impacts = np.asarray(impacts, dtype=float)
+    order = [int(i) for i in np.argsort(-np.abs(impacts), kind="stable")]
+    try:
+        below = below_cutoff([abs(float(impacts[i])) for i in order], cut.mode, cut.value,
+                             abs(float(impacts.sum() if total is None else total)))
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    if sum(below) == 1:
+        below = [False] * len(below)
+    shown = [i for i, b in zip(order, below) if not b]
+    rest = [i for i, b in zip(order, below) if b]
+    return shown, rest, {"count": len(rest), "impact": float(impacts[rest].sum()) if rest else 0.0}
 
 
 def label_key(row, serialised: dict) -> str | None:
@@ -260,6 +289,19 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
             supplies[key] = model.supply(product, amount)
         return supplies[key]
 
+    def check(activity=(), method=(), rule=()) -> None:
+        """The activities, methods and attribution rules a request names exist: the same answer at every endpoint
+        (a negative index would else silently be one from the end)."""
+        for j in activity:
+            if j is not None and not 0 <= j < model.size:
+                raise HTTPException(404, f"No activity {j}")
+        for k in method:
+            if k is not None and not 0 <= k < len(model.methods):
+                raise HTTPException(404, f"No method {k}")
+        for r in rule:
+            if r not in RULES:
+                raise HTTPException(400, f"Unknown rule {r!r}")
+
     def meta(i: int) -> dict:
         """Metadata of activity ``i`` used to name chart rows."""
         r = activities.iloc[i]
@@ -293,7 +335,7 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
             if req.target == "flows":
                 found = np.flatnonzero(evaluate(req.predicate, flows)) if req.predicate else np.arange(len(flows))
                 return {"total": int(len(found)), "results": [
-                    {"index": int(i), "name": flows["name"].iat[i], "location": flows["compartment"].iat[i]}
+                    {"index": int(i), "name": flows["name"].iat[i], "location": flows["place"].iat[i]}
                     for i in found[: req.limit]]}
             found = search(activities, req.text, req.predicate)
         except (KeyError, ValueError) as e:
@@ -316,6 +358,7 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
 
     @app.post("/api/rows")
     def rows(state: ViewState):
+        check(activity=state.root, method=[state.method, *state.methods], rule=[state.attribution])
         try:
             view = View.from_dict(model, state.model_dump())
             rendered = view.rows()
@@ -328,8 +371,7 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
             common = {"amount": float(node.amount), "impacts": _floats(node.impacts[methods])}
             if node.flow is not None:
                 f = flows.iloc[node.flow]
-                compartment = ", ".join(c for c in (f["compartment"], f["subcompartment"]) if c)
-                return {"flow": int(node.flow), "name": f["name"], "location": compartment, "unit": f["unit"],
+                return {"flow": int(node.flow), "name": f["name"], "location": f["place"], "unit": f["unit"],
                         "waste": False, **common}
             return {**meta(node.product), "unit": activities["unit"].iat[node.product],
                     "waste": bool(model.diagonal[node.product] < 0), **common}
@@ -420,8 +462,7 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
     @app.get("/api/activity/{index}")
     def activity(index: int, method: int | None = None, flows: int = 8):
         """Metadata, description and per-unit results of one activity, for the info pop-up."""
-        if not 0 <= index < model.size:
-            raise HTTPException(404, f"No activity {index}")
+        check(activity=[index])
         k = default_method if method is None else method
         per_unit = 1 / model.diagonal[index]  # per unit of reference product
         column = model.B[:, index].toarray().ravel() * model.methods[k].cfs * per_unit
@@ -446,8 +487,7 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
         """Exchanges of one activity as recorded in its dataset (amount, comment, uncertainty,
         pedigree, …), with their impact per unit of reference product, largest first.
         With ``product``, only the inputs of that product."""
-        if not 0 <= index < model.size:
-            raise HTTPException(404, f"No activity {index}")
+        check(activity=[index])
         k = default_method if method is None else method
         per_unit = 1 / model.diagonal[index]
         categories = model.flows["categories"] if "categories" in model.flows else None
@@ -488,8 +528,7 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
         factors = [{"method": i, "cf": float(m.cfs[index])} for i, m in enumerate(model.methods) if m.cfs[index] != 0]
         exchanges = []
         for j in (int(a) for a in activities.split(",") if a.strip()):
-            if not 0 <= j < model.size:
-                raise HTTPException(404, f"No activity {j}")
+            check(activity=[j])
             records = [{k_: v for k_, v in e.items() if k_ not in ("type", "row")}
                        for e in model.exchange_details(j) if e.get("type") == "biosphere" and e.get("row") == index]
             exchanges.append({"activity": meta(j), "exchanges": records})
@@ -504,8 +543,7 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
     def activity_users(index: int, root: int | None = None, amount: float = 1.0, method: int | None = None, limit: int = 15):
         """Activities using the product of ``index`` ("used by"); with ``root``, how much of
         it each one takes in that functional unit's supply chain, largest first."""
-        if not 0 <= index < model.size or (root is not None and not 0 <= root < model.size):
-            raise HTTPException(404, f"No activity {index if not 0 <= index < model.size else root}")
+        check(activity=[index, root])
         k = default_method if method is None else method
         start, end = rows_by_product.indptr[index], rows_by_product.indptr[index + 1]
         users, values = rows_by_product.indices[start:end], rows_by_product.data[start:end]
@@ -538,8 +576,7 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
     def activity_alternatives(index: int, method: int | None = None, limit: int = 50):
         """Other activities producing the same product in the same unit ("alternative
         suppliers"), with their cumulative impact per unit of product, lowest first."""
-        if not 0 <= index < model.size:
-            raise HTTPException(404, f"No activity {index}")
+        check(activity=[index])
         k = default_method if method is None else method
         same = np.flatnonzero((products == products[index]) & (units == units[index]) & (model.diagonal > 0))
         same = same[same != index]
@@ -559,6 +596,7 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
 
     @app.post("/api/global")
     def global_contribution(req: GlobalRequest):
+        check(activity=[req.root], method=[req.method], rule=[req.rule])
         methods = slice(None) if req.method is None else [req.method]
         result = supply_chain_contribution(model, req.root, req.groups, req.rule, req.amount, req.flow_groups, methods,
                                            req.order or None, req.flow_owners)
@@ -571,30 +609,30 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
         each of ``methods``."""
         if not req.entries:
             raise HTTPException(400, "Nothing to compare")
-        if req.rule not in ("direct", "first_match"):
-            raise HTTPException(400, f"Unknown rule {req.rule!r}")
         if req.basis not in ("groups", "flows", "activities"):
             raise HTTPException(400, f"Unknown basis {req.basis!r}")
-        for k in [req.method, *req.methods]:
-            if not 0 <= k < len(model.methods):
-                raise HTTPException(404, f"No method {k}")
-        for entry in req.entries:
-            if not 0 <= entry.root < model.size:
-                raise HTTPException(404, f"No activity {entry.root}")
-        if req.basis == "flows":
-            split = [_substances(model, flows, e.root, req.method, e.amount) for e in req.entries]
-            weight: dict[str, float] = {}
+        check(activity=[e.root for e in req.entries], method=[req.method, *req.methods], rule=[req.rule])
+
+        def folded(split: list[dict]) -> list[dict]:
+            """The parts of all the entries cut together (``req.cut``, of their totals together); *other* for the rest."""
+            keys = list({k: None for parts in split for k in parts})
+            weight = [sum(abs(parts.get(k, 0.0)) for parts in split) for k in keys]
+            shown, _, _ = _listed(weight, req.cut, sum(abs(sum(parts.values())) for parts in split))
+            kept = {keys[i] for i in shown}
+            out = []
             for parts in split:
-                for name, impact in parts.items():
-                    weight[name] = weight.get(name, 0.0) + abs(impact)
-            shown = set(sorted(weight, key=lambda n: -weight[n])[: max(req.limit, 0)])
-            split = [{**{n: v for n, v in parts.items() if n in shown},
-                      **({OTHER: rest} if (rest := sum(v for n, v in parts.items() if n not in shown)) else {})}
-                     for parts in split]
+                part = {k: v for k, v in parts.items() if k in kept}
+                rest = sum(v for k, v in parts.items() if k not in kept)
+                if abs(rest) > 1e-12 * max(abs(sum(parts.values())), 1e-300):
+                    part[OTHER] = rest
+                out.append(part)
+            return out
+
+        if req.basis == "flows":
+            split = folded([_substances(model, flows, e.root, req.method, e.amount) for e in req.entries])
         elif req.basis == "activities":
             # what is inside each product, the first tier only: its own emissions and each input with its supply chain
-            # (not the processes further down: those are in the input's share); the ``limit`` weighing most over all
-            # entries, and *other* for the rest
+            # (not the processes further down: those are in the input's share)
             contents: list[dict] = []
             for e in req.entries:
                 tree = Tree(model, e.root, e.amount)
@@ -605,26 +643,15 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
                         key = "direct emissions" if node.is_direct else int(node.product)
                         parts[key] = parts.get(key, 0.0) + value
                 contents.append(parts)
-            weight: dict = {}
-            for parts in contents:
-                for key, value in parts.items():
-                    weight[key] = weight.get(key, 0.0) + abs(value)
-            top = sorted(weight, key=lambda k: -weight[k])[: max(req.limit, 0)]
-            label = {}
-            for key in top:
+            label: dict = {}
+            for key in {k: None for parts in contents for k in parts}:
                 if key == "direct emissions":
                     label[key] = key
                     continue
                 m = meta(key)
                 name = f"{m['name']} ({m['location']})"
                 label[key] = name if name not in label.values() else f"{name} #{key}"
-            split = []
-            for parts in contents:
-                kept = {label[k]: v for k, v in parts.items() if k in label}
-                rest = sum(v for k, v in parts.items() if k not in label)
-                if abs(rest) > 1e-12 * max(abs(sum(parts.values())), 1e-300):
-                    kept[OTHER] = rest
-                split.append(kept)
+            split = folded([{label[k]: v for k, v in parts.items()} for parts in contents])
         else:
             split = [{name: float(v[0]) for name, v in supply_chain_contribution(
                 model, e.root, req.groups, req.rule, e.amount, req.flow_groups, [req.method], req.order or None,
@@ -639,6 +666,7 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
     @app.post("/api/global/contributors")
     def global_contributors(req: ContributorsRequest):
         """Activities making up one group of the whole-supply-chain analysis, largest first."""
+        check(activity=[req.root], method=[req.method], rule=[req.rule])
         try:
             members, values = group_contributors(model, req.root, req.groups, req.group, req.rule, req.amount,
                                                  req.flow_groups, [req.method], req.order or None, req.flow_owners)
@@ -646,8 +674,7 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
             raise HTTPException(400, f"Unknown group {req.group!r}") from e
         impacts = values[:, 0]
         flow_group = req.group in req.flow_groups and req.group not in req.groups
-        order = np.argsort(-np.abs(impacts))
-        shown, rest = order[: req.limit], order[req.limit:]
+        shown, _, others = _listed(impacts, req.cut)
         return {
             "group": req.group,
             "total": float(impacts.sum()),
@@ -656,7 +683,7 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
             "cumulative": req.rule == "first_match" and req.group != "other" and not flow_group,
             "flow_group": flow_group,
             "contributors": [{**meta(int(members[i])), "impact": float(impacts[i])} for i in shown],
-            "others": {"count": int(len(rest)), "impact": float(impacts[rest].sum()) if len(rest) else 0.0},
+            "others": others,
         }
 
     @app.post("/api/flows")
@@ -667,9 +694,10 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
             raise HTTPException(400, f"Unknown grouping {req.by!r}")
         if req.keys is not None and (not req.keys or any(k not in ("name", "compartment", "subcompartment") for k in req.keys)):
             raise HTTPException(400, f"Unknown grouping {req.keys!r}")
+        check(activity=[req.root], method=[req.method])
         amounts, impacts = flow_contribution(model, req.root, req.method, req.amount)
         table = pd.DataFrame({"name": flows["name"], "compartment": flows["compartment"],
-                              "subcompartment": flows["subcompartment"], "unit": flows["unit"],
+                              "subcompartment": flows["subcompartment"], "place": flows["place"], "unit": flows["unit"],
                               "amount": amounts, "impact": impacts})
         table = table[table["impact"] != 0]
         if req.keys is not None:
@@ -681,86 +709,74 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
                 places = ", ".join(str(values[c]) for c in ("compartment", "subcompartment") if c in values and values[c])
                 if "name" in values:
                     place = places if places else (f"{g['compartment'].nunique()} compartments" if g["compartment"].nunique() > 1
-                                                    else ", ".join(c for c in (g["compartment"].iat[0], g["subcompartment"].iat[0]) if c))
+                                                    else g["place"].iat[0])
                     name = values["name"]
                 else:
                     place, name = "", places or "(unspecified)"
                 items.append({"name": name, "compartment": place, "unit": values.get("unit", ""),
                               "amount": float(g["amount"].sum()) if "name" in values else 0.0, "impact": float(g["impact"].sum()),
                               "flows": [int(i) for i in g.index],
-                              "compartments": [", ".join(c for c in cs if c) for cs in zip(g["compartment"], g["subcompartment"])]})
+                              "compartments": list(g["place"])})
         elif req.by == "substance":
             keys = ["name", "unit"]
-            items = [{"name": name, "compartment": f"{len(g)} compartments" if len(g) > 1
-                      else ", ".join(c for c in (g["compartment"].iat[0], g["subcompartment"].iat[0]) if c),
+            items = [{"name": name, "compartment": f"{len(g)} compartments" if len(g) > 1 else g["place"].iat[0],
                       "unit": unit, "amount": float(g["amount"].sum()), "impact": float(g["impact"].sum()),
                       "flows": [int(i) for i in g.index],
-                      "compartments": [", ".join(c for c in cs if c) for cs in zip(g["compartment"], g["subcompartment"])]}
+                      "compartments": list(g["place"])}
                      for (name, unit), g in ((k, g.reindex(g["impact"].abs().sort_values(ascending=False).index))
                                              for k, g in table.groupby(keys, sort=False))]
         else:
-            items = [{"name": r.name, "compartment": ", ".join(c for c in (r.compartment, r.subcompartment) if c),
+            items = [{"name": r.name, "compartment": r.place,
                       "unit": r.unit, "amount": float(r.amount), "impact": float(r.impact), "flows": [int(i)]}
                      for i, r in zip(table.index, table.itertuples(index=False))]
-        items.sort(key=lambda it: -abs(it["impact"]))
-        shown, rest = items[: req.limit], items[req.limit:]
-        try:
-            masks = {name: evaluate(predicate, flows) for name, predicate in req.flow_groups.items()}
-        except (KeyError, ValueError) as e:
-            raise HTTPException(400, f"Invalid flow group: {e}")
-        for it in shown:
-            it["group"] = next((name for name, mask in masks.items() if mask[it["flows"]].any()), None)
+        shown, _, others = _listed([it["impact"] for it in items], req.cut, impacts.sum())
         return {
             "total": float(impacts.sum()),
             "count": len(items),
-            "items": shown,
-            "others": {"count": len(rest), "impact": sum(it["impact"] for it in rest)},
+            "items": [items[i] for i in shown],
+            "others": others,
         }
 
     @app.post("/api/flows/of-process")
     def flows_of_process(req: ProcessFlowsRequest):
         """The elementary flows behind what one process of the supply chain contributes by its own emissions (the
         contribution of a process, reversed: its flows), largest first."""
-        if not (0 <= req.root < model.size and 0 <= req.activity < model.size):
-            raise HTTPException(404, "No such activity")
-        if not 0 <= req.method < len(model.methods):
-            raise HTTPException(404, f"No method {req.method}")
-        level = float(model.supply(req.root, req.amount)[req.activity])
+        check(activity=[req.root, req.activity], method=[req.method])
+        level = float(supply(req.root, req.amount)[req.activity])
         amounts = model.B[:, req.activity].toarray().ravel() * level
         impacts = amounts * model.methods[req.method].cfs
-        order = [int(f) for f in np.argsort(-np.abs(impacts)) if impacts[f] != 0]
-        shown, rest = order[: max(req.limit, 0)], order[max(req.limit, 0):]
+        emitted = np.flatnonzero(impacts)
+        shown, _, others = _listed(impacts[emitted], req.cut)
         return {
             "total": float(impacts.sum()),
-            "count": len(order),
-            "flows": [{"flow": f, "name": flows["name"].iat[f],
-                       "compartment": ", ".join(c for c in (flows["compartment"].iat[f], flows["subcompartment"].iat[f]) if c),
-                       "unit": flows["unit"].iat[f], "amount": float(amounts[f]), "impact": float(impacts[f])} for f in shown],
-            "others": {"count": len(rest), "impact": float(impacts[rest].sum()) if rest else 0.0},
+            "count": len(emitted),
+            "flows": [{"flow": int(f), "name": flows["name"].iat[f], "compartment": flows["place"].iat[f],
+                       "unit": flows["unit"].iat[f], "amount": float(amounts[f]), "impact": float(impacts[f])}
+                      for f in emitted[shown]],
+            "others": others,
         }
 
     @app.post("/api/flows/contributors")
     def flows_contributors(req: FlowContributorsRequest):
         """Activities emitting some elementary flows in the supply chain, largest first."""
+        check(activity=[req.root], method=[req.method])
         try:
             members, amounts, impacts, main = flow_contributors(model, req.root, req.flows, req.method, req.amount)
         except IndexError as e:
             raise HTTPException(400, f"Unknown flow: {e}") from e
-        order = np.argsort(-np.abs(impacts))
-        shown, rest = order[: req.limit], order[req.limit:]
+        shown, _, others = _listed(impacts, req.cut)
         return {
             "total": float(impacts.sum()),
             "count": int(len(members)),
             "contributors": [{**meta(int(members[i])), "amount": float(amounts[i]), "impact": float(impacts[i]),
                               "flow": int(main[i])} for i in shown],
-            "others": {"count": int(len(rest)), "impact": float(impacts[rest].sum()) if len(rest) else 0.0},
+            "others": others,
         }
 
     @app.post("/api/locate")
     def locate(req: LocateRequest):
         """View changes that show ``product`` in the tree, along its most important supply path."""
-        if not 0 <= req.product < model.size:
-            raise HTTPException(404, f"No activity {req.product}")
+        check(activity=[req.product, *req.root], method=[req.method], rule=[req.rule])
         start = req.root[0]
         path = None
         if req.rule == "first_match" and req.groups:

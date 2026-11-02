@@ -30,6 +30,20 @@ function request(url, body) {
 }
 // The answer to a question already asked, at once (undefined: not yet)
 const peek = (url, body) => (body ? answers.get((url.startsWith("/api/") ? API_BASE + url : url) + JSON.stringify(body))?.value : undefined);
+// The answer of the server to ``body`` (asked again when it changes; null: nothing asked), for a component: { data, error }.
+// The last answer stays while the next one comes; one asked before is there at once.
+function useRequest(url, body) {
+  const key = body ? JSON.stringify(body) : null;
+  const [state, setState] = useState(() => ({ data: body ? peek(url, body) ?? null : null, error: null }));
+  useEffect(() => {
+    if (!body) { setState({ data: null, error: null }); return; }
+    let live = true;
+    setState((s) => ({ ...s, error: null }));
+    request(url, body).then((data) => live && setState({ data, error: null }), (e) => live && setState((s) => ({ ...s, error: e.message })));
+    return () => { live = false; };
+  }, [url, key]);
+  return state;
+}
 
 // The server's own API (databases loaded, Projects)
 async function serverRequest(url, body) {
@@ -178,14 +192,13 @@ const cutoffReason = (value, basis) => ({
 // hue, derived from the rule that made the group (its name, or the field of a group-by
 // rule) so that a group keeps its colour when others change, and matches its rule's swatch
 const hueOf = (key) => [...key].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 0);
-// The palette of the rules (set in the Rules panel, kept by the workspace): ``keys`` are the rules of the set in use, in
-// order; the palette gives its colours in that order ("auto": a hue derived from the name). ``paletteStamp`` changes with
-// either, for the memos that hold colours.
-let rulePalette = { name: "auto", keys: [], own: {} };
+// The colours of the rules (the Settings pop-up, kept by the workspace with its rules): ``keys`` are the rules of the set
+// in use, in order; the palette gives its colours in that order ("auto": a hue derived from the name), a colour picked for
+// a rule (``picked``: key -> "#rrggbb") wins. ``paletteStamp`` changes with any of them, for the memos that hold colours.
+let rulePalette = { name: "auto", keys: [], own: {}, picked: {} };
 let paletteStamp = "auto";
-// A colour picked in the Group rules tab (``picked``: key -> "#rrggbb", part of the view) wins
-function colorOf(key, picked) {
-  if (picked?.[key]) return picked[key];
+function colorOf(key) {
+  if (rulePalette.picked[key]) return rulePalette.picked[key];
   const colors = RULE_PALETTES[rulePalette.name]?.colors || rulePalette.own[rulePalette.name];
   if (!colors) return `hsl(${hueOf(key)} 55% 52%)`;
   const i = rulePalette.keys.indexOf(key);
@@ -236,10 +249,15 @@ const DEFAULT_COLUMNS = ["amount", "impact", "share"];
 // (a pop-up's explorer keeps the plain columns)
 const DEFAULT_VIEW_COLUMNS = [...DEFAULT_COLUMNS, "comment"];
 const DEFAULT_CUTOFF = 0;
+// The options of a tab's view, with their defaults: the preferences, the view files and the tabs' kept state follow this
+// list (a switch is kept as "1"/"0", a list as JSON, a text as it is)
 const DEFAULT_VIEW = {
   naming: "full", splitByType: false, hideOthers: false, groupProducts: false, groupByRules: false, groupSubstance: false,
-  groupCompartment: false, groupSubcompartment: false, groupFields: [], groupColors: false, colorBy: "group", columns: DEFAULT_VIEW_COLUMNS, ruleColors: {},
+  groupCompartment: false, groupSubcompartment: false, groupFields: [], groupColors: false, colorBy: "group", columns: DEFAULT_VIEW_COLUMNS,
 };
+// The options the rows of a tree depend on (sent to /api/rows): kept with each tab, for the comparison of the tabs' trees
+const TREE_OPTIONS = ["groupProducts", "groupByRules", "groupSubstance", "groupCompartment", "groupSubcompartment", "groupFields"];
+const pick = (object, keys) => Object.fromEntries(keys.filter((k) => k in object).map((k) => [k, object[k]]));
 // The rules a workspace starts with
 const DEFAULT_RULE_LABELS = ["Transport", "Electricity", "Heat & fuels", "Infrastructure", "Waste treatment"];
 const defaultRules = () => DEFAULT_RULE_LABELS.map((label) => ({ scope: "*", ...PRESETS.find((q) => q.label === label).rule }));
@@ -315,7 +333,7 @@ function groupColors(rows, view) {
   for (const r of rows) {
     // The group a rule of the Rules panel makes, a row it matches (grouped or not): its colour; groups of the view options
     // (product, substance, compartment) have none
-    if (r.rule) colors.set(r.id, colorOf(r.rule, view.ruleColors));
+    if (r.rule) colors.set(r.id, colorOf(r.rule));
     else if (colors.has(r.parent)) colors.set(r.id, colors.get(r.parent));
   }
   return colors;
@@ -374,6 +392,13 @@ function shortLabel(row, byId) {
 
 function frontier(rows) {
   return rows.filter((r) => !(r.expandable && r.expanded));
+}
+
+// A CSV file: the ``comments`` first (# …), the ``header``, then the ``rows`` (a number as it is, a text quoted)
+const csvQuote = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+function downloadCsv(filename, header, rows, comments = []) {
+  const line = (cells) => cells.map((v) => (typeof v === "number" ? String(v) : csvQuote(v))).join(",");
+  download(filename, [...comments.map((c) => `# ${c}`), line(header), ...rows.map(line)].join("\n"), "text/csv");
 }
 
 function download(filename, text, type) {
@@ -1905,6 +1930,13 @@ function SidePanelIcon({ open, left }) {
     </svg>`;
 }
 // The icon of the keyboard shortcuts in the status bar
+function PaletteIcon() {
+  return html`
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M8 1.8a6.2 6.2 0 1 0 0 12.4c.9 0 1.4-.6 1.4-1.3 0-.9-.8-1.2-.8-2s.6-1.3 1.5-1.3h1.6a2.5 2.5 0 0 0 2.5-2.5C14.2 4.1 11.4 1.8 8 1.8Z" />
+      <path d="M4.6 7.4h.01M6.4 4.6h.01M9.6 4.4h.01" stroke-width="2" />
+    </svg>`;
+}
 function KeyboardIcon() {
   return html`
     <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round">
@@ -2048,7 +2080,7 @@ function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onU
   const sections = new Map();  // row id -> the section of the last row seen below it
   const previous = { depth: 0 };  // the depth of the row before
   const span = 1 + COLUMNS.filter((c) => shown.has(c.id)).length;
-  const colors = useMemo(() => groupColors(rows, view), [rows, view.groupColors, view.colorBy, view.ruleColors, paletteStamp]);
+  const colors = useMemo(() => groupColors(rows, view), [rows, view.groupColors, view.colorBy, paletteStamp]);
   const ctx = useContext(EditorContext);
   const editing = ctx.editing;
   const box = useRef(null);
@@ -2412,7 +2444,7 @@ function TreeGraph({ rows, rootImpact, shareBasis, selection, onToggle, onSelect
   const orientation = sankey ? "horizontal" : chosenOrientation;
   const cycles = chosenCycles && !sankey;
   const byId = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
-  const colors = useMemo(() => groupColors(rows, view), [rows, view.groupColors, view.colorBy, view.ruleColors, paletteStamp]);
+  const colors = useMemo(() => groupColors(rows, view), [rows, view.groupColors, view.colorBy, paletteStamp]);
   const container = useRef(null);
   const drag = useRef(null);
   const [transform, setTransform] = useState({ k: 1, x: 16, y: 16 });
@@ -3736,7 +3768,7 @@ function ChartPanel({ data, info, method, chartMethods, onPickMethods, view, hea
   const unit = info.methods[method].unit;
   const total = parts.reduce((s, p) => s + p.impacts[0], 0);
   // Bars of rows in a group (or of the group) take the colour of its rule
-  const colors = useMemo(() => groupColors(data.rows, view), [data, view.groupColors, view.colorBy, view.ruleColors, paletteStamp]);
+  const colors = useMemo(() => groupColors(data.rows, view), [data, view.groupColors, view.colorBy, paletteStamp]);
 
   let legendKeys = [];
   const singleOption = useMemo(() => {
@@ -3805,10 +3837,8 @@ function ChartPanel({ data, info, method, chartMethods, onPickMethods, view, hea
   }, [parts, chartMethods, data, nameStamp]);
 
   function exportCsv() {
-    const quote = (v) => `"${String(v).replace(/"/g, '""')}"`;
-    const header = ["row", "kind", "merged rows", ...data.methods.map((m) => quote(methodTitle(info.methods[m])))];
-    const lines = parts.map((p) => [quote(p.label), p.kind, p.rows.length, ...p.impacts].join(","));
-    download("contributions.csv", [header.join(","), ...lines].join("\n"), "text/csv");
+    downloadCsv("contributions.csv", ["row", "kind", "merged rows", ...data.methods.map((m) => methodTitle(info.methods[m]))],
+      parts.map((p) => [p.label, p.kind, p.rows.length, ...p.impacts]));
   }
 
   return html`
@@ -3835,33 +3865,17 @@ function ChartPanel({ data, info, method, chartMethods, onPickMethods, view, hea
     </div>`;
 }
 
-// The number of bars and rows of a contribution panel: the largest ``value``, the rest in one row
-// The filters of a flat list of rows, the cut-offs of the Custom view that make sense for it: the largest ``value`` rows,
-// the rows under ``value`` % of the total (to others), the largest rows until ``value`` % of the total
+// The filters of a flat list of rows, the cut-offs of the Custom view that make sense for it (the server cuts the list as
+// it cuts the tree): the largest ``value`` rows, the rows under ``value`` % of the total (to others), the largest rows until
+// ``value`` % of all the rows
 const LIST_CUTS = {
   top: { label: "Top", unit: "", hint: "The largest rows", default: 20, step: 5 },
   total: { label: "Cut-off", unit: "%", hint: "Rows under this share of the total go to others", default: 1, step: 0.5, max: 100 },
   cumulative: { label: "Cumulative", unit: "%", hint: "The largest rows until this share of the total", default: 90, step: 5, max: 100 },
 };
-// ``items`` largest first: { shown, rest }. As the cut-offs of the Custom view: *Cut-off* takes the share of the total
-// (``total``, the score the Share column divides by), *Cumulative* of all the rows together, those the server did not list
-// (``unlisted``: their |impact|) included
-function cutList(items, size, { mode, value }, { total = 0, unlisted = 0 } = {}) {
-  if (mode === "top") return { shown: items.slice(0, value), rest: items.slice(value) };
-  const magnitudes = items.map((it) => Math.abs(size(it)));
-  if (mode === "total") {
-    const budget = (value / 100) * Math.abs(total);
-    let cut = items.length, under = 0;
-    while (cut > 0 && under + magnitudes[cut - 1] <= budget) under += magnitudes[--cut];
-    return { shown: items.slice(0, Math.max(cut, 1)), rest: items.slice(Math.max(cut, 1)) };
-  }
-  const budget = (value / 100) * (magnitudes.reduce((t, m) => t + m, 0) + Math.abs(unlisted));
-  let kept = 0, reached = 0;
-  while (kept < items.length && reached < budget) reached += magnitudes[kept++];
-  return { shown: items.slice(0, kept), rest: items.slice(kept) };
-}
-// What the server is asked for to cut a list here: the rows themselves for the shares, a number of them for the top
-const cutLimit = ({ mode, value }) => (mode === "top" ? value : 1000);
+// A filter as the server takes it (a share as a fraction, as the cut-off of a tree); ``ALL_ROWS``: no filter
+const apiCut = ({ mode, value }) => ({ mode, value: cutoffValue(value, mode) });
+const ALL_ROWS = { mode: "top", value: 0 };
 // The control: the type of the filter (a click on its name) and its value, in little room
 function CutField({ cut, setCut, what }) {
   const m = LIST_CUTS[cut.mode];
@@ -3872,91 +3886,88 @@ function CutField({ cut, setCut, what }) {
   </span>`;
 }
 
-// What each process of the supply chain contributes by its own emissions (the direct contributions, wherever it is in the
-// tree), largest first, as a chart and as the table of the same rows: from /api/global/contributors with no group
-// (everything is "other"). A click on a bar or on a row chooses it in both.
-function ProcessContributions({ info, root, amount, method, onInfo }) {
-  const [cut, setCut] = useState({ mode: "top", value: 20 });
-  const ask = (limit) => ({ root: root.index, amount, groups: {}, flow_groups: {}, order: [], rule: "direct", group: "other", method, limit });
-  const [found, setFound] = useState(() => peek("/api/global/contributors", ask(20)) ?? null);
-  const [error, setError] = useState(null);
-  const [chosen, setChosen] = useState(null);  // the activity chosen
-  const chosenRow = useRef(null);
+// A list of contributions, largest first, the rest in one *others* row, as a chart and as the table of the same rows, with
+// its filter (``cut``) and its export: a click on a bar or a row chooses it in both (the others fade). ``items``: the rows
+// the server listed, ``others`` ({ count, impact }) the rest, ``total`` the score the shares are of, ``what`` the rows in
+// words; a row: ``name`` its first cell, ``columns`` ({ head, cell, csv }) more before the impact, ``below`` the rows opened
+// under it when chosen; ``controls``: more of the panel's buttons, before the filter
+function ContributionList({ items, others, total, count, what, unitLabel, cut, setCut, keyOf, label, name, chosen, onChoose,
+                            head, columns = [], rowProps = () => ({}), below, csv, exportName, tableClass = "", controls }) {
   const chartRef = useRef(null);
-  const [inner, setInner] = useState(null);  // the flows of the process chosen: its contribution, reversed
-  useEffect(() => {
-    let live = true;
-    setError(null);
-    request("/api/global/contributors", ask(cutLimit(cut)))
-      .then((f) => live && setFound(f)).catch((e) => live && setError(e.message));
-    return () => { live = false; };
-  }, [root.index, amount, method, cut.mode, cutLimit(cut)]);
-  useEffect(() => setChosen(null), [root.index, method]);
-  useEffect(() => {
-    setInner(null);
-    if (chosen === null) return;
-    let live = true;
-    request("/api/flows/of-process", { root: root.index, amount, method, activity: chosen, limit: 12 }).then((d) => live && setInner(d)).catch(() => live && setInner({ flows: [], others: { count: 0, impact: 0 }, total: 0 }));
-    return () => { live = false; };
-  }, [chosen, root.index, amount, method]);
+  const chosenRow = useRef(null);
   useEffect(() => { chosenRow.current?.scrollIntoView({ block: "nearest", behavior: "smooth" }); }, [chosen]);
-  const unitLabel = info.methods[method].unit;
-  const split = found && cutList(found.contributors, (c) => c.impact, cut, { total: found.total, unlisted: found.others.impact });
-  const shown = split?.shown || [];
-  const others = found && { count: found.others.count + split.rest.length, impact: found.others.impact + split.rest.reduce((t, c) => t + c.impact, 0) };
-  const share = (v) => pct(found?.total ? v / found.total : 0);
-  const rows = found ? [...shown.map((c) => [`${c.name} (${c.location})`, c.impact, c]),
-    ...(others.count > 0 ? [[`${others.count} more`, others.impact, null]] : [])] : [];
-  const choose = (c) => setChosen(chosen === c.index ? null : c.index);
-  function exportCsv() {
-    const quote = (v) => `"${String(v).replace(/"/g, '""')}"`;
-    const lines = [...shown.map((c) => [quote(c.name), quote(c.location), c.impact, found.total ? c.impact / found.total : 0].join(",")),
-      ...(others.count > 0 ? [[quote(`${others.count} more`), "", others.impact, found.total ? others.impact / found.total : 0].join(",")] : [])];
-    download("process-contributions.csv", [`# ${unitLabel}`, ["process", "location", "impact", "share"].join(","), ...lines].join("\n"), "text/csv");
-  }
+  const share = (v) => pct(total ? v / total : 0);
+  const bars = [...items.map((it) => [label(it), it.impact, it]),
+    ...(others.count > 0 ? [[`others (${others.count} ${what})`, others.impact, null]] : [])];
   const option = useMemo(() => {
     const o = baseOption();
-    o.yAxis = { ...o.yAxis, type: "category", data: rows.map(([n]) => n), inverse: true, triggerEvent: true,
+    o.yAxis = { ...o.yAxis, type: "category", data: bars.map(([n]) => n), inverse: true, triggerEvent: true,
       axisLabel: { ...o.yAxis.axisLabel, width: 240, overflow: "truncate" } };
     o.xAxis = { ...o.xAxis, type: "value", name: unitLabel };
     o.tooltip.valueFormatter = (v) => `${fmt(v)} ${unitLabel} (${share(v)})`;
-    o.series = [{ type: "bar", cursor: "pointer", data: rows.map(([, v, c]) => ({ value: v,
-        itemStyle: { color: cssVar(!c ? "--muted" : v < 0 ? "--bar-negative" : "--bar"), opacity: chosen !== null && !(c && c.index === chosen) ? 0.35 : 1 } })),
+    o.series = [{ type: "bar", cursor: "pointer", data: bars.map(([, v, it]) => ({ value: v,
+        itemStyle: { color: cssVar(!it ? "--muted" : v < 0 ? "--bar-negative" : "--bar"), opacity: chosen != null && !(it && keyOf(it) === chosen) ? 0.35 : 1 } })),
       label: { show: true, position: "right", formatter: (d) => share(d.value), color: cssVar("--muted") } }];
     return o;
-  }, [found, unitLabel, chosen, cut]);
+  }, [items, others, total, unitLabel, chosen]);
+  const exportCsv = () => downloadCsv(`${exportName}.csv`, [...csv.header, ...columns.filter((c) => c.csv).map((c) => c.head), "impact", "share"], [
+    ...items.map((it) => [...csv.cells(it), ...columns.filter((c) => c.csv).map((c) => c.csv(it)), it.impact, total ? it.impact / total : 0]),
+    ...(others.count > 0 ? [[`${others.count} more`, ...csv.header.slice(1).map(() => ""), ...columns.filter((c) => c.csv).map(() => ""),
+      others.impact, total ? others.impact / total : 0]] : [])], [unitLabel]);
+  const blank = columns.map((c) => html`<td key=${c.head}></td>`);
+  return html`
+    <div class="row">${controls}<${CutField} cut=${cut} setCut=${setCut} what=${what} /><${ExportMenu} chart=${chartRef} csv=${exportCsv} name=${exportName} /></div>
+    <${Chart} exportRef=${chartRef} option=${option} height=${Math.max(200, bars.length * 26 + 60)}
+      onClick=${(e) => { const i = e.componentType === "yAxis" ? bars.findIndex(([n]) => n === e.value) : e.dataIndex; const it = bars[i]?.[2]; if (it) onChoose(it); }} />
+    <table class=${`results chart-results ${tableClass}`}>
+      <thead><tr><th>${head}</th>${columns.map((c) => html`<th class="num" key=${c.head}>${c.head}</th>`)}<th class="num">${unitLabel}</th><th class="num">Share</th></tr></thead>
+      <tbody>${items.map((it) => {
+        const on = keyOf(it) === chosen;
+        return html`<${Fragment} key=${keyOf(it)}>
+          <tr class=${`clickable ${on ? "selected" : ""}`} ref=${on ? chosenRow : null} ...${rowProps(it)} onClick=${() => onChoose(it)}>
+            <td>${on ? "▾" : "▸"} ${name(it)}</td>
+            ${columns.map((c) => html`<td class="num" key=${c.head}>${c.cell(it)}</td>`)}
+            <td class="num">${fmt(it.impact)}</td><td class="num">${share(it.impact)}</td>
+          </tr>
+          ${on && below?.(it)}
+        <//>`;
+      })}
+        ${others.count > 0 && html`<tr class="muted"><td>+ ${others.count} more ${what}</td>${blank}<td class="num">${fmt(others.impact)}</td><td class="num">${share(others.impact)}</td></tr>`}
+      </tbody>
+      <tfoot><tr><th>Total · ${count} ${what}</th>${blank}<th class="num">${fmt(total)}</th><th class="num">100%</th></tr></tfoot>
+    </table>`;
+}
+
+// What each process of the supply chain contributes by its own emissions (the direct contributions, wherever it is in the
+// tree): /api/global/contributors with no group (everything is "other"). A click on a process opens the elementary flows
+// its contribution is made of.
+function ProcessContributions({ info, root, amount, method, onInfo }) {
+  const [cut, setCut] = useState({ mode: "top", value: 20 });
+  const [chosen, setChosen] = useState(null);  // the activity chosen
+  useEffect(() => setChosen(null), [root.index, method]);
+  const { data: found, error } = useRequest("/api/global/contributors",
+    { root: root.index, amount, groups: {}, flow_groups: {}, order: [], rule: "direct", group: "other", method, cut: apiCut(cut) });
+  // the flows of the process chosen: its contribution, reversed
+  const inner = useRequest("/api/flows/of-process", chosen === null ? null : { root: root.index, amount, method, activity: chosen, cut: { mode: "top", value: 12 } });
   if (error) return html`<div class="error">${error}</div>`;
   if (!found) return html`<${Waiting} text="Computing…" />`;
+  const flowsOf = (c) => (inner.error ? html`<tr class="sub"><td colspan="3" class="error">${inner.error}</td></tr>`
+    : !inner.data ? html`<tr class="sub"><td colspan="3"><${Waiting} text="Computing…" /></td></tr>`
+    : html`${inner.data.flows.map((f) => html`
+        <tr class="sub" key=${f.flow}><td>${f.name} <span class="muted">${f.compartment}</span></td>
+          <td class="num">${fmt(f.impact)}</td><td class="num muted" title="Of this process's contribution">${pct(inner.data.total ? f.impact / inner.data.total : 0)}</td></tr>`)}
+        ${inner.data.others.count > 0 && html`<tr class="sub muted"><td>+ ${inner.data.others.count} more flows</td><td class="num">${fmt(inner.data.others.impact)}</td><td></td></tr>`}`);
   return html`
     <div class="panel">
-      <div class="row"><${CutField} cut=${cut} setCut=${setCut} what="processes" /><${ExportMenu} chart=${chartRef} csv=${exportCsv} name="process-contributions" /></div>
-      <${Chart} exportRef=${chartRef} option=${option} height=${Math.max(200, rows.length * 26 + 60)}
-        onClick=${(e) => { const i = e.componentType === "yAxis" ? rows.findIndex(([n]) => n === e.value) : e.dataIndex; const c = rows[i]?.[2]; if (c) choose(c); }} />
-      <table class="results chart-results direct-contributions">
-        <thead><tr><th>Process <span class="muted">· direct contributions</span></th><th class="num">${unitLabel}</th><th class="num">Share</th></tr></thead>
-        <tbody>${shown.map((c) => html`
-          <${Fragment} key=${c.index}>
-            <tr class=${`clickable ${chosen === c.index ? "selected" : ""}`} ref=${chosen === c.index ? chosenRow : null} ...${dragProcess(c.index)}
-                title=${`${c.reference_product ?? ""} | ${c.name} | ${c.location}: click for the flows it is made of, right-click for its details`}
-                onClick=${() => choose(c)}
-                onContextMenu=${(e) => { e.preventDefault(); onInfo?.(c.index, e.clientX, e.clientY); }}>
-              <td>${chosen === c.index ? "▾" : "▸"} ${c.name} <span class="loc-chip">${c.location}</span></td>
-              <td class="num">${fmt(c.impact)}</td>
-              <td class="num">${share(c.impact)}</td>
-            </tr>
-            ${chosen === c.index && (inner
-              ? html`${inner.flows.map((f) => html`
-                  <tr class="sub" key=${f.flow}><td>${f.name} <span class="muted">${f.compartment}</span></td>
-                    <td class="num">${fmt(f.impact)}</td><td class="num muted" title="Of this process's contribution">${pct(inner.total ? f.impact / inner.total : 0)}</td></tr>`)}
-                  ${inner.others.count > 0 && html`<tr class="sub muted"><td>+ ${inner.others.count} more flows</td><td class="num">${fmt(inner.others.impact)}</td><td></td></tr>`}`
-              : html`<tr class="sub"><td colspan="3"><${Waiting} text="Computing…" /></td></tr>`)}
-          <//>`)}
-        </tbody>
-        <tfoot>
-          ${others.count > 0 && html`<tr><td class="muted">${others.count} more</td><td class="num">${fmt(others.impact)}</td><td class="num">${share(others.impact)}</td></tr>`}
-          <tr><th>Total · ${found.count} ${found.count === 1 ? "process" : "processes"}</th><th class="num">${fmt(found.total)}</th><th class="num">100%</th></tr>
-        </tfoot>
-      </table>
+      <${ContributionList} items=${found.contributors} others=${found.others} total=${found.total} count=${found.count} what="processes"
+        unitLabel=${info.methods[method].unit} cut=${cut} setCut=${setCut} exportName="process-contributions" tableClass="direct-contributions"
+        keyOf=${(c) => c.index} label=${(c) => `${c.name} (${c.location})`} chosen=${chosen}
+        onChoose=${(c) => setChosen(chosen === c.index ? null : c.index)}
+        head=${html`Process <span class="muted">· direct contributions</span>`}
+        name=${(c) => html`${c.name} <span class="loc-chip">${c.location}</span>`}
+        rowProps=${(c) => ({ ...dragProcess(c.index), title: `${c.reference_product ?? ""} | ${c.name} | ${c.location}: click for the flows it is made of, right-click for its details`,
+          onContextMenu: (e) => { e.preventDefault(); onInfo?.(c.index, e.clientX, e.clientY); } })}
+        below=${flowsOf} csv=${{ header: ["process", "location"], cells: (c) => [c.name, c.location] }} />
     </div>`;
 }
 
@@ -4122,12 +4133,8 @@ function GroupPanel({ info, rules, setRules, selectedRow, view, setView, shared,
     document.addEventListener("keydown", key);
     return () => document.removeEventListener("keydown", key);
   }, [editIndex]);
-  // A rule's colour: picked here (kept in the view), or derived from its name
-  const ruleKey = (r) => r.by || r.name;
-  const pickColor = (key, color) => {
-    const { [key]: old, ...rest } = view.ruleColors || {};
-    setView({ ...view, ruleColors: color ? { ...rest, [key]: color } : rest });
-  };
+  // A rule's colour: picked here or in the Settings pop-up (kept by the workspace), or the palette's
+  const pickColor = (key, color) => extras?.pickColor?.(key, color);
   // Disabling keeps a rule (to switch it back on)
   const toggle = (i, key) => setRules(rules.map((r, j) => {
     if (j !== i) return r;
@@ -4157,8 +4164,6 @@ function GroupPanel({ info, rules, setRules, selectedRow, view, setView, shared,
   return html`
     <div class="panel">
       ${extras?.attribution}
-      ${extras?.palette && html`<${PaletteSwitch} ...${extras.palette} customized=${Object.keys(view.ruleColors || {}).length > 0}
-        clearCustom=${() => Object.keys(view.ruleColors || {}).length && setView({ ...view, ruleColors: {} })} />`}
       <${Fold} id="active" title="Active rules" actions=${html`<${InfoTip} text=${RULES_TIP} label="How rules work" />
         ${rules.length > 1 && html`<button class="link" onClick=${() => { setRules([]); stopEdit(); }}>remove all</button>`}`}>
       ${rules.length === 0 ? null : html`
@@ -4173,7 +4178,7 @@ function GroupPanel({ info, rules, setRules, selectedRow, view, setView, shared,
               onContextMenu=${(e) => { e.preventDefault(); startEdit(i); }}>
               ${rules.length > 1 && html`<span class="grip" title="Drag to reorder (rules apply in list order)" aria-hidden="true">⠿</span>`}
               ${!(r.target === "flows" && r.by) && view.groupColors && html`
-                <input type="color" class="swatch" value=${colorHex(colorOf(ruleKey(r), view.ruleColors))}
+                <input type="color" class="swatch" value=${colorHex(colorOf(ruleKey(r)))}
                   onInput=${(e) => pickColor(ruleKey(r), e.target.value)}
                   onContextMenu=${(e) => { e.preventDefault(); e.stopPropagation(); pickColor(ruleKey(r), null); }}
                   title="Colour of this rule's groups in the tree and the charts: click to change, right-click to reset" />`}
@@ -4196,7 +4201,7 @@ function GroupPanel({ info, rules, setRules, selectedRow, view, setView, shared,
         <div class="row">${PRESETS.map((p) => {
           const key = ruleKey(p.rule);
           const used = view.groupColors && rules.some((r) => !r.disabled && r.target !== "flows" && ruleKey(r) === key);
-          const fill = used ? colorOf(key, view.ruleColors) : null;
+          const fill = used ? colorOf(key) : null;
           return html`<button style=${used ? { background: fill, borderColor: fill, color: textOn(fill) } : null}
             title=${used ? "In the active rules, in this colour" : undefined} onClick=${() => add(p.rule)}>${p.label}</button>`;
         })}</div>
@@ -4260,8 +4265,11 @@ function useProcessMenu(goTo, onInfo, onExchange) {
   return { open, element };
 }
 
+// The key of a rule: its name, or the field of a group-by rule (its colour goes by it)
+const ruleKey = (r) => r.by || r.name;
 // The named rules as the analyses take them: groups of processes, groups of flows (renamed when the name is taken by a
-// group of processes), and the names of all of them in the order of the rules
+// group of processes), the names of all of them in the order of the rules, and the rule of each group (``ruleOf``: the
+// colour of a group is its rule's, whatever its name)
 function namedGroups(rules) {
   const active = rules.filter((r) => r.predicate && !r.disabled);
   const groups = Object.fromEntries(active.filter((r) => r.target !== "flows").map((r) => [r.name, r.predicate]));
@@ -4269,19 +4277,18 @@ function namedGroups(rules) {
   const flowGroups = Object.fromEntries(active.filter((r) => r.target === "flows").map((r) => [nameOf(r), r.predicate]));
   // A flow rule can be on the emissions of some processes only: its predicate on the processes that emit
   const flowOwners = Object.fromEntries(active.filter((r) => r.target === "flows" && r.owner).map((r) => [nameOf(r), r.owner]));
-  return { groups, flowGroups, flowOwners, order: active.map(nameOf) };
+  return { groups, flowGroups, flowOwners, order: active.map(nameOf), ruleOf: Object.fromEntries(active.map((r) => [nameOf(r), ruleKey(r)])) };
 }
 
 // The palette of the colours of the rules: a menu, with the first colours of the one chosen. A colour picked on a rule makes
 // the palette "Custom" (choosing a palette again clears the colours picked); "Add palette…" makes one of the user's own.
-function PaletteSwitch({ palette, setPalette, palettes, addPalette, customized, clearCustom }) {
+function PaletteSwitch({ palette, setPalette, palettes, addPalette, customized }) {
   const all = { ...RULE_PALETTES, ...Object.fromEntries(Object.entries(palettes).map(([n, colors]) => [n, { label: n, hint: "Your palette", colors }])) };
   const current = all[palette] || RULE_PALETTES.auto;
   const [adding, setAdding] = useState(null);  // the palette being made: { name, colors }
   const choose = (value) => {
     if (value === "__add__") { setAdding({ name: "", colors: PALETTE.slice(0, 5) }); return; }
-    clearCustom();
-    setPalette(value);
+    if (value !== "__custom__") setPalette(value);
   };
   const strip = (colors) => (colors || [0, 60, 120, 180, 240, 300].map((h) => `hsl(${h} 55% 52%)`)).slice(0, 8);
   return html`
@@ -4300,14 +4307,14 @@ function PaletteSwitch({ palette, setPalette, palettes, addPalette, customized, 
         ${adding.colors.map((c, i) => html`<input type="color" class="swatch" key=${i} value=${colorHex(c)} aria-label=${`Colour ${i + 1}`}
           onInput=${(e) => setAdding({ ...adding, colors: adding.colors.map((x, j) => (j === i ? e.target.value : x)) })} />`)}
         <button onClick=${() => setAdding({ ...adding, colors: [...adding.colors, PALETTE[adding.colors.length % PALETTE.length]] })} title="One more colour" aria-label="One more colour">+</button>
-        <button class="primary" disabled=${!adding.name.trim()} onClick=${() => { clearCustom(); addPalette(adding.name.trim(), adding.colors); setAdding(null); }}>Add</button>
+        <button class="primary" disabled=${!adding.name.trim()} onClick=${() => { addPalette(adding.name.trim(), adding.colors); setAdding(null); }}>Add</button>
         <button onClick=${() => setAdding(null)}>Cancel</button>
       </div>`}`;
 }
 
-// The Rules panel keeps these next to its rules (the attribution, the palette, the rule set), made where the lens is known
+// The Rules panel keeps these next to its rules (the attribution, the rule set, the colours picked), made where the lens is known
 const ruleExtras = (lens) => ({
-  palette: { palette: lens.palette, setPalette: lens.setPalette, palettes: lens.palettes, addPalette: lens.addPalette },
+  pickColor: lens.pickColor,
   attribution: html`<${AttributionSwitch} rule=${lens.attribution} setRule=${lens.setAttribution} />`,
   ruleSet: html`<${Fold} id="ruleset" title=${`Rule set · ${lens.set}`} open=${false} actions=${html`<${InfoTip} text=${RULE_SET_TIP} label="What a rule set is" />`}>
     <${SetMenu} lens=${lens} />
@@ -4408,33 +4415,18 @@ function AttributionSwitch({ rule, setRule }) {
 
 function GlobalPanel({ info, root, amount, method, rules, view, rule, setRule, onLocate, onInfo }) {
   // Named rules on activities are activity groups, named rules on elementary flows flow groups; they go by the order of the rules
-  const { groups, flowGroups, flowOwners, order } = useMemo(() => namedGroups(rules), [rules]);
+  const { groups, flowGroups, flowOwners, order, ruleOf } = useMemo(() => namedGroups(rules), [rules]);
   const k = method;
-  const [result, setResult] = useState(() => peek("/api/global", root && { root: root.index, amount, groups, flow_groups: flowGroups, flow_owners: flowOwners, order, rule, method: k }) ?? null);
-  const [error, setError] = useState(null);
   const [group, setGroup] = useState(null);
-  const [contributors, setContributors] = useState(null);
+  const [exportError, setError] = useState(null);
   const contributorsBox = useRef(null);
   const chartRef = useRef(null);
-
-  useEffect(() => {
-    if (!root) return;
-    let cancelled = false;
-    setError(null);
-    request("/api/global", { root: root.index, amount, groups, flow_groups: flowGroups, flow_owners: flowOwners, order, rule, method: k })
-      .then((d) => !cancelled && setResult(d)).catch((e) => !cancelled && setError(e.message));
-    return () => { cancelled = true; };
-  }, [root, amount, groups, flowGroups, flowOwners, order, rule, k]);
+  const asked = root && { root: root.index, amount, groups, flow_groups: flowGroups, flow_owners: flowOwners, order, rule, method: k };
+  const { data: result, error: resultError } = useRequest("/api/global", asked);
   useEffect(() => { if (group && result && !(group in result)) setGroup(null); }, [result]);
   // Processes making up the chosen group
-  useEffect(() => {
-    setContributors(null);
-    if (!root || !group) return;
-    let cancelled = false;
-    request("/api/global/contributors", { root: root.index, amount, groups, flow_groups: flowGroups, flow_owners: flowOwners, order, rule, group, method: k, limit: 50 })
-      .then((d) => !cancelled && setContributors(d)).catch((e) => !cancelled && setError(e.message));
-    return () => { cancelled = true; };
-  }, [root, amount, groups, flowGroups, flowOwners, order, rule, group, k]);
+  const { data: contributors, error: contributorsError } = useRequest("/api/global/contributors", asked && group && { ...asked, group, cut: { mode: "top", value: 50 } });
+  const error = resultError || contributorsError || exportError;
   useEffect(() => { contributorsBox.current?.scrollIntoView({ block: "nearest", behavior: "smooth" }); }, [group, !!contributors]);
 
   const unit = info.methods[k].unit;
@@ -4447,28 +4439,24 @@ function GlobalPanel({ info, root, amount, method, rules, view, rule, setRule, o
   const menu = useProcessMenu(goTo, onInfo);
   const ofTotal = (v) => pct(total ? v / total : 0);
   const ofGroup = (v) => pct(contributors?.total ? v / contributors.total : 0);
-  const quote = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
   const methodName = methodTitle(info.methods[k]);
   const fileName = (what) => `group-contributions-${what}-${(root?.name || "").replace(/[^A-Za-z0-9]+/g, "-").slice(0, 40)}.csv`;
   function exportGroups() {
-    const lines = entries.map(([n, v]) => [quote(n), n in flowGroups ? "flow group" : n === "other" ? "other" : "process group",
-      v, total ? v / total : 0].join(","));
-    const header = ["group", "kind", quote(methodName), "share of total"].join(",");
-    download(fileName("groups"), [`# ${rule === "first_match" ? "First match" : "Direct"} attribution`, header, ...lines].join("\n"), "text/csv");
+    downloadCsv(fileName("groups"), ["group", "kind", methodName, "share of total"],
+      entries.map(([n, v]) => [n, n in flowGroups ? "flow group" : n === "other" ? "other" : "process group", v, total ? v / total : 0]),
+      [`${rule === "first_match" ? "First match" : "Direct"} attribution`]);
   }
   function exportContributors() {
     // Every process of the group, not only those listed
-    request("/api/global/contributors", { root: root.index, amount, groups, flow_groups: flowGroups, flow_owners: flowOwners, order, rule, group, method: k, limit: 1000000 })
-      .then((d) => {
-        const header = ["process", "reference product", "location", "database", quote(methodName), "share of group", "share of total"].join(",");
-        const lines = d.contributors.map((c) => [quote(c.name), quote(c.reference_product), quote(c.location), quote(c.database),
-          c.impact, d.total ? c.impact / d.total : 0, total ? c.impact / total : 0].join(","));
-        download(fileName(`group-${group.replace(/[^A-Za-z0-9]+/g, "-")}`), [header, ...lines].join("\n"), "text/csv");
-      }).catch((e) => setError(e.message));
+    request("/api/global/contributors", { ...asked, group, cut: ALL_ROWS })
+      .then((d) => downloadCsv(fileName(`group-${group.replace(/[^A-Za-z0-9]+/g, "-")}`),
+        ["process", "reference product", "location", "database", methodName, "share of group", "share of total"],
+        d.contributors.map((c) => [c.name, c.reference_product, c.location, c.database, c.impact, d.total ? c.impact / d.total : 0,
+          total ? c.impact / total : 0])))
+      .catch((e) => setError(e.message));
   }
   // A group has the colour of its rule in the Rules panel (and of its rows in the tree)
-  const colorOfGroup = (n) => n === "other" ? cssVar("--muted")
-    : view.groupColors ? colorOf(n.replace(/ \(flows\)$/, ""), view.ruleColors) : undefined;
+  const colorOfGroup = (n) => n === "other" ? cssVar("--muted") : view.groupColors ? colorOf(ruleOf[n] ?? n) : undefined;
   const option = useMemo(() => {
     const o = baseOption();
     o.yAxis = { ...o.yAxis, type: "category", data: entries.map(([n]) => n), inverse: true, triggerEvent: true };
@@ -4481,7 +4469,7 @@ function GlobalPanel({ info, root, amount, method, rules, view, rule, setRule, o
       })),
       label: { show: true, position: "right", formatter: (d) => pct(d.value / total), color: cssVar("--muted") } }];
     return o;
-  }, [result, k, group, view.groupColors, view.ruleColors, paletteStamp]);
+  }, [result, k, group, view.groupColors, paletteStamp]);
 
   return html`
     <div class="panel">
@@ -4557,31 +4545,14 @@ function FlowPanel({ info, root, amount, method, onLocate, onInfo, onFlowInfo, r
   const withName = keys.length === 0 || keys.includes("name");
   const things = !keys.length ? "flows" : withName ? "substances" : "groups";
   const [cut, setCut] = useState({ mode: "top", value: 25 });
-  const chartRef = useRef(null);
-  const [result, setResult] = useState(null);
-  const [error, setError] = useState(null);
   const [flow, setFlow] = useState(null);
-  const [contributors, setContributors] = useState(null);
   const contributorsBox = useRef(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    setError(null);
-    request("/api/flows", { root: root.index, amount, method, by: "flow", ...(keys.length ? { keys } : {}), limit: cutLimit(cut) })
-      .then((d) => !cancelled && setResult(d)).catch((e) => !cancelled && setError(e.message));
-    return () => { cancelled = true; };
-  }, [root, amount, method, by, cut.mode, cutLimit(cut)]);
+  const { data: result, error } = useRequest("/api/flows", { root: root.index, amount, method, by: "flow", ...(keys.length ? { keys } : {}), cut: apiCut(cut) });
   useEffect(() => setFlow(null), [root, by]);
   const label = (it) => (withName && (!keys.length || keys.some((k) => k !== "name")) && it.compartment ? `${it.name} (${it.compartment})` : it.name);
   // Processes emitting the chosen flow (all its compartments, by substance)
-  useEffect(() => {
-    setContributors(null);
-    if (!flow) return;
-    let cancelled = false;
-    request("/api/flows/contributors", { root: root.index, amount, method, flows: flow.flows, limit: 50 })
-      .then((d) => !cancelled && setContributors(d)).catch((e) => !cancelled && setError(e.message));
-    return () => { cancelled = true; };
-  }, [root, amount, method, flow]);
+  const { data: contributors, error: contributorsError } = useRequest("/api/flows/contributors",
+    flow && { root: root.index, amount, method, flows: flow.flows, cut: { mode: "top", value: 50 } });
   useEffect(() => { contributorsBox.current?.scrollIntoView({ block: "nearest", behavior: "smooth" }); }, [flow, !!contributors]);
 
   const goTo = (c) => onLocate(c.index);
@@ -4595,74 +4566,25 @@ function FlowPanel({ info, root, amount, method, onLocate, onInfo, onFlowInfo, r
   const ofTotal = (v) => pct(total ? v / total : 0);
   const ofFlow = (v) => pct(contributors?.total ? v / contributors.total : 0);
   const keyOf = (it) => it.flows.join(",");
-  const isChosen = (it) => flow && keyOf(flow) === keyOf(it);
-  const choose = (it) => setFlow(isChosen(it) ? null : it);
-  const split = result && cutList(result.items, (it) => it.impact, cut, { total: result.total, unlisted: result.others.impact });
-  const shown = split?.shown || [];
-  const others = result && { count: result.others.count + split.rest.length, impact: result.others.impact + split.rest.reduce((t, it) => t + it.impact, 0) };
-  const entries = result ? [
-    ...shown.map((it) => [label(it), it.impact, it]),
-    ...(others.count ? [[`others (${others.count} ${things})`, others.impact, null]] : []),
-  ] : [];
-  function exportCsv() {
-    const quote = (v) => `"${String(v).replace(/"/g, '""')}"`;
-    const lines = [...shown.map((it) => [quote(it.name), quote(it.compartment), it.unit, it.amount, it.impact, total ? it.impact / total : 0].join(",")),
-      ...(others.count > 0 ? [[quote(`${others.count} more`), "", "", "", others.impact, total ? others.impact / total : 0].join(",")] : [])];
-    download("flow-contributions.csv", [`# ${methodUnit}`, ["name", "compartment", "unit", "amount", "impact", "share"].join(","), ...lines].join("\n"), "text/csv");
-  }
-  const option = useMemo(() => {
-    const o = baseOption();
-    o.yAxis = { ...o.yAxis, type: "category", data: entries.map(([n]) => n), inverse: true, triggerEvent: true,
-      axisLabel: { ...o.yAxis.axisLabel, width: 240, overflow: "truncate" } };
-    o.xAxis = { ...o.xAxis, type: "value", name: methodUnit };
-    o.tooltip.valueFormatter = (v) => `${fmt(v)} ${methodUnit} (${ofTotal(v)})`;
-    o.series = [{ type: "bar", cursor: "pointer",
-      data: entries.map(([, v, it]) => ({
-        value: v,
-        itemStyle: { color: cssVar(!it ? "--muted" : v < 0 ? "--bar-negative" : "--bar"),
-          opacity: flow && !(it && isChosen(it)) ? 0.35 : 1 },
-      })),
-      label: { show: true, position: "right", formatter: (d) => ofTotal(d.value), color: cssVar("--muted") } }];
-    return o;
-  }, [result, flow, cut]);
+  const choose = (it) => setFlow(flow && keyOf(flow) === keyOf(it) ? null : it);
 
   return html`
     <div class="panel">
-      <div class="row">
-        <div class="view-group" role="group" aria-label="Group by">
-          <span class="view-group-label">Group by</span>
-          ${[["name", "Substance", "Flows of a substance together"], ["compartment", "Compartment", "By compartment"], ["subcompartment", "Subcompartment", "By subcompartment"]].map(([k, label, hint]) => html`
-            <button class=${grouped[k] ? "primary" : ""} aria-pressed=${grouped[k]} title=${hint} onClick=${() => setGrouped({ ...grouped, [k]: !grouped[k] })}>${label}</button>`)}
-        </div>
-        <${CutField} cut=${cut} setCut=${setCut} what=${things} />
-        <${ExportMenu} chart=${chartRef} csv=${exportCsv} name="flow-contributions" />
-      </div>
       ${error && html`<div class="error">${error}</div>`}
       ${result && html`
-        <${Chart} exportRef=${chartRef} option=${option} height=${Math.max(200, entries.length * 26 + 60)}
-          onClick=${(e) => { const name = e.componentType === "yAxis" ? e.value : e.name; const it = entries.find(([n]) => n === name)?.[2]; if (it) choose(it); }} />
-        <table class="results flow-results">
-          <thead><tr>
-            <th>${!keys.length ? "Flow" : withName ? "Substance" : keys.join(", ")} <span class="muted">· click for the processes emitting it</span></th>
-            <th class="num">amount</th><th class="num">${methodUnit}</th><th class="num">Share</th>
-          </tr></thead>
-          <tbody>${shown.map((it) => html`
-            <tr key=${keyOf(it)} class="clickable ${isChosen(it) ? "selected" : ""}" onClick=${() => choose(it)}
-                onContextMenu=${(e) => onFlowInfo(flowTarget(it), e)} title="Click for the processes emitting it, right-click for its details">
-              <td>${isChosen(it) ? "▾" : "▸"} ${it.name} <span class="muted">${it.compartment}</span></td>
-              <td class="num">${it.unit ? `${fmtAmount(it.amount)} ${unit(it.unit)}` : ""}</td><td class="num">${fmt(it.impact)}</td><td class="num">${ofTotal(it.impact)}</td>
-            </tr>`)}
-            ${others.count > 0 && html`
-              <tr class="muted">
-                <td>+ ${others.count} more ${things}</td><td></td>
-                <td class="num">${fmt(others.impact)}</td><td class="num">${ofTotal(others.impact)}</td>
-              </tr>`}
-          </tbody>
-          <tfoot><tr>
-            <th>Total · ${result.count} ${things} with an impact</th><th></th>
-            <th class="num">${fmt(total)}</th><th class="num">100%</th>
-          </tr></tfoot>
-        </table>`}
+        <${ContributionList} items=${result.items} others=${result.others} total=${total} count=${result.count} what=${things}
+          unitLabel=${methodUnit} cut=${cut} setCut=${setCut} exportName="flow-contributions" tableClass="flow-results"
+          controls=${html`<div class="view-group" role="group" aria-label="Group by">
+            <span class="view-group-label">Group by</span>
+            ${[["name", "Substance", "Flows of a substance together"], ["compartment", "Compartment", "By compartment"], ["subcompartment", "Subcompartment", "By subcompartment"]].map(([k, label, hint]) => html`
+              <button class=${grouped[k] ? "primary" : ""} aria-pressed=${grouped[k]} title=${hint} onClick=${() => setGrouped({ ...grouped, [k]: !grouped[k] })}>${label}</button>`)}
+          </div>`}
+          keyOf=${keyOf} label=${label} chosen=${flow && keyOf(flow)} onChoose=${choose}
+          head=${html`${!keys.length ? "Flow" : withName ? "Substance" : keys.join(", ")} <span class="muted">· click for the processes emitting it</span>`}
+          name=${(it) => html`${it.name} <span class="muted">${it.compartment}</span>`}
+          columns=${[{ head: "amount", cell: (it) => (it.unit ? `${fmtAmount(it.amount)} ${unit(it.unit)}` : ""), csv: (it) => it.amount }]}
+          rowProps=${(it) => ({ title: "Click for the processes emitting it, right-click for its details", onContextMenu: (e) => onFlowInfo(flowTarget(it), e) })}
+          csv=${{ header: ["name", "compartment", "unit"], cells: (it) => [it.name, it.compartment, it.unit] }} />`}
       ${flow && html`
         <div class="contributors" ref=${contributorsBox}>
           <div class="details-head">
@@ -4681,6 +4603,7 @@ function FlowPanel({ info, root, amount, method, onLocate, onInfo, onFlowInfo, r
             })()}
             <button onClick=${() => setFlow(null)} aria-label="Close">×</button>
           </div>
+          ${contributorsError && html`<div class="error">${contributorsError}</div>`}
           ${contributors && html`
             <${InfoTip} text="Processes of the supply chain emitting it, by their own emissions. Right-click one: go to it in the tree, its details, or its exchange of this flow." label="About the emitters" />
             <div class="contributors-list">
@@ -4733,50 +4656,26 @@ const LENS_KEY = `${STORAGE_KEY}.lens`;
 // The options of the view as kept in the preferences; a pop-up's explorer lists its exchanges by section, in full names
 // The view of the explorer in a pop-up (the exchanges of a process): the plain tree, in the sections of the form of a new
 // process, whatever the options of the tabs are
-const PLAIN_VIEW = {
-  naming: "full", splitByType: true, hideOthers: false, groupProducts: false, groupByRules: true, groupSubstance: false,
-  groupCompartment: false, groupSubcompartment: false, groupFields: [], groupColors: false, colorBy: "group",
-};
-const initialView = (embedded) => (embedded
-  ? { ...PLAIN_VIEW, recipe: { ...DEFAULT_RECIPE }, columns: [...DEFAULT_COLUMNS], ruleColors: {} } : preferredView());
+const PLAIN_VIEW = { ...DEFAULT_VIEW, splitByType: true, groupByRules: true, columns: DEFAULT_COLUMNS };
+const initialView = (embedded) => (embedded ? { ...PLAIN_VIEW, recipe: { ...DEFAULT_RECIPE } } : preferredView());
+// An option as the preferences keep it (see DEFAULT_VIEW), back to its value (the default when it does not read)
+function loadOption(key, fallback) {
+  if (typeof fallback === "boolean") return loadPreference(key, fallback ? "1" : "0") === "1";
+  if (typeof fallback === "string") return loadPreference(key, fallback);
+  try {
+    const value = JSON.parse(loadPreference(key, "null"));
+    return Array.isArray(value) === Array.isArray(fallback) && value !== null ? value : fallback;
+  } catch { return fallback; }
+}
+const saveOption = (key, value) => savePreference(key, typeof value === "boolean" ? (value ? "1" : "0") : typeof value === "string" ? value : JSON.stringify(value));
+const RECIPE_PREFERENCES = { main: "recipeMain", secondary: "recipeSecondary", flowMain: "recipeFlowMain", flowSecondary: "recipeFlowSecondary" };
 const preferredView = () => ({
-  naming: loadPreference("naming", "full"),
-  splitByType: loadPreference("splitByType", "0") === "1",
-  hideOthers: loadPreference("hideOthers", "0") === "1",
-  recipe: {
-    main: loadPreference("recipeMain", DEFAULT_RECIPE.main), secondary: loadPreference("recipeSecondary", DEFAULT_RECIPE.secondary),
-    flowMain: loadPreference("recipeFlowMain", DEFAULT_RECIPE.flowMain), flowSecondary: loadPreference("recipeFlowSecondary", DEFAULT_RECIPE.flowSecondary),
-  },
-  groupProducts: loadPreference("groupProducts", "0") === "1",
-  groupByRules: loadPreference("groupByRules", "0") === "1",  // the rules of the workspace (and the tab's) group the tree
-  groupSubstance: loadPreference("groupSubstance", "0") === "1",  // the flows of direct emissions, by substance
-  groupCompartment: loadPreference("groupCompartment", "0") === "1",  // … and by compartment
-  groupSubcompartment: loadPreference("groupSubcompartment", "0") === "1",  // … and by subcompartment
-  groupFields: (() => { try { const f = JSON.parse(loadPreference("groupFields", "[]")); if (Array.isArray(f)) return f; } catch { /* none */ } return []; })(),
-  columns: (() => { try { const c = JSON.parse(loadPreference("columns", "null")); if (Array.isArray(c)) return c; } catch { /* the default */ } return DEFAULT_VIEW_COLUMNS; })(),
-  groupColors: loadPreference("groupColors", "0") === "1",
-  colorBy: loadPreference("colorBy", "group"),  // "group" or "type" (flow type)
-  // colours picked for rules, by rule name (or field, for a group-by rule)
-  ruleColors: (() => { try { return JSON.parse(loadPreference("ruleColors", "{}")) || {}; } catch { return {}; } })(),
+  ...Object.fromEntries(Object.entries(DEFAULT_VIEW).map(([key, fallback]) => [key, loadOption(key, fallback)])),
+  recipe: Object.fromEntries(Object.entries(RECIPE_PREFERENCES).map(([part, key]) => [part, loadPreference(key, DEFAULT_RECIPE[part])])),
 });
 function saveViewPreferences({ view, display, orientation, cycles }) {
-  savePreference("naming", view.naming);
-  savePreference("splitByType", view.splitByType ? "1" : "0");
-  savePreference("hideOthers", view.hideOthers ? "1" : "0");
-  savePreference("recipeMain", view.recipe.main);
-  savePreference("recipeSecondary", view.recipe.secondary);
-  savePreference("recipeFlowMain", view.recipe.flowMain ?? DEFAULT_RECIPE.flowMain);
-  savePreference("recipeFlowSecondary", view.recipe.flowSecondary ?? DEFAULT_RECIPE.flowSecondary);
-  savePreference("groupProducts", view.groupProducts ? "1" : "0");
-  savePreference("groupByRules", view.groupByRules ? "1" : "0");
-  savePreference("groupSubstance", view.groupSubstance ? "1" : "0");
-  savePreference("groupCompartment", view.groupCompartment ? "1" : "0");
-  savePreference("groupSubcompartment", view.groupSubcompartment ? "1" : "0");
-  savePreference("groupFields", JSON.stringify(view.groupFields || []));
-  savePreference("columns", JSON.stringify(view.columns));
-  savePreference("groupColors", view.groupColors ? "1" : "0");
-  savePreference("colorBy", view.colorBy);
-  savePreference("ruleColors", JSON.stringify(view.ruleColors));
+  for (const key of Object.keys(DEFAULT_VIEW)) saveOption(key, view[key] ?? DEFAULT_VIEW[key]);
+  for (const [part, key] of Object.entries(RECIPE_PREFERENCES)) savePreference(key, view.recipe[part] ?? DEFAULT_RECIPE[part]);
   savePreference("display", display);
   savePreference("orientation", orientation);
   savePreference("cycles", cycles ? "on" : "off");
@@ -4804,13 +4703,15 @@ function initLens(info, seed) {
     nameFormat: { ...DEFAULT_NAME_FORMAT, ...(stored?.nameFormat || {}) },
     palettes: stored?.palettes && typeof stored.palettes === "object" ? stored.palettes : {},  // the user's own: name -> colours
     palette: stored?.palette in RULE_PALETTES || stored?.palette in (stored?.palettes || {}) ? stored.palette : "auto",
+    // colours picked for rules, by rule name (or field, for a group-by rule); before, a preference of the tabs' views
+    ruleColors: stored?.ruleColors || loadOption("ruleColors", {}),
   };
 }
 function saveLens(info, lens) {
   try {
     localStorage.setItem(LENS_KEY, JSON.stringify({ method: info.methods[lens.method]?.name,
       chartMethods: lens.chartMethods.map((k) => info.methods[k]?.name).filter(Boolean), sets: lens.sets, set: lens.set,
-      attribution: lens.attribution, nameFormat: lens.nameFormat, palette: lens.palette, palettes: lens.palettes }));
+      attribution: lens.attribution, nameFormat: lens.nameFormat, palette: lens.palette, palettes: lens.palettes, ruleColors: lens.ruleColors }));
   } catch { /* storage unavailable */ }
 }
 
@@ -5200,13 +5101,13 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
       .then((d) => { if (!cancelled) { setData(d); setError(null); } })
       .catch((e) => !cancelled && setError(e.message));
     return () => { cancelled = true; };
-  }, [root, amount, method, lens.attribution, cutoff, cutoffBasis, expanded, rules, chartMethods, pinned, others, merges, ungrouped, substitutions, view.groupProducts, view.groupByRules, view.groupSubstance, view.groupCompartment, view.groupSubcompartment, view.groupFields, info, editing]);
+  }, [root, amount, method, lens.attribution, cutoff, cutoffBasis, expanded, rules, chartMethods, pinned, others, merges, ungrouped, substitutions, ...TREE_OPTIONS.map((k) => view[k]), info, editing]);
   // The tab's state is kept for the next visit (renaming does not reload the rows)
   useEffect(() => {
     if (!root || !info) return;
-    onSave(id, { root, amount, method, cutoff, cutoffBasis, expanded: [...expanded], rules, chartMethods, groupByRules: view.groupByRules, groupSubstance: view.groupSubstance, groupCompartment: view.groupCompartment, groupSubcompartment: view.groupSubcompartment, groupFields: view.groupFields, pinned: [...pinned], others: [...others], merges, ungrouped: [...ungrouped], substitutions, labels,
+    onSave(id, { root, amount, method, cutoff, cutoffBasis, expanded: [...expanded], rules, chartMethods, ...pick(view, TREE_OPTIONS), pinned: [...pinned], others: [...others], merges, ungrouped: [...ungrouped], substitutions, labels,
       layout: info.layout, methodName: info.methods[method]?.name, chartMethodNames: chartMethods.map((k) => info.methods[k]?.name) });
-  }, [root, amount, method, cutoff, cutoffBasis, expanded, rules, chartMethods, view.groupByRules, view.groupSubstance, view.groupCompartment, view.groupSubcompartment, view.groupFields, pinned, others, merges, ungrouped, substitutions, labels, info]);
+  }, [root, amount, method, cutoff, cutoffBasis, expanded, rules, chartMethods, ...TREE_OPTIONS.map((k) => view[k]), pinned, others, merges, ungrouped, substitutions, labels, info]);
   function startRename(row) {
     if (editing || !labelKey(row)) return;
     // The tree and Sankey views have no inline editor: ask
@@ -5402,7 +5303,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
       model: { title: info.title, activities: info.activities },
       root, amount, method: info.methods[method].name, chartMethods: chartMethods.map((k) => info.methods[k].name),
       cutoff: +cutoffValue(cutoff, cutoffBasis).toFixed(8), cutoffBasis, expanded: [...expanded], rules, pinned: [...pinned], others: [...others], merges, ungrouped: [...ungrouped], substitutions, labels,
-      display: { naming: view.naming, recipe: view.recipe, groupProducts: view.groupProducts, groupByRules: view.groupByRules, groupSubstance: view.groupSubstance, groupCompartment: view.groupCompartment, groupSubcompartment: view.groupSubcompartment, groupFields: view.groupFields, splitByType: view.splitByType, hideOthers: view.hideOthers, columns: view.columns, groupColors: view.groupColors, colorBy: view.colorBy, ruleColors: view.ruleColors },
+      display: { ...pick(view, Object.keys(DEFAULT_VIEW)), recipe: view.recipe },
     };
   }
   function exportView() {
@@ -5457,7 +5358,8 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
       if (saved.display) {
         // Views saved before the columns menu have a Comments switch
         const { comments, ...display } = saved.display;
-        setView({ ...DEFAULT_VIEW, recipe: view.recipe, ...display, ...(!display.columns && comments ? { columns: [...DEFAULT_COLUMNS, "comment"] } : {}) });
+        setView({ ...DEFAULT_VIEW, recipe: display.recipe || view.recipe, ...pick(display, Object.keys(DEFAULT_VIEW)),
+          ...(!display.columns && comments ? { columns: [...DEFAULT_COLUMNS, "comment"] } : {}) });
       }
       setSelection(new Set());
       setError(null);
@@ -5793,7 +5695,6 @@ const TOTAL_BAR = "Total";  // the one bar of a tab with no breakdown
 const relative = (value, base) => (base ? (value - base) / Math.abs(base) : value ? null : 0);
 const signed = (x) => `${x > 0 ? "+" : x < 0 ? "−" : ""}${fmt(Math.abs(x))}`;
 const signedPct = (r) => (r == null ? "n/a" : `${r > 0 ? "+" : r < 0 ? "−" : ""}${Math.abs(r * 100).toFixed(Math.abs(r) < 0.1 ? 1 : 0)} %`);
-const csvQuote = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
 
 // Names of the compared tabs: what tells them apart (the place when they share the process, the
 // process when they share the place), with the amount when it is not 1, and a number when two tabs
@@ -5820,7 +5721,7 @@ function compareLabels(tabs) {
 const treeBody = (s, method, attribution) => ({
   root: [s.root.index], amount: s.amount, expanded: s.expanded || [], rules: [...(s.groupByRules === false ? [] : s.rules || []), ...flowRulesOf(s)], cutoff: cutoffValue(s.cutoff, s.cutoffBasis),
   cutoff_basis: s.cutoffBasis || "parent", method, methods: s.chartMethods || [], pinned: s.pinned || [], others: s.others || [], merges: s.merges || [],
-  ungrouped: s.ungrouped || [], substitutions: s.substitutions || {}, group_products: loadPreference("groupProducts", "0") === "1",
+  ungrouped: s.ungrouped || [], substitutions: s.substitutions || {}, group_products: !!s.groupProducts,
   colour_rules: s.rules || [],
   attribution,
 });
@@ -5850,7 +5751,9 @@ function treeEntries(entries, rowsOf, roots) {
     const parts = new Map();
     for (const r of frontier(rows)) {
       const [key, label] = segmentOf(r, byId, roots[i]);
-      parts.set(key, { label, impact: (parts.get(key)?.impact || 0) + r.impacts[0] });
+      let ruled = r;
+      while (ruled && !ruled.rule) ruled = byId.get(ruled.parent);
+      parts.set(key, { label, impact: (parts.get(key)?.impact || 0) + r.impacts[0], rule: parts.get(key)?.rule ?? ruled?.rule });
     }
     return parts;
   });
@@ -5865,9 +5768,12 @@ function treeEntries(entries, rowsOf, roots) {
     }
   }
   return entries.map((e, i) => {
-    const groups = {};
-    for (const [key, { impact }] of perTab[i]) groups[names.get(key)] = impact;
-    return { ...e, groups, total: Object.values(groups).reduce((s, v) => s + v, 0) };
+    const groups = {}, rules = {};
+    for (const [key, { impact, rule }] of perTab[i]) {
+      groups[names.get(key)] = impact;
+      if (rule) rules[names.get(key)] = rule;
+    }
+    return { ...e, groups, rules, total: Object.values(groups).reduce((s, v) => s + v, 0) };
   });
 }
 
@@ -5929,14 +5835,11 @@ function CompareBars({ results, base, unitLabel, names, groupColor, mode, setMod
     o.series = names.map((g) => ({ type: "bar", stack: "total", name: g, itemStyle: { color: groupColor(g) }, data: results.map((r) => value(r, g)) }));
     return o;
   }, [results, names, mode, unitLabel]);
-  const exportCsv = () => {
-    const header = [noun.toLowerCase(), ...results.flatMap((r) => [csvQuote(r.label), csvQuote(`${r.label}: share`)])].join(",");
-    const lines = [...names, "total"].map((g) => [csvQuote(g), ...results.flatMap((r) => {
+  const exportCsv = () => downloadCsv(`comparison-${basis}.csv`, [noun.toLowerCase(), ...results.flatMap((r) => [r.label, `${r.label}: share`])],
+    [...names, "total"].map((g) => [g, ...results.flatMap((r) => {
       const v = g === "total" ? r.total : r.groups[g] || 0;
       return [v, r.total ? v / r.total : 0];
-    })].join(","));
-    download(`comparison-${basis}.csv`, [`# ${unitLabel}`, header, ...lines].join("\n"), "text/csv");
-  };
+    })]), [unitLabel]);
   return html`
     <div class="row">
       <${CompareBasis} none basis=${basis} setBasis=${setBasis} cut=${cut} setCut=${setCut} />
@@ -6014,11 +5917,8 @@ function CompareDifference({ results, base, target, setTarget, unitLabel, names,
   }, [rows, unitLabel, zoomed]);
   const change = to.total - from.total;
   const lead = steps[0];
-  const exportCsv = () => {
-    const lines = steps.map((s) => [csvQuote(s.name), from.groups[s.name] || 0, to.groups[s.name] || 0, s.delta].join(","));
-    download("comparison-difference.csv", [`# ${unitLabel}`, [noun.toLowerCase(), csvQuote(from.label), csvQuote(to.label), "difference"].join(","),
-      ...lines, ["total", from.total, to.total, change].join(",")].join("\n"), "text/csv");
-  };
+  const exportCsv = () => downloadCsv("comparison-difference.csv", [noun.toLowerCase(), from.label, to.label, "difference"],
+    [...steps.map((s) => [s.name, from.groups[s.name] || 0, to.groups[s.name] || 0, s.delta]), ["total", from.total, to.total, change]], [unitLabel]);
   return html`
     <div class="row">
       <${CompareBasis} basis=${basis} setBasis=${setBasis} cut=${cut} setCut=${setCut} />
@@ -6127,12 +6027,9 @@ function CompareMethods({ results, base, info, methods, sorted, setSorted }) {
     }];
     return o;
   }, [rows, results, base, info, nameStamp]);
-  const exportCsv = () => {
-    const header = ["method", "unit", ...results.flatMap((r) => [csvQuote(r.label), csvQuote(`${r.label}: vs baseline`)])].join(",");
-    const lines = rows.map((row) => [csvQuote(methodLabel(info.methods[row.k])), csvQuote(info.methods[row.k].unit),
-      ...results.flatMap((r, i) => [r.totals[row.j], i === base ? "" : row.changes[i] ?? ""])].join(","));
-    download("comparison-methods.csv", [header, ...lines].join("\n"), "text/csv");
-  };
+  const exportCsv = () => downloadCsv("comparison-methods.csv", ["method", "unit", ...results.flatMap((r) => [r.label, `${r.label}: vs baseline`])],
+    rows.map((row) => [methodLabel(info.methods[row.k]), info.methods[row.k].unit,
+      ...results.flatMap((r, i) => [r.totals[row.j], i === base ? "" : row.changes[i] ?? ""])]));
   return html`
     <div class="row">
       <label><input type="checkbox" checked=${sorted} onChange=${(e) => setSorted(e.target.checked)} /> Largest difference first</label>
@@ -6250,17 +6147,16 @@ function ComparisonView({ info, tabs, compare, setCompare }) {
   // The groups of the comparison: the rule set of the workspace (named rules on processes, and on elementary flows
   // as flow groups, as in the Rules contributions tab); they are changed in the Rules panel
   const rules = lens.rules;
-  const { groups, flowGroups, flowOwners, order } = useMemo(() => namedGroups(rules), [rules]);
+  const { groups, flowGroups, flowOwners, order, ruleOf } = useMemo(() => namedGroups(rules), [rules]);
   // The methods of the heat map: those shown together
   const heatMethods = lens.chartMethods;
   // What the bars are split into: groups, the tabs' displayed trees (asked of /api/rows tab by tab; /api/compare then
   // only gives the totals) or elementary flows
   const basis = panel !== "groups" && compare.basis === "none" ? "groups" : compare.basis || "groups";
-  const cut = compare.cut || { mode: "top", value: compare.limit || 15 };
-  const listed = basis === "flows" || basis === "activities";  // the bars are the rows of a list: the filter applies
+  const cut = compare.cut?.mode in LIST_CUTS ? compare.cut : { mode: "top", value: compare.limit || 15 };
   const noBreakdown = basis === "none";
   const body = { entries: chosen.map((t) => ({ root: t.state.root.index, amount: t.state.amount })), method, methods: heatMethods, rule,
-    basis: basis === "flows" ? "flows" : basis === "activities" ? "activities" : "groups", limit: listed ? cutLimit(cut) : 15, groups: basis === "groups" ? groups : {}, flow_groups: basis === "groups" ? flowGroups : {}, flow_owners: basis === "groups" ? flowOwners : {},
+    basis: basis === "flows" ? "flows" : basis === "activities" ? "activities" : "groups", cut: apiCut(cut), groups: basis === "groups" ? groups : {}, flow_groups: basis === "groups" ? flowGroups : {}, flow_owners: basis === "groups" ? flowOwners : {},
     order: basis === "groups" ? order : [] };
   const trees = basis === "tree" ? chosen.map((t) => treeBody(t.state, method, rule)) : null;
   const key = JSON.stringify([body, trees]);
@@ -6275,21 +6171,7 @@ function ComparisonView({ info, tabs, compare, setCompare }) {
       .catch((e) => !cancelled && setError(e.message));
     return () => { cancelled = true; };
   }, [key]);
-  // The filter of a list of bars: the largest (all the tabs together) stay, the rest goes to others
-  const filtered = (entries) => {
-    const all = [...new Set(entries.flatMap((e) => Object.keys(e.groups)))].filter((g) => g !== OTHER_GROUP);
-    const size = (g) => entries.reduce((t, e) => t + Math.abs(e.groups[g] || 0), 0);
-    const { shown } = cutList(all.map((g) => ({ g, size: size(g) })).sort((a, b) => b.size - a.size), (it) => it.size, cut,
-      { total: entries.reduce((t, e) => t + Math.abs(e.total), 0), unlisted: size(OTHER_GROUP) });
-    const keep = new Set(shown.map((it) => it.g));
-    return entries.map((e) => {
-      const groups = {};
-      let rest = e.groups[OTHER_GROUP] || 0, any = OTHER_GROUP in e.groups;
-      for (const [g, v] of Object.entries(e.groups)) { if (g === OTHER_GROUP) continue; if (keep.has(g)) groups[g] = v; else { rest += v; any = true; } }
-      return { ...e, groups: any ? { ...groups, [OTHER_GROUP]: rest } : groups };
-    });
-  };
-  const ready = data?.key === key ? (noBreakdown ? data.entries.map((e) => ({ ...e, groups: { [TOTAL_BAR]: e.total } })) : listed && cut.mode !== "top" ? filtered(data.entries) : data.entries) : null;
+  const ready = data?.key === key ? (noBreakdown ? data.entries.map((e) => ({ ...e, groups: { [TOTAL_BAR]: e.total } })) : data.entries) : null;
   const results = ready ? chosen.map((t, i) => ({ id: t.id, label: labels[t.id], color: compareColor(tabs.indexOf(t)), ...ready[i] })) : null;
   const names = useMemo(() => {
     if (!results) return [];
@@ -6299,8 +6181,10 @@ function ComparisonView({ info, tabs, compare, setCompare }) {
     return [...all.sort((a, b) => size(b) - size(a)), ...(present ? [OTHER_GROUP] : [])];
   }, [results]);
 
-  const ruleColors = useMemo(() => { try { return JSON.parse(loadPreference("ruleColors", "{}")) || {}; } catch { return {}; } }, []);
-  const groupColor = (g) => (g === OTHER_GROUP ? cssVar("--muted") : g === TOTAL_BAR && noBreakdown ? cssVar("--bar") : colorOf(g.replace(/ \(flows\)$/, "").replace(/^(\w+): .*$/, "$1"), ruleColors));  // "location: FR": the rule "location"
+  // A bar has the colour of its rule: a group of the rules, a row of a tab's tree (or of the row above it) that a rule
+  // matches; else one of its own
+  const barRules = basis === "groups" ? ruleOf : basis === "tree" ? Object.assign({}, ...(ready || []).map((e) => e.rules || {})) : {};
+  const groupColor = (g) => (g === OTHER_GROUP ? cssVar("--muted") : g === TOTAL_BAR && noBreakdown ? cssVar("--bar") : colorOf(barRules[g] ?? g));
   const target = chosen.length > 1 && compare.target !== base && compare.target < chosen.length ? compare.target : base === 0 ? 1 : 0;
   const unitLabel = info.methods[method].unit;
   const units = [...new Set(chosen.map((t) => unit(t.state.root.unit)).filter(Boolean))];
@@ -6557,7 +6441,8 @@ const SHORTCUTS = [
   ]],
 ];
 
-function ShortcutsDialog({ onClose }) {
+// A pop-up over the page, closed with Esc, ×, or a click beside it
+function Modal({ title, className = "", onClose, children }) {
   useEffect(() => {
     const onKey = (e) => { if (e.key === "Escape") onClose(); };
     document.addEventListener("keydown", onKey);
@@ -6565,23 +6450,52 @@ function ShortcutsDialog({ onClose }) {
   }, []);
   return html`
     <div class="modal-backdrop" onMouseDown=${(e) => e.target === e.currentTarget && onClose()}>
-      <div class="load-dialog shortcuts-dialog" role="dialog" aria-label="Keyboard shortcuts">
+      <div class=${`load-dialog ${className}`} role="dialog" aria-label=${title}>
         <div class="info-head">
-          <div class="info-title">Keyboard shortcuts</div>
+          <div class="info-title">${title}</div>
           <button onClick=${onClose} aria-label="Close">×</button>
         </div>
-        <div class="load-body">
-          ${SHORTCUTS.map(([title, keys]) => html`
-            <section key=${title}>
-              <h3>${title}</h3>
-              <table class="shortcuts">
-                ${keys.map(([k, what]) => html`<tr key=${k + what}><td class="keys">${k}</td><td>${what}</td></tr>`)}
-              </table>
-            </section>`)}
-          <p class="muted small">Keys do nothing while you type in a field.</p>
-        </div>
+        <div class="load-body">${children}</div>
       </div>
     </div>`;
+}
+
+function ShortcutsDialog({ onClose }) {
+  return html`
+    <${Modal} title="Keyboard shortcuts" className="shortcuts-dialog" onClose=${onClose}>
+      ${SHORTCUTS.map(([title, keys]) => html`
+        <section key=${title}>
+          <h3>${title}</h3>
+          <table class="shortcuts">
+            ${keys.map(([k, what]) => html`<tr key=${k + what}><td class="keys">${k}</td><td>${what}</td></tr>`)}
+          </table>
+        </section>`)}
+      <p class="muted small">Keys do nothing while you type in a field.</p>
+    <//>`;
+}
+
+// The settings of the workspace, from the status bar: the colours of the rules (a palette, and a colour picked for a rule),
+// the same in every tab, chart and comparison
+function SettingsDialog({ lens, onClose }) {
+  const picked = lens.ruleColors || {};
+  const keys = [...new Set(lens.rules.filter((r) => !(r.target === "flows" && r.by)).map(ruleKey))];
+  return html`
+    <${Modal} title="Settings" className="settings-dialog" onClose=${onClose}>
+      <section>
+        <h3>Colours of the rules <${InfoTip} text="Rows, bars and groups take the colour of the rule that matches them (with Colours: Rules in the Custom view). A colour picked for a rule wins over the palette; choosing a palette clears them." label="About the colours" /></h3>
+        <${PaletteSwitch} palette=${lens.palette} setPalette=${lens.setPalette} palettes=${lens.palettes} addPalette=${lens.addPalette}
+          customized=${Object.keys(picked).length > 0} />
+        <ul class="rule-colours">${keys.map((key) => html`
+          <li key=${key}>
+            <input type="color" class="swatch" value=${colorHex(colorOf(key))} onInput=${(e) => lens.pickColor(key, e.target.value)}
+              aria-label=${`Colour of ${key}`} />
+            <span>${key}</span>
+            ${picked[key] && html`<button class="link" onClick=${() => lens.pickColor(key, null)} title="Back to the palette's colour">reset</button>`}
+          </li>`)}
+        </ul>
+        ${keys.length === 0 && html`<p class="muted small">The rule set in use has no rules yet.</p>`}
+      </section>
+    <//>`;
 }
 
 function App() {
@@ -6590,14 +6504,16 @@ function App() {
   const [lens, setLens] = useState(null);
   nameFormat = lens?.nameFormat || DEFAULT_NAME_FORMAT;
   nameStamp = JSON.stringify(nameFormat);
-  rulePalette = { name: lens?.palette || "auto", keys: (lens?.sets[lens.set] || []).map((r) => r.by || r.name), own: lens?.palettes || {} };
-  paletteStamp = `${rulePalette.name}|${rulePalette.keys.join("|")}|${JSON.stringify(rulePalette.own[rulePalette.name] || "")}`;
+  rulePalette = { name: lens?.palette || "auto", keys: (lens?.sets[lens.set] || []).map((r) => r.by || r.name), own: lens?.palettes || {},
+    picked: lens?.ruleColors || {} };
+  paletteStamp = `${rulePalette.name}|${rulePalette.keys.join("|")}|${JSON.stringify(rulePalette.own[rulePalette.name] || "")}|${JSON.stringify(rulePalette.picked)}`;
   useEffect(() => { if (lens && info) saveLens(info, lens); }, [lens]);
   const [error, setError] = useState(null);
   // Databases loaded in the server; null: a server without the Projects dialog (one model, plain URLs)
   const [databases, setDatabases] = useState(undefined);
   const [loadOpen, setLoadOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   // Ctrl/⌘ + K: the search of the top bar
   useEffect(() => {
     const onKey = (e) => {
@@ -6906,15 +6822,17 @@ function App() {
     setChartMethods: (chartMethods) => setLens((l) => ({ ...l, chartMethods })),
     setAttribution: (attribution) => setLens((l) => ({ ...l, attribution })),
     setNameFormat: (format) => setLens((l) => ({ ...l, nameFormat: format })),
-    setPalette: (palette) => setLens((l) => ({ ...l, palette })),
-    addPalette: (name, colors) => setLens((l) => { const n = freshName(name, { ...RULE_PALETTES, ...l.palettes }); return { ...l, palettes: { ...l.palettes, [n]: colors }, palette: n }; }),
+    // choosing a palette, or making one, clears the colours picked for rules
+    setPalette: (palette) => setLens((l) => ({ ...l, palette, ruleColors: {} })),
+    addPalette: (name, colors) => setLens((l) => { const n = freshName(name, { ...RULE_PALETTES, ...l.palettes }); return { ...l, palettes: { ...l.palettes, [n]: colors }, palette: n, ruleColors: {} }; }),
+    pickColor: (key, color) => setLens((l) => { const { [key]: old, ...rest } = l.ruleColors || {}; return { ...l, ruleColors: color ? { ...rest, [key]: color } : rest }; }),
     setRules: (rules) => setLens((l) => ({ ...l, sets: { ...l.sets, [l.set]: rules } })),
     chooseSet: (set) => setLens((l) => ({ ...l, set })),
     // The rules of a view file as a set of their own, now in use
     loadSet: (name, rules) => setLens((l) => { const n = freshName(name, l.sets); return { ...l, set: n, sets: { ...l.sets, [n]: rules } }; }),
     // The settings of a first start: the method, the methods shown together, the rules, the names and the palette
     resetDefaults: () => setLens((l) => ({ ...l, method: info.default_method, chartMethods: familyOf(info, info.default_method),
-      sets: { ...l.sets, Default: defaultRules() }, set: "Default", palette: "auto", nameFormat: DEFAULT_NAME_FORMAT, attribution: "first_match" })),
+      sets: { ...l.sets, Default: defaultRules() }, set: "Default", palette: "auto", ruleColors: {}, nameFormat: DEFAULT_NAME_FORMAT, attribution: "first_match" })),
     addSet: (name, copy) => setLens((l) => { const n = freshName(name, l.sets); return { ...l, set: n, sets: { ...l.sets, [n]: copy ? l.sets[l.set] : [] } }; }),
     renameSet: (name) => setLens((l) => {
       const n = freshName(name, l.sets);
@@ -6953,6 +6871,7 @@ function App() {
       </div>
     </header>
     ${shortcutsOpen && html`<${ShortcutsDialog} onClose=${() => setShortcutsOpen(false)} />`}
+    ${settingsOpen && html`<${SettingsDialog} lens=${lensApi} onClose=${() => setSettingsOpen(false)} />`}
     ${loadOpen &&html`<${LoadDatabase} onClose=${() => setLoadOpen(false)} onDatabases=${setDatabases} onLocks=${refreshEditor} />`}
     ${datasetOpen && origin && html`<${DatasetForm} current=${origin} edit=${datasetOpen.edit} initial=${datasetOpen.initial}
       copyFrom=${datasetOpen.copyFrom} deleted=${new Set(pending.filter((c) => c.kind === "delete").map((c) => `${c.database}/${c.code}`))}
@@ -7050,6 +6969,7 @@ function App() {
           ${methodSummary(info, lens.method, lens.chartMethods)}</button>
         <button class="status-text" onClick=${() => lensApi.show("groups")} title="The rule set shared by all tabs">Rules: ${lens.set} · ${lensApi.rules.filter((r) => !r.disabled).length}</button>
         <span class="spacer"></span>
+        <button class="status-button" onClick=${() => setSettingsOpen(true)} aria-label="Settings" title="Settings: the colours of the rules"><${PaletteIcon} /></button>
         <button class="status-button" onClick=${() => setShortcutsOpen(true)} aria-label="Shortcuts" title="Keyboard shortcuts"><${KeyboardIcon} /></button>
       </footer>
       </div>

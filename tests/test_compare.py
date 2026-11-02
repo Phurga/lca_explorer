@@ -53,12 +53,9 @@ def test_flows_basis_splits_by_substance(client):
     assert water["groups"] == pytest.approx({"Water consumed": 6.6})
 
 
-def test_flows_basis_folds_the_rest_into_other(client):
-    [entry] = post(client, entries=[{"root": 2}], basis="flows", limit=0).json()["entries"]
-    assert entry["groups"] == pytest.approx({"other": 1.5})
-
-
 def test_bad_requests(client):
+    assert post(client, entries=[{"root": -1}]).status_code == 404  # not the last activity
+    assert post(client, entries=[{"root": 0}], basis="flows", cut={"mode": "nope", "value": 1}).status_code == 400
     assert post(client, entries=[{"root": 0}], basis="nope").status_code == 400
     assert post(client, entries=[]).status_code == 400
     assert post(client, entries=[{"root": 99}]).status_code == 404
@@ -77,9 +74,17 @@ def test_activities_basis_is_the_first_tier_only(client):
 
 
 def test_activities_basis_folds_the_rest_into_other(client):
-    [entry] = post(client, entries=[{"root": 2}], basis="activities", limit=1).json()["entries"]
-    assert entry["groups"] == pytest.approx({"flour (world)": 1.2, "other": 0.3})
-    assert entry["total"] == pytest.approx(1.5)
+    # the cut is of the bars of all the entries together: the wheat (2.0) is the largest, the direct emissions (1.3) and
+    # the flour (1.2) go to other
+    entries = [{"root": 2}, {"root": 1, "amount": 2.0}]
+    first, second = post(client, entries=entries, basis="activities", cut={"mode": "top", "value": 1}).json()["entries"]
+    assert first["groups"] == pytest.approx({"other": 1.5}) and second["groups"] == pytest.approx({"wheat (world)": 2.0, "other": 1.0})
+    # as in the tree, a single row under the cut-off is shown as itself
+    [entry] = post(client, entries=[{"root": 2}], basis="activities", cut={"mode": "top", "value": 1}).json()["entries"]
+    assert entry["groups"] == pytest.approx({"flour (world)": 1.2, "direct emissions": 0.3})
+    # a share of the total: the direct emissions (0.3 of 1.5) are under 25 %, but alone
+    [entry] = post(client, entries=[{"root": 2}], basis="activities", cut={"mode": "total", "value": 0.25}).json()["entries"]
+    assert entry["groups"] == pytest.approx({"flour (world)": 1.2, "direct emissions": 0.3})
 
 
 def test_flows_of_a_process_of_the_supply_chain(client):
@@ -89,3 +94,13 @@ def test_flows_of_a_process_of_the_supply_chain(client):
     assert found["total"] == pytest.approx(0.8) and found["count"] >= 1
     assert sum(f["impact"] for f in found["flows"]) + found["others"]["impact"] == pytest.approx(found["total"])
     assert client.post("/api/flows/of-process", json={**body, "activity": 99}).status_code == 404
+
+
+def test_every_analysis_checks_what_it_is_asked_for(client):
+    # a negative index would else be an activity from the end, an unknown rule computed as first match
+    for url, body in (("/api/global", {"groups": {}, "method": 0}), ("/api/global/contributors", {"groups": {}, "group": "other"}),
+                      ("/api/flows", {}), ("/api/flows/contributors", {"flows": [0]}), ("/api/flows/of-process", {"activity": 0})):
+        assert client.post(url, json={"root": -1, **body}).status_code == 404, url
+        assert client.post(url, json={"root": 0, **body, "method": 9}).status_code == 404, url
+    assert client.post("/api/global", json={"root": 0, "groups": {}, "rule": "firstmatch"}).status_code == 400
+    assert client.post("/api/rows", json={"root": [0], "attribution": "nope"}).status_code == 400

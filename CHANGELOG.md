@@ -44,6 +44,19 @@ Changes on `dev`, not released yet.
   own toolbox is gone. The several-indicator chart has the legend of the single one, every key shown.
 - **Process contribution**: a click on a row opens the elementary flows its contribution is made of.
 - Rules tooltip: "Group processes by your own criteria, beyond how individual flow or process contribute."
+- **Settings** (a palette icon in the status bar): the colours of the rules, a palette and a colour picked per rule, kept
+  with the rule sets of the workspace, the same in every tab, chart and comparison (they were a setting of each tab's
+  view, and Compare did not follow a change). The palette left the Rules panel.
+- The filters of the lists (*Top*, *Cut-off*, *Cumulative*) are applied by the server as the cut-off of the tree: the
+  shares are of all the rows, and a single row under the cut-off is shown as itself. The API's list endpoints take a
+  `cut` (`{mode, value}`) instead of `limit`.
+- Groups and bars take the colour of their rule, not of a rule found in their name (a rule named "Transport: road" was
+  coloured as "Transport").
+- The comparison of the tabs' trees groups by product as each tab does (it took the preference of the last tab).
+- The analyses check what they are asked for: a negative process index (it was an activity from the end) or an
+  unknown attribution rule (it was taken as first match) is refused.
+- Removed: rules that merge their groups (no control made them any more), `/api/lookup`, `/api/direct` and
+  `/api/brightway/dataset/delete` (datasets are deleted through the staged changes), and code nothing used.
 - Chart axes drop labels that would overlap.
 - README: use the latest release for a stable version; screenshots and wording follow the current interface.
 
