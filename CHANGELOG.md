@@ -11,6 +11,9 @@ Changes on `dev`, not released yet.
 
 - **Rules on emissions of some processes**: a rule on elementary flows can have an *Owning process* query (e.g. the
   N2O only of processes of CPC section 1); it applies in the tree, *Rules contributions* and Compare.
+- Fixed: *Colours: Rules* only coloured the rows inside a group, so nothing was coloured with *Group by rules* off (the
+  default), and a process a rule matches but that has no sibling to group with stayed grey. A row a rule matches now takes
+  its colour, grouped or not, and what is below it inherits it.
 - Chart axes drop labels that would overlap.
 - README: use the latest release for a stable version; screenshots and wording follow the current interface.
 

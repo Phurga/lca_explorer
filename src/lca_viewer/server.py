@@ -52,6 +52,8 @@ class ViewState(BaseModel):
     amount: float = 1.0
     expanded: list[str] = []
     rules: list[dict] = []
+    colour_rules: list[dict] = []
+    """The rules that colour the rows (each row says which of them matches it, grouped or not), whether or not they group."""
     cutoff: float = 0.0
     cutoff_basis: str = "parent"
     method: int = 0
@@ -377,6 +379,10 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
                 "pinned": r.pinned,
                 "moved": r.moved,
             }
+            if r.kind in ("process", "flow"):
+                matched = view.matching_rule(r, rendered_by_id.get(r.parent))
+                if matched:
+                    out["rule"] = matched  # the rule that matches it: its colour, grouped or not
             if r.kind == "process":
                 out["meta"] = meta(r.node.product)
                 out["replaced"] = r.replaced

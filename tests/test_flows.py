@@ -237,6 +237,25 @@ def test_flow_rule_with_an_owner_groups_only_under_those_processes(flows_model):
         assert np.allclose(sum(r.impacts for r in view.frontier()), view.tree.root.impacts)
 
 
+def test_rows_say_which_rule_matches_them_grouped_or_not(flows_model):
+    from fastapi.testclient import TestClient
+    from lca_viewer.server import create_app
+
+    fr = {"field": "location", "op": "eq", "value": "FR"}
+    n2o = {"field": "name", "op": "eq", "value": "Dinitrogen monoxide"}
+    rules = [{"name": "farm FR", "predicate": fr}, {"name": "N2O", "predicate": n2o, "target": "flows"}]
+    client = TestClient(create_app(flows_model))
+    state = {"root": [0], "amount": 1.0, "expanded": ["0", "0/1", "0/1/-1"], "rules": [], "colour_rules": rules, "method": 0, "cutoff": 0}
+    rows = {r["id"]: r for r in client.post("/api/rows", json=state).json()["rows"]}
+    # the rules do not group here (no rules), and the French farm is alone anyway: it is still matched by its rule, and the German one by none
+    assert rows["0/1"]["kind"] == "process" and rows["0/1"]["rule"] == "farm FR"
+    assert "rule" not in rows["0/2"] and "rule" not in rows["0"]
+    n2o_row = next(r for r in rows.values() if r["kind"] == "flow" and r["label"].startswith("Dinitrogen"))
+    assert n2o_row["rule"] == "N2O"
+    disabled = client.post("/api/rows", json={**state, "colour_rules": [{**rules[0], "disabled": True}]}).json()["rows"]
+    assert all("rule" not in r for r in disabled)
+
+
 def test_flow_contributors_are_the_emitting_processes(flows_model):
     from fastapi.testclient import TestClient
     from lca_viewer.server import create_app

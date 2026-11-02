@@ -559,7 +559,8 @@ API in `src/lca_viewer/server.py`.
     colours* colour the rows (list, tree view, Sankey and charts) by the kind of exchange instead:
     product (the root), technosphere input, waste (output to treatment),
     resource (input from nature), emission (output to nature) and direct
-    emissions rows; *Rules colours* goes back to the colours of groups.
+    emissions rows; *Rules colours* goes back to the colours of groups. A row that a rule matches takes the colour of the rule even when it is not in a group (the page sends the rules
+    to `/api/rows` as `colour_rules`; each row says which one matches it as `rule`), and what is below it inherits it.
   - *Rules contributions*: global grouping with the named groups, direct
     (the default) or first-match attribution (see [grouping.md](grouping.md)),
     groups sorted by decreasing impact with *other* last.

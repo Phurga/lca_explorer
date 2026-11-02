@@ -319,6 +319,7 @@ function groupColors(rows, view) {
   }
   for (const r of rows) {
     if (r.kind === "group") colors.set(r.id, colorOf(groupKey(r.id), view.ruleColors));
+    else if (r.rule) colors.set(r.id, colorOf(r.rule, view.ruleColors));  // a row a rule matches, grouped or not
     else if (colors.has(r.parent)) colors.set(r.id, colors.get(r.parent));
   }
   return colors;
@@ -5027,6 +5028,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
     root: [root.index], amount, expanded: [...exp], rules: [...(view.groupByRules === false ? [] : editing ? rules.map((r) => ({ ...r, merge: false })) : rules), ...flowRulesOf(view)], cutoff: cutoffValue(cutoff, cutoffBasis), cutoff_basis: cutoffBasis, method, methods: chartMethods,
     pinned: [...pinned], others: [...others], merges: editing ? [] : merges, ungrouped: [...ungrouped],
     substitutions: editing ? {} : substitutions, group_products: view.groupProducts,
+    colour_rules: editing ? rules.map((r) => ({ ...r, merge: false })) : rules,
   });
 
   useEffect(() => {
@@ -5657,6 +5659,7 @@ const treeBody = (s, method) => ({
   root: [s.root.index], amount: s.amount, expanded: s.expanded || [], rules: [...(s.groupByRules === false ? [] : s.rules || []), ...flowRulesOf(s)], cutoff: cutoffValue(s.cutoff, s.cutoffBasis),
   cutoff_basis: s.cutoffBasis || "parent", method, methods: s.chartMethods || [], pinned: s.pinned || [], others: s.others || [], merges: s.merges || [],
   ungrouped: s.ungrouped || [], substitutions: s.substitutions || {}, group_products: loadPreference("groupProducts", "0") === "1",
+  colour_rules: s.rules || [],
 });
 
 // A bar of a tab's tree: what it stands for (the same in every tab, so that bars line up) and its name. A process counts

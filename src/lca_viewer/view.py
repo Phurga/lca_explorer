@@ -96,6 +96,8 @@ class View:
     tree: Tree
     expanded: set[str] = field(default_factory=set)
     rules: list[GroupRule] = field(default_factory=list)
+    colour_rules: list[GroupRule] = field(default_factory=list)
+    """Rules that only colour (see :meth:`matching_rule`), not group."""
     cutoff: float = 0.0
     """Under each parent, the smallest children that together weigh at most ``cutoff`` of
     the reference (see ``cutoff_basis``), for ``method``, are bundled in "others"."""
@@ -162,6 +164,7 @@ class View:
             tree,
             expanded=set(data.get("expanded", [])),
             rules=[GroupRule(**r) for r in data.get("rules", [])],
+            colour_rules=[GroupRule(**r) for r in data.get("colour_rules", [])],
             cutoff=data.get("cutoff", 0.0),
             cutoff_basis=data.get("cutoff_basis", "parent"),
             method=data.get("method", 0),
@@ -433,6 +436,26 @@ class View:
                 break
             below[i] = True
         return below
+
+    def matching_rule(self, row: Row, parent: Row | None = None) -> str | None:
+        """The name of the first rule, in list order, whose query matches the process (or elementary flow) of ``row``.
+
+        A process (or a flow) that a rule matches takes its colour even when it is alone and no group was made; a flow
+        rule with an owner needs ``parent``, the direct emissions row above the flow."""
+        if row.node is None or row.kind not in ("process", "flow"):
+            return None
+        flows = row.kind == "flow"
+        for rule in self.colour_rules:
+            if rule.disabled or rule.predicate is None or rule.merge or (rule.target == "flows") != flows:
+                continue
+            if rule.scope != ROOT_SCOPE and not row.id.startswith(rule.scope + "/"):
+                continue
+            if flows and rule.owner is not None and (parent is None or not self._owned(rule, parent)):
+                continue
+            index = row.node.flow if flows else row.node.product
+            if index is not None and bool(self._mask(rule)[index]):
+                return rule.name or "group"
+        return None
 
     def _owned(self, rule: GroupRule, direct: Row) -> bool:
         """Whether the process whose direct emissions row is ``direct`` matches the owner predicate of ``rule``."""
