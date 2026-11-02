@@ -925,3 +925,6 @@ textarea.editing { width: 100%; box-sizing: border-box; }
 .gear-btn { border: none; background: none; padding: 4px 6px; color: var(--muted); display: inline-flex; align-items: center; border-radius: 6px; }
 .gear-btn:hover { color: var(--accent); background: var(--hover); }
 .recipe-input { flex: 1; min-width: 0; }
+
+.owner-query { margin: 4px 0 8px; padding-left: 8px; border-left: 2px solid var(--border); }
+.owner-query .row { align-items: center; }

@@ -88,6 +88,8 @@ class GlobalRequest(BaseModel):
     rule: str = "first_match"
     flow_groups: dict[str, dict] = {}
     """Groups of elementary flows."""
+    flow_owners: dict[str, dict] = {}
+    """For a flow group (by name), a predicate over activities: only the flows these emit are in the group."""
     order: list[str] = []
     """The names of the groups and flow groups in the order of the rules: a flow group listed before the group
     of an activity takes its flows (see ``analysis._attribute``). Activity groups come first when omitted."""
@@ -104,6 +106,7 @@ class CompareRequest(BaseModel):
     entries: list[CompareEntry]
     groups: dict[str, dict] = {}
     flow_groups: dict[str, dict] = {}
+    flow_owners: dict[str, dict] = {}
     order: list[str] = []
     """The names of the groups and flow groups in the order of the rules, as in ``GlobalRequest``."""
     rule: str = "first_match"
@@ -594,7 +597,7 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
     def global_contribution(req: GlobalRequest):
         methods = slice(None) if req.method is None else [req.method]
         result = supply_chain_contribution(model, req.root, req.groups, req.rule, req.amount, req.flow_groups, methods,
-                                           req.order or None)
+                                           req.order or None, req.flow_owners)
         return {name: _floats(v) for name, v in result.items()}
 
     @app.post("/api/compare")
@@ -644,7 +647,8 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
                 split.append(parts)
         else:
             split = [{name: float(v[0]) for name, v in supply_chain_contribution(
-                model, e.root, req.groups, req.rule, e.amount, req.flow_groups, [req.method], req.order or None).items()}
+                model, e.root, req.groups, req.rule, e.amount, req.flow_groups, [req.method], req.order or None,
+                req.flow_owners).items()}
                      for e in req.entries]
         return {"entries": [{
             "groups": parts,
@@ -657,7 +661,7 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
         """Activities making up one group of the whole-supply-chain analysis, largest first."""
         try:
             members, values = group_contributors(model, req.root, req.groups, req.group, req.rule, req.amount,
-                                                 req.flow_groups, [req.method], req.order or None)
+                                                 req.flow_groups, [req.method], req.order or None, req.flow_owners)
         except ValueError as e:
             raise HTTPException(400, f"Unknown group {req.group!r}") from e
         impacts = values[:, 0]

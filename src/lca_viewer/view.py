@@ -34,7 +34,8 @@ class GroupRule:
 
     With ``target="flows"`` the rule bundles the elementary flows under direct
     emissions rows instead of processes; its predicate and field then refer to
-    flow metadata (``name``, ``compartment``, ``subcompartment``, ``unit``).
+    flow metadata (``name``, ``compartment``, ``subcompartment``, ``unit``). A flow rule can have an
+    ``owner``: a predicate over activities, and it then bundles only the flows of the processes that match.
 
     A ``disabled`` rule is kept (in the list, in saved views) but not applied. With
     ``merge``, each group the rule makes becomes a merged process instead (process
@@ -48,6 +49,7 @@ class GroupRule:
     target: str | None = None
     disabled: bool | None = None
     merge: bool | None = None
+    owner: dict | None = None
 
     def to_dict(self) -> dict:
         return {k: v for k, v in self.__dict__.items() if v is not None}
@@ -292,6 +294,8 @@ class View:
         for rule in ordered:
             if rule.disabled or (rule.target == "flows") != flows or rule.scope not in (ROOT_SCOPE, parent.id) or not free:
                 continue
+            if flows and rule.owner is not None and not self._owned(rule, parent):
+                continue
             bundle = self._rule_merged_row if rule.merge and not flows else self._group_row
             if rule.predicate is not None:
                 mask = self._mask(rule)
@@ -429,6 +433,16 @@ class View:
                 break
             below[i] = True
         return below
+
+    def _owned(self, rule: GroupRule, direct: Row) -> bool:
+        """Whether the process whose direct emissions row is ``direct`` matches the owner predicate of ``rule``."""
+        owner = direct.id.rsplit("/", 2)[-2] if "/" in direct.id else ""
+        if not owner.isdigit():
+            return False
+        key = ("owner", id(rule))
+        if key not in self._masks:
+            self._masks[key] = evaluate(rule.owner, self._activities)
+        return bool(self._masks[key][int(owner)])
 
     def _mask(self, rule: GroupRule) -> np.ndarray:
         key = id(rule)

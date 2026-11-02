@@ -190,6 +190,53 @@ def test_flow_contribution_groups_by_chosen_fields(flows_model):
     assert client.post("/api/flows", json={"root": 0, "method": 0, "keys": ["location"]}).status_code == 400
 
 
+def test_flow_group_on_the_emissions_of_some_processes_only(flows_model):
+    from lca_viewer.analysis import group_contributors, supply_chain_contribution
+
+    n2o = {"field": "name", "op": "eq", "value": "Dinitrogen monoxide"}
+    german = {"field": "location", "op": "eq", "value": "DE"}
+    # N2O, but only of the German farm (0.4 kg x 0.02 kg x 273); the French farm's N2O stays in other
+    result = supply_chain_contribution(flows_model, 0, {}, "direct", flow_groups={"N2O in DE": n2o}, flow_owners={"N2O in DE": german})
+    np.testing.assert_allclose(sum(result.values()), flows_model.score(0))
+    assert result["N2O in DE"][0] == pytest.approx(0.4 * 0.02 * 273)
+    assert result["other"][0] == pytest.approx(flows_model.score(0)[0] - 0.4 * 0.02 * 273)
+    members, _ = group_contributors(flows_model, 0, {}, "N2O in DE", "direct", flow_groups={"N2O in DE": n2o}, flow_owners={"N2O in DE": german})
+    assert list(members) == [2]
+    # a later flow group takes the rest of the N2O: the first claims an emission, whoever the next one asks
+    both = supply_chain_contribution(flows_model, 0, {}, "direct", flow_groups={"N2O in DE": n2o, "N2O": n2o}, flow_owners={"N2O in DE": german})
+    assert both["N2O in DE"][0] == pytest.approx(0.4 * 0.02 * 273)
+    assert both["N2O"][0] == pytest.approx(0.6 * 0.01 * 273)
+    np.testing.assert_allclose(sum(both.values()), flows_model.score(0))
+
+
+def test_flow_owners_through_the_api(flows_model):
+    from fastapi.testclient import TestClient
+    from lca_viewer.server import create_app
+
+    client = TestClient(create_app(flows_model))
+    body = {"root": 0, "groups": {}, "flow_groups": {"N2O in FR": {"field": "name", "op": "eq", "value": "Dinitrogen monoxide"}},
+            "flow_owners": {"N2O in FR": {"field": "location", "op": "eq", "value": "FR"}}, "rule": "direct", "method": 0}
+    result = client.post("/api/global", json=body).json()
+    assert result["N2O in FR"][0] == pytest.approx(0.6 * 0.01 * 273)
+    listed = client.post("/api/global/contributors", json={**body, "group": "N2O in FR"}).json()
+    assert listed["count"] == 1 and listed["contributors"][0]["location"] == "FR"
+    compared = client.post("/api/compare", json={"entries": [{"root": 0}], "flow_groups": body["flow_groups"],
+                                                 "flow_owners": body["flow_owners"], "rule": "direct", "method": 0}).json()
+    assert compared["entries"][0]["groups"]["N2O in FR"] == pytest.approx(0.6 * 0.01 * 273)
+
+
+def test_flow_rule_with_an_owner_groups_only_under_those_processes(flows_model):
+    from lca_viewer.view import GroupRule
+
+    co2 = {"field": "name", "op": "eq", "value": "Carbon dioxide, fossil"}
+    for location, grouped in (("FR", True), ("DE", False)):
+        rule = GroupRule(name="CO2", predicate=co2, target="flows", owner={"field": "location", "op": "eq", "value": location})
+        view = _flow_view(flows_model, rules=[rule])
+        group = [r for r in view.rows() if r.kind == "group" and r.parent == "0/1/-1"]
+        assert bool(group) is grouped
+        assert np.allclose(sum(r.impacts for r in view.frontier()), view.tree.root.impacts)
+
+
 def test_flow_contributors_are_the_emitting_processes(flows_model):
     from fastapi.testclient import TestClient
     from lca_viewer.server import create_app

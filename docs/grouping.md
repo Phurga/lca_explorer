@@ -220,7 +220,14 @@ a flow group, whichever is listed first:
   (under first match, `s` is the cut supply, so emissions inside matched
   supply chains are not counted again).
 
-Each flow then goes to one group only (a flow goes to the first flow group
+A flow rule can be **on the emissions of some processes only** (an *Owning process* query in the rule form, `owner`
+in the rule, `flow_owners` in the API: a predicate over activities, e.g. `cpc_section = 1` for the N2O of agricultural
+processes). The group then takes an emission (a flow of an activity) only if the flow and the activity that emits it
+both match: in the matrices, `D_flows · B · D_owners`. Under a direct row of the tree, the rule applies only when the
+process of that row matches. The Flow contribution tab, which lists the inventory of the whole supply chain, does not
+colour by such a rule.
+
+Each emission (a flow of an activity) then goes to one group only (the first flow group
 that claims it), so the parts add up to the score exactly, whatever the order.
 Cost: under direct, a few vector operations per flow group. Under first match,
 a flow group listed before some process group needs `G_g`: one solve per such

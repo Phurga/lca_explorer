@@ -9,6 +9,8 @@ version, `main` can be ahead of it with work in progress.
 
 Changes on `dev`, not released yet.
 
+- **Rules on emissions of some processes**: a rule on elementary flows can have an *Owning process* query (e.g. the
+  N2O only of processes of CPC section 1); it applies in the tree, *Rules contributions* and Compare.
 - Chart axes drop labels that would overlap.
 - README: use the latest release for a stable version; screenshots and wording follow the current interface.
 

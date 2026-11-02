@@ -3874,7 +3874,7 @@ function EyeIcon({ off }) {
 }
 
 // A rule in words, whole (the list shows one line of it, this is its tooltip)
-const ruleText = (r) => `${r.target === "flows" ? "flows: " : ""}${r.by ? `group by ${r.by === "name" && r.target === "flows" ? "substance" : r.by}` : `${r.name} ← ${describePredicate(r.predicate)}`}`
+const ruleText = (r) => `${r.target === "flows" ? "flows: " : ""}${r.by ? `group by ${r.by === "name" && r.target === "flows" ? "substance" : r.by}` : `${r.name} ← ${describePredicate(r.predicate)}`}${r.owner ? `, emitted by processes ${describePredicate(r.owner)}` : ""}`
   + ` — ${r.scope === "*" ? "everywhere in the tree" : `under ${r.scope} (this tab only)`}${r.merge ? ", merged" : ""}${r.disabled ? ", disabled" : ""}`;
 // A section of a panel that folds: its header is the button, ``force`` keeps it open (a rule being edited), ``actions``
 // stay at the right of the header. Open or folded is kept per ``id``.
@@ -3904,8 +3904,10 @@ function GroupPanel({ info, rules, setRules, selectedRow, view, setView, shared,
   const [name, setName] = useState("");
   const [by, setBy] = useState("location");
   const [query, setQuery] = useState(() => emptyQuery("name", "contains"));
+  const [ownerQuery, setOwnerQuery] = useState(null);  // a flow rule on the emissions of some processes only: their query
   const [preview, setPreview] = useState(null);
   const predicate = useMemo(() => toPredicate(query), [query]);
+  const ownerPredicate = useMemo(() => (ownerQuery ? toPredicate(ownerQuery) : null), [ownerQuery]);
   useEffect(() => {
     if (kind !== "named" || !predicate) { setPreview(null); return; }
     const timer = setTimeout(() => request("/api/search", { predicate, limit: 5, target: flows ? "flows" : undefined }).then(setPreview).catch(() => setPreview(null)), 250);
@@ -3914,6 +3916,7 @@ function GroupPanel({ info, rules, setRules, selectedRow, view, setView, shared,
   const chooseTarget = (next) => {
     setTarget(next);
     setQuery(emptyQuery("name", "contains"));
+    setOwnerQuery(null);
     setBy(next === "flows" ? "compartment" : "location");
     setPreview(null);
   };
@@ -3927,8 +3930,9 @@ function GroupPanel({ info, rules, setRules, selectedRow, view, setView, shared,
   };
   function addCustom() {
     if (!predicate) return;
-    add({ name: name.trim() || describePredicate(predicate), predicate, ...(flows ? { target: "flows" } : {}) });
+    add({ name: name.trim() || describePredicate(predicate), predicate, ...(flows ? { target: "flows" } : {}), ...(flows && ownerPredicate ? { owner: ownerPredicate } : {}) });
     setName("");
+    setOwnerQuery(null);
   }
   // Change a rule: its form is the one of a new rule, filled in; the target, the kind and the scope stay as they were
   function startEdit(i) {
@@ -3945,18 +3949,22 @@ function GroupPanel({ info, rules, setRules, selectedRow, view, setView, shared,
       const q = queryOf(r.predicate);
       setQueryLocked(!q);
       setQuery(q || emptyQuery("name", "contains"));
+      setOwnerQuery(r.owner ? queryOf(r.owner) || emptyQuery("name", "contains") : null);
     }
     setTimeout(() => form.current?.scrollIntoView({ block: "start", behavior: "smooth" }));
   }
   function stopEdit() {
     setEditIndex(null);
     setQueryLocked(false);
+    setOwnerQuery(null);
     setName("");
     setQuery(emptyQuery("name", "contains"));
   }
   function saveEdit() {
     const r = rules[editIndex];
-    const next = r.by ? { ...r, by } : { ...r, name: uniqueName(name.trim() || r.name, editIndex), ...(queryLocked || !predicate ? {} : { predicate }) };
+    const { owner: before, ...rest } = r;
+    const owner = r.target === "flows" ? (ownerPredicate ?? undefined) : before;
+    const next = r.by ? { ...r, by } : { ...rest, name: uniqueName(name.trim() || r.name, editIndex), ...(queryLocked || !predicate ? {} : { predicate }), ...(owner ? { owner } : {}) };
     setRules(rules.map((x, j) => (j === editIndex ? next : x)));
     stopEdit();
   }
@@ -4022,7 +4030,7 @@ function GroupPanel({ info, rules, setRules, selectedRow, view, setView, shared,
                   title="Colour of this rule's groups in the tree and the charts: click to change, right-click to reset" />`}
               <span class="desc" title=${ruleText(r)}>
                 <span class="line">${r.target === "flows" && "flows: "}${r.by ? html`<b>group by ${r.by === "name" && r.target === "flows" ? "substance" : r.by}</b>` : html`<b>${r.name}</b> <small>← ${describePredicate(r.predicate)}</small>`}</span>
-                <span class="line"><small>${r.scope === "*" ? "everywhere in the tree" : `under ${r.scope} · this tab only`}${r.merge ? " · merged" : ""}${r.disabled ? " · disabled" : ""}</small></span>
+                <span class="line"><small>${r.owner ? `of processes ${describePredicate(r.owner)} · ` : ""}${r.scope === "*" ? "everywhere in the tree" : `under ${r.scope} · this tab only`}${r.merge ? " · merged" : ""}${r.disabled ? " · disabled" : ""}</small></span>
               </span>
               <button class=${editIndex === i ? "primary" : ""} onClick=${() => (editIndex === i ? stopEdit() : startEdit(i))}
                 aria-label="Edit rule" title="Edit this rule (or right-click it); Esc leaves it">✎</button>
@@ -4059,6 +4067,14 @@ function GroupPanel({ info, rules, setRules, selectedRow, view, setView, shared,
         ${queryLocked
           ? html`<p class="note">This group was made from selected rows or a nested query: only its name can be changed here.</p>`
           : html`<${QueryBuilder} query=${query} setQuery=${setQuery} fields=${flows ? info.flow_query_fields : info.query_fields} flows=${flows} />`}
+        ${flows && !queryLocked && (ownerQuery
+          ? html`
+            <div class="owner-query" role="group" aria-label="Owning process">
+              <div class="row"><span class="view-group-label" title="Only the emissions of the processes that match">Of processes</span>
+                <button onClick=${() => setOwnerQuery(null)} aria-label="Any process" title="Any process">×</button></div>
+              <${QueryBuilder} query=${ownerQuery} setQuery=${setOwnerQuery} fields=${info.query_fields} flows=${false} />
+            </div>`
+          : html`<div class="row"><button onClick=${() => setOwnerQuery(emptyQuery("name", "contains"))} title="Only the emissions of some processes">+ Owning process</button></div>`)}
         ${preview && !queryLocked && html`<p class="note" title=${preview.results.slice(0, 3).map((r) => `${r.name} (${r.location})`).join("; ") + (preview.total > 3 ? "…" : "")}>Matches ${preview.total} ${flows ? "flows" : "processes"}</p>`}
       ` : html`
         <div class="row"><select value=${by} onChange=${(e) => setBy(e.target.value)} aria-label="Group by field">
@@ -4103,7 +4119,9 @@ function namedGroups(rules) {
   const groups = Object.fromEntries(active.filter((r) => r.target !== "flows").map((r) => [r.name, r.predicate]));
   const nameOf = (r) => (r.target === "flows" && r.name in groups ? `${r.name} (flows)` : r.name);
   const flowGroups = Object.fromEntries(active.filter((r) => r.target === "flows").map((r) => [nameOf(r), r.predicate]));
-  return { groups, flowGroups, order: active.map(nameOf) };
+  // A flow rule can be on the emissions of some processes only: its predicate on the processes that emit
+  const flowOwners = Object.fromEntries(active.filter((r) => r.target === "flows" && r.owner).map((r) => [nameOf(r), r.owner]));
+  return { groups, flowGroups, flowOwners, order: active.map(nameOf) };
 }
 
 // The palette of the colours of the rules: a menu, with the first colours of the one chosen. A colour picked on a rule makes
@@ -4242,9 +4260,9 @@ function AttributionSwitch({ rule, setRule }) {
 
 function GlobalPanel({ info, root, amount, method, rules, view, rule, setRule, onLocate, onInfo }) {
   // Named rules on activities are activity groups, named rules on elementary flows flow groups; they go by the order of the rules
-  const { groups, flowGroups, order } = useMemo(() => namedGroups(rules), [rules]);
+  const { groups, flowGroups, flowOwners, order } = useMemo(() => namedGroups(rules), [rules]);
   const k = method;
-  const [result, setResult] = useState(() => peek("/api/global", root && { root: root.index, amount, groups, flow_groups: flowGroups, order, rule, method: k }) ?? null);
+  const [result, setResult] = useState(() => peek("/api/global", root && { root: root.index, amount, groups, flow_groups: flowGroups, flow_owners: flowOwners, order, rule, method: k }) ?? null);
   const [error, setError] = useState(null);
   const [group, setGroup] = useState(null);
   const [contributors, setContributors] = useState(null);
@@ -4254,20 +4272,20 @@ function GlobalPanel({ info, root, amount, method, rules, view, rule, setRule, o
     if (!root) return;
     let cancelled = false;
     setError(null);
-    request("/api/global", { root: root.index, amount, groups, flow_groups: flowGroups, order, rule, method: k })
+    request("/api/global", { root: root.index, amount, groups, flow_groups: flowGroups, flow_owners: flowOwners, order, rule, method: k })
       .then((d) => !cancelled && setResult(d)).catch((e) => !cancelled && setError(e.message));
     return () => { cancelled = true; };
-  }, [root, amount, groups, flowGroups, order, rule, k]);
+  }, [root, amount, groups, flowGroups, flowOwners, order, rule, k]);
   useEffect(() => { if (group && result && !(group in result)) setGroup(null); }, [result]);
   // Processes making up the chosen group
   useEffect(() => {
     setContributors(null);
     if (!root || !group) return;
     let cancelled = false;
-    request("/api/global/contributors", { root: root.index, amount, groups, flow_groups: flowGroups, order, rule, group, method: k, limit: 50 })
+    request("/api/global/contributors", { root: root.index, amount, groups, flow_groups: flowGroups, flow_owners: flowOwners, order, rule, group, method: k, limit: 50 })
       .then((d) => !cancelled && setContributors(d)).catch((e) => !cancelled && setError(e.message));
     return () => { cancelled = true; };
-  }, [root, amount, groups, flowGroups, order, rule, group, k]);
+  }, [root, amount, groups, flowGroups, flowOwners, order, rule, group, k]);
   useEffect(() => { contributorsBox.current?.scrollIntoView({ block: "nearest", behavior: "smooth" }); }, [group, !!contributors]);
 
   const unit = info.methods[k].unit;
@@ -4291,7 +4309,7 @@ function GlobalPanel({ info, root, amount, method, rules, view, rule, setRule, o
   }
   function exportContributors() {
     // Every process of the group, not only those listed
-    request("/api/global/contributors", { root: root.index, amount, groups, flow_groups: flowGroups, order, rule, group, method: k, limit: 1000000 })
+    request("/api/global/contributors", { root: root.index, amount, groups, flow_groups: flowGroups, flow_owners: flowOwners, order, rule, group, method: k, limit: 1000000 })
       .then((d) => {
         const header = ["process", "reference product", "location", "database", quote(methodName), "share of group", "share of total"].join(",");
         const lines = d.contributors.map((c) => [quote(c.name), quote(c.reference_product), quote(c.location), quote(c.database),
@@ -4396,7 +4414,7 @@ function FlowPanel({ info, root, amount, method, onLocate, onInfo, onFlowInfo, r
   const contributorsBox = useRef(null);
 
   // Named rules on elementary flows: a substance in one takes its colour
-  const flowGroups = useMemo(() => Object.fromEntries(rules.filter((r) => r.target === "flows" && r.predicate && !r.disabled)
+  const flowGroups = useMemo(() => Object.fromEntries(rules.filter((r) => r.target === "flows" && r.predicate && !r.disabled && !r.owner)
     .map((r) => [r.name, r.predicate])), [rules]);
   const colorOfItem = (it) => view.groupColors && it?.group ? colorOf(it.group, view.ruleColors) : null;
   useEffect(() => {
@@ -6064,7 +6082,7 @@ function ComparisonView({ info, tabs, compare, setCompare }) {
   // The groups of the comparison: the rule set of the workspace (named rules on processes, and on elementary flows
   // as flow groups, as in the Rules contributions tab); they are changed in the Rules panel
   const rules = lens.rules;
-  const { groups, flowGroups, order } = useMemo(() => namedGroups(rules), [rules]);
+  const { groups, flowGroups, flowOwners, order } = useMemo(() => namedGroups(rules), [rules]);
   // The methods of the heat map: those shown together
   const heatMethods = lens.chartMethods;
   // What the bars are split into: groups, the tabs' displayed trees (asked of /api/rows tab by tab; /api/compare then
@@ -6073,7 +6091,7 @@ function ComparisonView({ info, tabs, compare, setCompare }) {
   const limit = compare.limit || 15;
   const noBreakdown = basis === "none";
   const body = { entries: chosen.map((t) => ({ root: t.state.root.index, amount: t.state.amount })), method, methods: heatMethods, rule,
-    basis: basis === "flows" ? "flows" : basis === "activities" ? "activities" : "groups", limit, groups: basis === "groups" ? groups : {}, flow_groups: basis === "groups" ? flowGroups : {},
+    basis: basis === "flows" ? "flows" : basis === "activities" ? "activities" : "groups", limit, groups: basis === "groups" ? groups : {}, flow_groups: basis === "groups" ? flowGroups : {}, flow_owners: basis === "groups" ? flowOwners : {},
     order: basis === "groups" ? order : [] };
   const trees = basis === "tree" ? chosen.map((t) => treeBody(t.state, method)) : null;
   const key = JSON.stringify([body, trees]);
