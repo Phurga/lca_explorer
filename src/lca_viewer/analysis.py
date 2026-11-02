@@ -3,11 +3,11 @@
 Tree groups only bundle siblings. Questions like "how much does electricity
 contribute, anywhere upstream?" need a global attribution rule, because
 groups nest (electricity contains transport, which contains electricity).
-Two exact rules are provided; both sum to the total score.
+:func:`supply_chain_contribution` has two exact rules; both sum to the total score.
 
-- :func:`direct_contribution`: each activity's own emissions go to the first
+- ``rule="direct"``: each activity's own emissions go to the first
   group that matches it (SimaPro's "process contribution").
-- :func:`first_match_contribution`: walking down the supply chain from the
+- ``rule="first_match"``: walking down the supply chain from the
   functional unit, the first activity matching a group takes its whole
   cumulative impact (its supply chain included); unmatched activities keep
   their direct emissions. Computed exactly by cutting the inputs of matched
@@ -171,16 +171,6 @@ def supply_chain_contribution(model: LCAModel, product: int, groups: dict[str, d
     result = _sum_by_group(values, assignment, groups)
     del result[OTHER]
     return {**result, **{name: v.sum(axis=0) for name, v in flow_values.items()}, OTHER: other.sum(axis=0)}
-
-
-def direct_contribution(model: LCAModel, product: int, groups: dict[str, dict], amount: float = 1.0):
-    """Direct emissions of all activities in the supply chain, summed by group."""
-    return supply_chain_contribution(model, product, groups, "direct", amount)
-
-
-def first_match_contribution(model: LCAModel, product: int, groups: dict[str, dict], amount: float = 1.0):
-    """Cumulative impacts of the first matching activities on each supply path, by group."""
-    return supply_chain_contribution(model, product, groups, "first_match", amount)
 
 
 def group_contributors(model: LCAModel, product: int, groups: dict[str, dict], group: str,

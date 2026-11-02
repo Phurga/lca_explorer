@@ -37,9 +37,7 @@ class GroupRule:
     flow metadata (``name``, ``compartment``, ``subcompartment``, ``unit``). A flow rule can have an
     ``owner``: a predicate over activities, and it then bundles only the flows of the processes that match.
 
-    A ``disabled`` rule is kept (in the list, in saved views) but not applied. With
-    ``merge``, each group the rule makes becomes a merged process instead (process
-    rules only): its members' inventories combined, common inputs summed.
+    A ``disabled`` rule is kept (in the list, in saved views) but not applied.
     """
 
     name: str | None = None
@@ -48,7 +46,6 @@ class GroupRule:
     scope: str = ROOT_SCOPE
     target: str | None = None
     disabled: bool | None = None
-    merge: bool | None = None
     owner: dict | None = None
     plain: bool | None = None
     """Not a rule of the Rules panel but a grouping of the view options (by substance, by compartment): its groups are not
@@ -56,6 +53,11 @@ class GroupRule:
 
     def to_dict(self) -> dict:
         return {k: v for k, v in self.__dict__.items() if v is not None}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "GroupRule":
+        """A rule as the page or a view file has it; what a rule no longer has (``merge``, from older files) is left out."""
+        return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
 
 
 @dataclass
@@ -79,8 +81,6 @@ class Row:
     """Put in "others" by the user."""
     merged: list[Node] | None = None
     """For "merged" rows: the sibling processes whose inventories are combined."""
-    by_rule: bool = False
-    """For "merged" rows: made by a grouping rule with ``merge`` (not by ``View.merges``)."""
     by_product: bool = False
     """For "group" rows: made by ``View.group_products`` (not by a rule)."""
     rule_group: str | None = None
@@ -173,8 +173,8 @@ class View:
         return cls(
             tree,
             expanded=set(data.get("expanded", [])),
-            rules=[GroupRule(**r) for r in data.get("rules", [])],
-            colour_rules=[GroupRule(**r) for r in data.get("colour_rules", [])],
+            rules=[GroupRule.from_dict(r) for r in data.get("rules", [])],
+            colour_rules=[GroupRule.from_dict(r) for r in data.get("colour_rules", [])],
             attribution=data.get("attribution", "direct"),
             cutoff=data.get("cutoff", 0.0),
             cutoff_basis=data.get("cutoff_basis", "parent"),
@@ -222,20 +222,6 @@ class View:
         self._replaced = {}  # filled as the children of the expanded rows are built
         self._render(self._process_row(self.tree.root, None), out)
         return out
-
-    def find(self, row_id: str) -> Row:
-        """A visible row, or a row bundled in an others row."""
-        for r in self.rows():
-            if r.id == row_id:
-                return r
-            for m in r.members or []:
-                if m.id == row_id:
-                    return m
-        raise KeyError(row_id)
-
-    def direct_sources(self, row: Row) -> list[tuple[int, float]]:
-        """(activity, operation level) pairs whose own emissions make up a direct row."""
-        return row.sources
 
     def _sources(self, parent: Row) -> list[tuple[int, float]]:
         nodes = parent.merged if parent.kind == "merged" else [parent.node]
@@ -319,12 +305,11 @@ class View:
                 continue  # first match: below the row a rule took, the rules group no more
             if flows and rule.owner is not None and not self._owned(rule, parent.sources):
                 continue
-            bundle = self._rule_merged_row if rule.merge and not flows else self._group_row
             if rule.predicate is not None:
                 mask = self._mask(rule)
                 members = [c for c in free if mask[index(c)]]
                 if len(members) > 1:
-                    made = bundle(rule.name or "group", members, parent, depth)
+                    made = self._group_row(rule.name or "group", members, parent, depth)
                     made.rule_group = None if rule.plain else rule.name or "group"
                     rows.append(made)
                     free = [c for c in free if not mask[index(c)]]
@@ -338,7 +323,7 @@ class View:
                     if len(members) > 1:
                         # flows read better by value alone: "air", "Carbon dioxide, fossil"
                         name = (value or f"no {rule.by}") if flows else f"{rule.by}: {value}"
-                        made = bundle(name, members, parent, depth)
+                        made = self._group_row(name, members, parent, depth)
                         made.rule_group = None if rule.plain else rule.by
                         rows.append(made)
                     else:
@@ -464,8 +449,7 @@ class View:
     def matching_rule(self, row: Row, rules: list[GroupRule] | None = None) -> str | None:
         """The name of the first rule, in list order, whose query matches the process (or elementary flow) of ``row``.
 
-        A process (or a flow) that a rule matches takes its colour even when it is alone and no group was made (a rule
-        with ``merge`` too: a lone process is not merged); a flow rule with an owner also needs the processes emitting
+        A process (or a flow) that a rule matches takes its colour even when it is alone and no group was made; a flow rule with an owner also needs the processes emitting
         the flow (``row.sources``) to match."""
         if row.node is None or row.kind not in ("process", "flow"):
             return None
@@ -527,11 +511,6 @@ class View:
                    sum(m.amount for m in members) if same else 0.0,
                    acts["unit"].iat[0] if same else "",
                    sum(m.impacts for m in members), True, row_id in self.expanded, merged=members)
-
-    def _rule_merged_row(self, name: str, members: list[Node], parent: Row, depth: int) -> Row:
-        row = self._merged_row(members, parent, depth)
-        row.by_rule = True
-        return row
 
     def _group_row(self, name: str, members: list[Node], parent: Row, depth: int, label: str | None = None) -> Row:
         row_id = f"{parent.id}/g:{name}"

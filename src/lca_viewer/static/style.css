@@ -153,8 +153,6 @@ select.database { max-width: 220px; font-weight: 600; }
 .drop-zone.top { inset: 0 0 50% 0; }
 .drop-zone.bottom { inset: 50% 0 0 0; }
 .fu-view { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
-.fu-header { padding: 6px 10px; gap: 6px 10px; }
-.fu-header .fu { min-width: 200px; }
 .fu-view .toolbar { padding: 5px 10px; }
 .fu-view .toolbar .hint { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .fu-view .view-bar { padding: 2px 10px; }
@@ -273,7 +271,6 @@ section { display: flex; flex-direction: column; min-height: 0; border-right: 1p
 /* Discreet switch of the group colours, in the side panel's tab bar */
 /* The methods of the comparison, nested by family: a tick (heat map) and a round orange mark (the single method) each */
 .method-filter { width: 100%; box-sizing: border-box; margin-bottom: 4px; }
-.method-legend { font-size: 11px; margin: 0 0 4px; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; }
 .method-tree { max-height: 46vh; overflow: auto; border: 1px solid var(--border); border-radius: 6px; padding: 2px 4px; font-size: 12px; }
 .method-head, .method-row { display: flex; align-items: center; gap: 5px; padding: 1px 2px; }
 .method-head { font-weight: 600; position: sticky; top: 0; background: var(--panel); z-index: 1; }
@@ -281,13 +278,11 @@ section { display: flex; flex-direction: column; min-height: 0; border-right: 1p
 .method-row { padding-left: 24px; }
 .method-row:hover { background: var(--hover); }
 .method-head .count { font-weight: 400; font-size: 11px; }
-.method-tree input[type=checkbox], .method-legend input[type=checkbox] { accent-color: var(--accent); }
-.method-tree input.main, .method-legend input.main { accent-color: var(--bar-negative); }
+.method-tree input[type=checkbox] { accent-color: var(--accent); }
+.method-tree input.main { accent-color: var(--bar-negative); }
 .rules li.dragging { opacity: 0.4; }
 .rules li button.icon-btn { display: inline-flex; align-items: center; padding: 3px 6px; }
 .rules li.disabled button.icon-btn { color: var(--muted); }
-.rules-head { display: flex; align-items: center; gap: 6px; }
-.rules-head .link { margin-left: auto; }
 /* A popup explaining a tab or a panel, drawn on the page next to the pointer's element */
 .tip {
   position: fixed; z-index: 200000; padding: 8px 10px; font-size: 12px; line-height: 1.4; font-weight: 400; pointer-events: none;
@@ -296,8 +291,6 @@ section { display: flex; flex-direction: column; min-height: 0; border-right: 1p
 .rules li.drop-before { box-shadow: 0 -3px 0 var(--accent); }
 .rules li.drop-after { box-shadow: 0 3px 0 var(--accent); }
 .condition select, .condition input { max-width: 200px; }
-.methods-list { max-height: 180px; overflow: auto; border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; }
-.methods-list label { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .error { color: var(--bar-negative); padding: 8px 12px; }
 .empty { color: var(--muted); padding: 24px; text-align: center; }
 table.results { border-collapse: collapse; width: 100%; margin-top: 8px; }
@@ -397,7 +390,6 @@ table.results td.num { text-align: right; font-family: var(--mono); }
 .graph .node .unpin { fill: var(--accent); font-size: 11px; text-decoration: underline; }
 .details-head { display: flex; gap: 8px; align-items: center; }
 .details-title { flex: 1; min-width: 0; }
-.details-actions { display: flex; gap: 4px; flex: none; }
 .details-list { overflow: auto; min-height: 0; }
 .details-list table { width: 100%; border-collapse: collapse; table-layout: fixed; }
 .details-list td { padding: 3px 6px; border-bottom: 1px solid var(--border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -453,9 +445,6 @@ button.link { border: none; background: none; padding: 0 4px; color: var(--accen
 .exchange-meta table.kv th { width: 90px; }
 .info-body .mono { font-family: var(--mono); font-size: 12px; word-break: break-all; }
 .muted { color: var(--muted); }
-
-/* Chart quick views */
-.quick-views { margin-top: 0; }
 .recipe-field { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 200px; color: var(--muted); white-space: nowrap; }
 .recipe-field input { flex: 1; min-width: 0; font-family: var(--mono); color: var(--text); }
 .recipe-field input.target { border-color: var(--accent); }
@@ -532,8 +521,6 @@ header { gap: 10px; }
 .rule-sets label:hover { background: var(--hover); }
 .rule-sets .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rule-sets input { accent-color: var(--accent); }
-.rules-scope { margin: 0 0 8px; }
-
 /* Whole supply chain: what a group is made of, and "Go to in tree" */
 table.results tr.clickable { cursor: pointer; }
 table.results tr.clickable:hover td { background: var(--hover); }
@@ -782,13 +769,11 @@ table.dataset-table td button.link:disabled { opacity: 0.35; cursor: not-allowed
 .compare > .empty { flex: 1; }
 .compare-info { flex: none; padding: 8px 16px 4px; border-bottom: 1px solid var(--border); font-size: 12px; max-height: 34vh; overflow: auto; }
 .compare-info .note { margin: 0 0 6px; color: var(--muted); }
-.compare-info .compare-field { flex-direction: row; align-items: center; gap: 8px; }
 .compare-info .warning { color: var(--bar-negative); margin: 0 0 6px; }
 .compare-common { margin-bottom: 6px; }
 .compare-tab { display: flex; align-items: center; gap: 6px; padding: 3px 0; }
 .compare-tab.off .name { color: var(--muted); }
 .compare-tab .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.compare-field { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; color: var(--muted); font-size: 12px; }
 .compare-main { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--panel); }
 .compare-main .panel > .row { margin-bottom: 8px; }
 .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; flex: none; }
@@ -839,8 +824,6 @@ textarea.editing { width: 100%; box-sizing: border-box; }
 
 /* Processes panel: the amount under each functional unit; View panel: the options of the tab in focus */
 .process-row { padding: 3px 0 6px; border-bottom: 1px solid var(--border); }
-.process-row .amount-line { display: flex; align-items: center; gap: 6px; padding-left: 22px; color: var(--muted); font-size: 12px; }
-.process-row.off .amount-line { opacity: .6; }
 /* The options of the view: the top of the Custom view panel, a label and its settings on each line */
 .bottom { display: flex; flex-direction: column; min-width: 0; }
 .view-options { display: flex; flex-direction: column; gap: 2px; padding: 0 0 6px; min-width: 0; }
@@ -905,10 +888,6 @@ textarea.editing { width: 100%; box-sizing: border-box; }
 /* One caret for every list or section that folds */
 .fold-caret, .fold-toggle .caret { border: none; background: none; padding: 0 2px; color: var(--muted); font-size: 12px; line-height: 1; display: inline-block; width: 16px; text-align: center; cursor: pointer; }
 .fold-caret:hover, .fold-toggle:hover .caret { color: var(--accent); }
-
-.top-field { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; font-size: 12px; color: var(--muted); }
-.top-field input { width: 64px; }
-
 .palette-strip { display: inline-flex; gap: 2px; }
 .palette-strip i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
 .history-row { margin-bottom: 6px; }

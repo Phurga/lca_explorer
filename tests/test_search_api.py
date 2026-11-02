@@ -340,29 +340,6 @@ class TestSearchAPIEndpoints:
         # Impacts length should equal number of methods (1 method)
         assert len(data["rows"][0]["impacts"]) == len(data["methods"])
 
-    def test_lookup_exact_match_and_same_name_elsewhere(self, client):
-        """GET /api/lookup finds name + location, and lists the same name in other places."""
-        data = client.get("/api/lookup", params={"name": "wheat production", "location": "FR"}).json()
-        assert [m["index"] for m in data["matches"]] == [1]
-        assert sorted(m["location"] for m in data["same_name"]) == ["US"]
-        assert data["similar"] == []
-
-    def test_lookup_missing_location_suggests_the_others(self, client):
-        """A name that exists, but not there: no match, the real locations in same_name."""
-        data = client.get("/api/lookup", params={"name": "wheat production", "location": "GLO"}).json()
-        assert data["matches"] == []
-        assert sorted(m["location"] for m in data["same_name"]) == ["FR", "US"]
-
-    def test_lookup_without_location_matches_every_location(self, client):
-        data = client.get("/api/lookup", params={"name": "wheat production"}).json()
-        assert sorted(m["location"] for m in data["matches"]) == ["FR", "US"]
-        assert data["same_name"] == []
-
-    def test_lookup_unknown_name_gives_similar(self, client):
-        data = client.get("/api/lookup", params={"name": "diesel", "location": "RoW"}).json()
-        assert data["matches"] == [] and data["same_name"] == []
-        assert {m["name"] for m in data["similar"]} == {"market for diesel", "diesel production"}
-
     def test_rows_carry_the_custom_names_of_labels(self, client):
         """Labels of a saved view (p: process, f: flow, r: row id) come back as ``custom``."""
         base = {"root": [0], "expanded": ["0", "0/-1"], "methods": []}

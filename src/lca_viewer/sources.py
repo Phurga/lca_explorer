@@ -547,13 +547,6 @@ def _users(con, parts: dict) -> list[dict]:
     return out
 
 
-def dataset_users(base, project: str, database: str, code: str) -> list[dict]:
-    """Datasets of a project that use the products of the dataset of a process (read-only)."""
-    path = project_dir(base, project) / "lci" / "databases.db"
-    with closing(sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)) as con:
-        return _users(con, dataset_parts(con, database, code))
-
-
 def _treats_waste(con, key: tuple) -> bool:
     """Whether the node ``key`` is a waste, or a process treating one: something produces it in a
     negative amount (ecoinvent), or takes it as its functional input in a negative amount (SimaPro)."""

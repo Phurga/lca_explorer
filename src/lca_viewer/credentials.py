@@ -62,11 +62,6 @@ def load() -> tuple[str, str] | None:
     return (username, password) if password else None
 
 
-def stored_username() -> str | None:
-    kr = _keyring()
-    return kr.get_password(SERVICE, USERNAME_ENTRY) if kr else None
-
-
 def save(username: str, password: str) -> None:
     kr = _keyring()
     if kr is None:

@@ -603,19 +603,6 @@ def test_edit_copy_and_delete_through_the_api(project, tmp_path):
     shared = 5 * 0.1 + 6 * 0.5 + 3 * 0.2 + 3
     assert impact("milk") == pytest.approx(0.6 * shared) and impact("buttermilk") == pytest.approx(0.4 * shared / 2)
 
-    # Delete: what is used is refused (and said so), the rest goes
-    user = wait(client.post("/api/brightway/dataset", json={**where, "spec": {
-        "database": "downstream", "new_database": True, "process": {"name": "cheese dairy"},
-        "products": [{"name": "cheese", "amount": 1, "unit": "kilogram"}],
-        "exchanges": [{"section": "technosphere", "database": "my datasets", "code": saved["result"]["codes"][0], "amount": 1}]}}).json())
-    assert user["status"] == "done", user
-    blocked = wait(client.post("/api/brightway/dataset/delete", json={**where, "database": "my datasets", "code": code}).json())
-    assert blocked["status"] == "failed" and "is used by cheese dairy" in blocked["error"]
-    assert client.post("/api/brightway/dataset/delete", json={**where, "database": "my datasets", "code": "nothing"}).status_code == 404
-    gone = wait(client.post("/api/brightway/dataset/delete", json={**where, "database": "downstream", "code": user["result"]["code"]}).json())
-    assert gone["status"] == "done" and gone["result"]["deleted"] == "cheese dairy"
-    gone = wait(client.post("/api/brightway/dataset/delete", json={**where, "database": "my datasets", "code": code}).json())
-    assert gone["status"] == "done", gone
 
 
 def test_staged_changes_through_the_api(project, tmp_path):
@@ -677,7 +664,7 @@ def test_staged_changes_through_the_api(project, tmp_path):
         {"field": "reference_product", "op": "eq", "value": "milk"}, {"field": "database", "op": "eq", "value": "my datasets"}]}}).json()
     row = client.post(f"/db/{key}/api/rows", json={"root": [found["results"][0]["index"]], "method": 0}).json()["rows"][0]
     assert row["impacts"][0] == pytest.approx(0.8 * shared / 10)
-    assert client.get(f"/db/{key}/api/lookup", params={"name": "compost"}).json()["matches"]
+    assert client.post(f"/db/{key}/api/search", json={"text": "compost"}).json()["total"]
 
     # A batch that fails is not made, and stays staged to be corrected
     client.post("/api/brightway/pending", json={**where, "change": {"kind": "delete", "title": "Delete dairy farm", "database": "my datasets", "code": read["code"]}})

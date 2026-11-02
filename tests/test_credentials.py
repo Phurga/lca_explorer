@@ -43,7 +43,6 @@ def test_save_load_forget(store):
     assert credentials.load() is None
     credentials.save("me@lab.org", "s3cret")
     assert credentials.load() == ("me@lab.org", "s3cret")
-    assert credentials.stored_username() == "me@lab.org"
     credentials.save("other", "pw")  # replaces the previous account
     assert credentials.load() == ("other", "pw")
     assert ("lca_viewer:ecoinvent", "me@lab.org") not in store.secrets

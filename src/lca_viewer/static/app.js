@@ -1633,7 +1633,6 @@ function patchSupplier(input, node) {
     exchange.node = node;
   };
 }
-const productOfProcess = (draft, code) => draft.products.find((p) => p.processCode === code || p.code === code) || draft.products[0];
 
 // A value that can be changed by double-clicking it in edit mode: ``onCommit(text)`` returns a promise.
 // ``edit``: what the input starts with when that differs from what is shown; ``load``: the same, fetched when needed;
@@ -2120,10 +2119,8 @@ function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onU
                       ${r.kind === "group" && r.products && !editing && html`
                         <button class="chip merge" title="Merge into one process whose inventory is the union of the members'"
                           onClick=${(e) => { e.stopPropagation(); onMergeGroup(r); }}>merge</button>`}
-                      ${r.kind === "merged" && !editing && (r.by_rule
-                        ? html`<span class="chip merge" title="Merged by a grouping rule (see the Rules panel)">merged</span>`
-                        : html`<button class="chip merge" title="Split back into the original processes"
-                            onClick=${(e) => { e.stopPropagation(); onUnmerge(r); }}>merged ×</button>`)}
+                      ${r.kind === "merged" && !editing && html`<button class="chip merge" title="Split back into the original processes"
+                          onClick=${(e) => { e.stopPropagation(); onUnmerge(r); }}>merged ×</button>`}
                       ${r.pinned && html`
                         <button class="chip pin" title="Restored from others, shown despite the cut-off — click to move it back to others"
                           onClick=${(e) => { e.stopPropagation(); onUnpin(r); }}>restored ×</button>`}
@@ -2546,7 +2543,7 @@ function TreeGraph({ rows, rootImpact, shareBasis, selection, onToggle, onSelect
                 ${r.kind === "group" && r.products && !editing && html`
                   <text x=${x + BOX.w - (ungroupable(r) ? 62 : 10)} y=${y + 17} class="unmerge" text-anchor="end"
                         onClick=${(e) => { e.stopPropagation(); onMergeGroup(r); }}>merge</text>`}
-                ${r.kind === "merged" && !r.by_rule && !editing && html`
+                ${r.kind === "merged" && !editing && html`
                   <text x=${x + BOX.w - 10} y=${y + 17} class="unmerge" text-anchor="end"
                         onClick=${(e) => { e.stopPropagation(); onUnmerge(r); }}>unmerge</text>`}
                 ${r.pinned && html`
@@ -4021,7 +4018,7 @@ function EyeIcon({ off }) {
 
 // A rule in words, whole (the list shows one line of it, this is its tooltip)
 const ruleText = (r) => `${r.target === "flows" ? "flows: " : ""}${r.by ? `group by ${r.by === "name" && r.target === "flows" ? "substance" : r.by}` : `${r.name} ← ${describePredicate(r.predicate)}`}${r.owner ? `, emitted by processes ${describePredicate(r.owner)}` : ""}`
-  + ` — ${r.scope === "*" ? "everywhere in the tree" : `under ${r.scope} (this tab only)`}${r.merge ? ", merged" : ""}${r.disabled ? ", disabled" : ""}`;
+  + ` — ${r.scope === "*" ? "everywhere in the tree" : `under ${r.scope} (this tab only)`}${r.disabled ? ", disabled" : ""}`;
 // A section of a panel that folds: its header is the button, ``force`` keeps it open (a rule being edited), ``actions``
 // stay at the right of the header. Open or folded is kept per ``id``.
 function Fold({ id, title, open = true, force = false, actions, innerRef, children }) {
@@ -4175,14 +4172,14 @@ function GroupPanel({ info, rules, setRules, selectedRow, view, setView, shared,
               onDragEnd=${() => { setDragging(null); setDropAt(null); }}
               onContextMenu=${(e) => { e.preventDefault(); startEdit(i); }}>
               ${rules.length > 1 && html`<span class="grip" title="Drag to reorder (rules apply in list order)" aria-hidden="true">⠿</span>`}
-              ${!(r.target === "flows" && r.by) && !r.merge && view.groupColors && html`
+              ${!(r.target === "flows" && r.by) && view.groupColors && html`
                 <input type="color" class="swatch" value=${colorHex(colorOf(ruleKey(r), view.ruleColors))}
                   onInput=${(e) => pickColor(ruleKey(r), e.target.value)}
                   onContextMenu=${(e) => { e.preventDefault(); e.stopPropagation(); pickColor(ruleKey(r), null); }}
                   title="Colour of this rule's groups in the tree and the charts: click to change, right-click to reset" />`}
               <span class="desc" title=${ruleText(r)}>
                 <span class="line">${r.target === "flows" && "flows: "}${r.by ? html`<b>group by ${r.by === "name" && r.target === "flows" ? "substance" : r.by}</b>` : html`<b>${r.name}</b> <small>← ${describePredicate(r.predicate)}</small>`}</span>
-                <span class="line"><small>${r.owner ? `of processes ${describePredicate(r.owner)} · ` : ""}${r.scope === "*" ? "everywhere in the tree" : `under ${r.scope} · this tab only`}${r.merge ? " · merged" : ""}${r.disabled ? " · disabled" : ""}</small></span>
+                <span class="line"><small>${r.owner ? `of processes ${describePredicate(r.owner)} · ` : ""}${r.scope === "*" ? "everywhere in the tree" : `under ${r.scope} · this tab only`}${r.disabled ? " · disabled" : ""}</small></span>
               </span>
               <button class=${editIndex === i ? "primary" : ""} onClick=${() => (editIndex === i ? stopEdit() : startEdit(i))}
                 aria-label="Edit rule" title="Edit this rule (or right-click it); Esc leaves it">✎</button>
@@ -5189,10 +5186,10 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
   }
 
   const viewState = (exp = expanded) => ({
-    root: [root.index], amount, expanded: [...exp], rules: [...(view.groupByRules === false ? [] : editing ? rules.map((r) => ({ ...r, merge: false })) : rules), ...flowRulesOf(view)], cutoff: cutoffValue(cutoff, cutoffBasis), cutoff_basis: cutoffBasis, method, methods: chartMethods,
+    root: [root.index], amount, expanded: [...exp], rules: [...(view.groupByRules === false ? [] : rules), ...flowRulesOf(view)], cutoff: cutoffValue(cutoff, cutoffBasis), cutoff_basis: cutoffBasis, method, methods: chartMethods,
     pinned: [...pinned], others: [...others], merges: editing ? [] : merges, ungrouped: [...ungrouped],
     substitutions: editing ? {} : substitutions, group_products: view.groupProducts,
-    colour_rules: editing ? rules.map((r) => ({ ...r, merge: false })) : rules,
+    colour_rules: rules,
     attribution: lens.attribution,
   });
 
@@ -5567,7 +5564,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
       case "m":
         if (editing) return true;
         followCursor.current = true;
-        if (selectedRows.length === 1 && row.kind === "merged" && !row.by_rule) unmerge(row);
+        if (selectedRows.length === 1 && row.kind === "merged") unmerge(row);
         else if (canMerge) selectNew(mergeSelected());
         else followCursor.current = false;
         return true;
@@ -5655,7 +5652,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
         onMember=${(r) => { const next = infoTargetOf(r); if (next) follow(next); }} />`;
     if (bundle?.parts) return html`<${BundlePopup} ...${common} row=${bundle} methodInfo=${methodInfo} rootImpact=${rootImpact}
         actions=${bundle.kind === "merged"
-          ? !bundle.by_rule && !editing && html`<button onClick=${() => unmerge(bundle)} title="Split back into the original processes">Unmerge</button>`
+          ? !editing && html`<button onClick=${() => unmerge(bundle)} title="Split back into the original processes">Unmerge</button>`
           : html`
             ${bundle.products && !editing && html`<button onClick=${() => mergeRows([bundle])} title="Merge into one process whose inventory is the union of the members'">Merge</button>`}
             ${ungroupable(bundle) && html`<button onClick=${() => ungroup(bundle)}>Ungroup</button>`}
@@ -5671,14 +5668,6 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
         onFollow=${follow} onGoTo=${(index) => goTo(index)} />`;
   }
   // The options of the view: in the left panel (View), in the pop-up's explorer above its list
-  const cutoffControls = html`
-    <label>Cut-off <${NumberInput} class="cutoff" value=${cutoff} min=${cutoffBasis === "top" ? 1 : 0} max=${cutoffBasis === "top" ? undefined : 100}
-      step=${cutoffBasis === "top" ? 1 : 0.5} onValue=${(v) => changeCutoff(v)} aria-label="Cut-off"
-      title="Changing the cut-off resets pinned rows and rows moved to others" /> ${CUTOFF_MODES[cutoffBasis].unit}</label>
-    <select class="cutoff-mode" aria-label="Cut-off mode" value=${cutoffBasis} title=${CUTOFF_MODES[cutoffBasis].hint}
-      onChange=${(e) => changeCutoffMode(e.target.value)}>
-      ${Object.entries(CUTOFF_MODES).map(([key, mode]) => html`<option value=${key} title=${mode.hint}>${mode.label}</option>`)}
-    </select>`;
   const cutoffBare = html`
     <label><${NumberInput} class="cutoff" value=${cutoff} min=${cutoffBasis === "top" ? 1 : 0} max=${cutoffBasis === "top" ? undefined : 100}
       step=${cutoffBasis === "top" ? 1 : 0.5} onValue=${(v) => changeCutoff(v)} aria-label="Cut-off"
@@ -5798,7 +5787,6 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
 const COMPARE_PANELS = [["groups", "Compare contributions"], ["difference", "Cascade"], ["methods", "Multi indicator matrix"]];
 // What the bars of the first two panels are split into: the groups (rules and quick groups), the rows of each
 // tab's displayed tree (View mode), or the elementary flows
-const COMPARE_BASES = [["groups", "By groups"], ["tree", "By tree"], ["flows", "By flows"]];
 const compareColor = (i) => PALETTE[i % PALETTE.length];
 const OTHER_GROUP = "other";
 const TOTAL_BAR = "Total";  // the one bar of a tab with no breakdown

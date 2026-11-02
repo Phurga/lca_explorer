@@ -7,7 +7,7 @@ import pytest
 from lca_viewer.query import evaluate, with_derived_fields
 from lca_viewer.tree import Tree, DIRECT
 from lca_viewer.view import View, GroupRule
-from lca_viewer.analysis import direct_contribution, first_match_contribution
+from lca_viewer.analysis import supply_chain_contribution
 
 
 class TestQueryEvaluate:
@@ -473,7 +473,7 @@ class TestDirectContribution:
     def test_direct_contribution_sums_to_root(self, grouping_model):
         """Sum of all groups should equal root score."""
         groups = {}
-        result = direct_contribution(grouping_model, product=0, groups=groups, amount=1.0)
+        result = supply_chain_contribution(grouping_model, product=0, groups=groups, rule="direct", amount=1.0)
 
         # With empty groups, everything should be in "other"
         total = sum(result.values())
@@ -482,7 +482,7 @@ class TestDirectContribution:
 
     def test_direct_contribution_empty_groups_uses_other(self, grouping_model):
         """With empty groups dict, all impacts should be in 'other'."""
-        result = direct_contribution(grouping_model, product=0, groups={}, amount=1.0)
+        result = supply_chain_contribution(grouping_model, product=0, groups={}, rule="direct", amount=1.0)
 
         assert "other" in result
         assert len(result) == 1
@@ -498,7 +498,7 @@ class TestDirectContribution:
             "electricity": {"field": "name", "op": "contains", "value": "electricity"},
             "bread": {"field": "name", "op": "contains", "value": "bread"},
         }
-        result = direct_contribution(grouping_model, product=0, groups=groups, amount=1.0)
+        result = supply_chain_contribution(grouping_model, product=0, groups=groups, rule="direct", amount=1.0)
 
         # Should have electricity, bread, and other groups
         assert "electricity" in result
@@ -515,7 +515,7 @@ class TestDirectContribution:
         groups = {
             "electricity": {"field": "name", "op": "contains", "value": "electricity"},
         }
-        result = direct_contribution(grouping_model, product=0, groups=groups, amount=1.0)
+        result = supply_chain_contribution(grouping_model, product=0, groups=groups, rule="direct", amount=1.0)
 
         # Hand compute: supply * U for each activity
         m = grouping_model
@@ -544,7 +544,7 @@ class TestFirstMatchContribution:
     def test_first_match_sums_to_root(self, grouping_model):
         """Sum of all groups should equal root score."""
         groups = {}
-        result = first_match_contribution(grouping_model, product=0, groups=groups, amount=1.0)
+        result = supply_chain_contribution(grouping_model, product=0, groups=groups, rule="first_match", amount=1.0)
 
         total = sum(result.values())
         root_score = grouping_model.score(0, 1.0)
@@ -552,7 +552,7 @@ class TestFirstMatchContribution:
 
     def test_first_match_empty_groups_uses_other(self, grouping_model):
         """With empty groups, all impacts should be in 'other'."""
-        result = first_match_contribution(grouping_model, product=0, groups={}, amount=1.0)
+        result = supply_chain_contribution(grouping_model, product=0, groups={}, rule="first_match", amount=1.0)
 
         assert "other" in result
         assert len(result) == 1
@@ -572,7 +572,7 @@ class TestFirstMatchContribution:
                 "value": "bread production"
             }
         }
-        result = first_match_contribution(grouping_model, product=0, groups=groups, amount=1.0)
+        result = supply_chain_contribution(grouping_model, product=0, groups=groups, rule="first_match", amount=1.0)
 
         # bread production activities should account for their cumulative impacts
         # This includes their own emissions and their supply chain
@@ -593,7 +593,7 @@ class TestFirstMatchContribution:
                 "value": "market for bread"
             }
         }
-        result = first_match_contribution(grouping_model, product=0, groups=groups, amount=1.0)
+        result = supply_chain_contribution(grouping_model, product=0, groups=groups, rule="first_match", amount=1.0)
 
         # The root itself should account for all impacts
         root_score = grouping_model.score(0, 1.0)
@@ -620,7 +620,7 @@ class TestFirstMatchContribution:
         root_score = grouping_model.score(0, 1.0)
 
         for groups in test_cases:
-            result = first_match_contribution(grouping_model, product=0, groups=groups, amount=1.0)
+            result = supply_chain_contribution(grouping_model, product=0, groups=groups, rule="first_match", amount=1.0)
             total = sum(result.values())
             np.testing.assert_allclose(
                 total, root_score, rtol=1e-10,
@@ -986,20 +986,13 @@ def test_a_disabled_rule_is_kept_but_not_applied(grouping_model):
     assert [r for r in copy.rows() if r.kind == "group"]
 
 
-def test_a_merge_rule_turns_its_groups_into_merged_processes(grouping_model):
-    grouped = View(Tree(grouping_model, 0), rules=[GroupRule(by="activity_type")])
-    grouped.expand("0")
-    groups = [r for r in grouped.rows() if r.kind == "group"]
-    assert groups
-    view = View(Tree(grouping_model, 0), rules=[GroupRule(by="activity_type", merge=True)])
+def test_a_rule_of_an_older_view_file_with_merge_groups_as_the_others(grouping_model):
+    # rules no longer merge their groups: "merge" in an older file is left out, the rule groups
+    data = View(Tree(grouping_model, 0), rules=[GroupRule(by="activity_type")]).to_dict()
+    data["rules"][0]["merge"] = True
+    view = View.from_dict(grouping_model, data)
     view.expand("0")
-    merged = [r for r in view.rows() if r.kind == "merged"]
-    assert len(merged) == len(groups) and all(r.by_rule for r in merged)
-    assert sorted(float(r.impacts[0]) for r in merged) == pytest.approx(sorted(float(g.impacts[0]) for g in groups))
-    for r in merged:  # expands into the union of the members' inputs
-        view.expand(r.id)
-    assert np.allclose(sum(r.impacts for r in view.frontier()), view.tree.root.impacts)
-    assert View.from_dict(grouping_model, view.to_dict()).rules[0].merge
+    assert [r for r in view.rows() if r.kind == "group"] and not [r for r in view.rows() if r.kind == "merged"]
 
 
 def test_merged_label_lists_a_shared_name_once(grouping_model):
@@ -1008,41 +1001,6 @@ def test_merged_label_lists_a_shared_name_once(grouping_model):
     locations = [grouping_model.activities["location"].iat[b.node.product] for b in breads]
     assert merged.label == f"bread production ({' + '.join(locations)})"
 
-
-
-def test_direct_breakdown_sums_to_the_direct_row(grouping_model):
-    from fastapi.testclient import TestClient
-    from lca_viewer.server import create_app
-
-    client = TestClient(create_app(grouping_model))
-    state = {"root": [0], "expanded": ["0", "0/1"], "method": 0}
-    rows = client.post("/api/rows", json=state).json()["rows"]
-    direct = next(r for r in rows if r["kind"] == "direct" and r["parent"] == "0/1")
-    out = client.post("/api/direct", json={**state, "row": direct["id"]}).json()
-    assert out["total"] == pytest.approx(direct["impacts"][0])
-    assert sum(f["impact"] for f in out["flows"]) + out["others"]["impact"] == pytest.approx(out["total"])
-    assert out["sources"][0]["index"] == 1
-    assert client.post("/api/direct", json={**state, "row": "0/1"}).status_code == 400  # not a direct row
-
-
-def test_direct_breakdown_of_merged_and_hidden_rows(grouping_model):
-    from fastapi.testclient import TestClient
-    from lca_viewer.server import create_app
-
-    view, breads = _merged_view(grouping_model)
-    merged = next(r for r in view.rows() if r.kind == "merged")
-    view.expand(merged.id)
-    direct = next(r for r in view.rows() if r.parent == merged.id and r.kind == "direct")
-    assert len(view.direct_sources(direct)) == 2
-    client = TestClient(create_app(grouping_model))
-    state = {**view.to_dict(), "row": direct.id}
-    out = client.post("/api/direct", json=state).json()
-    assert out["total"] == pytest.approx(direct.impacts[0])
-    # a direct row bundled in others is found too
-    view.others = {direct.id}
-    assert view.find(direct.id).moved
-    out = client.post("/api/direct", json={**view.to_dict(), "row": direct.id}).json()
-    assert out["total"] == pytest.approx(direct.impacts[0])
 
 
 def test_flow_type_marks_wastes(grouping_model, waste_treatment_model):
@@ -1061,7 +1019,7 @@ GROUPS = {"electricity": {"field": "reference_product", "op": "eq", "value": "el
 def test_group_contributors_sum_to_the_group_total(grouping_model, rule, group):
     from lca_viewer.analysis import group_contributors
 
-    totals = (first_match_contribution if rule == "first_match" else direct_contribution)(grouping_model, 0, GROUPS)
+    totals = supply_chain_contribution(grouping_model, 0, GROUPS, rule)
     members, values = group_contributors(grouping_model, 0, GROUPS, group, rule)
     np.testing.assert_allclose(values.sum(axis=0), totals[group])
     if group == "electricity":

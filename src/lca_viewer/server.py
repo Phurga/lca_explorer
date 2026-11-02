@@ -80,11 +80,6 @@ class SearchRequest(BaseModel):
     """"flows": the predicate matches elementary flows (``text`` is ignored)."""
 
 
-class DirectRequest(ViewState):
-    row: str
-    limit: int = 25
-
-
 class GlobalRequest(BaseModel):
     root: int
     amount: float = 1.0
@@ -305,22 +300,6 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
             raise HTTPException(400, f"Invalid filter: {e}")
         return {"total": int(len(found)), "results": [describe(i) for i in found[: req.limit]]}
 
-    @app.get("/api/lookup")
-    def lookup(name: str, location: str | None = None, limit: int = 25):
-        """Whether an activity exists by name and location, and what is near it: the activities
-        of that name elsewhere (``same_name``), or, when no activity has the name, the closest
-        by words (``similar``). Without ``location``, every activity of that name matches."""
-        same = np.flatnonzero((activities["name"] == name).to_numpy())
-        matches = [i for i in same if location is None or activities["location"].iat[i] == location]
-        out = {
-            "matches": [describe(int(i)) for i in matches[:limit]],
-            "same_name": [describe(int(i)) for i in same if i not in matches][:limit],
-            "similar": [],
-        }
-        if not len(same):
-            out["similar"] = [describe(int(i)) for i in search(activities, name)[:limit]]
-        return out
-
     @app.get("/api/values/{field}")
     def values(field: str, q: str = "", limit: int = 100, target: str | None = None):
         if field not in (FLOW_FIELDS if target == "flows" else QUERY_FIELDS):
@@ -415,7 +394,6 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
                 out["products"] = [int(m.product) for m in r.merged]
                 out["metas"] = [meta(m.product) for m in r.merged]
                 out["parts"] = [part(m) for m in r.merged]
-                out["by_rule"] = r.by_rule
             elif r.kind == "group":
                 out["parts"] = [part(m) for m in r.node_members]
                 out["by_product"] = r.by_product
@@ -438,37 +416,6 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
 
         rows = [serialise(r) for r in rendered]
         return {"methods": methods, "rows": rows}
-
-    @app.post("/api/direct")
-    def direct_breakdown(req: DirectRequest):
-        """Elementary flows behind a "direct emissions" row, for the current method."""
-        try:
-            view = View.from_dict(model, req.model_dump())
-            row = view.find(req.row)
-        except (KeyError, IndexError, ValueError) as e:
-            raise HTTPException(400, f"Invalid request: {e}")
-        if row.kind != "direct":
-            raise HTTPException(400, f"Row {req.row} is not a direct emissions row")
-        sources = view.direct_sources(row)
-        amounts = sum(operation * model.B[:, j].toarray().ravel() for j, operation in sources)
-        impacts = amounts * model.methods[req.method].cfs
-        order = [f for f in np.argsort(-np.abs(impacts)) if impacts[f] != 0]
-        shown, rest = order[: req.limit], order[req.limit:]
-        categories = model.flows["categories"] if "categories" in model.flows else None
-        units = model.flows["unit"] if "unit" in model.flows else None
-        return {
-            "row": req.row,
-            "sources": [meta(j) for j, _ in sources],
-            "total": float(impacts.sum()),
-            "flows": [
-                {"name": model.flows["name"].iat[f],
-                 "categories": list(categories.iat[f]) if categories is not None else [],
-                 "unit": units.iat[f] if units is not None else "",
-                 "amount": float(amounts[f]), "impact": float(impacts[f])}
-                for f in shown
-            ],
-            "others": {"count": len(rest), "impact": float(impacts[rest].sum()) if rest else 0.0},
-        }
 
     @app.get("/api/activity/{index}")
     def activity(index: int, method: int | None = None, flows: int = 8):
@@ -999,14 +946,6 @@ class LockRequest(BaseModel):
     project: str
     database: str
     locked: bool
-
-
-class DeleteDatasetRequest(BaseModel):
-    folder: str
-    project: str
-    database: str
-    code: str
-    """A process of the dataset to delete."""
 
 
 def model_key(path) -> str:
@@ -1971,27 +1910,6 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
         except (FileNotFoundError, ValueError) as e:
             raise HTTPException(404, str(e))
         return {**read, "locked": read["database"] in locked_read(folder, project)}
-
-    @app.post("/api/brightway/dataset/delete")
-    def delete_dataset(req: DeleteDatasetRequest):
-        """Delete a dataset written by this app, if nothing uses it (``lca-viewer delete-dataset``)."""
-        import json
-
-        folder = folder_of(req.folder)
-        project_in(folder, req.project)
-        check_unlocked(folder, req.project, {req.database})
-        try:
-            sources.read_dataset(folder, req.project, req.database, req.code)
-        except ValueError as e:
-            raise HTTPException(404, str(e))
-
-        def work(job):
-            lines = cli(job, folder, ["delete-dataset", "--project", req.project, "--database", req.database, "--code", req.code],
-                        lambda line: None)
-            result = next((json.loads(line[7:]) for line in reversed(lines) if line.startswith("RESULT ")), {})
-            return {"result": result, "message": f"{result.get('deleted', 'The dataset')} deleted from {req.database}"}
-
-        return start(f"{req.database} / {req.code}", ("delete-dataset", folder, req.project, req.database, req.code), work)
 
     @app.post("/api/brightway/dataset")
     def write_dataset(req: DatasetRequest):

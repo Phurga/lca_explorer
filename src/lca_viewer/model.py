@@ -279,13 +279,6 @@ class LCAModel:
         out = self._solve_AT(np.asarray(direct, dtype=float).T)
         return out.reshape(self.size, -1)
 
-    def method_index(self, name) -> int:
-        name = tuple(name)
-        for i, m in enumerate(self.methods):
-            if m.name == name:
-                return i
-        raise KeyError(name)
-
     def save(self, directory) -> None:
         from pathlib import Path
         import pickle
