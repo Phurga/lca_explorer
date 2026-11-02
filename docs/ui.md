@@ -516,14 +516,15 @@ API in `src/lca_viewer/server.py`.
     bars of the main method, or **multi indicator**, the methods ticked in the Methods panel as 100 % stacked
     bars; CSV export.
   - *Process contribution*: what each process contributes by its own emissions (direct contributions, wherever
-    it is in the supply chain), as a chart and as the table of the same rows, largest first; the **Top** field
-    sets how many (the rest in one row; `/api/global/contributors` with no group). See [charts.md](charts.md).
+    it is in the supply chain), as a chart and as the table of the same rows, largest first; a click on a bar or a row chooses
+    it in both; the filter (*Top* n, *Cut-off* %, *Cumulative* %: click its name to change the type) leaves the rest in one row
+    (`/api/global/contributors` with no group). See [charts.md](charts.md).
   - *Flow contribution*: the score split by elementary flow: the whole
     inventory of the process (B·s) times the current method's
-    characterisation factors, so it sums to the total. *By substance*
-    sums the compartments of a substance (one row per name and unit), *By
-    flow* keeps them apart. Bar chart of the 25 largest |impacts| (the rest
-    as *others*) and a table with amount, impact and share; click a
+    characterisation factors, so it sums to the total. The panel's own buttons *Substance*, *Compartment* and
+    *Subcompartment* (alone or together; none: one row per flow) group the rows: *Substance*
+    sums the compartments of a substance (one row per name and unit). Bar chart of the 25 largest |impacts| (the filter
+    is *Top*, *Cut-off* or *Cumulative*; the rest as *others*) and a table with amount, impact and share; click a
     substance or flow (bar or row) to list the processes emitting it in the
     supply chain, with their own amount and impact. As in *Whole supply
     chain*, right-click (or double-click) one to go to it in the tree or

@@ -31,6 +31,13 @@ Changes on `dev`, not released yet.
 - **Rules**: the palette (*Colours*) is under the attribution rule, above *Active rules*; *Fertilisers* also takes the packaging for fertilisers.
 - **Projects**: rename and copy a project (its menu is now an icon of three dots); the tooltips are above the window.
 - **Pages wait with a moving mark**; an (i) tells on hover, a (?) acts when clicked.
+- **Filters of the lists** (process and flow contribution, Compare): the *Top* field names its type: click it to choose
+  *Top*, *Cut-off* (rows under a share of the total go to others) or *Cumulative* (the largest rows until a share).
+- **Process contribution**: a click on a bar or a row chooses it in both (the others fade, the row is shown).
+- **Flow contribution**: its own *Substance / Compartment / Subcompartment* buttons; rows no longer coloured by rules.
+- The chart legend no longer thins the bars; the Methods list fills the pane; the arrows of the folds are bigger and as
+  strong as their header; a tooltip starts under the start of its header.
+- **Projects**: the (i) of a form (add a database, rename, copy…) is next to its title, not floating under the fields.
 - Chart axes drop labels that would overlap.
 - README: use the latest release for a stable version; screenshots and wording follow the current interface.
 

@@ -524,11 +524,18 @@ function BodyPortal({ children }) {
 
 // A popup with an explanation when the pointer rests on an element, drawn on the page (not clipped by the panel it is in):
 // ``const [props, popup] = useTip(text)``, the props go on the element, the popup next to it
-function useTip(text) {
+// ``aligned``: the popup starts where the header of the (i) starts, under it (not where the (i) is)
+const TIP_HEADERS = "h3, h4, h5, legend, .fold-head, .view-group, .details-head, .info-title, label, .row";
+function useTip(text, aligned = true) {
   const [box, setBox] = useState(null);
   const leave = useRef(null);
   const props = {
-    onMouseEnter: (e) => { clearTimeout(leave.current); setBox(e.currentTarget.getBoundingClientRect()); },
+    onMouseEnter: (e) => {
+      clearTimeout(leave.current);
+      const own = e.currentTarget.getBoundingClientRect();
+      const header = aligned ? e.currentTarget.closest(TIP_HEADERS) : null;
+      setBox(header ? { left: header.getBoundingClientRect().left, bottom: own.bottom } : own);
+    },
     onMouseLeave: () => { leave.current = setTimeout(() => setBox(null), 80); },
   };
   const width = Math.min(360, window.innerWidth - 16);
@@ -540,7 +547,7 @@ function useTip(text) {
 
 // A tab whose name has its explanation in a popup
 function TabButton({ tip, children, ...props }) {
-  const [tipProps, popup] = useTip(tip);
+  const [tipProps, popup] = useTip(tip, false);
   return html`<button ...${props} ...${tipProps}>${children}</button>${popup}`;
 }
 
@@ -842,7 +849,7 @@ const ECOSPOLD_NAME = (path) => {
 // to the server once (checked with ecoinvent, then kept in the system's credential store, or in
 // the server's memory only); the page only ever gets the user name back. ``biosphere``: a
 // database of the project to link to, or null for the release's own biosphere and methods.
-function EcoinventForm({ folder, project, existing, biosphere, linked, onJob, busy, actions }) {
+function EcoinventForm({ folder, project, existing, biosphere, linked, onJob, busy, actions, head }) {
   const [status, setStatus] = useState(null);
   const [error, setError] = useState(null);
   const [username, setUsername] = useState("");
@@ -881,14 +888,15 @@ function EcoinventForm({ folder, project, existing, biosphere, linked, onJob, bu
   const logout = () => serverRequest("/api/ecoinvent/logout", {}).then((s) => { setStatus(s); setVersions(null); setVersion(""); })
     .catch((e) => setError(e.message));
 
-  if (!status) return error ? html`<div class="error">${error}</div>` : html`<p class="muted">…</p>`;
+  if (!status) return html`${head()}${error ? html`<div class="error">${error}</div>` : html`<${Waiting} text="Checking the account…" />`}`;
   if (!status.installed) return html`
+    ${head()}
     <p>The download needs <code>ecoinvent_interface</code> and <code>keyring</code> in the Python environment running
       lca_viewer: run <code>pip install ecoinvent_interface keyring</code> in it, then restart the app.</p>
     ${actions(null)}`;
   if (!status.username) return html`
+    ${head(html`<${InfoTip} text="Your ecoquery.ecoinvent.org account, with a licence for the releases." label="About the account" />`)}
     <form class="source-form" onSubmit=${login}>
-      <${InfoTip} text="Your ecoquery.ecoinvent.org account, with a licence for the releases." label="About the account" />
       <label>User name <input value=${username} onInput=${(e) => setUsername(e.target.value)} autocomplete="username" autofocus /></label>
       <label>Password <input type="password" value=${password} onInput=${(e) => setPassword(e.target.value)} autocomplete="current-password" /></label>
       <label class="check"><input type="checkbox" checked=${remember} disabled=${!status.store} onChange=${(e) => setRemember(e.target.checked)} />
@@ -899,6 +907,7 @@ function EcoinventForm({ folder, project, existing, biosphere, linked, onJob, bu
   const database = `ecoinvent-${version}-${model}`;
   const taken = version && existing.includes(database);
   return html`
+    ${head(html`<${InfoTip} text=${`Downloads the release (about 1 GB, kept for next time) and imports it as ${version ? database : "ecoinvent-<version>-<model>"} (10 to 20 minutes).`} label="About the download" />`)}
     <form class="source-form" onSubmit=${(e) => { e.preventDefault(); onJob("/api/ecoinvent/import", { folder, project, version, system_model: model, biosphere }); }}>
       <p class="muted small">Account <b>${status.username}</b> ${status.remembered ? `(remembered in ${status.store})` : "(until the app stops)"} ·
         <button type="button" class="link" onClick=${logout}>${status.remembered ? "Forget it" : "Log out"}</button></p>
@@ -913,7 +922,6 @@ function EcoinventForm({ folder, project, existing, biosphere, linked, onJob, bu
         </select></label>
       ${taken && html`<div class="error">${project} already has ${database}.</div>`}
       ${error && html`<div class="error">${error}</div>`}
-      <${InfoTip} text=${`Downloads the release (about 1 GB, kept for next time) and imports it as ${version ? database : "ecoinvent-<version>-<model>"} (10 to 20 minutes).`} label="About the download" />
       ${actions("Download and import", busy || !version || !models || taken || !linked)}
     </form>`;
 }
@@ -1023,8 +1031,8 @@ function ProjectForm({ form, folder, projects, onJob, onCancel, onForm, busy }) 
     const already = chosenVersion === "bundled" ? hasBundled : flowDbs.includes(`ecoinvent-${chosenVersion}-biosphere`);
     const linked = defaults ? !!chosenVersion : flowDbs.length > 0;  // a biosphere for the elementary flows to link to
     const minor = (v) => (v === "bundled" ? "3.9" : v.split(".").slice(0, 2).join("."));
-    const head = html`
-      <h4>Add a database to ${form.project}</h4>
+    const head = (tip = null) => html`
+      <h4>Add a database to ${form.project} ${tip}</h4>
       <div class="source-choice" role="radiogroup" aria-label="Source of the database">
         ${DATABASE_SOURCES.map((s) => html`
           <button type="button" role="radio" aria-checked=${source === s.kind} class=${source === s.kind ? "selected" : ""} title=${s.hint}
@@ -1055,7 +1063,7 @@ function ProjectForm({ form, folder, projects, onJob, onCancel, onForm, busy }) 
               ${flowDbs.map((d) => html`<option value=${d}>${d}</option>`)}
             </select></label>`
           : html`<p class="note">This project has no biosphere database yet: tick the box above to add one.</p>`)}`}`;
-    if (!source) return html`<div class="project-form">${head}${actions(null)}</div>`;
+    if (!source) return html`<div class="project-form">${head()}${actions(null)}</div>`;
     if (source === "project") {
       const choices = (projects?.projects || []).filter((q) => q.twofive).flatMap((q) => q.databases.filter((d) => d.processes)
         .map((d) => ({ key: `${q.name}\n${d.name}`, project: q.name, database: d.name, depends: d.depends || [] })));
@@ -1066,7 +1074,7 @@ function ProjectForm({ form, folder, projects, onJob, onCancel, onForm, busy }) 
       const missing = picked ? picked.depends.filter((d) => d !== picked.database && !names.includes(d)) : [];
       const taken = names.includes(target);
       return html`
-        <div class="project-form">${head}
+        <div class="project-form">${head(html`<${InfoTip} text="Its processes and exchanges are copied, linked to the same databases of this project. About a minute for ecoinvent." label="About the copy" />`)}
           <form class="source-form" onSubmit=${submit("/api/brightway/databases/copy", { folder, project: form.project,
             database: picked?.database, new_name: target, from_project: picked?.project })}>
             <label>Database to copy
@@ -1077,8 +1085,7 @@ function ProjectForm({ form, folder, projects, onJob, onCancel, onForm, busy }) 
             ${taken && html`<div class="error">${form.project} already has ${target}.</div>`}
             ${missing.length > 0 && html`<div class="error">${form.project} has no ${missing.join(", ")}, which ${picked.database} links to: add
               ${missing.length === 1 ? "it" : "them"} to this project first (the biosphere and impact methods: <i>Brightway repository</i>).</div>`}
-            <${InfoTip} text="Its processes and exchanges are copied, linked to the same databases of this project. About a minute for ecoinvent." label="About the copy" />
-            ${actions("Copy the database", !picked || !target || taken || missing.length > 0)}
+                        ${actions("Copy the database", !picked || !target || taken || missing.length > 0)}
           </form>
         </div>`;
     }
@@ -1086,17 +1093,16 @@ function ProjectForm({ form, folder, projects, onJob, onCancel, onForm, busy }) 
       const repoVersion = version ?? versions[0] ?? "";
       const here = repoVersion === "bundled" ? hasBundled : flowDbs.includes(`ecoinvent-${repoVersion}-biosphere`);
       return html`
-        <div class="project-form">${head}
+        <div class="project-form">${head(html`<${InfoTip} label="About the repository" text=${`${here ? "Its biosphere is already in this project: only the missing impact methods are added."
+              : repoVersion === "bundled" ? "A few minutes, offline."
+                : `ecoinvent's elementary flows and impact methods of ${repoVersion}, from files.brightway.dev (about 20 MB, 3 minutes).`} Databases imported afterwards can link to them.`} />`)}
           <form class="source-form" onSubmit=${submit("/api/brightway/defaults/install", { folder, project: form.project, version: repoVersion })}>
             <label>Biosphere and impact methods of
               <select value=${repoVersion} onChange=${(e) => setVersion(e.target.value)}>
                 ${versions.map((v) => html`<option value=${v}>${defaultsLabel(v)}</option>`)}
                 <option value="bundled">${defaultsLabel("bundled")}</option>
               </select></label>
-            <${InfoTip} label="About the repository" text=${`${here ? "Its biosphere is already in this project: only the missing impact methods are added."
-              : repoVersion === "bundled" ? "A few minutes, offline."
-                : `ecoinvent's elementary flows and impact methods of ${repoVersion}, from files.brightway.dev (about 20 MB, 3 minutes).`} Databases imported afterwards can link to them.`} />
-            ${actions("Add from the repository", !repoVersion || here && repoVersion === "bundled")}
+                        ${actions("Add from the repository", !repoVersion || here && repoVersion === "bundled")}
           </form>
         </div>`;
     }
@@ -1104,23 +1110,22 @@ function ProjectForm({ form, folder, projects, onJob, onCancel, onForm, busy }) 
       const here = processDbs.includes(remoteName);
       const otherMethods = project?.methods > 0;
       return html`
-        <div class="project-form">${head}
+        <div class="project-form">${head(html`<${InfoTip} label="About BAFU" text=${here ? `${remoteName} is already in this project.`
+              : `${remoteName}: the Swiss LCI database of BAFU/UVEK (11,747 processes), with its elementary flows and the 21 Ecological Scarcity 2021 methods, from files.brightway.dev (about 60 MB).`} />`)}
           <form class="source-form" onSubmit=${submit("/api/brightway/remote/add", { folder, project: form.project, remote: remoteName })}>
-            <${InfoTip} label="About BAFU" text=${here ? `${remoteName} is already in this project.`
-              : `${remoteName}: the Swiss LCI database of BAFU/UVEK (11,747 processes), with its elementary flows and the 21 Ecological Scarcity 2021 methods, from files.brightway.dev (about 60 MB).`} />
-            ${!here && otherMethods && html`<p class="note">BAFU has its own elementary flows: the methods already in this project
+                        ${!here && otherMethods && html`<p class="note">BAFU has its own elementary flows: the methods already in this project
               score nothing on it, and its methods score nothing on the other databases.</p>`}
             ${actions("Add BAFU", here)}
           </form>
         </div>`;
     }
     if (source === "ecoinvent") return html`
-      <div class="project-form">${head}
-        <${EcoinventForm} folder=${folder} project=${form.project} existing=${processDbs} biosphere=${defaults ? null : biosphere}
+      <div class="project-form">
+        <${EcoinventForm} head=${head} folder=${folder} project=${form.project} existing=${processDbs} biosphere=${defaults ? null : biosphere}
           linked=${linked} onJob=${onJob} busy=${busy} actions=${actions} />
       </div>`;
     if (source === "ecospold2") return html`
-      <div class="project-form">${head}
+      <div class="project-form">${head(html`<${InfoTip} text="About 10 minutes for ecoinvent; an archive is unpacked first (2.6 GB, deleted afterwards)." label="About the import" />`)}
         <form class="source-form" onSubmit=${submit("/api/brightway/import", { folder, project: form.project, format: "ecospold2", path, database,
           biosphere, defaults: defaults ? chosenVersion : null })}>
           <label>ecoSpold2 release: the .7z archive, or the folder it was unpacked to
@@ -1129,12 +1134,11 @@ function ProjectForm({ form, folder, projects, onJob, onCancel, onForm, busy }) 
           ${defaults && chosenVersion && (database.match(/\d+\.\d+/)?.[0] ?? minor(chosenVersion)) !== minor(chosenVersion) && html`
             <p class="note">The release is not ecoinvent ${minor(chosenVersion)}: with that biosphere, some elementary flows may
               not link and some impact factors may not match.</p>`}
-          <${InfoTip} text="About 10 minutes for ecoinvent; an archive is unpacked first (2.6 GB, deleted afterwards)." label="About the import" />
-          ${actions("Import", !path || !database.trim() || !linked)}
+                    ${actions("Import", !path || !database.trim() || !linked)}
         </form>
       </div>`;
     return html`
-      <div class="project-form">${head}
+      <div class="project-form">${head(html`<${InfoTip} text="Needs internet access (unit definitions). A large export takes a while: about 15 minutes for Agribalyse with its ecoinvent background." label="About the import" />`)}
         <form class="source-form" onSubmit=${submit("/api/brightway/import", {
           folder, project: form.project, format: "simapro-csv", path, database, biosphere, defaults: defaults ? chosenVersion : null,
           link_to: linkTo, migrations: adapterList,
@@ -1178,8 +1182,7 @@ function ProjectForm({ form, folder, projects, onJob, onCancel, onForm, busy }) 
             <label class="check"><input type="radio" checked=${form.unlinked === "drop"} onChange=${() => onForm({ ...form, unlinked: "drop" })} />
               Import without them, and list them</label>
           </fieldset>
-          <${InfoTip} text="Needs internet access (unit definitions). A large export takes a while: about 15 minutes for Agribalyse with its ecoinvent background." label="About the import" />
-          ${actions(form.unlinked === "drop" ? "Import without the unlinked exchanges" : "Import", !path || !database.trim() || !linked)}
+                    ${actions(form.unlinked === "drop" ? "Import without the unlinked exchanges" : "Import", !path || !database.trim() || !linked)}
         </form>
       </div>`;
   }
@@ -1188,11 +1191,10 @@ function ProjectForm({ form, folder, projects, onJob, onCancel, onForm, busy }) 
     const taken = (project?.databases || []).some((d) => d.name === name.trim());
     return html`
       <form class="project-form" onSubmit=${submit("/api/brightway/databases/rename", { folder, project: form.project, database: form.database, new_name: name.trim() })}>
-        <h4>Rename ${form.database}</h4>
+        <h4>Rename ${form.database} <${InfoTip} text="The links inside the database follow its name. A model already built from it stays in the app under the old name." label="About renaming" /></h4>
         <label>New name <input value=${name} onInput=${(e) => setName(e.target.value)} autofocus placeholder=${form.database} /></label>
         ${users.length > 0 && html`<div class="error">${`${users.join(", ")} ${users.length === 1 ? "links" : "link"} to it: it cannot be renamed while ${users.length === 1 ? "it does" : "they do"}.`}</div>`}
         ${taken && html`<div class="error">${form.project} already has ${name.trim()}.</div>`}
-        <${InfoTip} text="The links inside the database follow its name. A model already built from it stays in the app under the old name." label="About renaming" />
         ${actions("Rename database", !name.trim() || name.trim() === form.database || taken || users.length > 0)}
       </form>`;
   }
@@ -1200,9 +1202,8 @@ function ProjectForm({ form, folder, projects, onJob, onCancel, onForm, busy }) 
     const rename = form.kind === "renameProject";
     return html`
       <form class="project-form" onSubmit=${submit(`/api/brightway/projects/${rename ? "rename" : "copy"}`, { folder, project: form.project, new_name: name.trim() })}>
-        <h4>${rename ? "Rename" : "Copy"} ${form.project}</h4>
+        <h4>${rename ? "Rename" : "Copy"} ${form.project} <${InfoTip} text=${rename ? "A model already built from it stays in the app under the old project name." : "Its databases and impact methods are copied: it can take a while."} label="About this" /></h4>
         <label>${rename ? "New name" : "Name of the copy"} <input value=${name} onInput=${(e) => setName(e.target.value)} autofocus placeholder=${form.project} /></label>
-        <${InfoTip} text=${rename ? "A model already built from it stays in the app under the old project name." : "Its databases and impact methods are copied: it can take a while."} label="About this" />
         ${actions(rename ? "Rename project" : "Copy project", !name.trim() || name.trim() === form.project)}
       </form>`;
   }
@@ -3755,7 +3756,7 @@ function ChartPanel({ data, info, method, chartMethods, onPickMethods, view, hea
         itemStyle: { color: colors.get(p.rows[0].id) || (p.impacts[0] < 0 ? cssVar("--bar-negative") : cssVar("--bar")) },
       })),
       label: { show: true, position: "right", formatter: (d) => fmt(d.value), color: cssVar("--muted") },
-    }, ...legendKeys.map((k) => ({ type: "bar", name: k.name, data: [], silent: true, itemStyle: { color: k.color } }))];  // the keys of the legend
+    }, ...legendKeys.map((k) => ({ type: "scatter", name: k.name, data: [], silent: true, itemStyle: { color: k.color } }))];  // the keys of the legend, with no bar to share the width
     return o;
   }, [parts, method, colors, nameStamp]);
 
@@ -3814,51 +3815,89 @@ function ChartPanel({ data, info, method, chartMethods, onPickMethods, view, hea
 }
 
 // The number of bars and rows of a contribution panel: the largest ``value``, the rest in one row
-function TopField({ value, onValue, what }) {
-  return html`<label class="top-field" title=${`The number of ${what} listed: the largest ones, the rest in one row`}>Top
-    <${NumberInput} class="cutoff" value=${value} min=${1} step=${5} onValue=${onValue} aria-label=${`Top ${what}`} /></label>`;
+// The filters of a flat list of rows, the cut-offs of the Custom view that make sense for it: the largest ``value`` rows,
+// the rows under ``value`` % of the total (to others), the largest rows until ``value`` % of the total
+const LIST_CUTS = {
+  top: { label: "Top", unit: "", hint: "The largest rows", default: 20, step: 5 },
+  total: { label: "Cut-off", unit: "%", hint: "Rows under this share of the total go to others", default: 1, step: 0.5, max: 100 },
+  cumulative: { label: "Cumulative", unit: "%", hint: "The largest rows until this share of the total", default: 90, step: 5, max: 100 },
+};
+// ``items`` largest first: { shown, rest }
+function cutList(items, size, { mode, value }) {
+  if (mode === "top") return { shown: items.slice(0, value), rest: items.slice(value) };
+  const total = items.reduce((t, it) => t + Math.abs(size(it)), 0) || 1;
+  if (mode === "total") {
+    let cut = items.length, under = 0;
+    while (cut > 0 && (under + Math.abs(size(items[cut - 1]))) / total <= value / 100) under += Math.abs(size(items[--cut]));
+    return { shown: items.slice(0, Math.max(cut, 1)), rest: items.slice(Math.max(cut, 1)) };
+  }
+  let kept = 0, reached = 0;
+  while (kept < items.length && reached / total < value / 100) reached += Math.abs(size(items[kept++]));
+  return { shown: items.slice(0, kept), rest: items.slice(kept) };
+}
+// What the server is asked for to cut a list here: the rows themselves for the shares, a number of them for the top
+const cutLimit = ({ mode, value }) => (mode === "top" ? value : 1000);
+// The control: the type of the filter (a click on its name) and its value, in little room
+function CutField({ cut, setCut, what }) {
+  const m = LIST_CUTS[cut.mode];
+  return html`<span class="cut-field" title=${`${m.hint} (${what})`}>
+    <${PopupMenu} label=${`${m.label} ▾`} className="cut-mode" title="Type of filter"
+      items=${Object.entries(LIST_CUTS).map(([k, q]) => ({ key: k, label: `${cut.mode === k ? "✓ " : "   "}${q.label}`, title: q.hint, run: () => setCut({ mode: k, value: q.default }) }))} />
+    <${NumberInput} class="cutoff" value=${cut.value} min=${1} max=${m.max} step=${m.step} onValue=${(v) => setCut({ ...cut, value: v })} aria-label=${`${m.label} ${what}`} />${m.unit && html`<span class="muted">${m.unit}</span>`}
+  </span>`;
 }
 
 // What each process of the supply chain contributes by its own emissions (the direct contributions, wherever it is in the
 // tree), largest first, as a chart and as the table of the same rows: from /api/global/contributors with no group
-// (everything is "other")
+// (everything is "other"). A click on a bar or on a row chooses it in both.
 function ProcessContributions({ info, root, amount, method, onInfo }) {
-  const [limit, setLimit] = useState(20);
-  const [found, setFound] = useState(() => peek("/api/global/contributors", { root: root.index, amount, groups: {}, flow_groups: {}, order: [], rule: "direct", group: "other", method, limit: 20 }) ?? null);
+  const [cut, setCut] = useState({ mode: "top", value: 20 });
+  const ask = (limit) => ({ root: root.index, amount, groups: {}, flow_groups: {}, order: [], rule: "direct", group: "other", method, limit });
+  const [found, setFound] = useState(() => peek("/api/global/contributors", ask(20)) ?? null);
   const [error, setError] = useState(null);
+  const [chosen, setChosen] = useState(null);  // the activity chosen
+  const chosenRow = useRef(null);
   useEffect(() => {
     let live = true;
     setError(null);
-    request("/api/global/contributors", { root: root.index, amount, groups: {}, flow_groups: {}, order: [], rule: "direct", group: "other", method, limit })
+    request("/api/global/contributors", ask(cutLimit(cut)))
       .then((f) => live && setFound(f)).catch((e) => live && setError(e.message));
     return () => { live = false; };
-  }, [root.index, amount, method, limit]);
+  }, [root.index, amount, method, cut.mode, cutLimit(cut)]);
+  useEffect(() => setChosen(null), [root.index, method]);
+  useEffect(() => { chosenRow.current?.scrollIntoView({ block: "nearest", behavior: "smooth" }); }, [chosen]);
   const unitLabel = info.methods[method].unit;
-  const shown = found?.contributors || [];
+  const split = found && cutList(found.contributors, (c) => c.impact, cut);
+  const shown = split?.shown || [];
+  const others = found && { count: found.others.count + split.rest.length, impact: found.others.impact + split.rest.reduce((t, c) => t + c.impact, 0) };
   const share = (v) => pct(found?.total ? v / found.total : 0);
   const rows = found ? [...shown.map((c) => [`${c.name} (${c.location})`, c.impact, c]),
-    ...(found.others.count > 0 ? [[`${found.others.count} more`, found.others.impact, null]] : [])] : [];
+    ...(others.count > 0 ? [[`${others.count} more`, others.impact, null]] : [])] : [];
+  const choose = (c) => setChosen(chosen === c.index ? null : c.index);
   const option = useMemo(() => {
     const o = baseOption();
-    o.yAxis = { ...o.yAxis, type: "category", data: rows.map(([n]) => n), inverse: true,
+    o.yAxis = { ...o.yAxis, type: "category", data: rows.map(([n]) => n), inverse: true, triggerEvent: true,
       axisLabel: { ...o.yAxis.axisLabel, width: 240, overflow: "truncate" } };
     o.xAxis = { ...o.xAxis, type: "value", name: unitLabel };
     o.tooltip.valueFormatter = (v) => `${fmt(v)} ${unitLabel} (${share(v)})`;
-    o.series = [{ type: "bar", data: rows.map(([, v, c]) => ({ value: v,
-        itemStyle: { color: cssVar(!c ? "--muted" : v < 0 ? "--bar-negative" : "--bar") } })),
+    o.series = [{ type: "bar", cursor: "pointer", data: rows.map(([, v, c]) => ({ value: v,
+        itemStyle: { color: cssVar(!c ? "--muted" : v < 0 ? "--bar-negative" : "--bar"), opacity: chosen !== null && !(c && c.index === chosen) ? 0.35 : 1 } })),
       label: { show: true, position: "right", formatter: (d) => share(d.value), color: cssVar("--muted") } }];
     return o;
-  }, [found, unitLabel]);
+  }, [found, unitLabel, chosen, cut]);
   if (error) return html`<div class="error">${error}</div>`;
   if (!found) return html`<${Waiting} text="Computing…" />`;
   return html`
     <div class="panel">
-      <div class="row"><${TopField} value=${limit} onValue=${setLimit} what="processes" /></div>
-      <${Chart} option=${option} height=${Math.max(200, rows.length * 26 + 60)} />
+      <div class="row"><${CutField} cut=${cut} setCut=${setCut} what="processes" /></div>
+      <${Chart} option=${option} height=${Math.max(200, rows.length * 26 + 60)}
+        onClick=${(e) => { const i = e.componentType === "yAxis" ? rows.findIndex(([n]) => n === e.value) : e.dataIndex; const c = rows[i]?.[2]; if (c) choose(c); }} />
       <table class="results chart-results direct-contributions">
         <thead><tr><th>Process <span class="muted">· direct contributions</span></th><th class="num">${unitLabel}</th><th class="num">Share</th></tr></thead>
         <tbody>${shown.map((c) => html`
-          <tr key=${c.index} class="clickable" ...${dragProcess(c.index)} title=${`${c.reference_product ?? ""} | ${c.name} | ${c.location}: right-click for its details`}
+          <tr key=${c.index} class=${`clickable ${chosen === c.index ? "selected" : ""}`} ref=${chosen === c.index ? chosenRow : null} ...${dragProcess(c.index)}
+              title=${`${c.reference_product ?? ""} | ${c.name} | ${c.location}: click to find it in the chart, right-click for its details`}
+              onClick=${() => choose(c)}
               onContextMenu=${(e) => { e.preventDefault(); onInfo?.(c.index, e.clientX, e.clientY); }}>
             <td>${c.name} <span class="loc-chip">${c.location}</span></td>
             <td class="num">${fmt(c.impact)}</td>
@@ -3866,7 +3905,7 @@ function ProcessContributions({ info, root, amount, method, onInfo }) {
           </tr>`)}
         </tbody>
         <tfoot>
-          ${found.others.count > 0 && html`<tr><td class="muted">${found.others.count} more</td><td class="num">${fmt(found.others.impact)}</td><td class="num">${share(found.others.impact)}</td></tr>`}
+          ${others.count > 0 && html`<tr><td class="muted">${others.count} more</td><td class="num">${fmt(others.impact)}</td><td class="num">${share(others.impact)}</td></tr>`}
           <tr><th>Total · ${found.count} ${found.count === 1 ? "process" : "processes"}</th><th class="num">${fmt(found.total)}</th><th class="num">100%</th></tr>
         </tfoot>
       </table>
@@ -4456,30 +4495,27 @@ function GlobalPanel({ info, root, amount, method, rules, view, rule, setRule, o
 // ---------------------------------------------------------------- elementary flow contribution
 // The whole inventory of the process, characterised: which substances make the
 // score. Clicking a flow lists the processes emitting it.
-function FlowPanel({ info, root, amount, method, onLocate, onInfo, onFlowInfo, rules, setRules, view }) {
-  // The rows follow the Group by of the view: the substance, the compartment, the subcompartment; none: one row per flow
-  const keys = [view.groupSubstance && "name", view.groupCompartment && "compartment", view.groupSubcompartment && "subcompartment"].filter(Boolean);
+function FlowPanel({ info, root, amount, method, onLocate, onInfo, onFlowInfo, rules, setRules }) {
+  // The rows: by substance, by compartment, by subcompartment, alone or together; none: one row per flow
+  const [grouped, setGrouped] = useState({ name: true, compartment: false, subcompartment: false });
+  const keys = ["name", "compartment", "subcompartment"].filter((k) => grouped[k]);
   const by = keys.join("+") || "flow";
   const withName = keys.length === 0 || keys.includes("name");
   const things = !keys.length ? "flows" : withName ? "substances" : "groups";
-  const [top, setTop] = useState(25);
+  const [cut, setCut] = useState({ mode: "top", value: 25 });
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
   const [flow, setFlow] = useState(null);
   const [contributors, setContributors] = useState(null);
   const contributorsBox = useRef(null);
 
-  // Named rules on elementary flows: a substance in one takes its colour
-  const flowGroups = useMemo(() => Object.fromEntries(rules.filter((r) => r.target === "flows" && r.predicate && !r.disabled && !r.owner)
-    .map((r) => [r.name, r.predicate])), [rules]);
-  const colorOfItem = (it) => view.groupColors && it?.group ? colorOf(it.group, view.ruleColors) : null;
   useEffect(() => {
     let cancelled = false;
     setError(null);
-    request("/api/flows", { root: root.index, amount, method, by: "flow", ...(keys.length ? { keys } : {}), limit: top, flow_groups: flowGroups })
+    request("/api/flows", { root: root.index, amount, method, by: "flow", ...(keys.length ? { keys } : {}), limit: cutLimit(cut) })
       .then((d) => !cancelled && setResult(d)).catch((e) => !cancelled && setError(e.message));
     return () => { cancelled = true; };
-  }, [root, amount, method, by, top, flowGroups]);
+  }, [root, amount, method, by, cut.mode, cutLimit(cut)]);
   useEffect(() => setFlow(null), [root, by]);
   const label = (it) => (withName && (!keys.length || keys.some((k) => k !== "name")) && it.compartment ? `${it.name} (${it.compartment})` : it.name);
   // Processes emitting the chosen flow (all its compartments, by substance)
@@ -4506,9 +4542,12 @@ function FlowPanel({ info, root, amount, method, onLocate, onInfo, onFlowInfo, r
   const keyOf = (it) => it.flows.join(",");
   const isChosen = (it) => flow && keyOf(flow) === keyOf(it);
   const choose = (it) => setFlow(isChosen(it) ? null : it);
+  const split = result && cutList(result.items, (it) => it.impact, cut);
+  const shown = split?.shown || [];
+  const others = result && { count: result.others.count + split.rest.length, impact: result.others.impact + split.rest.reduce((t, it) => t + it.impact, 0) };
   const entries = result ? [
-    ...result.items.map((it) => [label(it), it.impact, it]),
-    ...(result.others.count ? [[`others (${result.others.count} ${things})`, result.others.impact, null]] : []),
+    ...shown.map((it) => [label(it), it.impact, it]),
+    ...(others.count ? [[`others (${others.count} ${things})`, others.impact, null]] : []),
   ] : [];
   const option = useMemo(() => {
     const o = baseOption();
@@ -4519,18 +4558,22 @@ function FlowPanel({ info, root, amount, method, onLocate, onInfo, onFlowInfo, r
     o.series = [{ type: "bar", cursor: "pointer",
       data: entries.map(([, v, it]) => ({
         value: v,
-        itemStyle: { color: colorOfItem(it) || cssVar(!it ? "--muted" : v < 0 ? "--bar-negative" : "--bar"),
+        itemStyle: { color: cssVar(!it ? "--muted" : v < 0 ? "--bar-negative" : "--bar"),
           opacity: flow && !(it && isChosen(it)) ? 0.35 : 1 },
       })),
       label: { show: true, position: "right", formatter: (d) => ofTotal(d.value), color: cssVar("--muted") } }];
     return o;
-  }, [result, flow, view.groupColors, view.ruleColors, paletteStamp]);
+  }, [result, flow, cut]);
 
   return html`
     <div class="panel">
       <div class="row">
-        <span class="muted" title="Set in the Custom view: Group by">${keys.length ? `By ${keys.map((k) => (k === "name" ? "substance" : k)).join(", ")}` : "By flow"}</span>
-        <${TopField} value=${top} onValue=${setTop} what=${things} />
+        <div class="view-group" role="group" aria-label="Group by">
+          <span class="view-group-label">Group by</span>
+          ${[["name", "Substance", "Flows of a substance together"], ["compartment", "Compartment", "By compartment"], ["subcompartment", "Subcompartment", "By subcompartment"]].map(([k, label, hint]) => html`
+            <button class=${grouped[k] ? "primary" : ""} aria-pressed=${grouped[k]} title=${hint} onClick=${() => setGrouped({ ...grouped, [k]: !grouped[k] })}>${label}</button>`)}
+        </div>
+        <${CutField} cut=${cut} setCut=${setCut} what=${things} />
       </div>
       ${error && html`<div class="error">${error}</div>`}
       ${result && html`
@@ -4541,16 +4584,16 @@ function FlowPanel({ info, root, amount, method, onLocate, onInfo, onFlowInfo, r
             <th>${!keys.length ? "Flow" : withName ? "Substance" : keys.join(", ")} <span class="muted">· click for the processes emitting it</span></th>
             <th class="num">amount</th><th class="num">${methodUnit}</th><th class="num">Share</th>
           </tr></thead>
-          <tbody>${result.items.map((it) => html`
+          <tbody>${shown.map((it) => html`
             <tr key=${keyOf(it)} class="clickable ${isChosen(it) ? "selected" : ""}" onClick=${() => choose(it)}
                 onContextMenu=${(e) => onFlowInfo(flowTarget(it), e)} title="Click for the processes emitting it, right-click for its details">
-              <td>${isChosen(it) ? "▾" : "▸"} ${colorOfItem(it) && html`<span class="swatch" style=${{ background: colorOfItem(it) }} title=${`In the group ${it.group}`}></span>`}${it.name} <span class="muted">${it.compartment}</span></td>
+              <td>${isChosen(it) ? "▾" : "▸"} ${it.name} <span class="muted">${it.compartment}</span></td>
               <td class="num">${it.unit ? `${fmtAmount(it.amount)} ${unit(it.unit)}` : ""}</td><td class="num">${fmt(it.impact)}</td><td class="num">${ofTotal(it.impact)}</td>
             </tr>`)}
-            ${result.others.count > 0 && html`
+            ${others.count > 0 && html`
               <tr class="muted">
-                <td>+ ${result.others.count} more ${things}</td><td></td>
-                <td class="num">${fmt(result.others.impact)}</td><td class="num">${ofTotal(result.others.impact)}</td>
+                <td>+ ${others.count} more ${things}</td><td></td>
+                <td class="num">${fmt(others.impact)}</td><td class="num">${ofTotal(others.impact)}</td>
               </tr>`}
           </tbody>
           <tfoot><tr>
@@ -4566,7 +4609,7 @@ function FlowPanel({ info, root, amount, method, onLocate, onInfo, onFlowInfo, r
               : " …"}</span>
             ${(() => {
               // A substance: all its compartments, by name; a flow: that flow only
-              const rule = by === "substance"
+              const rule = by === "name"
                 ? { name: flow.name, predicate: { field: "name", op: "eq", value: flow.name }, target: "flows", scope: "*" }
                 : { name: `${flow.name} (${flow.compartment})`, predicate: { flows: flow.flows }, target: "flows", scope: "*" };
               const exists = rules.some((r) => r.name === rule.name && r.target === "flows");
@@ -4805,7 +4848,7 @@ function LensPanel({ info, lens, tab, setTab, tabs, focusedTab, comparing, view,
     <div class="panel" style=${{ display: tab === "processes" ? "" : "none" }}>
       <${ProcessesPanel} tabs=${compareTabs} compare=${compare} setCompare=${setCompare} windows=${windows} />
     </div>
-    <div class="panel" style=${{ display: tab === "methods" ? "" : "none" }}>
+    <div class="panel methods-panel" style=${{ display: tab === "methods" ? "" : "none" }}>
       ${methods && html`<${MethodMenu} info=${info} method=${lens.method} setMethod=${lens.setMethod} chartMethods=${lens.chartMethods} setChartMethods=${lens.setChartMethods}
         format=${lens.nameFormat} setFormat=${lens.setNameFormat} />`}
     </div>
@@ -5668,7 +5711,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
               onInfo=${(index, x, y) => openInfo({ index, row: null, x, y })} />`}
           ${tab === "flows" && root && html`<${FlowPanel} info=${info} root=${root} amount=${amount} method=${method}
               onLocate=${goTo} onInfo=${(index, x, y) => openInfo({ index, row: null, x, y })} onFlowInfo=${showFlowInfo}
-              rules=${rules} setRules=${setRules} view=${view} />`}
+              rules=${rules} setRules=${setRules} />`}
           ${tab === "global" && html`<${GlobalPanel} info=${info} root=${root} amount=${amount} method=${method} rules=${rules} view=${view}
               rule=${lens.attribution} setRule=${lens.setAttribution}
               onLocate=${goTo} onInfo=${(index, x, y) => openInfo({ index, row: null, x, y })} />`}
@@ -5777,7 +5820,7 @@ function treeEntries(entries, rowsOf, roots) {
 
 // The breakdown of the bars: by rules, by flows, or by processes (the rows of each tab's view, or what each process
 // contributes by its own emissions). One at a time.
-function CompareBasis({ basis, setBasis, limit, setLimit, none }) {
+function CompareBasis({ basis, setBasis, cut, setCut, none }) {
   return html`
     <div class="view-group" role="group" aria-label="Breakdown">
       <span class="view-group-label">Breakdown</span>
@@ -5786,8 +5829,7 @@ function CompareBasis({ basis, setBasis, limit, setLimit, none }) {
           ["tree", "Custom view", "Rows of each tab's view"], ["activities", "Activity", "By process, own emissions"]].map(([k, label, hint]) => html`
           <button class=${basis === k ? "primary" : ""} onClick=${() => setBasis(k)} title=${hint}>${label}</button>`)}
       </span>
-      ${(basis === "flows" || basis === "activities") && html`
-        <${TopField} value=${limit} onValue=${setLimit} what="bars" />`}
+      ${(basis === "flows" || basis === "activities") && html`<${CutField} cut=${cut} setCut=${setCut} what="bars" />`}
     </div>`;
 }
 
@@ -5809,7 +5851,7 @@ function waterfallRows(from, to, names) {
   return rows;
 }
 
-function CompareBars({ results, base, unitLabel, names, groupColor, mode, setMode, basis, setBasis, limit, setLimit }) {
+function CompareBars({ results, base, unitLabel, names, groupColor, mode, setMode, basis, setBasis, cut, setCut }) {
   const noun = { none: "Total", groups: "Group", tree: "Row", flows: "Flow", activities: "Process" }[basis];
   const baseTotal = Math.abs(results[base].total);
   const value = (r, g) => {
@@ -5843,7 +5885,7 @@ function CompareBars({ results, base, unitLabel, names, groupColor, mode, setMod
   };
   return html`
     <div class="row">
-      <${CompareBasis} none basis=${basis} setBasis=${setBasis} limit=${limit} setLimit=${setLimit} />
+      <${CompareBasis} none basis=${basis} setBasis=${setBasis} cut=${cut} setCut=${setCut} />
       <span style="flex:1"></span>
       <button onClick=${exportCsv}>Export CSV</button>
     </div>
@@ -5874,7 +5916,7 @@ function CompareBars({ results, base, unitLabel, names, groupColor, mode, setMod
     </table>`;
 }
 
-function CompareDifference({ results, base, target, setTarget, unitLabel, names, basis, setBasis, limit, setLimit }) {
+function CompareDifference({ results, base, target, setTarget, unitLabel, names, basis, setBasis, cut, setCut }) {
   const noun = { groups: "Group", tree: "Row", flows: "Flow", activities: "Process" }[basis];
   const from = results[base], to = results[target];
   const rows = useMemo(() => waterfallRows(from, to, names), [from, to, names]);
@@ -5924,7 +5966,7 @@ function CompareDifference({ results, base, target, setTarget, unitLabel, names,
   };
   return html`
     <div class="row">
-      <${CompareBasis} basis=${basis} setBasis=${setBasis} limit=${limit} setLimit=${setLimit} />
+      <${CompareBasis} basis=${basis} setBasis=${setBasis} cut=${cut} setCut=${setCut} />
       <span style="flex:1"></span>
       <button onClick=${exportCsv}>Export CSV</button>
     </div>
@@ -6158,10 +6200,11 @@ function ComparisonView({ info, tabs, compare, setCompare }) {
   // What the bars are split into: groups, the tabs' displayed trees (asked of /api/rows tab by tab; /api/compare then
   // only gives the totals) or elementary flows
   const basis = panel !== "groups" && compare.basis === "none" ? "groups" : compare.basis || "groups";
-  const limit = compare.limit || 15;
+  const cut = compare.cut || { mode: "top", value: compare.limit || 15 };
+  const listed = basis === "flows" || basis === "activities";  // the bars are the rows of a list: the filter applies
   const noBreakdown = basis === "none";
   const body = { entries: chosen.map((t) => ({ root: t.state.root.index, amount: t.state.amount })), method, methods: heatMethods, rule,
-    basis: basis === "flows" ? "flows" : basis === "activities" ? "activities" : "groups", limit, groups: basis === "groups" ? groups : {}, flow_groups: basis === "groups" ? flowGroups : {}, flow_owners: basis === "groups" ? flowOwners : {},
+    basis: basis === "flows" ? "flows" : basis === "activities" ? "activities" : "groups", limit: listed ? cutLimit(cut) : 15, groups: basis === "groups" ? groups : {}, flow_groups: basis === "groups" ? flowGroups : {}, flow_owners: basis === "groups" ? flowOwners : {},
     order: basis === "groups" ? order : [] };
   const trees = basis === "tree" ? chosen.map((t) => treeBody(t.state, method, rule)) : null;
   const key = JSON.stringify([body, trees]);
@@ -6176,7 +6219,20 @@ function ComparisonView({ info, tabs, compare, setCompare }) {
       .catch((e) => !cancelled && setError(e.message));
     return () => { cancelled = true; };
   }, [key]);
-  const ready = data?.key === key ? (noBreakdown ? data.entries.map((e) => ({ ...e, groups: { [TOTAL_BAR]: e.total } })) : data.entries) : null;
+  // The filter of a list of bars: the largest (all the tabs together) stay, the rest goes to others
+  const filtered = (entries) => {
+    const all = [...new Set(entries.flatMap((e) => Object.keys(e.groups)))].filter((g) => g !== OTHER_GROUP);
+    const size = (g) => entries.reduce((t, e) => t + Math.abs(e.groups[g] || 0), 0);
+    const { shown } = cutList(all.map((g) => ({ g, size: size(g) })).sort((a, b) => b.size - a.size), (it) => it.size, cut);
+    const keep = new Set(shown.map((it) => it.g));
+    return entries.map((e) => {
+      const groups = {};
+      let rest = e.groups[OTHER_GROUP] || 0, any = OTHER_GROUP in e.groups;
+      for (const [g, v] of Object.entries(e.groups)) { if (g === OTHER_GROUP) continue; if (keep.has(g)) groups[g] = v; else { rest += v; any = true; } }
+      return { ...e, groups: any ? { ...groups, [OTHER_GROUP]: rest } : groups };
+    });
+  };
+  const ready = data?.key === key ? (noBreakdown ? data.entries.map((e) => ({ ...e, groups: { [TOTAL_BAR]: e.total } })) : listed && cut.mode !== "top" ? filtered(data.entries) : data.entries) : null;
   const results = ready ? chosen.map((t, i) => ({ id: t.id, label: labels[t.id], color: compareColor(tabs.indexOf(t)), ...ready[i] })) : null;
   const names = useMemo(() => {
     if (!results) return [];
@@ -6214,10 +6270,10 @@ function ComparisonView({ info, tabs, compare, setCompare }) {
             : !results ? html`<${Waiting} text="Computing…" />`
             : panel === "groups" ? html`<${CompareBars} results=${results} base=${base} unitLabel=${unitLabel} names=${names} groupColor=${groupColor}
                 mode=${compare.mode || "absolute"} setMode=${(mode) => set({ mode })} basis=${basis} setBasis=${(b) => set({ basis: b })}
-                limit=${limit} setLimit=${(n) => set({ limit: n })} />`
+                cut=${cut} setCut=${(c) => set({ cut: c })} />`
             : panel === "difference" ? html`<${CompareDifference} results=${results} base=${base} target=${target} setTarget=${(t) => set({ target: t })}
                 unitLabel=${unitLabel} names=${names}
-                basis=${basis} setBasis=${(b) => set({ basis: b })} limit=${limit} setLimit=${(n) => set({ limit: n })} />`
+                basis=${basis} setBasis=${(b) => set({ basis: b })} cut=${cut} setCut=${(c) => set({ cut: c })} />`
             : html`<${CompareMethods} results=${results} base=${base} info=${info} methods=${heatMethods}
                 sorted=${!!compare.sorted} setSorted=${(sorted) => set({ sorted })} />`}
         </div>

@@ -940,3 +940,17 @@ textarea.editing { width: 100%; box-sizing: border-box; }
 
 .icon-plain { border: none; background: none; padding: 4px 6px; color: var(--muted); display: inline-flex; align-items: center; border-radius: 6px; }
 .icon-plain:hover:not(:disabled) { color: var(--accent); background: var(--hover); }
+
+/* The folds: an arrow as strong as the header */
+.fold-caret, .fold-toggle .caret { color: var(--text); font-size: 21px; font-weight: 700; width: 22px; height: 22px; line-height: 22px; padding: 0; text-align: center; border-radius: 5px; }
+.fold-caret:hover, .fold-toggle:hover .caret { color: var(--accent); background: var(--hover); }
+.fold-head { font-size: 14px; }
+/* Method selection: the list takes the room down to the bottom of the pane */
+.leftbar .methods-panel { display: flex; flex-direction: column; min-height: 0; }
+.leftbar .methods-panel .lens-menu { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.leftbar .methods-panel .lens-menu .method-tree { flex: 1; min-height: 120px; max-height: none; overflow: auto; }
+/* The filter of a list: its type and its value */
+.cut-field { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; font-size: 12px; }
+.cut-field input { width: 56px; }
+.cut-field .cut-mode { border: none; background: none; padding: 2px 4px; color: var(--muted); font: inherit; font-weight: 600; }
+.cut-field .cut-mode:hover { color: var(--accent); }
