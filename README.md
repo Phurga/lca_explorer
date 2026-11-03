@@ -71,7 +71,7 @@ your Brightway (v2.5) project folder.
 ## Quick start
 
 **Use the latest [release](https://github.com/Phurga/lca_explorer/releases) to get a stable version**: download it,
-or clone the repository and check out its tag (`git checkout v1.3.0`). The `main` branch is not guaranteed to be
+or clone the repository and check out its tag (`git checkout v1.4.0`). The `main` branch is not guaranteed to be
 stable: it can hold work in progress between two releases.
 
 From the repository folder:
@@ -95,7 +95,7 @@ Each version is a tagged release (see the [releases](https://github.com/Phurga/l
 [changelog](CHANGELOG.md)); the stable one is the latest release. `main` follows the work and can be ahead of it,
 without any guarantee. To update, download the latest release and put your `data/` folder in it, or in your clone
 run `git fetch --tags` and `git checkout` the new tag. To stay on one version, stay on its tag (`git checkout
-v1.3.0`). Your data and Brightway projects are never touched by an update.
+v1.4.0`). Your data and Brightway projects are never touched by an update.
 
 The app starts empty: **Projects** lists the databases of your Brightway 2.5 projects (it reads
 `BRIGHTWAY2_DIR`, else Brightway's default folder) and lets you import ecoSpold2, SimaPro CSV or ecoinvent

@@ -9,6 +9,10 @@ version, `main` can be ahead of it with work in progress.
 
 Changes on `dev`, not released yet.
 
+## 1.4.0 - 2026-11-03
+
+Rules on the emissions of some processes, colours that follow the rules everywhere, filters and exports on every list, and a shorter tree with *Collapse singletons*.
+
 - **Collapse singletons** (Custom view, *Organize*): a process made of only one process (a market of one supplier, a
   chain of them) shows as the last process of the chain, "via" those above it, with the same impacts.
 - **Rules on emissions of some processes**: a rule on elementary flows can have an *Owning process* query (e.g. the
