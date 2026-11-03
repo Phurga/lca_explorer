@@ -9,6 +9,8 @@ version, `main` can be ahead of it with work in progress.
 
 Changes on `dev`, not released yet.
 
+- **Collapse singletons** (Custom view, *Organize*): a process made of only one process (a market of one supplier, a
+  chain of them) shows as the last process of the chain, "via" those above it, with the same impacts.
 - **Rules on emissions of some processes**: a rule on elementary flows can have an *Owning process* query (e.g. the
   N2O only of processes of CPC section 1); it applies in the tree, *Rules contributions* and Compare.
 - Fixed: *Colours: Rules* only coloured the rows inside a group, so nothing was coloured with *Group by rules* off (the

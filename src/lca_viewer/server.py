@@ -77,6 +77,8 @@ class ViewState(BaseModel):
     ungrouped: list[str] = []
     substitutions: dict[str, int] = {}
     group_products: bool = False
+    collapse_singletons: bool = False
+    """A process made of only one process is shown as that process (see ``View.collapse_singletons``)."""
     methods: list[int] = []
     """Methods whose impacts are returned, in this order (default: ``method`` only)."""
     labels: dict[str, str] = {}
@@ -418,6 +420,8 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
             if r.kind == "process":
                 out["meta"] = meta(r.node.product)
                 out["replaced"] = r.replaced
+                if r.chain:
+                    out["chain"] = [meta(n.product) for n in r.chain]  # the processes made of this one alone, first first
                 supplied = supplying(r)
                 comments: list[str] = []
                 for e in supplied:

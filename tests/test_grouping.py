@@ -1128,3 +1128,56 @@ def test_ungrouping_a_product_group_keeps_its_members_as_rows(grouping_model):
     again = next(r for r in view.rows() if r.kind == "group")
     assert again.id == group.id and {m.product for m in again.node_members} == {m.product for m in group.node_members}
     assert not [r for r in view.rows() if r.regroup]
+
+
+@pytest.fixture
+def markets_model():
+    """bread (0) <- market for flour (1) <- flour (2) <- market for wheat (3) <- wheat (4): each market has one supplier
+    and no emissions of its own; bread, flour and wheat emit CO2."""
+    import scipy.sparse as sp
+
+    from lca_viewer.model import LCAModel, Method
+
+    names = ["bread", "market for flour", "flour", "market for wheat", "wheat"]
+    activities = pd.DataFrame({"name": names, "reference_product": ["bread", "flour", "flour", "wheat", "wheat"],
+                               "location": ["world"] * 5, "unit": ["kg"] * 5})
+    flows = pd.DataFrame({"name": ["CO2"], "unit": ["kg"]})
+    inputs = [(1, 0, 0.8), (2, 1, 1.0), (3, 2, 0.5), (4, 3, 1.0)]  # (input, user, amount)
+    A = sp.csc_matrix(([1.0] * 5 + [-a for _, _, a in inputs], ([*range(5), *(i for i, _, _ in inputs)],
+                                                                 [*range(5), *(u for _, u, _ in inputs)])), shape=(5, 5))
+    B = sp.csc_matrix(([0.3, 0.5, 2.0], ([0, 0, 0], [0, 2, 4])), shape=(1, 5))
+    return LCAModel(A=A, B=B, activities=activities, flows=flows, methods=[Method(("climate change",), "kg", np.array([1.0]))])
+
+
+def test_collapse_singletons_shows_the_end_of_a_chain_of_one_process(markets_model):
+    plain = View(Tree(markets_model, 0))
+    plain.expand("0")
+    assert [r.id for r in plain.rows() if r.kind == "process"] == ["0", "0/1"]
+    view = View(Tree(markets_model, 0), collapse_singletons=True)
+    view.expand("0")
+    flour = next(r for r in view.rows() if r.parent == "0" and r.kind == "process")
+    # the market of one supplier is the flour production: one row, the same impacts
+    assert flour.id == "0/1/2" and [n.id for n in flour.chain] == ["0/1"]
+    assert np.allclose(flour.impacts, plain.rows()[1].impacts)
+    view.expand(flour.id)
+    wheat = next(r for r in view.rows() if r.parent == flour.id and r.kind == "process")
+    assert wheat.id == "0/1/2/3/4" and [n.id for n in wheat.chain] == ["0/1/2/3"]
+    assert np.allclose(sum(r.impacts for r in view.frontier()), view.tree.root.impacts)
+    # a process emitting, or with several inputs, is not collapsed; the root never is
+    assert view.rows()[0].chain is None
+    # a collapsed process is found through the row standing for it
+    found = View(Tree(markets_model, 0), collapse_singletons=True)
+    assert found.reveal("0/1/2/3") == "0/1/2/3/4"
+    assert View.from_dict(markets_model, view.to_dict()).collapse_singletons
+
+
+def test_rows_name_the_processes_collapsed_into_them(markets_model):
+    from fastapi.testclient import TestClient
+    from lca_viewer.server import create_app
+
+    client = TestClient(create_app(markets_model))
+    rows = client.post("/api/rows", json={"root": [0], "expanded": ["0"], "collapse_singletons": True}).json()["rows"]
+    flour = next(r for r in rows if r["id"] == "0/1/2")
+    assert [m["name"] for m in flour["chain"]] == ["market for flour"] and flour["meta"]["name"] == "flour"
+    plain = client.post("/api/rows", json={"root": [0], "expanded": ["0"]}).json()["rows"]
+    assert all("chain" not in r for r in plain)

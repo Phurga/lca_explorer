@@ -253,10 +253,11 @@ const DEFAULT_CUTOFF = 0;
 // list (a switch is kept as "1"/"0", a list as JSON, a text as it is)
 const DEFAULT_VIEW = {
   naming: "full", splitByType: false, hideOthers: false, groupProducts: false, groupByRules: false, groupSubstance: false,
-  groupCompartment: false, groupSubcompartment: false, groupFields: [], groupColors: false, colorBy: "group", columns: DEFAULT_VIEW_COLUMNS,
+  groupCompartment: false, groupSubcompartment: false, groupFields: [], collapseSingletons: false, groupColors: false, colorBy: "group",
+  columns: DEFAULT_VIEW_COLUMNS,
 };
 // The options the rows of a tree depend on (sent to /api/rows): kept with each tab, for the comparison of the tabs' trees
-const TREE_OPTIONS = ["groupProducts", "groupByRules", "groupSubstance", "groupCompartment", "groupSubcompartment", "groupFields"];
+const TREE_OPTIONS = ["groupProducts", "groupByRules", "groupSubstance", "groupCompartment", "groupSubcompartment", "groupFields", "collapseSingletons"];
 const pick = (object, keys) => Object.fromEntries(keys.filter((k) => k in object).map((k) => [k, object[k]]));
 // The rules a workspace starts with
 const DEFAULT_RULE_LABELS = ["Transport", "Electricity", "Heat & fuels", "Infrastructure", "Waste treatment"];
@@ -2795,6 +2796,7 @@ function ViewBar({ view, setView, example, fields = [] }) {
         <span class="view-group-label">Organize</span>
         ${toggle("splitByType", "Split by type", "Sections by exchange type")}
         ${toggle("hideOthers", "Hide others", "No others rows in the tree")}
+        ${toggle("collapseSingletons", "Collapse singletons", "A process made of only one process (a market of one supplier…) shows as that process, down the chain")}
       </div>
       <div class="view-group" role="group" aria-label="Names">
         <span class="view-group-label">Names</span>
@@ -3626,7 +3628,9 @@ function baseNameItem(item, naming, recipe, byId, withEmitter = true) {
 // Name of a tree row (list and tree view), following the view's naming choice
 function rowNames(r, byId, view) {
   const names = baseRowNames(r, byId, view);
-  return r.custom ? { ...names, main: r.custom } : names;
+  // Collapse singletons: the processes made of this one alone, above it
+  const via = r.chain?.length ? `via ${r.chain.map((m) => m.name).join(" › ")}` : "";
+  return { ...names, ...(r.custom ? { main: r.custom } : {}), ...(via ? { qual: [via, names.qual].filter(Boolean).join(" · ") } : {}) };
 }
 function baseRowNames(r, byId, view) {
   if (r.kind === "process" && view.naming === "full") {
@@ -5089,7 +5093,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
   const viewState = (exp = expanded) => ({
     root: [root.index], amount, expanded: [...exp], rules: [...(view.groupByRules === false ? [] : rules), ...flowRulesOf(view)], cutoff: cutoffValue(cutoff, cutoffBasis), cutoff_basis: cutoffBasis, method, methods: chartMethods,
     pinned: [...pinned], others: [...others], merges: editing ? [] : merges, ungrouped: [...ungrouped],
-    substitutions: editing ? {} : substitutions, group_products: view.groupProducts,
+    substitutions: editing ? {} : substitutions, group_products: view.groupProducts, collapse_singletons: view.collapseSingletons,
     colour_rules: rules,
     attribution: lens.attribution,
   });
@@ -5721,7 +5725,7 @@ function compareLabels(tabs) {
 const treeBody = (s, method, attribution) => ({
   root: [s.root.index], amount: s.amount, expanded: s.expanded || [], rules: [...(s.groupByRules === false ? [] : s.rules || []), ...flowRulesOf(s)], cutoff: cutoffValue(s.cutoff, s.cutoffBasis),
   cutoff_basis: s.cutoffBasis || "parent", method, methods: s.chartMethods || [], pinned: s.pinned || [], others: s.others || [], merges: s.merges || [],
-  ungrouped: s.ungrouped || [], substitutions: s.substitutions || {}, group_products: !!s.groupProducts,
+  ungrouped: s.ungrouped || [], substitutions: s.substitutions || {}, group_products: !!s.groupProducts, collapse_singletons: !!s.collapseSingletons,
   colour_rules: s.rules || [],
   attribution,
 });

@@ -128,6 +128,9 @@ class Row:
     replaced: str | None = None
     """Process row whose input the user replaced by another supplier: the row id the input
     has without the substitution (``View.substitutions``)."""
+    chain: list[Node] | None = None
+    """For process rows, with ``View.collapse_singletons``: the processes above this one that are made of it alone (no
+    other input, no emissions of their own), first first. The row stands for all of them: its node is the last."""
 
 
 @dataclass
@@ -165,6 +168,9 @@ class View:
     """``{row id of an input: activity index}``: the input is supplied by that activity
     instead (same unit, same amount), with its own supply chain. The key is the input's
     row id as it is without the substitution."""
+    collapse_singletons: bool = False
+    """A process made of only one process (a single input, no emissions of its own, e.g. a market of one supplier) is
+    shown as that process, and so on down the chain (``Row.chain``): the impacts are the same, the tree is shorter."""
 
     def __post_init__(self):
         self._activities = derived_activities(self.tree.model)
@@ -197,6 +203,7 @@ class View:
             "ungrouped": sorted(self.ungrouped),
             "substitutions": self.substitutions,
             "group_products": self.group_products,
+            "collapse_singletons": self.collapse_singletons,
         }
 
     @classmethod
@@ -217,6 +224,7 @@ class View:
             ungrouped=set(data.get("ungrouped", [])),
             substitutions={k: int(v) for k, v in data.get("substitutions", {}).items()},
             group_products=bool(data.get("group_products", False)),
+            collapse_singletons=bool(data.get("collapse_singletons", False)),
         )
 
     def reveal(self, row_id: str) -> str | None:
@@ -228,9 +236,10 @@ class View:
         contains = lambda r, i: r.id == i or any(m.id == i for m in getattr(r, "node_members", []))
         for _ in range(4 * len(parts)):  # each pass opens at least one group or others row
             rows = self.rows()
-            visible = {r.id for r in rows}
+            shown_as = self._shown_as(rows)
+            visible = {r.id for r in rows} | set(shown_as)
             if row_id in visible:
-                return row_id
+                return shown_as.get(row_id, row_id)
             target = next("/".join(parts[:i]) for i in range(1, len(parts) + 1) if "/".join(parts[:i]) not in visible)
             changed = False
             for r in rows:
@@ -244,8 +253,16 @@ class View:
                         changed = True
             if not changed:
                 break
-        shown = [i for i in range(1, len(parts) + 1) if "/".join(parts[:i]) in {r.id for r in self.rows()}]
-        return "/".join(parts[: shown[-1]]) if shown else None
+        rows = self.rows()
+        shown_as = self._shown_as(rows)
+        visible = {r.id for r in rows} | set(shown_as)
+        shown = [i for i in range(1, len(parts) + 1) if "/".join(parts[:i]) in visible]
+        return shown_as.get("/".join(parts[: shown[-1]]), "/".join(parts[: shown[-1]])) if shown else None
+
+    @staticmethod
+    def _shown_as(rows: list[Row]) -> dict[str, str]:
+        """The ids of the processes collapsed into a row (``Row.chain``) -> that row's id."""
+        return {n.id: r.id for r in rows for n in r.chain or []}
 
     # --- rendering -------------------------------------------------------
     def rows(self) -> list[Row]:
@@ -496,10 +513,29 @@ class View:
         if node.is_direct:
             return Row(node.id, parent, depth, "direct", "direct emissions", 0.0, "",
                        node.impacts, True, node.id in self.expanded, node)
+        chain = []
+        if self.collapse_singletons and parent is not None:
+            node, chain = self._singleton_end(node)
         a = self._activities.iloc[node.product]
         label = f"{a['reference_product']} | {a['name']} | {a['location']}"
         return Row(node.id, parent, depth, "process", label, node.amount, a["unit"],
-                   node.impacts, True, node.id in self.expanded, node, replaced=self._replaced.get(node.id))
+                   node.impacts, True, node.id in self.expanded, node, replaced=self._replaced.get(node.id),
+                   chain=chain or None)
+
+    def _singleton_end(self, node: Node) -> tuple[Node, list[Node]]:
+        """Down from ``node``, while a process is made of only one other process (its single input, no emissions of its
+        own in any method): the last process, and those above it."""
+        chain: list[Node] = []
+        seen = {node.product}
+        while True:
+            children = self._substituted(self.tree.children(node))
+            inputs = [c for c in children if not c.is_direct]
+            own = any(c.is_direct and np.any(c.impacts != 0) for c in children)
+            if own or len(inputs) != 1 or inputs[0].product in seen:
+                return node, chain
+            chain.append(node)
+            node = inputs[0]
+            seen.add(node.product)
 
     def _merged_row(self, members: list[Node], parent: Row, depth: int) -> Row:
         products = sorted(m.product for m in members)

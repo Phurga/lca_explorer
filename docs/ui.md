@@ -416,7 +416,10 @@ API in `src/lca_viewer/server.py`.
   row, the rows in the sections of the form of a new process, as in the flow type colours, with a
   heading each: inputs from technosphere, inputs from nature, emissions, direct emissions, waste
   to treatment; the others rows come last with no heading of their own; the order inside a section is kept), *Hide others* (the others
-  rows, with the rows of an expanded one, and their boxes in the tree view and the Sankey, are left out; the chart keeps them), *Full / Short /
+  rows, with the rows of an expanded one, and their boxes in the tree view and the Sankey, are left out; the chart keeps them), *Collapse singletons* (a process made of only one process, with no
+  other input and no emissions of its own, such as a market of one supplier, shows as that process, and so on down
+  the chain: the row is the last process, "via" the ones above it; same impacts, a shorter tree;
+  `collapse_singletons` in `/api/rows`, each such row lists them as `chain`), *Full / Short /
   Custom* names, applied
   to the list, the tree view, the others panel and the chart; see
   [charts.md](charts.md); and the colours: *No colours*, *Rules colours* or *Flow type colours*. In the view
