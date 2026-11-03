@@ -158,15 +158,34 @@ def _methods_stamp(project_dir: Path) -> str | None:
     return digest.hexdigest()[:16]
 
 
-def _node_counts(project_dir: Path) -> dict[str, dict[str, int]]:
-    """database -> {node type -> count}, from the project's SQLite database."""
+def _file_stamp(path: Path) -> list[int]:
+    """Changes when the SQLite file (or its write-ahead log) is written."""
+    stamp = []
+    for p in (path, path.with_name(path.name + "-wal")):
+        try:
+            stat = p.stat()
+            stamp += [stat.st_mtime_ns, stat.st_size]
+        except OSError:
+            pass
+    return stamp
+
+
+def _node_counts(project_dir: Path, cache: dict | None = None) -> dict[str, dict[str, int]]:
+    """database -> {node type -> count}, from the project's SQLite database (seconds for ecoinvent).
+    ``cache``: ``{path: {"stamp", "counts"}}``, the counts of the files not written since are taken
+    from it, and those counted are added to it."""
     path = project_dir / "lci" / "databases.db"
     if not path.is_file():
         return {}
+    stamp, key = _file_stamp(path), str(path)
+    if cache is not None and (cache.get(key) or {}).get("stamp") == stamp:
+        return cache[key]["counts"]
     out: dict[str, dict[str, int]] = {}
     with closing(sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)) as con:
         for database, kind, n in con.execute("SELECT database, type, COUNT(*) FROM activitydataset GROUP BY database, type"):
             out.setdefault(database, {})[kind or "process"] = n
+    if cache is not None:
+        cache[key] = {"stamp": stamp, "counts": out}
     return out
 
 
@@ -184,14 +203,19 @@ def _projects(base) -> list[tuple[str, bool, Path]]:
             for name, blob, full_hash in rows]
 
 
-def brightway_projects(base) -> list[dict]:
+def project_names(base) -> list[str]:
+    """The names of the projects of a Brightway data folder (quick: nothing of them is read)."""
+    return [name for name, _, _ in _projects(base)]
+
+
+def brightway_projects(base, counts_cache: dict | None = None) -> list[dict]:
     """Projects of a Brightway data folder and their databases, read-only.
 
     Each project: ``{"name", "twofive", "methods", "methods_stamp", "databases": [{"name",
     "processes", "flows", "depends", "modified", "backend"}], "dir"}``. ``twofive`` is False for
     projects made with Brightway 2 (bw2data 3), which lca_viewer (Brightway 2.5) cannot read
     without upgrading them. ``methods_stamp`` changes when impact methods are added, removed or
-    written.
+    written. ``counts_cache``: the cache of the node counts (see :func:`_node_counts`).
     """
     out = []
     for name, twofive, project_dir in _projects(base):
@@ -204,7 +228,7 @@ def brightway_projects(base) -> list[dict]:
         project["methods"] = len(_read_json(project_dir / "methods.json"))
         project["methods_stamp"] = _methods_stamp(project_dir)
         try:
-            counts = _node_counts(project_dir)
+            counts = _node_counts(project_dir, counts_cache)
         except sqlite3.Error:
             counts = {}
         for database, meta in sorted(metadata.items(), key=lambda kv: kv[0].lower()):

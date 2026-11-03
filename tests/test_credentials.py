@@ -117,7 +117,8 @@ def test_import_passes_credentials_in_the_environment(store, tmp_path, monkeypat
             return 0
 
     monkeypatch.setattr(subprocess, "Popen", Done)
-    monkeypatch.setattr(sources, "brightway_projects", lambda folder: [{"name": "ei", "databases": []}])
+    monkeypatch.setattr(sources, "brightway_projects", lambda folder, counts_cache=None: [{"name": "ei", "databases": []}])
+    monkeypatch.setattr(sources, "project_names", lambda folder: ["ei"])
     client = TestClient(create_library(tmp_path / "data"))
     folder = str(tmp_path / "bw")
     assert client.post("/api/ecoinvent/import", json={"folder": folder, "project": "new", "version": "3.11"}).status_code == 404

@@ -130,6 +130,24 @@ def test_brightway_projects_are_listed_without_brightway(tmp_path):
         assert job["status"] == "failed" and message in job["error"]
 
 
+def test_brightway_node_counts_are_kept_until_the_project_is_written(tmp_path):
+    from contextlib import closing
+
+    make_brightway(tmp_path / "bw", {"a": (True, {"ei": {"process": 3}}), "b": (True, {"agb": {"process": 2}})})
+    counts = {}
+    brightway_projects(tmp_path / "bw", counts)
+    first = dict(counts)
+    assert len(first) == 2
+    project = tmp_path / "bw" / _safe_filename("a", False)
+    with closing(sqlite3.connect(project / "lci" / "databases.db")) as lci, lci:
+        lci.execute("INSERT INTO activitydataset (data, code, database, type) VALUES (x'', 'new', 'ei', 'process')")
+    listed = {p["name"]: p["databases"][0]["processes"] for p in brightway_projects(tmp_path / "bw", counts)}
+    assert listed == {"a": 4, "b": 2}
+    b = next(k for k in counts if _safe_filename("b", True) in k)
+    assert counts[b] is first[b]  # not written since: not counted again
+    assert next(v for k, v in counts.items() if k != b) is not first[next(k for k in first if k != b)]
+
+
 def test_brightway_builds_are_kept_per_folder_and_tell_what_changed(tmp_path, linear_chain_model):
     import json
 
@@ -159,19 +177,20 @@ def test_brightway_builds_are_kept_per_folder_and_tell_what_changed(tmp_path, li
              {"brightway": str((tmp_path / "bw").resolve()), "project": "p", "database": "agb", **state})
     client = TestClient(create_library(data))
 
-    def models(folder="bw"):
-        listed = client.get("/api/brightway", params={"folder": str(tmp_path / folder)}).json()
+    def models(folder="bw", refresh=False):
+        listed = client.get("/api/brightway", params={"folder": str(tmp_path / folder), "refresh": refresh}).json()
         return {d["name"]: d["model"] for d in listed["projects"][0]["databases"]}
 
     assert models() == {"agb": {"key": None, "outdated": None}, "bio": None, "ei": None}
     assert models("other") == {"agb": None, "bio": None, "ei": None}  # not built from that folder
     edit("databases.json", lambda m: m["bio"].update(modified="2026-02-01T00:00:00"))  # a database it links to, indirectly
-    assert models()["agb"]["outdated"] == "bio (linked) changed since the model was built"
+    assert models()["agb"]["outdated"] is None  # changed outside the app: the projects read before are kept…
+    assert models(refresh=True)["agb"]["outdated"] == "bio (linked) changed since the model was built"  # …until read again
     edit("databases.json", lambda m: m["bio"].update(modified="2026-01-01T00:00:00"))
     edit("methods.json", lambda m: m.update({"('IPCC', 'GWP20')": {}}))
-    assert models()["agb"]["outdated"] == "impact methods changed since the model was built"
+    assert models(refresh=True)["agb"]["outdated"] == "impact methods changed since the model was built"
     edit("databases.json", lambda m: m["agb"].update(modified="2026-03-01T00:00:00"))
-    assert models()["agb"]["outdated"] == "changed since the model was built"
+    assert models(refresh=True)["agb"]["outdated"] == "changed since the model was built"
 
     # Out of date, the build made before is still opened when asked (no rebuild unless asked)
     body = {"brightway": str(tmp_path / "bw"), "project": "p", "database": "agb"}

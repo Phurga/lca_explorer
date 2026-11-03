@@ -126,8 +126,11 @@ def _download(archive: str, downloads, message: str) -> Path:
         part = path.with_name(path.name + ".part")
         print(message, flush=True)
         with urllib.request.urlopen(REMOTE + archive, timeout=60) as response, open(part, "wb") as out:
+            size, done = int(response.headers.get("Content-Length") or 0), 0
             while chunk := response.read(1 << 20):
                 out.write(chunk)
+                done += len(chunk)
+                print(f"{message}: {done >> 20} of {size >> 20} MB" if size else f"{message}: {done >> 20} MB", flush=True)
         part.replace(path)
     return path
 
@@ -137,10 +140,12 @@ def _write_methods(methods: list, prefix: str) -> None:
     the project has."""
     import bw2data as bd
 
-    for name, meta, cfs in methods:
+    for i, (name, meta, cfs) in enumerate(methods, 1):
         method = bd.Method((prefix, *name))
         method.register(**{k: v for k, v in meta.items() if k not in ("abbreviation", "num_cfs", "geocollections", "filepath")})
         method.write(cfs)
+        if i % 20 == 0:
+            print(f"Installing the impact methods of {prefix}: {i} of {len(methods)}", flush=True)
     print(f"{len(methods)} impact methods installed", flush=True)
 
 
@@ -180,7 +185,7 @@ def install_defaults(project: str, version: str, downloads) -> str:
         print(f"Writing {database} ({len(nodes[database])} elementary flows)", flush=True)
         bd.Database(database).write(nodes[database])
     if not has_methods:
-        print(f"Installing {len(methods)} impact methods of ecoinvent {version} (about 3 minutes)", flush=True)
+        print(f"Installing {len(methods)} impact methods of ecoinvent {version} (several minutes)", flush=True)
         _write_methods(methods, prefix)
     return database
 

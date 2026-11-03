@@ -983,7 +983,9 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
     ``{"path", "title", "default_root"}`` models loaded before the server starts. ``/`` opens
     the first loaded database, or the page that asks which one to load.
     """
+    import copy
     import gc
+    import json
     import shutil
     import subprocess
     import sys
@@ -997,10 +999,33 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
     from . import sources
 
     data = Path(data or "data").resolve()
+    # Files the page uploaded are deleted once imported: those left are of an import that failed or was
+    # abandoned (no job runs yet)
+    shutil.rmtree(data / "uploads", ignore_errors=True)
     app = FastAPI(title="lca_viewer")
     loaded: dict[str, dict] = {}  # key -> {"key", "title", "path", "activities", "route"}
     jobs: dict[str, dict] = {}
     lock = threading.Lock()
+    projects_cache: dict[str, list] = {}  # Brightway data folder -> its projects, as the Projects page last read them
+    counts_file = data / "cache" / "node-counts.json"
+    try:
+        node_counts = json.loads(counts_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        node_counts = {}
+
+    def projects_in(folder: str) -> list[dict]:
+        """:func:`sources.brightway_projects`, the nodes counted again only in the projects written
+        since the last time (seconds for ecoinvent); the counts are kept in data/cache for the next start."""
+        cache = dict(node_counts)
+        projects = sources.brightway_projects(folder, cache)
+        if any(node_counts.get(k) is not v for k, v in cache.items()):
+            node_counts.update(cache)
+            try:
+                counts_file.parent.mkdir(parents=True, exist_ok=True)
+                counts_file.write_text(json.dumps(node_counts), encoding="utf-8")
+            except OSError:
+                pass  # counted again at the next start
+        return projects
 
     def listing() -> list[dict]:
         """The loaded databases; ``brightway``: the data folder, project and database a model was built from."""
@@ -1018,7 +1043,7 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
         """What changed in the project since the model of a Brightway database was built (a rebuild is
         required), or None."""
         try:
-            p = next(p for p in sources.brightway_projects(folder) if p["name"] == project)
+            p = next(p for p in projects_in(folder) if p["name"] == project)
             return sources.changes(entry["source"], sources.database_state(p, database))
         except (StopIteration, KeyError, FileNotFoundError, ValueError):
             return None
@@ -1057,7 +1082,7 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
     def find_database(folder: str, project: str, database: str) -> tuple[dict, dict]:
         """(project, database) as listed by :func:`sources.brightway_projects`, if a model can be built from it."""
         try:
-            projects = sources.brightway_projects(folder)
+            projects = projects_in(folder)
         except FileNotFoundError as e:
             raise ValueError(str(e)) from None
         p = next((p for p in projects if p["name"] == project), None)
@@ -1178,27 +1203,33 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
         return {"key": key, "message": f"{entry['title']} is ready"}
 
     def public(job: dict) -> dict:
-        return {k: v for k, v in job.items() if not k.startswith("_")}
+        out = {k: v for k, v in job.items() if not k.startswith("_")}
+        if job["status"] == "running":  # for how long, so that the page shows it is still under way
+            out["seconds"] = round(time.perf_counter() - job["_start"])
+        return out
 
-    def start(title: str, target: tuple, work, *args) -> dict:
+    def start(title: str, target: tuple, work, *args, message: str = "Starting") -> dict:
         """Run ``work(job, *args)`` in the background, one job per ``target`` at a time; what it
-        returns is added to the job, which the page follows with ``/api/jobs/<id>``."""
+        returns is added to the job, which the page follows with ``/api/jobs/<id>``. ``message``:
+        what the page shows until the job says more. A job other than a load changes the projects:
+        they are listed again afterwards."""
         with lock:
             for job in jobs.values():  # already under way
                 if job["status"] == "running" and job["_target"] == target:
                     return public(job)
-            job = {"id": uuid.uuid4().hex[:12], "status": "running", "message": "Starting", "log": [],
+            job = {"id": uuid.uuid4().hex[:12], "status": "running", "message": message, "log": [],
                    "title": title, "_target": target, "_start": time.perf_counter()}
             jobs[job["id"]] = job
 
         def go():
             try:
-                job.update(work(job, *args) or {})
-                job["status"] = "done"
+                found = {**(work(job, *args) or {}), "status": "done"}
             except Exception as e:  # reported to the page
-                job.update(status="failed", error=str(e) or type(e).__name__)
-            finally:
-                job["seconds"] = round(time.perf_counter() - job["_start"], 1)
+                found = {"status": "failed", "error": str(e) or type(e).__name__}
+            if target[0] != "load":  # before the page, seeing the job end, lists the projects again
+                projects_cache.clear()
+            job["seconds"] = round(time.perf_counter() - job["_start"], 1)
+            job.update(found)
 
         threading.Thread(target=go, daemon=True).start()
         return public(job)
@@ -1224,15 +1255,20 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
         }
 
     @app.get("/api/brightway")
-    def brightway(folder: str):
-        """Projects and databases of a Brightway data folder, with the model built from each, if any."""
-        try:
-            projects = sources.brightway_projects(folder)
-        except FileNotFoundError as e:
-            if not Path(folder).expanduser().is_dir():
-                raise HTTPException(404, str(e))
-            projects = []  # a folder without projects yet: New project creates the first one
-        folder = str(Path(folder).expanduser().resolve())
+    def brightway(folder: str, refresh: bool = False):
+        """Projects and databases of a Brightway data folder, with the model built from each, if any.
+        They are read once, then kept until a job changes them; ``refresh``: read them again (changes
+        made outside the app, in Activity Browser…), the nodes counted again only where written since."""
+        key = str(Path(folder).expanduser().resolve())
+        if refresh or key not in projects_cache:
+            try:
+                projects_cache[key] = projects_in(folder)
+            except FileNotFoundError as e:
+                if not Path(folder).expanduser().is_dir():
+                    raise HTTPException(404, str(e))
+                projects_cache[key] = []  # a folder without projects yet: New project creates the first one
+        projects = copy.deepcopy(projects_cache[key])
+        folder = key
         built = {}
         for m in sources.catalog(data):
             origin = built_from(m)
@@ -1279,7 +1315,7 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
 
     def project_names(folder: str) -> list[str]:
         try:
-            return [p["name"] for p in sources.brightway_projects(folder)]
+            return sources.project_names(folder)
         except FileNotFoundError:
             return []
 
@@ -1365,7 +1401,7 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
         """Delete a database from a project, unless a database linking to it, or its open model, needs it."""
         folder = folder_of(req.folder)
         try:
-            p = next((p for p in sources.brightway_projects(folder) if p["name"] == req.project), None)
+            p = next((p for p in projects_in(folder) if p["name"] == req.project), None)
         except FileNotFoundError:
             p = None
         if p is None:
@@ -1390,7 +1426,7 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
     def twofive_project(folder: str, name: str) -> dict:
         """A project of the folder made with Brightway 2.5, or the error to show."""
         try:
-            p = next((p for p in sources.brightway_projects(folder) if p["name"] == name), None)
+            p = next((p for p in projects_in(folder) if p["name"] == name), None)
         except FileNotFoundError:
             p = None
         if p is None:
@@ -1461,7 +1497,10 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
             return {"message": f"Biosphere and impact methods of ecoinvent {req.version.replace('bundled', '3.9')} "
                                f"are in {req.project}"}
 
-        return start(f"biosphere ({req.project})", ("defaults", folder, req.project, req.version), work)
+        return start(f"biosphere ({req.project})", ("defaults", folder, req.project, req.version), work,
+                     message="Installing the biosphere and impact methods of Brightway (a few minutes)" if req.version == "bundled"
+                     else f"Adding the biosphere and impact methods of ecoinvent {req.version} (a download of about 20 MB "
+                          f"the first time, then several minutes)")
 
     @app.get("/api/brightway/remote")
     def remote():
@@ -1480,7 +1519,8 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
             cli(job, folder, ["add-remote", req.remote, "--project", req.project, "--data", str(data)], ours)
             return {"message": f"{req.remote} is in {req.project}"}
 
-        return start(f"{req.remote} ({req.project})", ("add-remote", folder, req.project, req.remote), work)
+        return start(f"{req.remote} ({req.project})", ("add-remote", folder, req.project, req.remote), work,
+                     message=f"Adding {req.remote} from files.brightway.dev (a download the first time, then a few minutes)")
 
     @app.post("/api/brightway/restore")
     def restore(req: RestoreRequest):
@@ -1521,7 +1561,8 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
                 uploaded(path)
             return {"message": lines[-1] if lines else "Restored"}
 
-        return start(f"project {name or req.remote or Path(req.file).name}", ("restore", folder, name, req.file, req.remote), work)
+        return start(f"project {name or req.remote or Path(req.file).name}", ("restore", folder, name, req.file, req.remote), work,
+                     message=f"Downloading {req.remote} from files.brightway.dev" if req.remote else "Restoring the backup")
 
     @app.post("/api/upload")
     async def upload(request: Request, name: str):
@@ -1621,7 +1662,8 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
                     uploaded(Path(m))
             return {"message": lines[-1] if lines else f"{database} imported", "database": database}
 
-        return start(f"{database} ({req.project})", ("import", folder, req.project, database), work)
+        return start(f"{database} ({req.project})", ("import", folder, req.project, database), work,
+                     message=f"Importing {database} into {req.project}")
 
     # ------------------------------------------------ ecoinvent releases, with the user's account
 
@@ -1728,7 +1770,9 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
                         env=secrets)
             return {"message": lines[-1] if lines else f"ecoinvent {req.version} imported into {project}"}
 
-        return start(f"ecoinvent {req.version} {req.system_model}", ("ecoinvent", folder, project), work)
+        return start(f"ecoinvent {req.version} {req.system_model}", ("ecoinvent", folder, project), work,
+                     message=f"Downloading ecoinvent {req.version} {req.system_model} (about 1 GB, once), then importing it "
+                             f"(10 to 20 minutes in all)")
 
     @app.get("/api/brightway/search")
     def search_nodes(folder: str, project: str, q: str = "", kind: str = "process", database: str | None = None,
@@ -1841,7 +1885,7 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
         changes = pending_read(folder, project) if changes is None else changes
         touched = sorted({d for c in changes for d in touched_by(c)})
         try:
-            p = next(p for p in sources.brightway_projects(folder) if p["name"] == project)
+            p = next(p for p in projects_in(folder) if p["name"] == project)
             affected = sources.affected_databases(p, touched)
         except (StopIteration, FileNotFoundError):
             affected = touched

@@ -1,6 +1,7 @@
 """Datasets written from the Create dataset panel, and project management (needs Brightway)."""
 
 import math
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -535,6 +536,8 @@ def test_through_the_api(project, tmp_path):
 
     uploaded = client.post("/api/upload", params={"name": "my export.CSV"}, content=b"{CSV}").json()
     assert uploaded["size"] == 5 and uploaded["path"].endswith("my-export.CSV")
+    create_library(tmp_path / "data")  # an upload left by an import that never ran is deleted at the next start
+    assert not Path(uploaded["path"]).exists()
     assert client.post("/api/brightway/import", json={"folder": folder, "project": "toy", "format": "simapro-csv",
                                                       "path": str(tmp_path / "nothing.csv"), "database": "x"}).status_code == 404
     adapters = client.get("/api/adapters", params={"link_to": ["ecoinvent-3.9.1-cutoff"]}).json()
@@ -758,7 +761,8 @@ def test_import_without_the_default_biosphere(tmp_path, monkeypatch):
             return 0
 
     monkeypatch.setattr(subprocess, "Popen", Done)
-    monkeypatch.setattr(sources, "brightway_projects", lambda folder: [{"name": "p", "databases": []}])
+    monkeypatch.setattr(sources, "brightway_projects", lambda folder, counts_cache=None: [{"name": "p", "databases": []}])
+    monkeypatch.setattr(sources, "project_names", lambda folder: ["p"])
     client = TestClient(create_library(tmp_path / "data"))
     export = tmp_path / "export.csv"
     export.write_text("{CSV}")
@@ -800,7 +804,8 @@ def test_add_a_remote_project_through_the_api(tmp_path, monkeypatch):
             return 0
 
     monkeypatch.setattr(subprocess, "Popen", Done)
-    monkeypatch.setattr(sources, "brightway_projects", lambda folder: [{"name": "p", "databases": []}])
+    monkeypatch.setattr(sources, "brightway_projects", lambda folder, counts_cache=None: [{"name": "p", "databases": []}])
+    monkeypatch.setattr(sources, "project_names", lambda folder: ["p"])
     monkeypatch.setattr(sources, "remote_projects", lambda: {"BAFU-2025-v2": "bafu.tar.gz"})
     client = TestClient(create_library(tmp_path / "data"))
     body = {"folder": str(tmp_path / "bw"), "project": "p", "remote": "BAFU-2025-v2"}
@@ -897,7 +902,8 @@ def test_add_defaults_from_the_repository(tmp_path, monkeypatch):
             return 0
 
     monkeypatch.setattr(subprocess, "Popen", Done)
-    monkeypatch.setattr(sources, "brightway_projects", lambda folder: [{"name": "p", "databases": []}])
+    monkeypatch.setattr(sources, "brightway_projects", lambda folder, counts_cache=None: [{"name": "p", "databases": []}])
+    monkeypatch.setattr(sources, "project_names", lambda folder: ["p"])
     client = TestClient(create_library(tmp_path / "data"))
     job = client.post("/api/brightway/defaults/install", json={"folder": str(tmp_path / "bw"), "project": "p", "version": "3.10"}).json()
     for _ in range(100):

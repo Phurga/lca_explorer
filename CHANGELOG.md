@@ -9,6 +9,16 @@ version, `main` can be ahead of it with work in progress.
 
 Changes on `dev`, not released yet.
 
+- **Projects open at once**: the projects and databases are read once and kept (the node counts of each project
+  too, in `data/cache`, counted again only when the project is written); *↻ Refresh* reads them again, for
+  changes made outside the app. A job that changes a project lists them again.
+- **Feedback on every job**: a button starting a job shows it under way at once, under the button, with what it is
+  doing (MB downloaded, impact methods installed) and for how long; a greyed-out button says why.
+- Fixed: *Add database → ecoinvent* stayed greyed out in a project without a biosphere.
+- Fixed: *Add database → Brightway repository* seemed to do nothing: the server read every project before starting
+  the job (up to 30 s), and the download said nothing until done.
+- Files uploaded for an import that failed or was abandoned are deleted when the app starts.
+
 ## 1.4.0 - 2026-11-03
 
 Rules on the emissions of some processes, colours that follow the rules everywhere, filters and exports on every list, and a shorter tree with *Collapse singletons*.

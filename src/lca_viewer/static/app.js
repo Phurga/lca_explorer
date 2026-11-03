@@ -876,7 +876,7 @@ const ECOSPOLD_NAME = (path) => {
 // to the server once (checked with ecoinvent, then kept in the system's credential store, or in
 // the server's memory only); the page only ever gets the user name back. ``biosphere``: a
 // database of the project to link to, or null for the release's own biosphere and methods.
-function EcoinventForm({ folder, project, existing, biosphere, linked, onJob, busy, actions, head }) {
+function EcoinventForm({ folder, project, existing, biosphere, unlinked, onJob, actions, head }) {
   const [status, setStatus] = useState(null);
   const [error, setError] = useState(null);
   const [username, setUsername] = useState("");
@@ -929,7 +929,7 @@ function EcoinventForm({ folder, project, existing, biosphere, linked, onJob, bu
       <label class="check"><input type="checkbox" checked=${remember} disabled=${!status.store} onChange=${(e) => setRemember(e.target.checked)} />
         ${status.store ? `Remember on this computer, in ${status.store}` : "Remember: no secure credential store on this computer, kept until the app stops"}</label>
       ${error && html`<div class="error">${error}</div>`}
-      ${actions(checking ? "Checking with ecoinvent…" : "Log in", checking || !username.trim() || !password)}
+      ${actions(checking ? "Checking with ecoinvent…" : "Log in", checking || (!username.trim() || !password) && "Give your user name and password")}
     </form>`;
   const database = `ecoinvent-${version}-${model}`;
   const taken = version && existing.includes(database);
@@ -949,7 +949,8 @@ function EcoinventForm({ folder, project, existing, biosphere, linked, onJob, bu
         </select></label>
       ${taken && html`<div class="error">${project} already has ${database}.</div>`}
       ${error && html`<div class="error">${error}</div>`}
-      ${actions("Download and import", busy || !version || !models || taken || !linked)}
+      ${actions("Download and import", !versions || !models ? "Asking ecoinvent for its releases…" : !version ? "No release for this account"
+        : taken || unlinked)}
     </form>`;
 }
 
@@ -1014,16 +1015,24 @@ function ProjectForm({ form, folder, projects, onJob, onCancel, onForm, busy }) 
   const [custom, setCustom] = useState([]);
   const [customPath, setCustomPath] = useState("");
   const [customError, setCustomError] = useState(null);
-  const addCustom = () => serverRequest(`/api/adapter-file?path=${encodeURIComponent(customPath)}`)
-    .then((found) => { setCustom((list) => (list.some((c) => c.path === found.path) ? list : [...list, found])); setCustomPath(""); setCustomError(null); })
-    .catch((e) => setCustomError(e.message));
+  const [customReading, setCustomReading] = useState(false);
+  const addCustom = () => {
+    setCustomReading(true);
+    serverRequest(`/api/adapter-file?path=${encodeURIComponent(customPath)}`)
+      .then((found) => { setCustom((list) => (list.some((c) => c.path === found.path) ? list : [...list, found])); setCustomPath(""); setCustomError(null); })
+      .catch((e) => setCustomError(e.message)).finally(() => setCustomReading(false));
+  };
   const adapterList = [...migrations, ...custom.map((c) => c.path)];  // what the import applies, in this order
   const toggle = (list, item) => (list.includes(item) ? list.filter((x) => x !== item) : [...list, item]);
   const submit = (url, body) => (e) => { e.preventDefault(); onJob(url, body); };
+  // The buttons of a form; ``disabled``: false, or why the button is greyed out (true: no reason
+  // to show, the form says it already)
   const actions = (label, disabled, danger) => html`
     <div class="form-actions">
-      ${label && html`<button type="submit" class=${danger ? "danger" : "primary"} disabled=${disabled || busy}>${label}</button>`}
+      ${label && html`<button type="submit" class=${danger ? "danger" : "primary"} disabled=${!!disabled || busy}>${label}</button>`}
       <button type="button" onClick=${onCancel}>Cancel</button>
+      ${label && (busy ? html`<span class="muted small">Wait for the job under way to end</span>`
+        : typeof disabled === "string" && html`<span class="muted small">${disabled}</span>`)}
     </div>`;
 
   if (form.kind === "new") return html`
@@ -1047,7 +1056,8 @@ function ProjectForm({ form, folder, projects, onJob, onCancel, onForm, busy }) 
           A Brightway backup file (.tar.gz) you downloaded or made</label>
         ${origin === "file" && html`<${PathInput} value=${path} onChange=${setPath} accept=".gz,.tar.gz" placeholder="Path of the .tar.gz file" />`}
       </fieldset>
-      ${actions(origin === "remote" ? "Download and create" : "Create project", origin === "empty" ? !name.trim() : origin === "file" && !path)}
+      ${actions(origin === "remote" ? "Download and create" : "Create project", origin === "empty" ? !name.trim() && "Give the project a name"
+        : origin === "file" && !path && "Give the backup file")}
     </form>`;
 
   if (form.kind === "add") {
@@ -1056,7 +1066,9 @@ function ProjectForm({ form, folder, projects, onJob, onCancel, onForm, busy }) 
     const detected = defaultsFor(detectedFrom, versions, hasBundled);
     const chosenVersion = version ?? detected ?? "";
     const already = chosenVersion === "bundled" ? hasBundled : flowDbs.includes(`ecoinvent-${chosenVersion}-biosphere`);
-    const linked = defaults ? !!chosenVersion : flowDbs.length > 0;  // a biosphere for the elementary flows to link to
+    // A biosphere for the elementary flows to link to (an ecoinvent download brings its own)
+    const linked = defaults ? source === "ecoinvent" || !!chosenVersion : flowDbs.length > 0;
+    const unlinked = !linked && (defaults ? "Choose the ecoinvent version of the biosphere above" : "Tick the box above to add a biosphere");
     const minor = (v) => (v === "bundled" ? "3.9" : v.split(".").slice(0, 2).join("."));
     const head = (tip = null) => html`
       <h4>Add a database to ${form.project} ${tip}</h4>
@@ -1112,7 +1124,7 @@ function ProjectForm({ form, folder, projects, onJob, onCancel, onForm, busy }) 
             ${taken && html`<div class="error">${form.project} already has ${target}.</div>`}
             ${missing.length > 0 && html`<div class="error">${form.project} has no ${missing.join(", ")}, which ${picked.database} links to: add
               ${missing.length === 1 ? "it" : "them"} to this project first (the biosphere and impact methods: <i>Brightway repository</i>).</div>`}
-                        ${actions("Copy the database", !picked || !target || taken || missing.length > 0)}
+            ${actions("Copy the database", !picked ? "No database to copy" : !target ? "Give the copy a name" : taken || missing.length > 0)}
           </form>
         </div>`;
     }
@@ -1129,7 +1141,7 @@ function ProjectForm({ form, folder, projects, onJob, onCancel, onForm, busy }) 
                 ${versions.map((v) => html`<option value=${v}>${defaultsLabel(v)}</option>`)}
                 <option value="bundled">${defaultsLabel("bundled")}</option>
               </select></label>
-                        ${actions("Add from the repository", !repoVersion || here && repoVersion === "bundled")}
+            ${actions("Add from the repository", !repoVersion ? "Choose a version" : here && repoVersion === "bundled" && "Already in this project")}
           </form>
         </div>`;
     }
@@ -1140,16 +1152,16 @@ function ProjectForm({ form, folder, projects, onJob, onCancel, onForm, busy }) 
         <div class="project-form">${head(html`<${InfoTip} label="About BAFU" text=${here ? `${remoteName} is already in this project.`
               : `${remoteName}: the Swiss LCI database of BAFU/UVEK (11,747 processes), with its elementary flows and the 21 Ecological Scarcity 2021 methods, from files.brightway.dev (about 60 MB).`} />`)}
           <form class="source-form" onSubmit=${submit("/api/brightway/remote/add", { folder, project: form.project, remote: remoteName })}>
-                        ${!here && otherMethods && html`<p class="note">BAFU has its own elementary flows: the methods already in this project
+            ${!here && otherMethods && html`<p class="note">BAFU has its own elementary flows: the methods already in this project
               score nothing on it, and its methods score nothing on the other databases.</p>`}
-            ${actions("Add BAFU", here)}
+            ${actions("Add BAFU", here && `${remoteName} is already in this project`)}
           </form>
         </div>`;
     }
     if (source === "ecoinvent") return html`
       <div class="project-form">
         <${EcoinventForm} head=${head} folder=${folder} project=${form.project} existing=${processDbs} biosphere=${defaults ? null : biosphere}
-          linked=${linked} onJob=${onJob} busy=${busy} actions=${actions} />
+          unlinked=${unlinked} onJob=${onJob} actions=${actions} />
       </div>`;
     if (source === "ecospold2") return html`
       <div class="project-form">${head(html`<${InfoTip} text="About 10 minutes for ecoinvent; an archive is unpacked first (2.6 GB, deleted afterwards)." label="About the import" />`)}
@@ -1161,7 +1173,7 @@ function ProjectForm({ form, folder, projects, onJob, onCancel, onForm, busy }) 
           ${defaults && chosenVersion && (database.match(/\d+\.\d+/)?.[0] ?? minor(chosenVersion)) !== minor(chosenVersion) && html`
             <p class="note">The release is not ecoinvent ${minor(chosenVersion)}: with that biosphere, some elementary flows may
               not link and some impact factors may not match.</p>`}
-                    ${actions("Import", !path || !database.trim() || !linked)}
+          ${actions("Import", !path ? "Give the release first" : !database.trim() ? "Give the database a name" : unlinked)}
         </form>
       </div>`;
     return html`
@@ -1198,7 +1210,7 @@ function ProjectForm({ form, folder, projects, onJob, onCancel, onForm, busy }) 
             <div class="adapter-add">
               <${PathInput} value=${customPath} onChange=${(v) => { setCustomPath(v); setCustomError(null); }} accept=".json,application/json"
                 placeholder="Path of an adapter file (.json)" />
-              <button type="button" disabled=${!customPath} onClick=${addCustom}>Add this adapter</button>
+              <button type="button" disabled=${!customPath || customReading} onClick=${addCustom}>${customReading ? "Reading it…" : "Add this adapter"}</button>
             </div>
             ${customError && html`<div class="error">${customError}</div>`}
           </details>
@@ -1209,7 +1221,8 @@ function ProjectForm({ form, folder, projects, onJob, onCancel, onForm, busy }) 
             <label class="check"><input type="radio" checked=${form.unlinked === "drop"} onChange=${() => onForm({ ...form, unlinked: "drop" })} />
               Import without them, and list them</label>
           </fieldset>
-                    ${actions(form.unlinked === "drop" ? "Import without the unlinked exchanges" : "Import", !path || !database.trim() || !linked)}
+          ${actions(form.unlinked === "drop" ? "Import without the unlinked exchanges" : "Import",
+            !path ? "Give the CSV export first" : !database.trim() ? "Give the database a name" : unlinked)}
         </form>
       </div>`;
   }
@@ -1256,18 +1269,26 @@ function ProjectForm({ form, folder, projects, onJob, onCancel, onForm, busy }) 
   return null;
 }
 
+// What the Projects dialog last listed, shown at once when it opens again while it is read again
+// (the server keeps the projects too: reading them takes seconds): /api/sources, and the projects
+// of each Brightway data folder
+const projectsCache = { sources: null, folders: {} };
+const elapsed = (s) => (s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${String(s % 60).padStart(2, "0")} s`);
+
 // Projects: the models already built (data/models.json) open
 // in seconds; a database of a Brightway project is first built into a model (once, kept in
 // data/cache). Loads run on the server, the dialog follows them and opens the database when ready.
 // The Brightway projects can also be changed here (new, deleted, restored, databases imported).
 function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
-  const [sources, setSources] = useState(null);
+  const [sources, setSources] = useState(projectsCache.sources);
   const [error, setError] = useState(null);
   const [job, setJob] = useState(null);
   const [folder, setFolder] = useState(() => loadPreference("brightwayFolder", ""));
   const [typed, setTyped] = useState(folder);
-  const [projects, setProjects] = useState(null);
+  const [projects, setProjects] = useState(() => projectsCache.folders[folder] || null);
   const [projectsError, setProjectsError] = useState(null);
+  const [reading, setReading] = useState(false);  // the projects are being read again (the list shown stays)
+  const asked = useRef(folder);  // the folder whose projects were asked for last
   const [showLog, setShowLog] = useState(false);
   const [form, setForm] = useState(null);  // { kind, project }: a ProjectForm open
   const [jobAt, setJobAt] = useState(null);  // the project a job was started from: its progress shows there
@@ -1290,6 +1311,7 @@ function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
   const box = useRef(null);
 
   const refresh = () => serverRequest("/api/sources").then((s) => {
+    projectsCache.sources = s;
     setSources(s);
     if (s.jobs.length) setJob((j) => j || s.jobs[0]);  // a load started before (dialog closed meanwhile)
     if (!folder && s.brightway.length) setFolder(s.brightway[0].path);
@@ -1303,20 +1325,30 @@ function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
     }
   }, [onClose]);
 
-  function listProjects(path) {
-    setProjects(null);
+  // The projects of a folder: those listed before are shown while they are read again. ``again``:
+  // the server reads them again too (changes made outside the app), else it answers from what it keeps.
+  function listProjects(path, again = false) {
+    asked.current = path;
     setProjectsError(null);
+    setProjects((shown) => (shown && shown === projectsCache.folders[path] ? shown : projectsCache.folders[path] || null));
     if (!path) return;
-    serverRequest(`/api/brightway?folder=${encodeURIComponent(path)}`)
-      .then((r) => { setProjects(r); savePreference("brightwayFolder", path); })
-      .catch((e) => setProjectsError(e.message));
+    setReading(true);
+    serverRequest(`/api/brightway?folder=${encodeURIComponent(path)}${again ? "&refresh=true" : ""}`)
+      .then((r) => {
+        projectsCache.folders[path] = r;
+        if (asked.current !== path) return;
+        setProjects(r);
+        savePreference("brightwayFolder", path);
+      })
+      .catch((e) => asked.current === path && setProjectsError(e.message))
+      .finally(() => asked.current === path && setReading(false));
   }
   useEffect(() => { if (folder) listProjects(folder); }, [folder]);
 
   // Follow the job under way: open the database a load made ready; after a change to the
   // projects, list them again
   useEffect(() => {
-    if (!job || job.status !== "running") return;
+    if (!job?.id || job.status !== "running") return;
     const timer = setTimeout(() => serverRequest(`/api/jobs/${job.id}`).then((j) => {
       setJob(j);
       if (j.status === "done" && j.key) openDatabase(j.key);
@@ -1328,9 +1360,11 @@ function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
     return () => clearTimeout(timer);
   }, [job]);
 
+  // Shown as under way at once, until the server answers with the job (its checks can take a moment)
   const startJob = (url, body, at = form?.project) => {
     setShowLog(false);
     setJobAt(at || null);
+    setJob({ status: "running", message: "Starting…", log: [] });
     serverRequest(url, body).then(setJob).catch((e) => setJob({ status: "failed", error: e.message, log: [] }));
   };
   const start = (body) => { if (body.project) noteProject(body.project); startJob("/api/load", body, body.project); };
@@ -1379,7 +1413,8 @@ function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
       <div class=${`load-job ${job.status}`}>
         <div class="load-job-head">
           ${job.status === "running" && html`<span class="spinner" aria-hidden="true"></span>`}
-          <span>${job.status === "failed" ? html`<b>${job.title || "It"} failed.</b> ${job.error}` : job.message}</span>
+          <span>${job.status === "failed" ? html`<b>${job.title || "It"} failed.</b> ${job.error}` : job.message}
+            ${job.status === "running" && job.seconds >= 2 && html` <span class="muted small">· ${elapsed(job.seconds)}</span>`}</span>
           ${job.log?.length > 0 && html`<button class="link" onClick=${() => setShowLog(!showLog)}>${showLog ? "Hide details" : "Details"}</button>`}
           ${job.status !== "running" && html`<button class="link" onClick=${() => setJob(null)}>Dismiss</button>`}
         </div>
@@ -1426,6 +1461,9 @@ function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
           <div class="project-tools">
             <button class="link" onClick=${() => setForm({ kind: "new" })}
               title="An empty project, to add databases to, or one from a Brightway backup (BAFU, …)">+ New project</button>
+            <button class="link" disabled=${reading} onClick=${() => { refresh(); listProjects(folder, true); }}
+              title="Read the projects and databases again, for changes made outside the app (Activity Browser, a script…). Only the projects written since are counted again.">
+              ${reading ? html`<span class="spinner" aria-hidden="true"></span> Reading the projects…` : "↻ Refresh"}</button>
           </div>`}
         ${!listed(form?.project) && projectForm}
         ${projectsError && html`<div class="error">${projectsError}</div>`}
@@ -1452,8 +1490,8 @@ function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
                     { label: "Delete project…", danger: true, title: "Delete this project", run: () => setForm({ kind: "delete", project: p.name }) }]} />
                 </td>
               </tr>
-              ${jobAt === p.name && jobBox && html`<tr class="form-row" key=${`j:${p.name}`}><td colspan="3">${jobBox}</td></tr>`}
-              ${form?.project === p.name && html`<tr class="form-row" key=${`f:${p.name}`}><td colspan="3">${projectForm}</td></tr>`}
+              ${jobAt === p.name && jobBox && form?.project !== p.name && html`<tr class="form-row" key=${`j:${p.name}`}><td colspan="3">${jobBox}</td></tr>`}
+              ${form?.project === p.name && html`<tr class="form-row" key=${`f:${p.name}`}><td colspan="3">${projectForm}${jobAt === p.name && jobBox}</td></tr>`}
               ${shown && p.databases.map((d) => html`
                 <tr key=${`d:${p.name}/${d.name}`} class=${p.twofive && d.processes ? "" : "muted"}>
                   <td class="indent">${d.name}${d.locked && html` <span class="loc-chip" title="What this database contains cannot be edited">🔒 locked</span>`}${d.model?.outdated && html`<div class="muted small">${d.model.outdated}${d.model.key ? ": close it to rebuild it" : ""}</div>`}</td>
