@@ -679,9 +679,13 @@ table.load-table td.actions button + button { margin-left: 4px; }
 table.load-table tr.project td { padding-top: 10px; border-bottom: none; }
 table.load-table td.indent { padding-left: 20px; overflow-wrap: anywhere; }
 table.load-table tr.muted td { color: var(--muted); }
-.load-folder { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
-.load-folder select { max-width: 100%; flex: 1 1 260px; min-width: 0; }
-.load-other { display: flex; gap: 6px; flex: 1 1 100%; }
+/* The folder, as an option of a panel: its label on the left; another folder typed below the list */
+.load-folder { margin: 10px 0 4px; }
+.load-folder select { flex: 1 1 260px; min-width: 0; max-width: 100%; }
+.load-other { display: flex; gap: 6px; flex: 1 1 100%; padding-left: 82px; }
+.load-head { display: flex; align-items: center; gap: 4px; }
+.load-head-tools { display: flex; align-items: center; gap: 2px; margin-left: auto; }
+.load-head-tools .spinner { margin: 0 2px; }
 .load-other input { flex: 1; min-width: 0; }
 .load-job { margin-top: 10px; padding: 8px 10px; border-radius: 6px; background: var(--accent-soft); }
 .load-job.failed { background: var(--selected); }
@@ -694,7 +698,6 @@ table.load-table tr.muted td { color: var(--muted); }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* Brightway projects: forms (new, backup, imports, delete) */
-.project-tools { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 4px 0 6px; }
 td.project-actions { white-space: nowrap; }
 button.link.danger, .project-form.danger h4 { color: var(--bar-negative); }
 button.danger:not(.link) { background: var(--bar-negative); border-color: var(--bar-negative); color: var(--panel); }

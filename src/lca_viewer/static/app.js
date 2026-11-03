@@ -1442,29 +1442,31 @@ function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
     ${error && html`<div class="error">${error}</div>`}
     ${!listed(jobAt) && jobBox}
     ${!sources ? (!error && html`<${Waiting} text="Looking for databases…" />`) : html`
+      <div class="view-group load-folder" role="group" aria-label="Brightway data folder">
+        <span class="view-group-label" title="The Brightway data folder: the one with projects.db">Folder</span>
+        <select aria-label="Brightway data folder" value=${isKnown ? folder : "other"}
+          onChange=${(e) => { if (e.target.value === "other") { setTyped(folder); setFolder(""); setProjects(null); } else setFolder(e.target.value); }}>
+          ${known.map((d) => html`<option value=${d.path}>${d.label} — ${d.path}</option>`)}
+          <option value="other">Other folder…</option>
+        </select>
+        ${!isKnown && html`
+          <form class="load-other" onSubmit=${(e) => { e.preventDefault(); setFolder(typed.trim().replace(/^["']|["']$/g, "")); }}>
+            <input value=${typed} placeholder="Another Brightway data folder (the one with projects.db)"
+              onInput=${(e) => setTyped(e.target.value)} />
+            <button type="submit">List projects</button>
+          </form>`}
+      </div>
       <section>
-        <h3>Projects <${InfoTip} text="Brightway 2.5 projects and their databases. Import into a project first (+ New project, then Add database), then open a database. Your own datasets: Edit mode." label="About projects" /></h3>
-        <div class="load-folder">
-          <select aria-label="Brightway data folder" value=${isKnown ? folder : "other"}
-            onChange=${(e) => { if (e.target.value === "other") { setTyped(folder); setFolder(""); setProjects(null); } else setFolder(e.target.value); }}>
-            ${known.map((d) => html`<option value=${d.path}>${d.label} — ${d.path}</option>`)}
-            <option value="other">Other folder…</option>
-          </select>
-          ${!isKnown && html`
-            <form class="load-other" onSubmit=${(e) => { e.preventDefault(); setFolder(typed.trim().replace(/^["']|["']$/g, "")); }}>
-              <input value=${typed} placeholder="Another Brightway data folder (the one with projects.db)"
-                onInput=${(e) => setTyped(e.target.value)} />
-              <button type="submit">List projects</button>
-            </form>`}
-        </div>
-        ${folder && html`
-          <div class="project-tools">
-            <button class="link" onClick=${() => setForm({ kind: "new" })}
-              title="An empty project, to add databases to, or one from a Brightway backup (BAFU, …)">+ New project</button>
-            <button class="link" disabled=${reading} onClick=${() => { refresh(); listProjects(folder, true); }}
-              title="Read the projects and databases again, for changes made outside the app (Activity Browser, a script…). Only the projects written since are counted again.">
-              ${reading ? html`<span class="spinner" aria-hidden="true"></span> Reading the projects…` : "↻ Refresh"}</button>
-          </div>`}
+        <h3 class="load-head">Projects <${InfoTip} text="Brightway 2.5 projects and their databases. Import into a project first (+, then Add database in the project's ⋯ menu), then open a database. Your own datasets: Edit mode." label="About projects" />
+          ${folder && html`
+            <span class="load-head-tools">
+              <button class="icon-plain" onClick=${() => setForm({ kind: "new" })} aria-label="New project"
+                title="New project: an empty one, to add databases to, or one from a Brightway backup (BAFU, …)"><${PlusIcon} /></button>
+              <button class="icon-plain" disabled=${reading} onClick=${() => { refresh(); listProjects(folder, true); }}
+                aria-label=${reading ? "Reading the projects" : "Refresh"}
+                title=${reading ? "Reading the projects…" : "Refresh: read the projects and databases again, for changes made outside the app (Activity Browser, a script…). Only the projects written since are counted again."}>
+                ${reading ? html`<span class="spinner" aria-hidden="true"></span>` : html`<${RefreshIcon} />`}</button>
+            </span>`}</h3>
         ${!listed(form?.project) && projectForm}
         ${projectsError && html`<div class="error">${projectsError}</div>`}
         ${folder && !projects && !projectsError && html`<${Waiting} text="Reading the projects…" />`}
@@ -1500,7 +1502,7 @@ function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
                     ${p.twofive && html`<${PopupMenu} label=${html`<${GearIcon} />`} className="gear-btn" title="Options of this database" items=${dbOptions(p, d)} />`}</td>
                 </tr>`)}`; })}
           </table>
-          ${!projects.projects.length && html`<p class="muted">No project in this folder yet: create one with <i>New project</i>.</p>`}`}
+          ${!projects.projects.length && html`<p class="muted">No project in this folder yet: create one with <b>+</b> above.</p>`}`}
       </section>
       ${otherModels.length > 0 && html`
         <section>
@@ -2755,6 +2757,18 @@ function ResetIcon() {
   return html`
     <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
       <path d="M2.5 8a5.5 5.5 0 1 0 1.8-4.1" /><path d="M2.5 2.5v3h3" />
+    </svg>`;
+}
+function PlusIcon() {
+  return html`
+    <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+      <path d="M8 3v10M3 8h10" />
+    </svg>`;
+}
+function RefreshIcon() {
+  return html`
+    <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M13.5 8a5.5 5.5 0 1 1-1.8-4.1" /><path d="M13.5 2.5v3h-3" />
     </svg>`;
 }
 function DownloadIcon() {
