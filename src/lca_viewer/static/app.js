@@ -224,6 +224,7 @@ const FLOW_TYPES = {
   product: { label: "Product", hint: "The process itself: its reference product, an output", color: "hsl(270 45% 58%)" },
   technosphere: { label: "Technosphere input", hint: "Input from another process", color: "hsl(212 65% 52%)" },
   waste: { label: "Waste", hint: "Output to treatment: the waste of the process above, treated by this one", color: "hsl(32 85% 50%)" },
+  avoided: { label: "Avoided product", hint: "Negative input from another process: a product the process above replaces (substitution, as in consequential databases)", color: "hsl(320 50% 55%)" },
   resource: { label: "Resource", hint: "Input from nature (biosphere)", color: "hsl(135 45% 42%)" },
   emission: { label: "Emission", hint: "Output to nature (biosphere)", color: "hsl(2 65% 52%)" },
   direct: { label: "Direct", hint: "Direct emissions row: the exchanges with nature of the process above", color: "hsl(178 50% 38%)" },
@@ -272,14 +273,16 @@ function flowTypeOf(r) {
   if (r.depth === 0) return "product";
   const part = r.parts?.[0];
   if (part?.flow !== undefined) return fromNature(part.location) ? "resource" : "emission";
-  return (r.kind === "process" ? r.waste : part?.waste) ? "waste" : "technosphere";
+  if (r.kind === "process" ? r.waste : part?.waste) return "waste";
+  // a negative input of a product (not a waste): an avoided product
+  return (r.kind === "process" ? r.amount : part ? part.amount : r.amount) < 0 ? "avoided" : "technosphere";
 }
 // "Split by flow type": below each row, the rows are in the sections of the form of a new process (and the types of the
 // flow type colours), the list showing a heading for each: inputs from technosphere, inputs from nature, emissions,
 // direct emissions, waste to treatment (the others rows come last, with no heading)
 const SPLIT_SECTIONS = [
   ["technosphere", "Inputs from technosphere"], ["resource", "Inputs from nature"], ["emission", "Emissions"],
-  ["direct", "Direct emissions"], ["waste", "Waste to treatment"],
+  ["direct", "Direct emissions"], ["waste", "Waste to treatment"], ["avoided", "Avoided products"],
 ];
 const SECTION_LABELS = Object.fromEntries(SPLIT_SECTIONS);
 const SECTION_RANK = { ...Object.fromEntries(SPLIT_SECTIONS.map(([key], i) => [key, i])), rest: SPLIT_SECTIONS.length };  // the others rows last, with no heading of their own
@@ -428,6 +431,7 @@ function describePredicate(p) {
   if (p.products) return `${p.products.length} selected processes`;
   if (p.flows) return `${p.flows.length} selected flows`;
   const value = Array.isArray(p.value) ? p.value.join(", ") : p.value;
+  if (NUMBER_FIELDS.has(p.field)) return `${p.field} ${(NUMBER_OPS.find(([op]) => op === p.op) || [, p.op])[1]} ${value}`;
   return `${p.field} ${p.op} "${value}"`;
 }
 
@@ -502,14 +506,24 @@ function baseOption() {
 // ---------------------------------------------------------------- shared query builder
 // Used both by the process search and by the grouping rules, so filters read the same everywhere.
 const OPS = [["contains", "contains"], ["eq", "is"], ["ne", "is not"], ["in", "is one of"], ["startswith", "starts with"], ["regex", "matches regex"]];
+// The operators of a number (the amount of an exchange)
+const NUMBER_OPS = [["lt", "<"], ["le", "≤"], ["gt", ">"], ["ge", "≥"], ["eq", "="], ["ne", "≠"]];
+const NUMBER_FIELDS = new Set(["exchange_amount"]);
+const opsOf = (field) => (NUMBER_FIELDS.has(field) ? NUMBER_OPS : OPS);
+// The fields of the exchange that brings a row in (rules of the tree only): its type (technosphere, avoided product, waste;
+// resource, emission for a flow) and its amount, as recorded in the dataset of the process above, per unit of its product
+const EXCHANGE_FIELDS = new Set(["exchange_type", "exchange_amount"]);
+const usesExchange = (p) => !!p && (p.all || p.any ? (p.all || p.any).some(usesExchange) : p.not ? usesExchange(p.not) : EXCHANGE_FIELDS.has(p.field));
 const FIELD_LABELS = {
   name: "activity name", reference_product: "product", location: "location", unit: "unit",
   activity_type: "activity type", isic: "ISIC class", isic_division: "ISIC division",
   cpc: "CPC class", cpc_section: "CPC section", database: "database",
+  exchange_type: "exchange type", exchange_amount: "exchange amount",
 };
 // flow_type: "product" or "waste" (the sign of what the process produces), not a type of elementary flow
 FIELD_LABELS.flow_type = "product / waste";
-const FLOW_FIELD_LABELS = { name: "substance", compartment: "compartment", subcompartment: "subcompartment", unit: "unit", database: "database" };
+const FLOW_FIELD_LABELS = { name: "substance", compartment: "compartment", subcompartment: "subcompartment", unit: "unit", database: "database",
+  exchange_type: "exchange type", exchange_amount: "exchange amount" };
 const fieldLabel = (f, flows) => (flows ? FLOW_FIELD_LABELS[f] : FIELD_LABELS[f]) || f;
 let conditionIds = 0;
 
@@ -587,7 +601,7 @@ function InfoTip({ text, label = "What this is" }) {
 // What the page says while it waits: an animated mark and the text
 const Waiting = ({ text }) => html`<div class="empty waiting" role="status"><span class="spinner" aria-hidden="true"></span> ${text}</div>`;
 
-const SHORT_FIELDS = new Set(["unit", "activity_type", "flow_type", "database", "compartment"]);
+const SHORT_FIELDS = new Set(["unit", "activity_type", "flow_type", "database", "compartment", "exchange_type"]);
 // ISIC and CPC classes are written "code:name" in the data, so a code is matched on the start of it
 const CLASS_FIELDS = new Set(["isic", "cpc"]);
 
@@ -676,18 +690,22 @@ function Condition({ condition, fields, flows, source, onChange, onRemove }) {
   };
   return html`
     <div class="row condition">
-      <select value=${condition.field} onChange=${(e) => onChange({ ...condition, field: e.target.value })} aria-label="Field">
+      <select value=${condition.field} aria-label="Field" onChange=${(e) => {
+        const field = e.target.value, ops = opsOf(field);
+        onChange({ ...condition, field, op: ops.some(([op]) => op === condition.op) ? condition.op : ops[0][0] });
+      }}>
         ${fields.map((f) => html`<option value=${f}>${fieldLabel(f, flows)}</option>`)}
       </select>
       <select value=${condition.op} onChange=${(e) => onChange({ ...condition, op: e.target.value })} aria-label="Operator">
-        ${OPS.map(([op, label]) => html`<option value=${op}>${label}</option>`)}
+        ${opsOf(condition.field).map(([op, label]) => html`<option value=${op}>${label}</option>`)}
       </select>
-      <input value=${condition.value} list=${listId} placeholder=${condition.op === "in" ? "a, b, c" : "value"}
+      <input value=${condition.value} list=${listId} placeholder=${condition.op === "in" ? "a, b, c" : NUMBER_FIELDS.has(condition.field) ? "number" : "value"}
+             inputmode=${NUMBER_FIELDS.has(condition.field) ? "decimal" : undefined}
              onInput=${(e) => onChange({ ...condition, value: e.target.value })} aria-label="Value" />
       <datalist id=${listId}>
         ${values.map((v) => html`<option value=${condition.op === "in" ? condition.value.replace(/[^,]*$/, (condition.value.includes(",") ? " " : "") + v) : v} />`)}
       </datalist>
-      <${FieldHelp} condition=${condition} flows=${flows} source=${source} onPick=${pick} />
+      ${!NUMBER_FIELDS.has(condition.field) && html`<${FieldHelp} condition=${condition} flows=${flows} source=${source} onPick=${pick} />`}
       <button onClick=${onRemove} aria-label="Remove condition">×</button>
     </div>`;
 }
@@ -716,8 +734,9 @@ const emptyQuery = (field, op) => ({ combinator: "all", conditions: [newConditio
 function toPredicate({ conditions, combinator }) {
   const parts = conditions.filter((c) => c.value.trim()).map((c) => ({
     field: c.field, op: c.op,
-    value: c.op === "in" ? c.value.split(",").map((v) => v.trim()).filter(Boolean) : c.value.trim(),
-  }));
+    value: c.op === "in" ? c.value.split(",").map((v) => v.trim()).filter(Boolean)
+      : NUMBER_FIELDS.has(c.field) ? Number(c.value.trim().replace(",", ".")) : c.value.trim(),
+  })).filter((p) => !(NUMBER_FIELDS.has(p.field) && Number.isNaN(p.value)));
   if (parts.length === 0) return null;
   if (parts.length === 1) return parts[0];
   return { [combinator]: parts };
@@ -1377,13 +1396,26 @@ function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
   }).catch((e) => setError(e.message));
 
   // A locked database cannot be edited, whichever database is open when one of its processes is reached
-  const lockDatabase = (p, d) => serverRequest("/api/brightway/lock", { folder: projects.folder, project: p.name, database: d.name, locked: !d.locked })
-    .then(() => { listProjects(folder); onLocks?.(); }).catch((e) => setError(e.message));
+  const [locking, setLocking] = useState(null);  // the database being locked or unlocked (dbKey)
+  const dbKey = (p, d) => `${p.name}\n${d.name}`;
+  const lockDatabase = (p, d) => {
+    setLocking(dbKey(p, d));
+    serverRequest("/api/brightway/lock", { folder: projects.folder, project: p.name, database: d.name, locked: !d.locked })
+      .then(() => { listProjects(folder); onLocks?.(); }).catch((e) => setError(e.message)).finally(() => setLocking(null));
+  };
+  // The lock of a database: shown when it is locked (a click unlocks it), else on the row's hover (a click locks it)
+  const lockButton = (p, d) => html`
+    <button class=${`lock-btn${d.locked ? " locked" : ""}`} disabled=${locking === dbKey(p, d)} onClick=${() => lockDatabase(p, d)}
+      aria-label=${d.locked ? `Unlock ${d.name}` : `Lock ${d.name}`} aria-pressed=${!!d.locked}
+      title=${d.locked ? "Locked: what this database contains cannot be edited, deleted or added to, from any database. Click to unlock it."
+        : "Lock: nothing in this database can be edited, deleted or added to, from any database"}><${LockIcon} open=${!d.locked} /></button>`;
+  // Why the row of a database cannot be opened (greyed out), or null
+  const greyed = (p, d) => (!p.twofive ? "A database of a Brightway 2 project: upgrade the project to Brightway 2.5 (Activity Browser 3) to open it"
+    : !d.processes ? "Elementary flows only (a biosphere database): nothing to open, the databases of this project link to its flows" : null);
   const known = sources?.brightway || [];
   const isKnown = known.some((d) => d.path === folder);
   const dbAction = (p, d) => {
-    if (!p.twofive) return null;
-    if (!d.processes) return html`<span class="muted">elementary flows</span>`;
+    if (!p.twofive || !d.processes) return null;
     const body = { brightway: projects.folder, project: p.name, database: d.name };
     if (d.model?.key) return html`<button onClick=${() => { noteProject(p.name); openDatabase(d.model.key); }}>${d.model.key === DATABASE ? "Shown" : "Switch to"}</button>`;
     if (d.model && !d.model.outdated) return html`<button class="primary" disabled=${busy} onClick=${() => start(body)}>Open</button>`;
@@ -1393,16 +1425,14 @@ function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
         ${d.model ? "Rebuild and open" : "Build and open"}</button>`;
   };
 
-  // The options of a database: close it, lock it, rename it, add one, remove it
+  // The options of a database: close it, rename it, remove it (locked with its lock icon)
   const dbOptions = (p, d) => {
     const open = d.model?.key;
     const body = { brightway: projects.folder, project: p.name, database: d.name };
     return [
       ...(open ? [{ label: "Close (free its memory)", title: "Stop serving this database", run: () => unload(open) }] : []),
       ...(d.model?.outdated && !open && d.processes ? [{ label: "Open the old build", disabled: busy, title: "Open the model built before the database changed", run: () => start(body) }] : []),
-      { label: d.locked ? "Unlock" : "Lock", title: d.locked ? "Unlock: its processes can be edited again" : "Lock: nothing in this database can be edited, deleted or added to, from any database", run: () => lockDatabase(p, d) },
       { label: "Rename…", disabled: busy || d.locked || !!open, title: d.locked ? "Unlock it first" : open ? "Close it first" : "Give the database another name", run: () => setForm({ kind: "renameDb", project: p.name, database: d.name }) },
-      { label: "Add database…", title: `Add a database to ${p.name}: a file, a download, or a copy of one of another project`, run: () => setForm({ kind: "add", project: p.name }) },
       { label: "Remove…", danger: true, disabled: busy || d.locked, title: "Delete this database from the project", run: () => setForm({ kind: "removeDb", project: p.name, database: d.name }) },
     ];
   };
@@ -1495,8 +1525,8 @@ function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
               ${jobAt === p.name && jobBox && form?.project !== p.name && html`<tr class="form-row" key=${`j:${p.name}`}><td colspan="3">${jobBox}</td></tr>`}
               ${form?.project === p.name && html`<tr class="form-row" key=${`f:${p.name}`}><td colspan="3">${projectForm}${jobAt === p.name && jobBox}</td></tr>`}
               ${shown && p.databases.map((d) => html`
-                <tr key=${`d:${p.name}/${d.name}`} class=${p.twofive && d.processes ? "" : "muted"}>
-                  <td class="indent">${d.name}${d.locked && html` <span class="loc-chip" title="What this database contains cannot be edited">🔒 locked</span>`}${d.model?.outdated && html`<div class="muted small">${d.model.outdated}${d.model.key ? ": close it to rebuild it" : ""}</div>`}</td>
+                <tr key=${`d:${p.name}/${d.name}`} class=${`database${greyed(p, d) ? " muted" : ""}`} title=${greyed(p, d)}>
+                  <td class="indent"><span class="db-name">${d.name}${p.twofive && lockButton(p, d)}</span>${d.model?.outdated && html`<div class="muted small">${d.model.outdated}${d.model.key ? ": close it to rebuild it" : ""}</div>`}</td>
                   <td class="num muted">${d.processes ? `${count(d.processes)} processes` : `${count(d.flows)} flows`}</td>
                   <td class="actions">${dbAction(p, d)}
                     ${p.twofive && html`<${PopupMenu} label=${html`<${GearIcon} />`} className="gear-btn" title="Options of this database" items=${dbOptions(p, d)} />`}</td>
@@ -2757,6 +2787,13 @@ function ResetIcon() {
   return html`
     <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
       <path d="M2.5 8a5.5 5.5 0 1 0 1.8-4.1" /><path d="M2.5 2.5v3h3" />
+    </svg>`;
+}
+// A padlock, closed or ``open``
+function LockIcon({ open }) {
+  return html`
+    <svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="3" y="7" width="10" height="7" rx="1.5" /><path d=${open ? "M5.5 7V5a2.5 2.5 0 0 1 4.9-.7" : "M5.5 7V5a2.5 2.5 0 0 1 5 0v2"} />
     </svg>`;
 }
 function PlusIcon() {
@@ -4274,7 +4311,7 @@ function GroupPanel({ info, rules, setRules, selectedRow, view, setView, shared,
         <div class="row"><input placeholder="Group name" value=${name} onInput=${(e) => setName(e.target.value)} aria-label="Group name" /></div>
         ${queryLocked
           ? html`<p class="note">This group was made from selected rows or a nested query: only its name can be changed here.</p>`
-          : html`<${QueryBuilder} query=${query} setQuery=${setQuery} fields=${flows ? info.flow_query_fields : info.query_fields} flows=${flows} />`}
+          : html`<${QueryBuilder} query=${query} setQuery=${setQuery} fields=${(flows ? info.rule_flow_query_fields || info.flow_query_fields : info.rule_query_fields || info.query_fields)} flows=${flows} />`}
         ${flows && ownerLocked && html`<p class="note">Its owning process query cannot be shown here: it is kept as it is.</p>`}
         ${flows && !queryLocked && !ownerLocked && (ownerQuery
           ? html`
@@ -4284,7 +4321,9 @@ function GroupPanel({ info, rules, setRules, selectedRow, view, setView, shared,
               <${QueryBuilder} query=${ownerQuery} setQuery=${setOwnerQuery} fields=${info.query_fields} flows=${false} />
             </div>`
           : html`<div class="row"><button onClick=${() => setOwnerQuery(emptyQuery("name", "contains"))} title="Only the emissions of some processes">+ Owning process</button></div>`)}
-        ${preview && !queryLocked && html`<p class="note" title=${preview.results.slice(0, 3).map((r) => `${r.name} (${r.location})`).join("; ") + (preview.total > 3 ? "…" : "")}>Matches ${preview.total} ${flows ? "flows" : "processes"}</p>`}
+        ${preview && !queryLocked && html`<p class="note" title=${preview.results.slice(0, 3).map((r) => `${r.name} (${r.location})`).join("; ") + (preview.total > 3 ? "…" : "")}>${usesExchange(predicate)
+          ? `Matches ${preview.total} ${flows ? "flows" : "processes"}, where their exchange matches. In Rules contributions it takes what goes through the exchanges it matches.`
+          : `Matches ${preview.total} ${flows ? "flows" : "processes"}`}</p>`}
       ` : html`
         <div class="row"><select value=${by} onChange=${(e) => setBy(e.target.value)} aria-label="Group by field">
           ${(flows ? info.flow_query_fields : info.group_by_fields).map((f) => html`<option value=${f}>${fieldLabel(f, flows)}</option>`)}
@@ -4327,6 +4366,8 @@ const ruleKey = (r) => r.by || r.name;
 // group of processes), the names of all of them in the order of the rules, and the rule of each group (``ruleOf``: the
 // colour of a group is its rule's, whatever its name)
 function namedGroups(rules) {
+  // a rule on the exchange that brings a row in (avoided products, amounts…) takes the impacts that go through the
+  // exchanges it matches
   const active = rules.filter((r) => r.predicate && !r.disabled);
   const groups = Object.fromEntries(active.filter((r) => r.target !== "flows").map((r) => [r.name, r.predicate]));
   const nameOf = (r) => (r.target === "flows" && r.name in groups ? `${r.name} (flows)` : r.name);

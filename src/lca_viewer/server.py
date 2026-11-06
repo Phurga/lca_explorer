@@ -21,7 +21,8 @@ from pydantic import BaseModel
 from .analysis import (OTHER, flow_contribution, flow_contributors, group_contributors, main_path, matched,
                        supply_chain_contribution)
 from .model import LCAModel
-from .query import derived_activities, derived_flows, evaluate, field_options, search, suggest_values
+from .query import (EXCHANGE_FIELDS, EXCHANGE_TYPES, FLOW_EXCHANGE_TYPES, derived_activities, derived_flows, evaluate,
+                    field_options, search, suggest_values, without_exchange)
 from .tree import Tree
 from .view import View, below_cutoff
 
@@ -39,9 +40,13 @@ QUERY_FIELDS = [
     "name", "reference_product", "location", "unit", "activity_type",
     "isic", "isic_division", "cpc", "cpc_section", "flow_type", "database",
 ]
-GROUP_BY_FIELDS = ["location", "activity_type", "flow_type", "isic_division", "cpc_section", "reference_product", "unit", "database"]
+GROUP_BY_FIELDS = ["location", "activity_type", "flow_type", "isic_division", "cpc_section", "reference_product", "unit", "database",
+                   "exchange_type"]
 # Elementary flows (rules with ``target="flows"``)
 FLOW_FIELDS = ["name", "compartment", "subcompartment", "unit"]
+# The rules of the tree can also test the exchange bringing a row in: its type and its amount (``query.EXCHANGE_FIELDS``)
+RULE_QUERY_FIELDS = [*QUERY_FIELDS, *EXCHANGE_FIELDS]
+RULE_FLOW_FIELDS = [*FLOW_FIELDS, *EXCHANGE_FIELDS]
 # Recorded data of the exchange supplying a row that the list can show as columns (comments are sent apart)
 EXCHANGE_COLUMNS = ["uncertainty type", "loc", "scale", "scale without pedigree", "shape", "minimum", "maximum",
                     "pedigree", "formula", "variable name"]
@@ -327,25 +332,31 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
             "query_fields": QUERY_FIELDS,
             "group_by_fields": GROUP_BY_FIELDS,
             "flow_query_fields": FLOW_FIELDS,
+            "rule_query_fields": RULE_QUERY_FIELDS,
+            "rule_flow_query_fields": RULE_FLOW_FIELDS,
             "default_root": describe(root) if root is not None else None,
             "default_method": default_method,
         }
 
     @app.post("/api/search")
     def search_activities(req: SearchRequest):
+        predicate = without_exchange(req.predicate)  # a rule's preview: what may match, whatever the exchange
         try:
             if req.target == "flows":
-                found = np.flatnonzero(evaluate(req.predicate, flows)) if req.predicate else np.arange(len(flows))
+                found = np.flatnonzero(evaluate(predicate, flows)) if predicate else np.arange(len(flows))
                 return {"total": int(len(found)), "results": [
                     {"index": int(i), "name": flows["name"].iat[i], "location": flows["place"].iat[i]}
                     for i in found[: req.limit]]}
-            found = search(activities, req.text, req.predicate)
+            found = search(activities, req.text, predicate)
         except (KeyError, ValueError) as e:
             raise HTTPException(400, f"Invalid filter: {e}")
         return {"total": int(len(found)), "results": [describe(i) for i in found[: req.limit]]}
 
     @app.get("/api/values/{field}")
     def values(field: str, q: str = "", limit: int = 100, target: str | None = None):
+        if field in EXCHANGE_FIELDS:
+            return [t for t in (FLOW_EXCHANGE_TYPES if target == "flows" else EXCHANGE_TYPES)
+                    if field == "exchange_type" and q.lower() in t]
         if field not in (FLOW_FIELDS if target == "flows" else QUERY_FIELDS):
             raise HTTPException(404, f"Unknown field {field}")
         return suggest_values(flows if target == "flows" else activities, field, q, limit)
@@ -354,6 +365,10 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
     def options(field: str, q: str = "", limit: int = 200, target: str | None = None):
         """The values of a filter field with how many activities (flows) have each and, for codes
         (location, ISIC, CPC), what they stand for: the helper of the filter builder."""
+        if field in EXCHANGE_FIELDS:  # of an exchange, not of the activities: the types, no count
+            types = (FLOW_EXCHANGE_TYPES if target == "flows" else EXCHANGE_TYPES) if field == "exchange_type" else ()
+            items = [{"value": t, "count": ""} for t in types if q.lower() in t]
+            return {"items": items, "named": False, "total": len(items)}
         if field not in (FLOW_FIELDS if target == "flows" else QUERY_FIELDS):
             raise HTTPException(404, f"Unknown field {field}")
         return field_options(flows if target == "flows" else activities, field, q, limit)

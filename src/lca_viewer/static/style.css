@@ -676,8 +676,17 @@ table.load-table td { padding: 5px 6px; border-bottom: 1px solid var(--border); 
 table.load-table td.num { text-align: right; white-space: nowrap; font-size: 12px; }
 table.load-table td.actions { text-align: right; white-space: nowrap; width: 1%; }
 table.load-table td.actions button + button { margin-left: 4px; }
-table.load-table tr.project td { padding-top: 10px; border-bottom: none; }
-table.load-table td.indent { padding-left: 20px; overflow-wrap: anywhere; }
+/* A project: a band, set apart from the one above; its databases below, smaller and indented */
+table.load-table tr.project td { background: var(--hover); border-top: 8px solid var(--panel); border-bottom: none; padding: 6px; }
+table.load-table tr.database td { font-size: 13px; }
+table.load-table td.indent { padding-left: 30px; overflow-wrap: anywhere; }
+.db-name { display: inline-flex; align-items: center; gap: 4px; }
+/* The lock of a database: shown when locked, else on the row's hover */
+.lock-btn { border: none; background: none; padding: 2px 4px; color: var(--muted); display: inline-flex; align-items: center; border-radius: 5px; cursor: pointer; opacity: 0; }
+.lock-btn.locked, tr:hover .lock-btn, .lock-btn:focus-visible { opacity: 1; }
+.lock-btn.locked { color: var(--text); }
+.lock-btn:hover:not(:disabled) { color: var(--accent); background: var(--accent-soft); }
+@media (hover: none) { .lock-btn { opacity: 1; } }
 table.load-table tr.muted td { color: var(--muted); }
 /* The folder, as an option of a panel: its label on the left; another folder typed below the list */
 .load-folder { margin: 10px 0 4px; }

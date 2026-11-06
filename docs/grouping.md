@@ -25,6 +25,21 @@ the whole tree). Two forms:
   (thematic grouping: location, ISIC division, CPC section, activity type…).
 
 Manual grouping = named group with `{"products": [...]}` scoped to one node.
+
+A rule can also test the **exchange** that brings a child in (`query.EXCHANGE_FIELDS`), not only its activity:
+`exchange_type` (`technosphere`, `avoided` — a negative input of a product, as the substitutions of consequential
+databases —, `waste`; `resource` / `emission` for elementary flows) and `exchange_amount` (as recorded in the dataset
+of the parent, per unit of its reference product: avoided products and wastes negative; summed over the members of a
+merged parent), with the numeric operators `lt`, `le`, `gt`, `ge` (and `eq`, `ne`). `View._group` notes the exchange
+of every child (`View._exchanges`) and evaluates such a predicate over a frame of the siblings
+(`query.exchange_frame`); `exchange_type` can also be a group-by field. An exchange belongs to an edge, not to an
+activity: in global grouping such a rule is an **exchange group** matching entries of `A` (the input `i` of
+activity `j`, with the fields of `i`; `analysis._edge_mask`). Under first match the matched edges are cut like the
+inputs of matched activities, and the group takes the cumulative impact of what goes through them; under own
+emissions, the direct emissions of the share of `i` they bring in. An edge goes to the first rule in list order
+(an activity group of `i` listed before keeps it), and flow groups take from exchange groups as from activity
+groups; the parts still add up to the total. A flow rule can test the exchange too (entries of `B`). The Rules
+panel's preview counts the processes that may match (`query.without_exchange`).
 Named groups are applied first, then group-by rules, each in list order (so
 a broad "group by location" never swallows a group the user named); a child
 goes to the first group claiming it, and groups of one child are not created.

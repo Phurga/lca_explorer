@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from .query import derived_activities, derived_flows, evaluate
+from .query import EXCHANGE_FIELDS, derived_activities, derived_flows, evaluate, exchange_frame, uses_exchange
 from .tree import DIRECT, Node, Tree
 
 ROOT_SCOPE = "*"
@@ -177,6 +177,8 @@ class View:
         self._flows = derived_flows(self.tree.model)
         self._masks: dict[int, np.ndarray] = {}
         self._replaced: dict[str, str] = {}  # row id of a substituted input -> its original id
+        # node id -> the type and amount of the exchange that brings it in (see ``query.EXCHANGE_FIELDS``)
+        self._exchanges: dict[str, tuple[str, float]] = {}
 
     # --- state -----------------------------------------------------------
     def expand(self, row_id: str) -> None:
@@ -346,6 +348,7 @@ class View:
         flows = parent.kind == "direct"
         table = self._flows if flows else self._activities
         index = (lambda c: c.flow) if flows else (lambda c: c.product)
+        self._note_exchanges(children, parent)
         ordered = [r for r in self.rules if r.by is None] + [r for r in self.rules if r.by is not None]
         for rule in ordered:
             if rule.disabled or (rule.target == "flows") != flows or rule.scope not in (ROOT_SCOPE, parent.id) or not free:
@@ -355,18 +358,23 @@ class View:
             if flows and rule.owner is not None and not self._owned(rule, parent.sources):
                 continue
             if rule.predicate is not None:
-                mask = self._mask(rule)
-                members = [c for c in free if mask[index(c)]]
+                hits = self._hits(rule, free, index)
+                members = [c for c, hit in zip(free, hits) if hit]
                 if len(members) > 1:
                     made = self._group_row(rule.name or "group", members, parent, depth)
                     made.rule_group = None if rule.plain else rule.name or "group"
                     rows.append(made)
-                    free = [c for c in free if not mask[index(c)]]
+                    free = [c for c, hit in zip(free, hits) if not hit]
             elif rule.by is not None:
-                column = table[rule.by]
+                if rule.by in EXCHANGE_FIELDS:
+                    at = EXCHANGE_FIELDS.index(rule.by)
+                    value_of = lambda c: str(self._exchanges.get(c.id, ("", ""))[at])  # noqa: E731
+                else:
+                    column = table[rule.by]
+                    value_of = lambda c: str(column.iat[index(c)])  # noqa: E731
                 buckets: dict[str, list[Node]] = {}
                 for c in free:
-                    buckets.setdefault(str(column.iat[index(c)]), []).append(c)
+                    buckets.setdefault(value_of(c), []).append(c)
                 free = []
                 for value, members in buckets.items():
                     if len(members) > 1:
@@ -484,10 +492,52 @@ class View:
                 continue
             if flows and rule.owner is not None and not self._owned(rule, row.sources):
                 continue
+            # the node the exchange brings in: the first of a chain of singletons
+            node = row.chain[0] if row.chain else row.node
+            if uses_exchange(rule.predicate):
+                if node.id in self._exchanges and self._hits(rule, [node], lambda c: c.flow if flows else c.product)[0]:
+                    return rule.name or "group"
+                continue
             index = row.node.flow if flows else row.node.product
             if index is not None and bool(self._mask(rule)[index]):
                 return rule.name or "group"
         return None
+
+    def _note_exchanges(self, children: list[Node], parent: Row) -> None:
+        """Keep the type and amount of the exchange bringing in each of ``children`` (``query.EXCHANGE_FIELDS``). The
+        amount is as recorded in the dataset of the process above (summed over the members of a merged process), per unit
+        of its reference product: a negative input of a product is an avoided product."""
+        m = self.tree.model
+        sources = parent.sources if parent.kind == "direct" else (
+            self._sources(parent) if parent.kind in ("process", "merged") else None)
+        if not sources:
+            return
+        output = sum(abs(op * m.diagonal[j]) for j, op in sources)
+        sign = -1.0 if sources[0][1] < 0 else 1.0  # under an avoided product, the amounts below are negative
+        for c in children:
+            if c.is_direct:
+                continue
+            amount = float(sign * c.amount / output) if output else 0.0
+            if c.flow is not None:
+                kind = "resource" if "resource" in str(self._flows["compartment"].iat[c.flow]).lower() else "emission"
+            elif m.diagonal[c.product] < 0:
+                kind = "waste"
+            else:
+                kind = "avoided" if amount < 0 else "technosphere"
+            self._exchanges[c.id] = (kind, amount)
+
+    def _hits(self, rule: GroupRule, nodes: list[Node], index) -> list[bool]:
+        """Whether the query of ``rule`` matches each of ``nodes``: their activity (flow) and, when the query tests it,
+        the exchange that brings them in."""
+        if not uses_exchange(rule.predicate):
+            mask = self._mask(rule)
+            return [bool(mask[index(c)]) for c in nodes]
+        if not nodes:
+            return []
+        table = self._flows if rule.target == "flows" else self._activities
+        frame = exchange_frame(table, [index(c) for c in nodes],
+                               [self._exchanges.get(c.id, ("", float("nan"))) for c in nodes])
+        return [bool(x) for x in evaluate(rule.predicate, frame)]
 
     def _owned(self, rule: GroupRule, sources: list[tuple[int, float]] | None) -> bool:
         """Whether the processes emitting some flows (``sources``: the (activity, operation level) pairs of a direct

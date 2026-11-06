@@ -8,8 +8,15 @@ A predicate is a dict, evaluated vectorised over the activities dataframe:
 - ``{"products": [12, 345]}`` — explicit selection (manual groups); ``{"flows": [...]}``
   for elementary flows (predicates evaluated over :func:`derived_flows`)
 
-Operators: ``eq``, ``ne``, ``in``, ``contains``, ``startswith``, ``regex``.
-Text operators are case-insensitive.
+Operators: ``eq``, ``ne``, ``in``, ``contains``, ``startswith``, ``regex``, and for numbers ``gt``, ``ge``,
+``lt``, ``le``. Text operators are case-insensitive.
+
+The rules of the tree can also test the exchange that brings a row in (``EXCHANGE_FIELDS``):
+``exchange_type`` (``technosphere``, ``avoided``, ``waste``; ``resource``, ``emission`` for elementary flows) and
+``exchange_amount`` (as recorded in the dataset of the process above, per unit of its reference product: avoided
+products and wastes negative). They belong to an edge, not to an activity: the tree evaluates them over a frame of
+the siblings (:func:`exchange_frame`), the global analyses over the entries of the matrices (``analysis``); the
+preview of a rule (:func:`without_exchange`) leaves them out.
 """
 
 from __future__ import annotations
@@ -19,7 +26,57 @@ import warnings
 import numpy as np
 import pandas as pd
 
-OPERATORS = ("eq", "ne", "in", "contains", "startswith", "regex")
+OPERATORS = ("eq", "ne", "in", "contains", "startswith", "regex", "gt", "ge", "lt", "le")
+NUMERIC_OPERATORS = {"gt": "__gt__", "ge": "__ge__", "lt": "__lt__", "le": "__le__"}
+EXCHANGE_FIELDS = ("exchange_type", "exchange_amount")
+EXCHANGE_TYPES = ("technosphere", "avoided", "waste")
+FLOW_EXCHANGE_TYPES = ("resource", "emission")
+
+
+def uses_exchange(predicate: dict | None) -> bool:
+    """Whether ``predicate`` tests the exchange of a row (``EXCHANGE_FIELDS``), not only the activity or flow."""
+    if not predicate:
+        return False
+    if "all" in predicate or "any" in predicate:
+        return any(uses_exchange(p) for p in predicate.get("all", predicate.get("any")))
+    if "not" in predicate:
+        return uses_exchange(predicate["not"])
+    return predicate.get("field") in EXCHANGE_FIELDS
+
+
+def predicate_fields(predicate: dict | None) -> set[str]:
+    """The fields ``predicate`` tests."""
+    if not predicate:
+        return set()
+    for key in ("all", "any"):
+        if key in predicate:
+            return set().union(*(predicate_fields(p) for p in predicate[key]))
+    if "not" in predicate:
+        return predicate_fields(predicate["not"])
+    return {predicate["field"]} if "field" in predicate else set()
+
+
+def without_exchange(predicate: dict | None) -> dict | None:
+    """``predicate`` with its conditions on exchanges left out (None: nothing is left), for what tests activities alone:
+    the processes that may match, whatever their exchange."""
+    if not predicate:
+        return None
+    for key in ("all", "any"):
+        if key in predicate:
+            parts = [q for q in (without_exchange(p) for p in predicate[key]) if q is not None]
+            return {key: parts} if parts else None
+    if "not" in predicate:
+        inner = without_exchange(predicate["not"])
+        return {"not": inner} if inner is not None else None
+    return None if predicate.get("field") in EXCHANGE_FIELDS else predicate
+
+
+def exchange_frame(table: pd.DataFrame, indices: list[int], exchanges: list[tuple[str, float]]) -> pd.DataFrame:
+    """The rows ``indices`` of ``table`` (activities or flows) with the type and amount of the exchange of each: what a
+    predicate using ``EXCHANGE_FIELDS`` is evaluated over (``_row``: the position in ``table``, for explicit selections)."""
+    frame = table.iloc[indices].reset_index(drop=True)
+    return frame.assign(_row=np.asarray(indices, dtype=int),
+                        exchange_type=[t for t, _ in exchanges], exchange_amount=[float(a) for _, a in exchanges])
 
 
 def activity_type(name: str) -> str:
@@ -86,13 +143,23 @@ def evaluate(predicate: dict, activities: pd.DataFrame) -> np.ndarray:
     if "not" in predicate:
         return ~evaluate(predicate["not"], activities)
     if "products" in predicate or "flows" in predicate:  # explicit rows of the table
+        chosen = list(predicate.get("products", predicate.get("flows")))
+        if "_row" in activities:  # a frame of some rows (``exchange_frame``)
+            return np.isin(activities["_row"].to_numpy(), chosen)
         mask = np.zeros(len(activities), dtype=bool)
-        mask[list(predicate.get("products", predicate.get("flows")))] = True
+        mask[chosen] = True
         return mask
 
     column = activities[predicate["field"]]
     op, value = predicate["op"], predicate["value"]
-    if op == "eq":
+    numeric = pd.api.types.is_numeric_dtype(column)
+    if op in NUMERIC_OPERATORS or (numeric and op in ("eq", "ne")):
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            raise ValueError(f"{predicate['field']}: {value!r} is not a number")
+        result = getattr(pd.to_numeric(column, errors="coerce"), NUMERIC_OPERATORS.get(op, f"__{op}__"))(number)
+    elif op == "eq":
         result = column == value
     elif op == "ne":
         result = column != value

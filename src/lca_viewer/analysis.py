@@ -24,6 +24,15 @@ whole supply chain). What no activity group claims is split by the flow groups,
 else *other*. Without an order, activity groups come first. The parts still add
 up exactly to the total.
 
+**Exchange groups**: a group whose predicate tests the exchange (``query.EXCHANGE_FIELDS``: its type, avoided
+product or waste, its amount) matches edges of the supply chain, not activities: the input ``i`` of activity ``j``
+(``A[i, j]``), with the fields of ``i``. Under first match a matched edge is cut like the inputs of a matched
+activity, and the group takes the whole cumulative impact of what goes through it; under ``direct`` it takes the own
+emissions of the share of ``i`` that the edge brings in. An edge goes to the first group in the order of the rules: an
+activity group of ``i`` listed before the exchange group keeps it. Flow groups take from exchange groups as from
+activity groups. A flow group can test the exchange too: the entries of ``B`` (``exchange_type`` resource or emission,
+``exchange_amount`` per unit of the emitting activity's product).
+
 :func:`group_contributors` lists the activities making up one group, and
 :func:`main_path` finds the supply path along which an activity weighs most,
 to show it in the tree.
@@ -40,9 +49,63 @@ import scipy.sparse as sp
 from scipy.sparse.csgraph import dijkstra
 
 from .model import LCAModel, _factorized_solver
-from .query import derived_activities, derived_flows, evaluate
+import pandas as pd
+
+from .query import EXCHANGE_FIELDS, derived_activities, derived_flows, evaluate, predicate_fields, uses_exchange
 
 OTHER = "other"
+
+
+def _matching(predicate: dict, frame) -> np.ndarray:
+    """``evaluate``, except that a query testing the exchange (``query.EXCHANGE_FIELDS``) matches no activity: it
+    matches edges (see :func:`_edge_mask`)."""
+    if uses_exchange(predicate):
+        return np.zeros(len(frame), dtype=bool)
+    return evaluate(predicate, frame)
+
+
+def _edges(model: LCAModel):
+    """The entries of ``A`` (coordinates, values) with, off the diagonal, the type and amount of each exchange: the
+    input ``row`` of activity ``col``, as recorded per unit of its reference product (avoided products and wastes
+    negative), computed once per model."""
+    if getattr(model, "_edge_cache", None) is None:
+        A = model.A.tocoo()
+        rows, cols, data = A.row.astype(np.int64), A.col.astype(np.int64), A.data
+        off = rows != cols
+        amount = np.where(off, -data / np.abs(model.diagonal[cols]), 0.0)
+        kind = np.where(model.diagonal[rows] < 0, "waste", np.where(amount < 0, "avoided", "technosphere"))
+        model._edge_cache = (rows, cols, data, off, amount, kind)
+    return model._edge_cache
+
+
+def _entry_mask(predicate: dict, table: pd.DataFrame, rows: np.ndarray, kind: np.ndarray, amount: np.ndarray) -> np.ndarray:
+    """``predicate`` over some entries of a matrix: the fields of ``table`` at ``rows``, with the exchange of each."""
+    fields = predicate_fields(predicate) - set(EXCHANGE_FIELDS)
+    frame = pd.DataFrame({f: table[f].to_numpy()[rows] for f in fields})
+    frame["_row"], frame["exchange_type"], frame["exchange_amount"] = rows, kind, amount
+    return evaluate(predicate, frame)
+
+
+def _edge_mask(model: LCAModel, predicate: dict) -> np.ndarray:
+    """The entries of ``A`` (as :func:`_edges` lists them) that ``predicate`` matches: off the diagonal only."""
+    rows, _, _, off, amount, kind = _edges(model)
+    mask = np.zeros(len(rows), dtype=bool)
+    mask[off] = _entry_mask(predicate, derived_activities(model), rows[off], kind[off], amount[off])
+    return mask
+
+
+def _flow_mask(model: LCAModel, predicate: dict, B: sp.csr_matrix) -> sp.csr_matrix:
+    """0/1 on the entries of ``B`` that ``predicate`` matches (by flow, or by exchange when it tests it)."""
+    flows = derived_flows(model)
+    if not uses_exchange(predicate):
+        return sp.diags(evaluate(predicate, flows).astype(float)) @ (B != 0).astype(float)
+    E = B.tocoo()
+    rows, cols = E.row.astype(np.int64), E.col.astype(np.int64)
+    resource = flows["compartment"].astype(str).str.contains("resource", case=False).to_numpy()
+    kind = np.where(resource[rows], "resource", "emission")
+    amount = E.data / np.abs(model.diagonal[cols])
+    hit = _entry_mask(predicate, flows, rows, kind, amount).astype(float)
+    return sp.csr_matrix((hit, (rows, cols)), shape=B.shape)
 
 
 def _assign(model: LCAModel, groups: dict[str, dict]) -> np.ndarray:
@@ -50,7 +113,7 @@ def _assign(model: LCAModel, groups: dict[str, dict]) -> np.ndarray:
     activities = derived_activities(model)
     assignment = np.full(model.size, len(groups))
     for g, predicate in reversed(list(enumerate(groups.values()))):
-        assignment[evaluate(predicate, activities)] = g
+        assignment[_matching(predicate, activities)] = g
     return assignment
 
 
@@ -66,11 +129,14 @@ def _sum_by_group(values: np.ndarray, assignment: np.ndarray, groups: dict) -> d
     return dict(zip(names, totals))
 
 
-def _cut_inputs(model: LCAModel, is_matched: np.ndarray) -> sp.csc_matrix:
-    """``A`` where matched activities keep their production but lose their inputs."""
-    A = model.A.tocoo()
-    keep = (A.row == A.col) | ~is_matched[A.col]
-    return sp.csc_matrix((A.data[keep], (A.row[keep], A.col[keep])), shape=A.shape)
+def _cut_inputs(model: LCAModel, is_matched: np.ndarray, cut: np.ndarray | None = None) -> sp.csc_matrix:
+    """``A`` where matched activities keep their production but lose their inputs, without the edges ``cut`` (a mask
+    over the entries as :func:`_edges` lists them)."""
+    rows, cols, data, off, _, _ = _edges(model)
+    keep = ~off | ~is_matched[cols]
+    if cut is not None:
+        keep &= ~cut
+    return sp.csc_matrix((data[keep], (rows[keep], cols[keep])), shape=model.A.shape)
 
 
 def _flow_directs(model: LCAModel, flow_groups: dict[str, dict], flow_owners: dict[str, dict], methods) -> list[np.ndarray]:
@@ -86,7 +152,7 @@ def _flow_directs(model: LCAModel, flow_groups: dict[str, dict], flow_owners: di
     CF = sp.csr_matrix(model.CF[methods])
     out = []
     for name, predicate in flow_groups.items():
-        taken = sp.diags(evaluate(predicate, flows).astype(float)) @ remaining
+        taken = sp.csr_matrix(remaining.multiply(_flow_mask(model, predicate, remaining)))
         if flow_owners.get(name):
             taken = taken @ sp.diags(evaluate(flow_owners[name], activities).astype(float))
         remaining = remaining - taken
@@ -94,14 +160,15 @@ def _flow_directs(model: LCAModel, flow_groups: dict[str, dict], flow_owners: di
     return out
 
 
-def _supply(model: LCAModel, product: int, assignment: np.ndarray, n_groups: int, rule: str, amount: float):
+def _supply(model: LCAModel, product: int, assignment: np.ndarray, n_groups: int, rule: str, amount: float,
+            cut: np.ndarray | None = None):
     """Operation levels the impacts are attributed from: the supply chain, or under first
-    match the supply chain cut below matched activities."""
+    match the supply chain cut below matched activities and at the matched edges (``cut``)."""
     if rule == "direct":
         return model.supply(product, amount)
     demand = np.zeros(model.size)
     demand[product] = amount
-    return _factorized_solver(_cut_inputs(model, assignment < n_groups))(demand)
+    return _factorized_solver(_cut_inputs(model, assignment < n_groups, cut))(demand)
 
 
 def _activity_values(model: LCAModel, s: np.ndarray, assignment: np.ndarray, n_groups: int, rule: str,
@@ -130,10 +197,27 @@ def _positions(groups: dict[str, dict], flow_groups: dict[str, dict], order: lis
     return place[: len(groups)], place[len(groups):]
 
 
+def _edge_groups(model: LCAModel, groups: dict[str, dict], places: list[int], activity_place: np.ndarray,
+                 inputs_cut: np.ndarray | None) -> np.ndarray:
+    """Per entry of ``A`` (:func:`_edges`): the exchange group taking it (an index in ``groups``), else -1. An edge goes
+    to the first group in the order of the rules (``places``) that matches it, unless the activity group of its input
+    comes before (``activity_place``: per activity); none out of an activity whose inputs are cut (``inputs_cut``)."""
+    rows, cols, *_ = _edges(model)
+    taken = np.full(len(rows), -1)
+    best = activity_place[rows].copy()
+    for k, predicate in enumerate(groups.values()):
+        hit = _edge_mask(model, predicate) & (places[k] < best)
+        taken[hit], best[hit] = k, places[k]
+    if inputs_cut is not None:
+        taken[inputs_cut[cols]] = -1
+    return taken
+
+
 def _attribute(model: LCAModel, product: int, groups: dict[str, dict], rule: str, amount: float,
                flow_groups: dict[str, dict], methods, order: list[str] | None = None,
                flow_owners: dict[str, dict] | None = None):
-    """Per activity (activities x methods): the impacts of each activity group, of each flow group and of *other*.
+    """Per activity (activities x methods): the impacts of each activity group, of each flow group, of *other* and of
+    each exchange group (on the activities its edges bring in).
 
     The groups go by the order of the rules (``order``: their names, first rule first): what an activity emits goes to
     its activity group or to a flow group, whichever is first. A flow group before the group of an activity takes its
@@ -141,35 +225,61 @@ def _attribute(model: LCAModel, product: int, groups: dict[str, dict], rule: str
     a flow group after it takes nothing from it; the flows of an activity no group claims go to the first flow group
     that claims them, else to *other*. Without ``order``, activity groups come first.
     """
+    edge_groups = {name: p for name, p in groups.items() if uses_exchange(p)}
+    groups = {name: p for name, p in groups.items() if name not in edge_groups}
     n = len(groups)
     assignment = _assign(model, groups)
-    s = _supply(model, product, assignment, n, rule, amount)
-    group_place, flow_place = _positions(groups, flow_groups, order)
+    places, flow_place = _positions({**groups, **edge_groups}, flow_groups, order)
+    group_place, edge_place = places[:n], places[n:]
     place = np.array([*group_place, NEVER])[assignment]  # of the group each activity belongs to
+    taken = _edge_groups(model, edge_groups, edge_place, place, assignment < n if rule == "first_match" else None)
+    s = _supply(model, product, assignment, n, rule, amount, taken >= 0)
+    # Per exchange group, the operation level of each activity that its edges bring in
+    rows, cols, data, *_ = _edges(model)
+    portions = []
+    for k in range(len(edge_groups)):
+        on = taken == k
+        portions.append(np.bincount(rows[on], weights=-data[on] * s[cols[on]], minlength=model.size) / model.diagonal)
+    own = s - sum(portions, np.zeros(model.size)) if rule == "direct" else s  # under first match the cut edges are not in ``s``
     matched = (assignment < n)[:, None]
-    total = _activity_values(model, s, assignment, n, rule, methods)
+    total = _activity_values(model, own, assignment, n, rule, methods)
+    U, G = model.U[methods], model.G[:, methods]
+    edge_values = {name: (p[:, None] * U.T if rule == "direct" else (p * model.diagonal)[:, None] * G)
+                   for name, p in zip(edge_groups, portions)}
     directs = _flow_directs(model, flow_groups, flow_owners or {}, methods)
     last = max(group_place, default=-1)
-    reaching = (s * model.diagonal)[:, None]  # amount of product reaching each activity
-    flow_values = {}
+    reaching = (own * model.diagonal)[:, None]  # amount of product reaching each activity
+    flow_values, flow_own = {}, []
     for h, name in enumerate(flow_groups):
         direct = directs[h]  # methods x activities
-        part = s[:, None] * direct.T
+        part = own[:, None] * direct.T
+        before = [k for k in range(len(edge_groups)) if flow_place[h] < edge_place[k]]  # exchange groups it takes from
+        cumulative = model.cumulative(direct) if rule == "first_match" and (flow_place[h] < last or before) else None
         if rule == "first_match" and flow_place[h] < last:  # before some activity group: its flows in their supply chains
-            part = np.where(matched, reaching * model.cumulative(direct), part)
-        flow_values[name] = np.where((place > flow_place[h])[:, None], part, 0.0)
-    rest = total - sum(flow_values.values(), 0.0)
-    return assignment, np.where(matched, rest, 0.0), flow_values, np.where(matched, 0.0, rest)
+            part = np.where(matched, reaching * cumulative, part)
+        flow_own.append(np.where((place > flow_place[h])[:, None], part, 0.0))
+        flow_values[name] = flow_own[-1]
+        for k in before:
+            name_k = list(edge_groups)[k]
+            take = (portions[k][:, None] * direct.T if rule == "direct"
+                    else (portions[k] * model.diagonal)[:, None] * cumulative)
+            flow_values[name] = flow_values[name] + take
+            edge_values[name_k] = edge_values[name_k] - take
+    rest = total - sum(flow_own, 0.0)
+    return assignment, np.where(matched, rest, 0.0), flow_values, np.where(matched, 0.0, rest), edge_values
 
 
 def supply_chain_contribution(model: LCAModel, product: int, groups: dict[str, dict], rule: str = "first_match",
                               amount: float = 1.0, flow_groups: dict[str, dict] | None = None, methods=slice(None),
                               order: list[str] | None = None, flow_owners: dict[str, dict] | None = None):
     """Activity groups (``rule``), flow groups and *other*: name -> impacts (``methods``)."""
-    assignment, values, flow_values, other = _attribute(model, product, groups, rule, amount, flow_groups or {}, methods, order,
-                                                        flow_owners)
-    result = _sum_by_group(values, assignment, groups)
+    assignment, values, flow_values, other, edge_values = _attribute(model, product, groups, rule, amount, flow_groups or {},
+                                                                     methods, order, flow_owners)
+    activity_groups = {name: p for name, p in groups.items() if name not in edge_values}
+    result = _sum_by_group(values, assignment, activity_groups)
     del result[OTHER]
+    result.update({name: v.sum(axis=0) for name, v in edge_values.items()})
+    result = {name: result[name] for name in groups}  # in the order of the groups asked
     return {**result, **{name: v.sum(axis=0) for name, v in flow_values.items()}, OTHER: other.sum(axis=0)}
 
 
@@ -180,11 +290,15 @@ def group_contributors(model: LCAModel, product: int, groups: dict[str, dict], g
     """Activities making up ``group`` (an activity or flow group, or ``OTHER``), in index
     order, and their impacts (activities x methods); the impacts sum to the group's total."""
     flow_groups = flow_groups or {}
-    assignment, values, flow_values, other = _attribute(model, product, groups, rule, amount, flow_groups, methods, order, flow_owners)
+    assignment, values, flow_values, other, edge_values = _attribute(model, product, groups, rule, amount, flow_groups,
+                                                                     methods, order, flow_owners)
     if group == OTHER:
         values = other
+    elif group in edge_values:  # the activities its edges bring in
+        values = edge_values[group]
     elif group in groups:
-        values = np.where((assignment == list(groups).index(group))[:, None], values, 0.0)
+        activity_groups = [name for name in groups if name not in edge_values]
+        values = np.where((assignment == activity_groups.index(group))[:, None], values, 0.0)
     elif group in flow_values:
         values = flow_values[group]
     else:

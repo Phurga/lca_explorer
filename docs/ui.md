@@ -415,7 +415,8 @@ API in `src/lca_viewer/server.py`.
 - **View bar** (the *Rows* of the *Custom view* panel): *Group by rules* (on by default), *Group by product*, *Split by flow type* (below each
   row, the rows in the sections of the form of a new process, as in the flow type colours, with a
   heading each: inputs from technosphere, inputs from nature, emissions, direct emissions, waste
-  to treatment; the others rows come last with no heading of their own; the order inside a section is kept), *Hide others* (the others
+  to treatment, avoided products (a negative input of a product, not a waste: the substitutions of consequential
+  databases, also a colour of their own in *Flow type* colours); the others rows come last with no heading of their own; the order inside a section is kept), *Hide others* (the others
   rows, with the rows of an expanded one, and their boxes in the tree view and the Sankey, are left out; the chart keeps them), *Collapse singletons* (a process made of only one process, with no
   other input and no emissions of its own, such as a market of one supplier, shows as that process, and so on down
   the chain: the row is the last process, "via" the ones above it; same impacts, a shorter tree;

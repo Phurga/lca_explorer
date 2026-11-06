@@ -9,11 +9,26 @@ version, `main` can be ahead of it with work in progress.
 
 Changes on `dev`, not released yet.
 
+## 1.5.0 - 2026-11-06
+
+Avoided products set apart, rules on the exchanges themselves (their type and amount), and projects that open at once.
+
+- **Avoided products** in *Split by flow type*: a negative input of a product (not a waste), as the substitutions of
+  consequential databases, has a section of its own instead of being among the inputs from technosphere, and a
+  colour of its own in the *Flow type* colours.
+- **Rules on exchanges**: a rule can test the exchange that brings a row in, its *exchange type* (technosphere,
+  avoided, waste; resource or emission for a flow) and its *exchange amount* (as recorded in the dataset of the
+  process above, with <, ≤, >, ≥), alone or with conditions on the process; *Group by* offers the exchange type.
+  These rules group and colour the tree, and in *Rules contributions* (and Compare by groups) they take what goes
+  through the exchanges they match: under first match the whole supply chain of what they bring in (an avoided
+  product with everything it avoids), under own emissions the emissions of that share.
 - **Projects open at once**: the projects and databases are read once and kept (the node counts of each project
   too, in `data/cache`, counted again only when the project is written); *↻ Refresh* reads them again, for
   changes made outside the app. A job that changes a project lists them again.
 - **Feedback on every job**: a button starting a job shows it under way at once, under the button, with what it is
   doing (MB downloaded, impact methods installed) and for how long; a greyed-out button says why.
+- **Lock icon** on each database of the Projects page: shown when the database is locked (a click unlocks it), on
+  the row's hover otherwise (a click locks it); a greyed-out database says why it cannot be opened.
 - Fixed: *Add database → ecoinvent* stayed greyed out in a project without a biosphere.
 - Fixed: *Add database → Brightway repository* seemed to do nothing: the server read every project before starting
   the job (up to 30 s), and the download said nothing until done.
