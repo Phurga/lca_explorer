@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Adrien Burg and LCA Explorer contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Import LCI databases into a Brightway project, before ``lca-viewer build``.
 
 - ecoSpold2 (ecoinvent releases) with bw2io's ``SingleOutputEcospold2Importer``.

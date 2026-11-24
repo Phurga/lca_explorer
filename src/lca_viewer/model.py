@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Adrien Burg and LCA Explorer contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Matrix model and per-unit cumulative impacts.
 
 Conventions (same as Brightway):

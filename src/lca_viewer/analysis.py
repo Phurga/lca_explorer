@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Adrien Burg and LCA Explorer contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Whole-supply-chain contribution analyses, grouped by queries.
 
 Tree groups only bundle siblings. Questions like "how much does electricity

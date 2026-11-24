@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Adrien Burg and LCA Explorer contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """ecoinvent credentials, kept in the operating system's credential store.
 
 They are stored with ``keyring``: Windows Credential Manager, the macOS Keychain, or the Secret

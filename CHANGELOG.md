@@ -9,6 +9,11 @@ version, `main` can be ahead of it with work in progress.
 
 Changes on `dev`, not released yet.
 
+- **New licence: GNU AGPL 3.0 or later** instead of the PolyForm Strict License. LCA Explorer is now free and
+  open-source software: anyone may use, change and share it, for any purpose, as long as what they share (or run
+  for others over a network) stays under the AGPL with its source. Each source file carries its licence
+  (`SPDX-License-Identifier: AGPL-3.0-or-later`), and a **Source** link in the top bar leads to the code.
+
 ## 1.5.0 - 2026-11-06
 
 Avoided products set apart, rules on the exchanges themselves (their type and amount), and projects that open at once.

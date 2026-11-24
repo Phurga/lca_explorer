@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Adrien Burg and LCA Explorer contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Local web server: a stateless JSON API over :class:`View`, plus the UI.
 
 The client owns the view state (expanded rows, group rules, cut-off) and

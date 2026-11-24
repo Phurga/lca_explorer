@@ -103,9 +103,17 @@ databases. More in the [user guide](docs/user-guide.md).
 
 ## Licence
 
-LCA Explorer is licensed under the [PolyForm Strict License 1.0.0](LICENSE): you may use it for noncommercial
-purposes only, and you may not distribute it, change it or make new works based on it. For any other use, ask
-the copyright holder. The libraries in `src/lca_viewer/static/vendor/` keep their own licences (MIT, Apache-2.0).
+Copyright (c) 2026 Adrien Burg and LCA Explorer contributors.
+
+LCA Explorer is free software under the [GNU Affero General Public License, version 3 or later](LICENSE)
+(`AGPL-3.0-or-later`): you may use it for any purpose, study and change it, and share it, changed or not, as long
+as what you share keeps this licence and comes with its source code. If you run a changed version for other people
+over a network (on a shared server, for instance), you must offer them its source too (section 13 of the licence);
+the **Source** link in the app's top bar is there for that, point it at your own version. It comes without any
+warranty. Contributions are accepted under the same licence.
+
+The libraries in `src/lca_viewer/static/vendor/` keep their own licences: Preact (MIT), htm (Apache-2.0) and
+Apache ECharts (Apache-2.0).
 
 ecoinvent and Agribalyse are licensed: only people covered by an ecoinvent licence may use the explorer on
 them, and results must not be shared beyond what that licence allows. The archives and the built models stay in

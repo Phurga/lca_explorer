@@ -273,6 +273,12 @@ Nothing needs to be installed on your computer besides an SSH client
 Replace `<user>`, `<host>` and `<ssh-port>` with the values you normally use
 to log in to the server.
 
+If the server runs a version changed from a release (local fixes, extra
+features), the AGPL asks that its users can get that source: commit the
+changes to a public branch or fork and point `SOURCE_URL` at the top of
+`src/lca_viewer/static/app.js` to it, so the **Source** link of the top bar
+leads there.
+
 **1. Open a tunnel** from your computer and keep this terminal open:
 
 ```bash
@@ -362,6 +368,15 @@ Install the test tools too (`pip install pytest httpx`), then:
 
 ```bash
 python -m pytest tests -q
+```
+
+Code contributed to LCA Explorer is under its licence, the GNU AGPL 3.0 or
+later ([README](../README.md#licence)). A new source file starts with the
+two lines of the others:
+
+```python
+# SPDX-FileCopyrightText: 2026 Adrien Burg and LCA Explorer contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
 ```
 
 Add `--reload` to `lca-viewer serve` to restart it when Python code changes;

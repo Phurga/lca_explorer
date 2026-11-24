@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,7 +7,8 @@ name = "lca-viewer"
 version = "1.5.0"
 description = "Process explorer and contribution analysis for life cycle assessment results"
 requires-python = ">=3.10"
-license = { file = "LICENSE" }
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE"]
 dependencies = ["numpy", "scipy", "pandas"]
 
 [project.optional-dependencies]

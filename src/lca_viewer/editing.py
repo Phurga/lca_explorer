@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Adrien Burg and LCA Explorer contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Changes to Brightway projects made from the app: create, delete and restore projects, delete
 their databases, and write, edit and delete datasets (the *Create dataset* panel).
 

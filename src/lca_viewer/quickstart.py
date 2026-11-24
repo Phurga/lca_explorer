@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Adrien Burg and LCA Explorer contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """``lca-viewer setup``: record the Python the start script runs the app with.
 
 The app starts with no database: *Projects* offers the built models (``data/models.json``)

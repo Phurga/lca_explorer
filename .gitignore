@@ -20,3 +20,6 @@ __pycache__/
 # Claude Code: machine-specific settings
 .claude/settings.local.json
 .claude/launch.json
+
+# Python build output
+build/

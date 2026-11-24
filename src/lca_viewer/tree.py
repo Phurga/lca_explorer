@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Adrien Burg and LCA Explorer contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Lazy supply chain tree.
 
 A node is "``amount`` of product ``p``, reached through ``path``". Expanding it

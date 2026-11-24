@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 Adrien Burg and LCA Explorer contributors
+   SPDX-License-Identifier: AGPL-3.0-or-later */
 :root {
   --bg: #f7f7f5;
   --panel: #ffffff;
@@ -104,6 +106,8 @@ select.database { max-width: 220px; font-weight: 600; }
 .top-bar .spacer { flex: 1; }
 .top-left, .top-right { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; min-width: 0; }
 .top-right { justify-content: flex-end; }
+.source-link { color: var(--muted); font-size: 12px; text-decoration: none; }
+.source-link:hover { color: var(--accent); text-decoration: underline; }
 /* The search of a process, in the middle of the bar like a command palette, with the switch of the view options */
 .top-centre { display: flex; gap: 6px; align-items: center; min-width: 0; }
 .top-centre .fu { flex: 1; min-width: 0; position: relative; }

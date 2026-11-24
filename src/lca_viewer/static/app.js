@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Adrien Burg and LCA Explorer contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { h, render, Fragment, createContext } from "preact";
 import { useState, useEffect, useMemo, useRef, useContext } from "preact/hooks";
 import htm from "htm";
@@ -7,6 +9,8 @@ const html = htm.bind(h);
 const DATABASE = location.pathname.match(/^\/db\/([^/]+)/)?.[1] ?? null;
 const API_BASE = DATABASE ? `/db/${DATABASE}` : "";
 const STORAGE_KEY = DATABASE ? `lca_viewer.view.${DATABASE}` : "lca_viewer.view";
+// Where the source of this version is (GNU AGPL, section 13): a modified version run for others must link to its own source
+const SOURCE_URL = "https://github.com/Phurga/lca_explorer";
 
 // ---------------------------------------------------------------- helpers
 // The API of the database shown (under /db/<key>/)
@@ -6955,6 +6959,8 @@ function App() {
       </div>
       <div class="top-centre">${centre}</div>
       <div class="top-right">
+      <a class="source-link" href=${SOURCE_URL} target="_blank" rel="noopener noreferrer"
+        title="Source code of LCA Explorer, free software under the GNU AGPL 3.0 or later">Source</a>
       ${databases && html`
         <span class="mode-switch" role="group" aria-label="Mode">
           <button class=${`has-key ${!editing && !comparing ? "primary" : ""}`} onClick=${() => setMode("view")}

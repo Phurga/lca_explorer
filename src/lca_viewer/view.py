@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Adrien Burg and LCA Explorer contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """A tree view: expansion state + grouping rules, rendered as rows.
 
 The view is the user's working state and is JSON-serialisable. The rows it

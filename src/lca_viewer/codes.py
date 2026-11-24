@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Adrien Burg and LCA Explorer contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Names for the codes of the filter fields: locations (ISO 3166 countries, ecoinvent regions, subdivisions),
 ISIC Rev. 4 divisions and CPC sections. The names of ISIC classes and CPC classes are in the data itself
 (``"4322:Plumbing, heat and air-conditioning installation"``)."""

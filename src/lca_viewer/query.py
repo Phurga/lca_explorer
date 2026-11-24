@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Adrien Burg and LCA Explorer contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Queries on activity metadata, as JSON-serialisable predicates.
 
 A predicate is a dict, evaluated vectorised over the activities dataframe:
