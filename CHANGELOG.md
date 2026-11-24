@@ -9,6 +9,10 @@ version, `main` can be ahead of it with work in progress.
 
 Changes on `dev`, not released yet.
 
+## 1.5.1 - 2026-11-24
+
+LCA Explorer becomes free and open-source software, under the GNU AGPL 3.0 or later.
+
 - **New licence: GNU AGPL 3.0 or later** instead of the PolyForm Strict License. LCA Explorer is now free and
   open-source software: anyone may use, change and share it, for any purpose, as long as what they share (or run
   for others over a network) stays under the AGPL with its source. Each source file carries its licence
