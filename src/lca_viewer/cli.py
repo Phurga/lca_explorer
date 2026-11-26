@@ -15,7 +15,9 @@ def build(args) -> None:
     from .brightway import from_brightway
 
     bd.projects.set_current(args.project)
-    if args.methods:
+    if args.methods_file:
+        methods = _chosen_methods(bd, args.methods_file)
+    elif args.methods:
         methods = [m for m in bd.methods if m[0] in args.methods]
     else:
         methods = list(bd.methods)
@@ -23,6 +25,36 @@ def build(args) -> None:
     model = from_brightway(args.project, args.database, methods, log=lambda message: print(message, flush=True))
     model.save(args.output)
     print(f"{model.size} activities, {len(model.methods)} methods -> {args.output} ({time.perf_counter() - t:.1f}s)")
+
+
+def _chosen_methods(bd, path) -> list[tuple]:
+    """The methods named in the JSON file ``path`` (a list of names, each a list of strings) that the
+    project has, in the project's order."""
+    import json
+
+    chosen = {tuple(name) for name in json.loads(Path(path).read_text(encoding="utf-8"))}
+    methods = [m for m in bd.methods if tuple(m) in chosen]
+    if not methods:
+        raise SystemExit("None of the chosen impact methods is in the project")
+    return methods
+
+
+def add_methods(args) -> None:
+    """Read the factors of more impact methods for a built model, on its elementary flows, to a pickle
+    that the server adds to the model (:meth:`LCAModel.add_methods`)."""
+    import pickle
+
+    import bw2data as bd
+    import pandas as pd
+
+    from .brightway import method_factors
+
+    bd.projects.set_current(args.project)
+    methods = _chosen_methods(bd, args.methods_file)
+    print(f"Reading {len(methods)} impact methods", flush=True)
+    flows = pd.read_pickle(Path(args.model) / "flows.pkl")
+    with open(args.output, "wb") as f:
+        pickle.dump(method_factors(methods, flows["id"].to_numpy()), f)
 
 
 def _per_model(values, n: int, name: str) -> list:
@@ -288,8 +320,16 @@ def main(argv=None) -> None:
     p.add_argument("--project", required=True)
     p.add_argument("--database", required=True)
     p.add_argument("--methods", nargs="*", help="Method families to include (first element of the method tuple); default: all")
+    p.add_argument("--methods-file", help="JSON file listing the impact methods to include (each name a list of strings)")
     p.add_argument("--output", required=True)
     p.set_defaults(func=build)
+
+    p = sub.add_parser("add-methods", help="Read the factors of more impact methods for a model built from Brightway")
+    p.add_argument("--project", required=True)
+    p.add_argument("--model", required=True, help="Folder of the built model")
+    p.add_argument("--methods-file", required=True, help="JSON file listing the impact methods (each name a list of strings)")
+    p.add_argument("--output", required=True, help="Pickle file the methods are written to")
+    p.set_defaults(func=add_methods)
 
     p = sub.add_parser("import", help="Import a database into a Brightway project (before build)")
     p.add_argument("format", choices=["ecospold2", "simapro-csv"])

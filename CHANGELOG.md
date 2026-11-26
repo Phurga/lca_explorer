@@ -11,12 +11,18 @@ Changes on `dev`, not released yet.
 
 Large databases: one built with hundreds of thousands of processes opens, and every database is solved faster.
 
+- **Impact methods chosen before a build**: *Build and open…* first lists the impact methods of the project, by
+  family, those of the previous build (or the family of the default method) ticked. Only their impacts are
+  computed and kept: the fewer, the faster and the lighter. A rebuild keeps them.
+- **Add impact methods** to an open database, in its *Methods* panel: their factors are read from the project and
+  only their impacts computed (seconds), without building the database again.
 - **New solver**: the processes are ordered suppliers first, so that only the loops of the technosphere (the
   processes that supply each other) need a full factorisation, and the rest is solved step by step. One
   factorisation serves the tree and the contributions alike. On a database of 300 000 processes on top of
   ecoinvent it takes 2 s, where the previous solver ran out of time and memory; without Pardiso (macOS on
   Apple silicon) ecoinvent is factorised in 4 s instead of 2 minutes.
 - **Fixed**: building a database of more than about 30 000 processes failed with "too many SQL variables".
+- Impact methods are read from the project directly when a database is built: the same factors as before, faster.
 
 ## 1.5.1 - 2026-11-24
 

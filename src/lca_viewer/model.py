@@ -261,6 +261,32 @@ class LCAModel:
         out = self.solver.solve_transposed(np.asarray(direct, dtype=float).T)
         return out.reshape(self.size, -1)
 
+    def add_methods(self, methods: list[Method]) -> int:
+        """Add impact methods to the model (those it has already are passed over), after the others, so the
+        positions of these do not move. Only their columns of ``G`` are computed (one solve), and the model's
+        files are written again with them when it was loaded from a folder. Returns how many were added."""
+        import pickle
+
+        have = {tuple(m.name) for m in self.methods}
+        new = [m for m in methods if tuple(m.name) not in have and not have.add(tuple(m.name))]
+        if not new:
+            return 0
+        G = self.G  # read or computed first: its columns for the methods already there
+        with self._g_lock:
+            CF = np.vstack([self.CF, *[m.cfs for m in new]])
+            U_new = np.asarray((sp.csr_matrix(np.vstack([m.cfs for m in new])) @ self.B).todense())
+            G_new = self.solver.solve_transposed(U_new.T).reshape(self.size, -1)
+            # The arrays first, then the list of methods: a request in another thread sees no method without them
+            self._CF, self._U, self._G = CF, np.vstack([self.U, U_new]), np.hstack([G, G_new])
+            self.methods = [*self.methods, *new]
+            if self._directory is not None:
+                tmp = self._directory / "methods.tmp.pkl"
+                with open(tmp, "wb") as f:
+                    pickle.dump(self.methods, f)
+                os.replace(tmp, self._directory / "methods.pkl")
+                self._write_cached_G(self._G)
+        return len(new)
+
     def save(self, directory) -> None:
         from pathlib import Path
         import pickle
@@ -278,6 +304,17 @@ class LCAModel:
                 pickle.dump(self.details, f)
         if self.exchanges is not None:
             _write_exchanges(directory / "exchanges.sqlite", self.exchanges)
+
+    @staticmethod
+    def method_names(directory) -> list[list[str]]:
+        """The names of the impact methods of the model saved in ``directory`` ([] when there is none)."""
+        import pickle
+
+        try:
+            with open(Path(directory) / "methods.pkl", "rb") as f:
+                return [list(m.name) for m in pickle.load(f)]
+        except (OSError, pickle.UnpicklingError, EOFError):
+            return []
 
     @classmethod
     def load(cls, directory) -> "LCAModel":

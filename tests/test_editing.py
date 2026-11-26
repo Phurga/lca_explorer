@@ -500,6 +500,59 @@ def test_create_and_delete_projects(project):
         editing.delete_project("toy")
 
 
+def test_methods_chosen_for_the_build_and_added_later(project, tmp_path):
+    """A database is built with the impact methods chosen; more are added to it once open (only their
+    impacts are computed), and a rebuild keeps them all."""
+    import time
+
+    import bw2data as bd
+    from fastapi.testclient import TestClient
+
+    from lca_viewer.server import create_library
+
+    bd.Method(("toy", "co2 twice")).register(unit="kg")
+    bd.Method(("toy", "co2 twice")).write([(("bio", "co2"), 2.0)])
+    bd.Method(("other", "water")).register(unit="m3")
+    bd.Method(("other", "water")).write([(("bio", "water"), 1.0)])
+    client = TestClient(create_library(tmp_path / "data"))
+    folder = str(project)
+
+    def wait(job):
+        for _ in range(600):
+            if job["status"] != "running":
+                return job
+            time.sleep(0.1)
+            job = client.get(f"/api/jobs/{job['id']}").json()
+        raise AssertionError("job still running")
+
+    listed = client.get("/api/brightway/methods", params={"folder": folder, "project": "toy", "database": "bg"}).json()
+    assert [m["name"] for m in listed["methods"]] == [["toy", "gwp"], ["toy", "co2 twice"], ["other", "water"]]
+    assert listed["selected"] is None and listed["default"] == [["toy", "gwp"], ["toy", "co2 twice"]]
+
+    body = {"brightway": folder, "project": "toy", "database": "bg"}
+    job = wait(client.post("/api/load", json={**body, "methods": [["toy", "gwp"]]}).json())
+    assert job["status"] == "done", job
+    key = job["key"]
+    assert [m["name"] for m in client.get(f"/db/{key}/api/info").json()["methods"]] == [["toy", "gwp"]]
+    listed = client.get("/api/brightway/methods", params={"folder": folder, "project": "toy", "database": "bg"}).json()
+    assert listed["selected"] == [["toy", "gwp"]]
+
+    job = wait(client.post("/api/methods/add", json={"key": key, "methods": [["toy", "co2 twice"], ["toy", "gwp"]]}).json())
+    assert job["status"] == "done" and job["added"] == 1, job
+    info = client.get(f"/db/{key}/api/info").json()
+    assert [m["name"] for m in info["methods"]] == [["toy", "gwp"], ["toy", "co2 twice"]]
+    found = client.post(f"/db/{key}/api/search", json={"text": "feed"}).json()
+    index = next(a["index"] for a in (found if isinstance(found, list) else found["results"]) if a["name"] == "feed")
+    impacts = [client.get(f"/db/{key}/api/activity/{index}", params={"method": k}).json()["cumulative_per_unit"] for k in (0, 1)]
+    assert np.isclose(impacts[1], 2 * impacts[0]) and np.isclose(impacts[0], 0.5)
+
+    # The rebuild (the project changed) keeps both, without being told
+    client.post("/api/unload", json={"key": key})
+    job = wait(client.post("/api/load", json={**body, "rebuild": True}).json())
+    assert job["status"] == "done", job
+    assert [m["name"] for m in client.get(f"/db/{job['key']}/api/info").json()["methods"]] == [["toy", "gwp"], ["toy", "co2 twice"]]
+
+
 def test_through_the_api(project, tmp_path):
     """The page's requests: changes run as ``lca-viewer`` in a separate process on the folder."""
     import time

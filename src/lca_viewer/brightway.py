@@ -153,6 +153,31 @@ def _product_rows(lca, activity_ids: np.ndarray) -> np.ndarray:
     return rows
 
 
+def method_factors(names: list[tuple], flow_ids) -> list[Method]:
+    """The impact methods ``names`` of the current project, their factors on the elementary flows
+    ``flow_ids`` (node ids, the rows of a model's ``B``), as Brightway's LCA reads them: in float32
+    (its datapackages keep them so), the factors of one flow added up (a method may give it several,
+    by location), flows outside ``flow_ids`` left out."""
+    import bw2data as bd
+
+    row_of = {int(i): r for r, i in enumerate(flow_ids)}
+    out = []
+    for name in names:
+        method = bd.Method(tuple(name))
+        cfs = np.zeros(len(row_of))
+        for cf in method.load():
+            flow, value = cf[0], cf[1]
+            if isinstance(flow, (tuple, list)):  # a key, in data written before node ids
+                flow = bd.get_id(tuple(flow))
+            if isinstance(value, dict):
+                value = value.get("amount", 0.0)
+            r = row_of.get(int(flow))
+            if r is not None:
+                cfs[r] += float(np.float32(value))
+        out.append(Method(tuple(name), method.metadata.get("unit", ""), cfs))
+    return out
+
+
 def from_brightway(project: str, database: str, methods: list[tuple], log=None) -> LCAModel:
     """Load the technosphere of ``database`` and of the databases it links to, with ``methods``.
 
@@ -228,11 +253,7 @@ def from_brightway(project: str, database: str, methods: list[tuple], log=None) 
     )
 
     log(f"Reading {len(methods)} impact methods")
-    loaded = []
-    for name in methods:
-        lca.switch_method(name)
-        cfs = np.asarray(lca.characterization_matrix.diagonal()).ravel()
-        loaded.append(Method(tuple(name), bd.methods[name].get("unit", ""), cfs))
+    loaded = method_factors(methods, flow_ids)
 
     details = [_details(records[i]) for i in activity_ids]
     log("Reading the exchanges")
