@@ -1012,5 +1012,15 @@ textarea.editing { width: 100%; box-sizing: border-box; }
 .category-table th.rel, .category-table td.rel { width: 90px; }
 .category-table .rel-bar { display: block; height: 7px; border-radius: 3px; background: var(--category); }
 .category-table tbody tr:hover { background: var(--hover); }
-.category-table tr.absent td { color: var(--muted); }
+.category-table tr.category-section { cursor: pointer; background: var(--category-soft); }
+.category-table tr.category-section td { font-weight: 600; padding-top: 4px; padding-bottom: 4px; }
+.category-table tr.category-section td .muted { font-weight: 400; }
+.category-table tr.category-section .caret { display: inline-block; width: 12px; color: var(--category); }
+.category-table tr.in-section td:first-child { padding-left: 22px; }
+/* A and B: the method of the pop-up and the one it is compared with, in the header (two lines) and the columns */
+.category-legend { margin-top: 2px; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip.side { display: inline-block; min-width: 16px; padding: 0 4px; border-radius: 4px; font-size: 11px; font-weight: 700; text-align: center;
+  color: var(--panel); vertical-align: 1px; }
+.chip.side-a { background: var(--category); }
+.chip.side-b { background: var(--muted); }
 .category-table .chip.only { font-size: 11px; padding: 0 6px; border-radius: 9px; border: 1px solid var(--category); color: var(--category); background: none; }

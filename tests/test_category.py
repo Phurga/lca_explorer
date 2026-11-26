@@ -118,18 +118,15 @@ def test_api_category_in_a_process_and_compared(client):
     assert by_flow[2]["ratio"] == pytest.approx(265 / 273)
 
 
-def test_api_category_grouped_by_substance(client):
-    data = client.post("/api/category", json={"method": 0, "compare": 1, "root": 0, "keys": ["name"]}).json()
-    co2 = next(it for it in data["items"] if it["name"] == "Carbon dioxide, fossil")
-    assert sorted(co2["flows"]) == [0, 1]
-    assert co2["compartment"] == "air · 2 subcompartments"
-    assert co2["emitters"] == 2  # both farms, counted once
-    assert co2["amount"] == pytest.approx(0.6 * 3 + 0.4 * 0.5)
-    assert co2["b"] == {"min": 0.0, "max": 1.0, "rel": pytest.approx(1 / 265), "impact": pytest.approx(0.6 + 0.2)}
-    assert co2["ratio"] is None and co2["only"] == ""  # factors differ within the group: no single ratio
+def test_api_category_items_carry_their_compartments_for_the_pop_up_to_organize(client):
+    # one row per flow: the pop-up arranges them in sections (substance, compartment, subcompartment) itself
+    items = client.post("/api/category", json={"method": 0}).json()["items"]
+    assert all(len(it["flows"]) == 1 for it in items)
+    by_flow = {it["flows"][0]: it for it in items}
+    assert by_flow[0]["top"] == "air" and by_flow[0]["sub"] == "urban air close to ground"
+    assert by_flow[2]["top"] == "air" and by_flow[2]["sub"] == ""
 
 
 def test_api_category_rejects_unknown_input(client):
     assert client.post("/api/category", json={"method": 5}).status_code == 404
     assert client.post("/api/category", json={"method": 0, "compare": 9}).status_code == 404
-    assert client.post("/api/category", json={"method": 0, "keys": ["colour"]}).status_code == 400

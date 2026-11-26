@@ -3589,8 +3589,6 @@ function CategoryIcon() {
     <rect x="1" y="2" width="14" height="2.4" rx="1" /><rect x="1" y="6.8" width="10" height="2.4" rx="1" /><rect x="1" y="11.6" width="5.5" height="2.4" rx="1" /></svg>`;
 }
 const CATEGORY_LIMIT = 300;  // rows drawn before "Show all"
-// A factor, or the range of factors of a group of flows
-const fmtRange = (s) => (s.min === s.max ? fmt(s.max) : `${fmt(s.min)} … ${fmt(s.max)}`);
 // The other methods, for *Compare with*: those of the same category name first (the same impact in another family or
 // version), then the others by family
 function compareChoices(methods, method) {
@@ -3604,67 +3602,102 @@ function compareChoices(methods, method) {
   return { same, families: [...families] };
 }
 
-// An impact category seen from its elementary flows (the Methods panel: the list icon of a method): the flows of the
-// model that it characterises, their factor, the factor relative to the largest one of the same unit, how many
-// processes emit them directly and, in the supply chain of the process of the tab, their amount and contribution.
-// *Compare with* lines it up with another method (the factors of both, their ratio, the flows only one of them
-// characterises). Right-click (or double-click) a flow: its pop-up. ``target.category``: the method.
-function CategoryPopup({ target, win, info, root, amount, onClose, onBack, onFlow }) {
+// How the rows of the category pop-up can be arranged: each flow keeps its row; sections gather the flows of a substance
+// or of a compartment under a header, in the order of their first (largest) flow
+const CATEGORY_ORGANIZE = [
+  ["", "Factor", "One list, the largest relative factor first"],
+  ["name", "Substance", "A section per substance: its flows in each compartment"],
+  ["top", "Compartment", "A section per compartment (air, water, soil, natural resource…)"],
+  ["sub", "Subcompartment", "A section per compartment and subcompartment"],
+];
+function organizeFlows(items, by) {
+  if (!by) return null;
+  const key = (it) => (by === "name" ? `${it.name}\u0000${it.unit}` : by === "top" ? it.top || "" : `${it.top || ""}\u0000${it.sub || ""}`);
+  const label = (it) => (by === "name" ? it.name : by === "top" ? it.top || "(unspecified)" : [it.top, it.sub || "unspecified"].filter(Boolean).join(" · "));
+  const sections = new Map();
+  for (const it of items) {
+    const k = key(it);
+    if (!sections.has(k)) sections.set(k, { key: k, label: label(it), unit: it.unit, items: [] });
+    sections.get(k).items.push(it);
+  }
+  return [...sections.values()];
+}
+
+// An impact category seen from its elementary flows (the Methods panel: the list icon of a method), in the whole
+// database: the flows of the model that it characterises, their factor, the factor relative to the largest one of the
+// same unit and how many processes emit them directly. *Organize by* arranges them in sections (substance,
+// compartment). *Compare with* lines it up with another method (the factors of both, their ratio, the flows only one
+// of them characterises). Right-click (or double-click) a flow: its pop-up. ``target.category``: the method.
+// Not in the supply chain of the process of the tab, for now: a pinned pop-up would follow the focus of the tab.
+function CategoryPopup({ target, win, info, onClose, onBack, onFlow }) {
   const method = target.category;
   const methods = info.methods;
   const [compare, setCompare] = useState(target.compare ?? null);
-  const [scoped, setScoped] = useState(true);
-  const [grouped, setGrouped] = useState({ name: false, compartment: false, subcompartment: false });
+  const [organize, setOrganize] = useState("");
+  const [folded, setFolded] = useState(new Set());
   const [filter, setFilter] = useState("");
   const [all, setAll] = useState(false);
   useEffect(() => { setCompare(target.compare ?? null); setAll(false); }, [method]);
-  const keys = ["name", "compartment", "subcompartment"].filter((k) => grouped[k]);
-  const inProcess = scoped && !!root;
-  const { data, error } = useRequest("/api/category", {
-    method, ...(compare !== null ? { compare } : {}), ...(inProcess ? { root: root.index, amount } : {}), ...(keys.length ? { keys } : {}),
-  });
+  useEffect(() => setFolded(new Set()), [organize]);
+  const { data, error } = useRequest("/api/category", { method, ...(compare !== null ? { compare } : {}) });
   const body = useRef(null);
   const both = !!data && data.compare !== null && data.compare !== undefined;
   const a = methods[method], b = both ? methods[data.compare] : null;
   const words = filter.toLowerCase().split(/\s+/).filter(Boolean);
   const items = data ? data.items.filter((it) => words.every((w) => `${it.name} ${it.compartment}`.toLowerCase().includes(w))) : [];
-  const shown = all ? items : items.slice(0, CATEGORY_LIMIT);
-  const withAmount = !!data && data.in_inventory !== null;
-  const share = (v, k) => (data.totals[k] ? pct(v / data.totals[k]) : "");
+  const sections = useMemo(() => organizeFlows(items, organize), [data, filter, organize]);
+  // the rows drawn: section headers and the flows of the unfolded sections, up to CATEGORY_LIMIT flows
+  const rows = [];
+  let count = 0;
+  for (const section of sections || [{ key: "", items }]) {
+    if (!all && count >= CATEGORY_LIMIT) break;
+    if (sections) rows.push({ section });
+    if (sections && folded.has(section.key)) continue;
+    for (const it of section.items) {
+      if (!all && count >= CATEGORY_LIMIT) break;
+      rows.push({ it });
+      count++;
+    }
+  }
+  const hidden = !all && count >= CATEGORY_LIMIT && items.length > count;
+  const fold = (k) => { const next = new Set(folded); next.has(k) ? next.delete(k) : next.add(k); setFolded(next); };
   // its pop-up shows its factor in this category, not in the method of the tab
   const flowTarget = (it) => ({ flow: it.flows[0], flows: it.flows, labels: it.compartments, method });
   const choices = useMemo(() => compareChoices(methods, method), [methods, method]);
-  const things = !keys.length ? "flows" : keys.includes("name") ? "substances" : "groups";
   const csv = () => downloadCsv(`category-${methodLabel(a).replace(/[^\w-]+/g, "_")}.csv`,
-    ["name", "compartment", "unit", "factor_a_min", "factor_a_max", ...(both ? ["factor_b_min", "factor_b_max", "ratio_b_a"] : []),
-      "emitters", ...(withAmount ? ["amount", "impact_a", ...(both ? ["impact_b"] : [])] : [])],
-    items.map((it) => [it.name, it.compartment, it.unit, it.a.min, it.a.max, ...(both ? [it.b.min, it.b.max, it.ratio ?? ""] : []),
-      it.emitters, ...(withAmount ? [it.amount ?? "", it.a.impact, ...(both ? [it.b.impact] : [])] : [])]),
-    [`# ${methodTitle(a)}${both ? ` compared with ${methodTitle(b)}` : ""}`,
-      `# ${inProcess ? `in the supply chain of ${amount} ${root.unit || ""} ${root.name} (${root.location})` : "whole database"}`]);
+    ["name", "compartment", "unit", both ? "factor_a" : "factor", ...(both ? ["factor_b", "ratio_b_a"] : ["relative"]), "emitters"],
+    items.map((it) => [it.name, it.compartment, it.unit, it.a.max, ...(both ? [it.b.max, it.ratio ?? ""] : [it.a.rel]), it.emitters]),
+    [`# ${both ? `A: ${methodTitle(a)} (${a.unit}); B: ${methodTitle(b)} (${b.unit})` : `${methodTitle(a)} (${a.unit})`}`, "# whole database"]);
   const factorUnit = (m, it) => `${m.unit} / ${unit(it.unit)}`;
+  const columns = both ? 5 : 4;
+  // in a section, the row says what the header does not
+  const flowLabel = (it) => (organize === "name" ? html`${it.compartment}`
+    : organize === "top" ? html`${it.name} <span class="muted">${it.sub || ""}</span>`
+    : organize === "sub" ? html`${it.name}`
+    : html`${it.name} <span class="muted">${it.compartment}</span>`);
+  const range = (list, k) => {
+    const v = list.map((it) => it[k].max).filter((x) => x);
+    if (!v.length) return "–";
+    const lo = Math.min(...v), hi = Math.max(...v);
+    return lo === hi ? fmt(hi) : `${fmt(lo)} … ${fmt(hi)}`;
+  };
+  const legend = (letter, m) => html`
+    <div class="category-legend"><span class=${`chip side side-${letter.toLowerCase()}`}>${letter}</span> ${methodTitle(m)}${!methodTitle(m).includes(m.unit) && html` <span class="muted">· ${m.unit}</span>`}</div>`;
   return html`
-    <${PopupWindow} target=${target} win=${win} label="Impact category" className="category-popup" width=${800} onClose=${onClose} onBack=${onBack}
+    <${PopupWindow} target=${target} win=${win} label="Impact category" className="category-popup" width=${760} onClose=${onClose} onBack=${onBack}
       menu=${[{ label: "Export CSV", run: csv, title: "The rows of the table (all of them, filtered)" }]}
       onKeyDown=${popupKeys({ tabs: [], shown: null, setTab: () => {}, body, onClose })}
       head=${html`
         <div class="info-title"><span class="kind-mark category" title="Impact category: its elementary flows"><${CategoryIcon} /></span>
           ${methodLabel(a)}</div>
-        <div class="muted">Impact category · ${a.unit}${data ? ` · ${data.flows} flows of this model characterised${both ? " by either method" : ""}` : ""}</div>`}>
+        ${both ? html`${legend("A", a)}${legend("B", b)}` : html`<div class="muted">${a.unit}</div>`}`}>
       <div class="category-controls">
-        <div class="view-group" role="group" aria-label="Scope">
-          <span class="view-group-label">In</span>
+        <div class="view-group" role="group" aria-label="Organize by">
+          <span class="view-group-label">Organize by</span>
           <span class="segmented">
-            <button class=${inProcess ? "primary" : ""} disabled=${!root} onClick=${() => setScoped(true)}
-              title=${root ? `The supply chain of ${root.name} (${root.location}): amount and contribution of each flow` : "No process in this tab"}>
-              ${root ? truncate(root.name, 32) : "The process"}</button>
-            <button class=${inProcess ? "" : "primary"} onClick=${() => setScoped(false)} title="The whole database: factors and emitters only">Database</button>
+            ${CATEGORY_ORGANIZE.map(([k, label, hint]) => html`
+              <button class=${organize === k ? "primary" : ""} aria-pressed=${organize === k} title=${hint} onClick=${() => setOrganize(k)}>${label}</button>`)}
           </span>
-        </div>
-        <div class="view-group" role="group" aria-label="Group by">
-          <span class="view-group-label">Group by</span>
-          ${[["name", "Substance", "Flows of a substance together"], ["compartment", "Compartment", "By compartment"], ["subcompartment", "Subcompartment", "By subcompartment"]].map(([k, label, hint]) => html`
-            <button class=${grouped[k] ? "primary" : ""} aria-pressed=${grouped[k]} title=${hint} onClick=${() => setGrouped({ ...grouped, [k]: !grouped[k] })}>${label}</button>`)}
         </div>
         <label class="view-group compare-with">
           <span class="view-group-label">Compare with</span>
@@ -3677,43 +3710,45 @@ function CategoryPopup({ target, win, info, root, amount, onClose, onBack, onFlo
           </select>
         </label>
         <input class="category-filter" placeholder="Filter flows" value=${filter} onInput=${(e) => setFilter(e.target.value)} aria-label="Filter flows" />
+        <${InfoTip} label="About this table" text=${`The flows of this model that the method characterises, in the whole database. Relative: the factor over the largest of the method among the flows of the same unit. Emitters: the processes emitting (or taking) the flow directly. ${both ? "A is the method of this pop-up, B the one it is compared with; B / A: the ratio of their factors. " : ""}A factor of the method on a flow that no process emits is not listed. Right-click a flow for its details.`} />
       </div>
       ${error && html`<div class="error">${error}</div>`}
       <div class="info-body" ref=${body}>
         ${!data && !error && html`<${Waiting} text="Reading the factors…" />`}
         ${data && html`
-          <p class="note">${items.length} ${things}${words.length ? " matching" : ""}${withAmount ? ` · ${data.in_inventory} flows in the inventory of the process` : ""}.${both ? ` A: ${methodLabel(a)}; B: ${methodLabel(b)}.` : ""}
-            <${InfoTip} label="About this table" text=${`Relative: the factor over the largest of the method among the flows of the same unit. Emitters: the processes of the database emitting (or taking) the flow directly. ${withAmount ? "Amount: in the inventory of the process (its whole supply chain); impact and share: its contribution to the score. " : ""}Only flows of this model are listed: a factor of the method on a flow that no process emits is not known here. Right-click a flow for its details.`} /></p>
           <table class="flows category-table">
             <thead><tr>
-              <th>${!keys.length ? "Flow" : keys.includes("name") ? "Substance" : keys.join(", ")}</th>
-              ${both ? html`<th class="num" title=${methodTitle(a)}>factor A</th><th class="num" title=${methodTitle(b)}>factor B</th><th class="num" title="Factor B over factor A">B / A</th>`
+              <th>${organize === "name" ? "Substance / compartment" : organize ? "Compartment / flow" : "Flow"}</th>
+              ${both ? html`<th class="num" title=${`${methodTitle(a)} (${a.unit})`}>factor <span class="chip side side-a">A</span></th>
+                  <th class="num" title=${`${methodTitle(b)} (${b.unit})`}>factor <span class="chip side side-b">B</span></th>
+                  <th class="num" title="Factor B over factor A">B / A</th>`
                 : html`<th class="num">factor</th><th class="rel" title="Relative to the largest factor of the same unit">relative</th>`}
               <th class="num" title="Processes emitting it directly, in the whole database">emitters</th>
-              ${withAmount && html`<th class="num">amount</th>`}
-              ${withAmount && (both ? html`<th class="num" title=${a.unit}>impact A</th><th class="num" title=${b.unit}>impact B</th>`
-                : html`<th class="num">${a.unit}</th><th class="pct">share</th>`)}
             </tr></thead>
-            <tbody>${shown.map((it) => html`
-              <tr key=${it.flows.join(",")} class=${`${withAmount && !it.amount ? "absent" : ""} ${it.only ? `only-${it.only}` : ""}`}
+            <tbody>${rows.map(({ section, it }) => (section ? html`
+              <tr key=${`s:${section.key}`} class="category-section" onClick=${() => fold(section.key)} aria-expanded=${!folded.has(section.key)}>
+                <td colspan=${organize === "name" ? 1 : columns}><span class="caret">${folded.has(section.key) ? "▸" : "▾"}</span> ${section.label}
+                  <span class="muted"> · ${section.items.length} flow${section.items.length === 1 ? "" : "s"}</span></td>
+                ${organize === "name" && (both ? html`<td class="num">${range(section.items, "a")}</td><td class="num">${range(section.items, "b")}</td><td></td><td></td>`
+                  : html`<td class="num">${range(section.items, "a")} <span class="muted">/ ${unit(section.unit)}</span></td><td></td><td></td>`)}
+              </tr>` : html`
+              <tr key=${it.flows[0]} class=${`${sections ? "in-section" : ""} ${it.only ? `only-${it.only}` : ""}`}
                   title="Right-click or double-click: its details" onContextMenu=${(e) => { e.preventDefault(); onFlow(flowTarget(it)); }}
                   onDblClick=${() => onFlow(flowTarget(it))}>
-                <td>${it.name} <span class="muted">${it.compartment}</span></td>
+                <td>${flowLabel(it)}</td>
                 ${both ? html`
-                  <td class="num" title=${factorUnit(a, it)}>${it.only === "b" ? html`<span class="muted">–</span>` : fmtRange(it.a)}</td>
-                  <td class="num" title=${factorUnit(b, it)}>${it.only === "a" ? html`<span class="muted">–</span>` : fmtRange(it.b)}</td>
+                  <td class="num" title=${factorUnit(a, it)}>${it.only === "b" ? html`<span class="muted">–</span>` : fmt(it.a.max)}</td>
+                  <td class="num" title=${factorUnit(b, it)}>${it.only === "a" ? html`<span class="muted">–</span>` : fmt(it.b.max)}</td>
                   <td class="num">${it.only ? html`<span class=${`chip only only-${it.only}`}>only ${it.only.toUpperCase()}</span>` : it.ratio !== null ? fmt(it.ratio) : ""}</td>`
                 : html`
-                  <td class="num" title=${factorUnit(a, it)}>${fmtRange(it.a)} <span class="muted">/ ${unit(it.unit)}</span></td>
+                  <td class="num" title=${factorUnit(a, it)}>${fmt(it.a.max)} <span class="muted">/ ${unit(it.unit)}</span></td>
                   <td class="rel"><span class="rel-bar" style=${{ width: `${Math.max(1, it.a.rel * 100)}%` }}></span></td>`}
                 <td class="num">${it.emitters}</td>
-                ${withAmount && html`<td class="num">${it.amount === null ? "" : it.amount ? `${fmtAmount(it.amount)} ${unit(it.unit)}` : html`<span class="muted">0</span>`}</td>`}
-                ${withAmount && (both ? html`<td class="num">${fmt(it.a.impact)}</td><td class="num">${fmt(it.b.impact)}</td>`
-                  : html`<td class="num">${fmt(it.a.impact)}</td><td class="pct">${share(it.a.impact, "a")}</td>`)}
-              </tr>`)}
+              </tr>`))}
             </tbody>
           </table>
-          ${!all && items.length > CATEGORY_LIMIT && html`<p class="note"><button class="link" onClick=${() => setAll(true)}>Show all ${items.length} ${things}</button></p>`}`}
+          ${hidden && html`<p class="note"><button class="link" onClick=${() => setAll(true)}>Show all ${items.length} flows</button></p>`}
+          ${!items.length && html`<p class="note">No flow${words.length ? " matching" : ""}.</p>`}`}
       </div>
     <//>`;
 }
@@ -6291,7 +6326,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
         onPart=${(part) => follow(part.flow !== undefined
           ? { flow: part.flow, activities: (bundle.emitters || []).map((m) => m.index) }
           : { index: part.index, row: null, parents: suppliedTo(bundle, rowsById) })} />`;
-    if (t.category !== undefined) return html`<${CategoryPopup} ...${common} info=${info} root=${root} amount=${amount}
+    if (t.category !== undefined) return html`<${CategoryPopup} ...${common} info=${info}
         onFlow=${(next) => follow(next)} />`;
     if (t.flow !== undefined) return html`<${FlowInfoPopup} ...${common} method=${t.method ?? method} methods=${info.methods}
         onOpen=${(index) => follow({ index, row: null })} />`;
