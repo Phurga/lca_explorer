@@ -195,19 +195,31 @@ API in `src/lca_viewer/server.py`.
   (Ctrl/⌘ + K focuses it; Enter makes the result the process of the tab in
   focus, Ctrl/⌘ + Enter opens it in a new tab); the mode switch is at the right.
 - **Status bar** (bottom of the page): the active method and the rule set at the left, the **Settings** icon (the
-  colours of the rules) and the
+  colours of every *Color by* mode) and the
   **Shortcuts** icon at the right. The **view options** are the top of the first panel of the side
   panel, *Custom view* (key v in View mode), with the options of **the tab in focus**, the one of
-  the window (split pane) used last: *Display* (List / Tree / Sankey), *Cut-off*, and the *Rows* options; *Reset* and *Save* are icons at the top right
+  the window (split pane) used last, one line each and in this order: *Display* (List / Tree / Sankey), *Cut-off*, *Names*,
+  *Organise by*, *Group by*, *Color by*, then *Rows*; *Reset* and *Save* are icons at the top right
   of the section (Save's arrow: Load, Copy, Default settings). *Group by*: *Rules*, a switch that
   applies or not the rules of the Rules panel to the tree, which keep their place in the panel (adding a rule,
   or grouping rows, while it is off switches it on, since the group would not show); group by
-  product, split by flow type, hide others, names, colours, columns). Each tab has its own options, so in a
+  product, …: one grouping of the processes and one of the flows, since the first leaves nothing for the next), *Organise
+  by* (headings without grouping: the processes by type, location or activity type, the direct emissions by compartment,
+  subcompartment or type; none when grouped by the same field), *Color by* (one mode, like a switch: *Rules*, *Type*, or
+  in *By…* location, activity type, compartment of the flows; under it the colours in use, a click on a swatch picks
+  another, *Colours…* opens the Settings pop-up), *Rows* (hide others, collapse singletons), columns). Decision: *Rules*
+  is both in *Group by* and in *Color by*, two switches: rows can be grouped by the rules, coloured by them, or both. Each tab has its own options, so in a
   split the windows can show the same process in a list and as a Sankey; the pane follows the
   window clicked. The options of the last tab changed are what a new tab starts with. The
   panel is not shown in Compare mode. The tabs have no header any more: the options were above each tree, and now
   are in one place. *Shortcuts* (keyboard) lists the keys. At the left, the icon that shows
   or hides the left panel, and the active method and the rule set in use, which open it.
+- **First start** (nothing kept in the browser): the plain reading first, complexity when asked for. A tab is a list
+  with *Amount*, *Impact* and *Share*, no cut-off, nothing grouped, the direct emissions organised by compartment, full names, no colours; the left
+  panel is closed, the side panel open on *Custom view* with *Options* folded. Widths follow the window until dragged
+  (side panel 42 % of it, leaving the tree 720 px). Constants `DEFAULT_VIEW`, `DEFAULT_CUTOFF` and `FIRST_PANELS` in
+  `app.js`. Decision: a preference is written when the user changes it, not at the first render, so a default never
+  chosen can still change in a later version; *Default settings* (save menu) restores all of it, panels included.
 - **Left panel: Processes, Methods and Rules** (hidden and shown with its icon, the
   status bar's, the edge of the page or Ctrl/⌘ + ←; the right panel with Ctrl/⌘ + →;
   resizable, in every mode). *Processes* lists the tabs open: the tick for the ones compared in
@@ -423,11 +435,9 @@ API in `src/lca_viewer/server.py`.
   `collapse_singletons` in `/api/rows`, each such row lists them as `chain`), *Full / Short /
   Custom* names, applied
   to the list, the tree view, the others panel and the chart; see
-  [charts.md](charts.md); and the colours: *No colours*, *Rules colours* or *Flow type colours*. In the view
-  options pane the buttons are in three labelled groups (*Groups*, *Names*, *Colours*); *Group by
+  [charts.md](charts.md); and the colours (*Color by*, see above). *Group by
   substance* and *Group by compartment* bundle the flows under direct emissions (they were quick
-  groups of the Rules panel, which are gone); the flow type legend shows only with the flow type
-  colours, and the colour bar at the left of a row names its type on hover.
+  groups of the Rules panel, which are gone); with *Color by Type* the colour bar at the left of a row names its type on hover.
   **Columns of the list**: right-click the column headers to choose them (the process is
   always there; remembered, saved with the view). *Amount*, *Impact* and *Share* are on by
   default; *Exchange data* columns, off by default, show what the exchange supplying
@@ -554,10 +564,13 @@ API in `src/lca_viewer/server.py`.
     on flows (substance, compartment, subcompartment, unit), which group the
     flows under direct emissions and split what the process groups leave in
     *Rules contributions*; "product / waste" (`flow_type`) is a field of
-    processes, not of flows. The colours of the rules are settings of the workspace, the same in every tab, chart
-    and comparison: the **Settings** pop-up (the palette icon of the status bar) picks a palette (automatic hues,
-    categorical, colour-blind safe, vivid, soft, earth), given in the order of the rules, and lists the rules with
-    their colour, to pick another one (*reset* goes back to the palette's; choosing a palette clears them). Each rule
+    processes, not of flows. The colours are settings of the workspace, the same in every tab, chart
+    and comparison: the **Settings** pop-up (the palette icon of the status bar, or *Colours…* under *Color by*) picks
+    one palette for every mode (automatic hues, categorical, colour-blind safe, vivid, soft, earth), given in the order
+    of the rules (a location, activity type or compartment: from its name; the exchange types: in their order, or
+    their own colours with *Automatic*), and lists the rules, the types and the values given a colour, to pick
+    another one (*reset* goes back to the palette's; choosing a palette clears them; kept in the lens's `ruleColors`,
+    `type:…`, `location:…` for the others). Each rule
     of the Rules panel has its swatch too: click it to pick a colour, right-click resets it. They are kept with the
     rule sets (`lens.ruleColors`), not in the views. A group of the analyses (*Rules contributions*, Compare) and a
     bar of a tab's tree in Compare take the colour of their rule (`namedGroups(…).ruleOf`, the `rule` of the rows),

@@ -201,6 +201,16 @@ const hueOf = (key) => [...key].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 36
 // a rule (``picked``: key -> "#rrggbb") wins. ``paletteStamp`` changes with any of them, for the memos that hold colours.
 let rulePalette = { name: "auto", keys: [], own: {}, picked: {} };
 let paletteStamp = "auto";
+// The colour of any colour key (see colorKeyOf): a colour picked for it; an exchange type: its own colour, or its place in
+// a palette chosen; a rule or a value: see colorOf
+function colorFor(key) {
+  if (rulePalette.picked[key]) return rulePalette.picked[key];
+  if (key.startsWith("type:")) {
+    const type = key.slice(5), colors = RULE_PALETTES[rulePalette.name]?.colors || rulePalette.own[rulePalette.name];
+    return colors ? colors[Object.keys(FLOW_TYPES).indexOf(type) % colors.length] : FLOW_TYPES[type]?.color || cssVar("--bar");
+  }
+  return colorOf(key);
+}
 function colorOf(key) {
   if (rulePalette.picked[key]) return rulePalette.picked[key];
   const colors = RULE_PALETTES[rulePalette.name]?.colors || rulePalette.own[rulePalette.name];
@@ -250,14 +260,17 @@ const COLUMNS = [
     text: (r) => (r.exchanges || []).map((e) => e["variable name"]).filter(Boolean).join("; ") },
 ];
 const DEFAULT_COLUMNS = ["amount", "impact", "share"];
-// What a tab starts with when nothing was kept: a list, no cut-off, nothing grouped, full names, no colours, the comments shown
-// (a pop-up's explorer keeps the plain columns)
-const DEFAULT_VIEW_COLUMNS = [...DEFAULT_COLUMNS, "comment"];
+// First start (nothing kept in the browser yet): the plain reading of a supply chain, and anything more complex one click
+// away for whoever wants it. A tab shows a list with three columns (Comment, Uncertainty… in the columns menu), the rows
+// all shown (no cut-off), nothing grouped, full names, no colours, the direct emissions organised by compartment. The page: the left panel (processes,
+// methods, rules) closed, the side panel open on the chart with its options folded (see FIRST_PANELS). Once the user
+// changes one of them, theirs is kept instead.
+const DEFAULT_VIEW_COLUMNS = DEFAULT_COLUMNS;
 const DEFAULT_CUTOFF = 0;
 // The options of a tab's view, with their defaults: the preferences, the view files and the tabs' kept state follow this
 // list (a switch is kept as "1"/"0", a list as JSON, a text as it is)
 const DEFAULT_VIEW = {
-  naming: "full", splitByType: false, hideOthers: false, groupProducts: false, groupByRules: false, groupSubstance: false,
+  naming: "full", organize: "none", organizeFlows: "compartment", hideOthers: false, groupProducts: false, groupByRules: false, groupSubstance: false,
   groupCompartment: false, groupSubcompartment: false, groupFields: [], collapseSingletons: false, groupColors: false, colorBy: "group",
   columns: DEFAULT_VIEW_COLUMNS,
 };
@@ -281,16 +294,41 @@ function flowTypeOf(r) {
   // a negative input of a product (not a waste): an avoided product
   return (r.kind === "process" ? r.amount : part ? part.amount : r.amount) < 0 ? "avoided" : "technosphere";
 }
-// "Split by flow type": below each row, the rows are in the sections of the form of a new process (and the types of the
-// flow type colours), the list showing a heading for each: inputs from technosphere, inputs from nature, emissions,
-// direct emissions, waste to treatment (the others rows come last, with no heading)
+// Organise by: below each row, its rows in sections, the list showing a heading for each; nothing is summed or hidden
+// (Group by makes rows). One choice for the rows below a process (``view.organize``) and one for the elementary flows of
+// a direct emissions row (``view.organizeFlows``), "none" for neither. *Type*: the sections of the form of a new process
+// (and the flow type colours), in that order; the others are in the order of their largest row. The others rows come
+// last, with no heading.
+const ORGANIZE = { type: "Type", location: "Location", activity_type: "Activity type" };
+const ORGANIZE_HINTS = { type: "Sections by exchange type: inputs from technosphere, direct emissions, waste…", location: "Sections by location",
+  activity_type: "Sections by activity type (market, production…)" };
+const ORGANIZE_FLOWS = { compartment: "Compartment", subcompartment: "Subcompartment", type: "Type" };
+const ORGANIZE_FLOWS_HINTS = { compartment: "Direct emissions in sections by compartment: air, water, soil, natural resource",
+  subcompartment: "Direct emissions in sections by compartment and subcompartment", type: "Direct emissions in sections: inputs from nature, emissions" };
 const SPLIT_SECTIONS = [
   ["technosphere", "Inputs from technosphere"], ["resource", "Inputs from nature"], ["emission", "Emissions"],
   ["direct", "Direct emissions"], ["waste", "Waste to treatment"], ["avoided", "Avoided products"],
 ];
 const SECTION_LABELS = Object.fromEntries(SPLIT_SECTIONS);
 const SECTION_RANK = { ...Object.fromEntries(SPLIT_SECTIONS.map(([key], i) => [key, i])), rest: SPLIT_SECTIONS.length };  // the others rows last, with no heading of their own
-const sectionOf = (r) => (r.kind === "rest" ? "rest" : flowTypeOf(r));
+// A row of elementary flows: a flow, or a group of them (below a direct emissions row)
+const isFlowRow = (r) => r.kind === "flow" || r.parts?.[0]?.flow !== undefined;
+// The section of a row, as the options organise it: { key, label } (key "rest": an others row), none when not organised
+function sectionOf(r, view) {
+  if (r.kind === "rest") return { key: "rest", label: null };
+  const flows = isFlowRow(r);
+  const by = flows ? view.organizeFlows : view.organize;
+  if (!by || by === "none" || r.depth === 0) return null;
+  if (by === groupingOf(view)[flows ? "flows" : "processes"]) return null;  // grouped by it already: a heading per group row says nothing more
+  if (by === "type") { const type = flowTypeOf(r); return { key: type, label: SECTION_LABELS[type] }; }
+  if (!flows && r.kind === "direct") return { key: "direct", label: SECTION_LABELS.direct };
+  const first = flows ? r.flow || r.parts[0] : r.meta || r.parts?.[0] || r.metas?.[0] || {};
+  const value = by === "subcompartment" ? [first.compartment, first.subcompartment || "unspecified"].filter(Boolean).join(" · ")
+    : (by === "location" && r.kind === "process" ? r.location : null) ?? first[by];
+  const text = value || `no ${flows ? FLOW_FIELD_LABELS[by] || by : fieldLabel(by, false)}`;
+  return { key: `${by}:${text}`, label: text };
+}
+const organizing = (view) => (view.organize && view.organize !== "none") || (view.organizeFlows && view.organizeFlows !== "none");
 // The groups of the flows of a direct emissions row asked for by the options of the view (Group by substance, by
 // compartment): rules on the elementary flows, applied after the others
 const flowRulesOf = (view) => [
@@ -300,6 +338,21 @@ const flowRulesOf = (view) => [
   // the fields of the By... menu: groups of processes by their location, activity type...
   ...(view.groupFields || []).map((by) => ({ by, scope: "*", plain: true })),
 ];
+// Group by: the one grouping of the processes ("product", a field of the By… menu, or null) and of the flows ("name",
+// "compartment", "subcompartment", or null) a view applies. A view saved when several could be chosen applies the first
+// the server tries (the fields before the product; substance, compartment, subcompartment): ``oneGrouping`` keeps it.
+function groupingOf(view) {
+  const fields = view.groupFields || [];
+  return {
+    processes: fields[0] ?? (view.groupProducts ? "product" : null),
+    flows: view.groupSubstance ? "name" : view.groupCompartment ? "compartment" : view.groupSubcompartment ? "subcompartment" : null,
+  };
+}
+const processGrouping = (k) => ({ groupProducts: k === "product", groupFields: k && k !== "product" ? [k] : [] });
+const flowGrouping = (k) => ({ groupSubstance: k === "name", groupCompartment: k === "compartment", groupSubcompartment: k === "subcompartment" });
+const oneGrouping = (view) => { const g = groupingOf(view); return { ...view, ...processGrouping(g.processes), ...flowGrouping(g.flows) }; };
+// Views kept before Organise by: *Split by type* organised the rows by type
+const withOrganize = (view, kept) => (kept.splitByType && !("organize" in kept) ? { ...view, organize: "type", organizeFlows: "type" } : view);
 // Hide others: the others rows and what an expanded one shows below it (its members, and their own rows). The rows are
 // in display order, so what is below a row is what follows it, deeper.
 function withoutOthers(rows) {
@@ -312,8 +365,9 @@ function withoutOthers(rows) {
   }
   return out;
 }
-// The rows with the rows below each row ordered by section (the order inside a section is kept)
-function splitRows(rows) {
+// The rows with the rows below each row ordered by section (the order inside a section is kept): the sections of a type
+// in their order, the others in the order of their first row (the rows come largest first)
+function splitRows(rows, view) {
   const below = new Map();
   for (const r of rows) {
     if (!below.has(r.parent)) below.set(r.parent, []);
@@ -322,29 +376,62 @@ function splitRows(rows) {
   const out = [];
   const place = (r) => {
     out.push(r);
-    (below.get(r.id) || []).map((c) => [SECTION_RANK[sectionOf(c)], c]).sort((a, b) => a[0] - b[0]).forEach(([, c]) => place(c));
+    const first = new Map();
+    const rank = (c) => {
+      const section = sectionOf(c, view);
+      if (!section) return 0;
+      if (section.key === "rest") return 2e9;
+      if (section.key === "direct" && view.organize !== "type") return 1e9;  // by location…: the direct emissions after the processes
+      if (section.key in SECTION_RANK) return SECTION_RANK[section.key];
+      if (!first.has(section.key)) first.set(section.key, SPLIT_SECTIONS.length + first.size);
+      return first.get(section.key);
+    };
+    (below.get(r.id) || []).map((c) => [rank(c), c]).sort((a, b) => a[0] - b[0]).forEach(([, c]) => place(c));
   };
   rows.filter((r) => r.parent == null || !rows.some((q) => q.id === r.parent)).forEach(place);
   return out;
 }
-// Empty when group colours are switched off (``view.groupColors``)
+// Color by (one mode at a time): "group" (the rules of the Rules panel), "type" (of exchange), or a value of the row:
+// "location", "activity_type" (processes), "compartment" (elementary flows). ``view.groupColors`` false: none.
+const COLOR_MODES = { group: "Rules", type: "Type", location: "Location", activity_type: "Activity type", compartment: "Compartment" };
+const COLOR_HINTS = { group: "By your rules: a group and the rows below it take its rule's colour", type: "By exchange type: technosphere, waste, emissions…",
+  location: "Processes by their location", activity_type: "Processes by their activity type", compartment: "Direct emissions by compartment" };
+const colorModeOf = (view) => (view.groupColors ? view.colorBy || "group" : "none");
+// What gives a row its colour in ``mode``: { key (of colorFor, and of the colours picked), name (the legend's) }, or none
+function colorKeyOf(r, mode) {
+  if (r.kind === "rest" || mode === "none") return null;
+  if (mode === "group") return r.rule ? { key: r.rule, name: r.rule } : null;
+  if (mode === "type") { const t = flowTypeOf(r); return t ? { key: `type:${t}`, name: FLOW_TYPES[t].label } : null; }
+  const flows = isFlowRow(r);
+  if (mode === "compartment") {
+    const value = flows ? (r.flow || r.parts[0]).compartment : null;
+    return value ? { key: `compartment:${value}`, name: value } : null;
+  }
+  if (flows || r.kind === "direct") return null;
+  const first = r.meta || r.parts?.[0] || r.metas?.[0];
+  const value = (mode === "location" && r.kind === "process" ? r.location : null) ?? first?.[mode];
+  return value ? { key: `${mode}:${value}`, name: value } : null;
+}
+// The colour of each row (row id -> colour), empty with no colours. By rules, the rows below a group take its colour.
 function groupColors(rows, view) {
   const colors = new Map();
-  if (!view.groupColors) return colors;
-  if (view.colorBy === "type") {
-    for (const r of rows) {
-      const type = flowTypeOf(r);
-      if (type) colors.set(r.id, FLOW_TYPES[type].color);
-    }
-    return colors;
-  }
+  const mode = colorModeOf(view);
+  if (mode === "none") return colors;
   for (const r of rows) {
-    // The group a rule of the Rules panel makes, a row it matches (grouped or not): its colour; groups of the view options
-    // (product, substance, compartment) have none
-    if (r.rule) colors.set(r.id, colorOf(r.rule));
-    else if (colors.has(r.parent)) colors.set(r.id, colors.get(r.parent));
+    const found = colorKeyOf(r, mode);
+    if (found) colors.set(r.id, colorFor(found.key));
+    else if (mode === "group" && colors.has(r.parent)) colors.set(r.id, colors.get(r.parent));
   }
   return colors;
+}
+// The colours in use in ``rows``, once each, in the order of the rows: [{ key, name, color }]
+function colorLegend(rows, view) {
+  const mode = colorModeOf(view), seen = new Map();
+  for (const r of rows) {
+    const found = colorKeyOf(r, mode);
+    if (found && !seen.has(found.key)) seen.set(found.key, { ...found, color: colorFor(found.key) });
+  }
+  return [...seen.values()];
 }
 // Amount column of a row: product supplied, waste treated, or elementary flow emitted
 function rowAmount(r) {
@@ -445,7 +532,7 @@ const PALETTE = [
 ];
 const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 const RULE_PALETTES = {
-  auto: { label: "Automatic", hint: "A hue derived from each rule's name", colors: null },
+  auto: { label: "Automatic", hint: "A hue derived from each rule's or value's name; the exchange types their own colours", colors: null },
   categorical: { label: "Categorical", hint: "The colours of the charts", colors: PALETTE.slice(0, 11) },
   safe: { label: "Colour-blind safe", hint: "Eight colours told apart by most kinds of colour blindness (Okabe-Ito)",
     colors: ["#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999"] },
@@ -2310,12 +2397,12 @@ function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onU
           ${extra.map((c) => html`<th key=${c.id} title=${c.hint}>${c.label}</th>`)}</tr></thead>
         <tbody>
           ${rows.map((r) => {
-            // Split by flow type: a heading where the section of the rows below a row changes
+            // Organise by: a heading where the section of the rows below a row changes
             // (again when the rows come back from the rows below a sibling)
-            const section = view.splitByType && r.depth > 0 ? sectionOf(r) : null;
+            const section = r.depth > 0 ? sectionOf(r, view) : null;
             const returned = previous.depth > r.depth;
             previous.depth = r.depth;
-            const heading = section && (sections.get(r.parent) !== section || returned) && (sections.set(r.parent, section), SECTION_LABELS[section]);
+            const heading = section && (sections.get(r.parent) !== section.key || returned) && (sections.set(r.parent, section.key), section.label);
             const share = shareOf(r, byId, rootImpact, shareBasis);
             const amount = rowAmount(r);
             const [product, name, location] = r.kind === "process" ? r.label.split(" | ") : [r.label];
@@ -2327,7 +2414,7 @@ function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onU
                   onClick=${(e) => onSelect(r, e.ctrlKey || e.metaKey || e.shiftKey)}
                   onContextMenu=${(e) => onInfo(r, e)}>
                 <td style=${{ "--depth": r.depth }}>
-                  ${colors.has(r.id) && view.colorBy === "type" && flowTypeOf(r) && html`<span class="type-bar" title=${`${FLOW_TYPES[flowTypeOf(r)].label}: ${FLOW_TYPES[flowTypeOf(r)].hint}`}></span>`}
+                  ${colors.has(r.id) && colorModeOf(view) === "type" && flowTypeOf(r) && html`<span class="type-bar" title=${`${FLOW_TYPES[flowTypeOf(r)].label}: ${FLOW_TYPES[flowTypeOf(r)].hint}`}></span>`}
                   <div class="name" style=${{ paddingLeft: `${r.depth * 16}px` }}>
                     ${r.expandable
                       ? html`<button class="toggle" aria-label=${r.expanded ? "Collapse" : "Expand"}
@@ -2990,7 +3077,7 @@ function SaveMenu({ disabled, onSave, onLoad, onCopy, onDefaults, icon }) {
         <div class="menu" role="menu">
           <button role="menuitem" onClick=${() => { setOpen(false); file.current.click(); }}>Load view…</button>
           <button role="menuitem" disabled=${disabled} onClick=${() => { setOpen(false); onCopy(); }}>Copy view as JSON</button>
-          ${onDefaults && html`<button role="menuitem" title="List, no cut-off, nothing grouped, full names, no colours, comments shown; climate change as method, its family shown together, the default rules"
+          ${onDefaults && html`<button role="menuitem" title="As at a first start: list, no cut-off, nothing grouped, direct emissions organised by compartment, full names, no colours, three columns; climate change as method, its family shown together, the default rules; the left panel closed, the panels' widths fitted to the window"
             onClick=${() => { setOpen(false); onDefaults(); }}>Default settings</button>`}
         </div>`}
       <input type="file" accept=".json,application/json" ref=${file} style="display:none" aria-label="View file"
@@ -3000,31 +3087,33 @@ function SaveMenu({ disabled, onSave, onLoad, onCopy, onDefaults, icon }) {
 
 // ---------------------------------------------------------------- view bar (group by, organize, names, colours)
 // The headers say what the buttons are for, so the buttons are one word
-function ViewBar({ view, setView, example, fields = [] }) {
+// The colours under Color by, at most this many (the Settings pop-up lists them all)
+const LEGEND_MAX = 14;
+// ``legend``: the colours in use in the tree (colorLegend); ``onPick(key, colour)``: a colour picked; ``onColours``: the Settings pop-up
+function ViewBar({ view, setView, example, fields = [], legend = [], onPick = () => {}, onColours = () => {} }) {
   const set = (patch) => setView({ ...view, ...patch });
   const toggle = (key, label, title, on = !!view[key]) => html`
     <button class=${on ? "primary" : ""} onClick=${() => set({ [key]: !on })} aria-pressed=${on} title=${title}>${label}</button>`;
+  // One grouping of the processes and one of the flows (the first would leave nothing to the next): choosing one replaces
+  // the other, choosing it again switches it off
+  const byProcesses = groupingOf(view).processes, byFlows = groupingOf(view).flows;
+  const groupProcesses = (k) => set(processGrouping(byProcesses === k ? null : k));
+  const groupFlows = (k) => set(flowGrouping(byFlows === k ? null : k));
+  const organize = (key, k) => set({ [key]: view[key] === k ? "none" : k });
+  const choice = (on, label, title, run) => html`
+    <button class=${on ? "primary" : ""} onClick=${run} aria-pressed=${on} title=${title}>${label}</button>`;
+  const item = (on, label, run, title) => ({ key: label, label: `${on ? "✓ " : "   "}${label}`, run, title });
+  // The By… menus show what they apply
+  const groupMore = [byProcesses && byProcesses !== "product" && fieldLabel(byProcesses, false), ["compartment", "subcompartment"].includes(byFlows) && FLOW_FIELD_LABELS[byFlows]].filter(Boolean);
+  const organizeMore = [["location", "activity_type"].includes(view.organize) && ORGANIZE[view.organize].toLowerCase(),
+    ["subcompartment", "type"].includes(view.organizeFlows) && `flows: ${ORGANIZE_FLOWS[view.organizeFlows].toLowerCase()}`].filter(Boolean);
+  const moreLabel = (chosen) => (chosen.length ? `By ${chosen.join(", ")} ▾` : "By…");
+  const colorMode = colorModeOf(view);
+  const colorBy = (mode) => set(colorMode === mode ? { groupColors: false } : { colorBy: mode, groupColors: true });
+  const colorMore = ["location", "activity_type", "compartment"].includes(colorMode) ? [COLOR_MODES[colorMode].toLowerCase()] : [];
+  const shownLegend = legend.slice(0, LEGEND_MAX);
   return html`
     <div class="view-bar">
-      <div class="view-group" role="group" aria-label="Group by">
-        <span class="view-group-label">Group by</span>
-        ${toggle("groupByRules", "Rules", "By your rules", view.groupByRules !== false)}
-        ${toggle("groupProducts", "Product", "Suppliers of one product")}
-        ${toggle("groupSubstance", "Substance", "Flows of a substance")}
-        <${PopupMenu} label="By…" className=${[...(view.groupFields || []), view.groupCompartment && "c", view.groupSubcompartment && "s"].some(Boolean) ? "primary" : ""}
-          title="Group by another criterion: location, activity type, compartment…" items=${[
-            ...fields.map((f) => ({ key: f, label: `${(view.groupFields || []).includes(f) ? "✓ " : "   "}${fieldLabel(f, false)}`,
-              run: () => set({ groupFields: (view.groupFields || []).includes(f) ? view.groupFields.filter((x) => x !== f) : [...(view.groupFields || []), f] }) })),
-            { key: "compartment", label: `${view.groupCompartment ? "✓ " : "   "}Compartment (flows)`, run: () => set({ groupCompartment: !view.groupCompartment }) },
-            { key: "subcompartment", label: `${view.groupSubcompartment ? "✓ " : "   "}Subcompartment (flows)`, run: () => set({ groupSubcompartment: !view.groupSubcompartment }) },
-          ]} />
-      </div>
-      <div class="view-group" role="group" aria-label="Organize">
-        <span class="view-group-label">Organize</span>
-        ${toggle("splitByType", "Split by type", "Sections by exchange type")}
-        ${toggle("hideOthers", "Hide others", "No others rows in the tree")}
-        ${toggle("collapseSingletons", "Collapse singletons", "A process made of only one process (a market of one supplier…) shows as that process, down the chain")}
-      </div>
       <div class="view-group" role="group" aria-label="Names">
         <span class="view-group-label">Names</span>
         <span class="segmented">
@@ -3032,22 +3121,52 @@ function ViewBar({ view, setView, example, fields = [] }) {
             <button class=${view.naming === id ? "primary" : ""} title=${hint} onClick=${() => set({ naming: id })}>${label}</button>`)}
         </span>
       </div>
-      <div class="view-group" role="group" aria-label="Colours">
-        <span class="view-group-label">Colours</span>
-        <span class="segmented">
-          ${[["none", "None", "No colours"],
-            ["group", "Rules", "By rule"],
-            ["type", "Flow type", "By exchange type"]].map(([id, label, hint]) => html`
-            <button class=${(view.groupColors ? view.colorBy || "group" : "none") === id ? "primary" : ""} title=${hint}
-              onClick=${() => set(id === "none" ? { groupColors: false } : { colorBy: id, groupColors: true })}>${label}</button>`)}
-        </span>
-      </div>
-      ${view.groupColors && view.colorBy === "type" && html`
-        <div class="color-legend" aria-label="Flow type colours">
-          ${Object.entries(FLOW_TYPES).map(([key, t]) => html`
-            <span key=${key} title=${t.hint}><i style=${{ background: t.color }}></i>${t.label}</span>`)}
-        </div>`}
       ${view.naming === "custom" && html`<${RecipeEditor} recipe=${view.recipe} setRecipe=${(recipe) => set({ recipe })} example=${example} />`}
+      <div class="view-group" role="group" aria-label="Organise by">
+        <span class="view-group-label">Organise by</span>
+        ${choice(view.organize === "type", ORGANIZE.type, ORGANIZE_HINTS.type, () => organize("organize", "type"))}
+        ${choice(view.organizeFlows === "compartment", ORGANIZE_FLOWS.compartment, ORGANIZE_FLOWS_HINTS.compartment, () => organize("organizeFlows", "compartment"))}
+        <${PopupMenu} label=${moreLabel(organizeMore)} className=${organizeMore.length ? "primary" : ""}
+          title="Headings in the list, without grouping: one choice for the processes and one for the direct emissions"
+          items=${[
+            ...["location", "activity_type"].map((k) => item(view.organize === k, ORGANIZE[k], () => organize("organize", k), ORGANIZE_HINTS[k])),
+            ...["subcompartment", "type"].map((k) => item(view.organizeFlows === k, `${ORGANIZE_FLOWS[k]} (flows)`, () => organize("organizeFlows", k), ORGANIZE_FLOWS_HINTS[k])),
+          ]} />
+      </div>
+      <div class="view-group" role="group" aria-label="Group by">
+        <span class="view-group-label">Group by</span>
+        ${toggle("groupByRules", "Rules", "By your rules (the Rules panel)", view.groupByRules !== false)}
+        ${choice(byProcesses === "product", "Product", "Suppliers of one product", () => groupProcesses("product"))}
+        ${choice(byFlows === "name", "Substance", "Flows of a substance", () => groupFlows("name"))}
+        <${PopupMenu} label=${moreLabel(groupMore)} className=${groupMore.length ? "primary" : ""}
+          title="Group by another criterion: location, activity type, compartment… One for the processes and one for the flows: a second one would find nothing left to group"
+          items=${[
+            ...fields.map((f) => item(byProcesses === f, fieldLabel(f, false), () => groupProcesses(f))),
+            ...["compartment", "subcompartment"].map((f) => item(byFlows === f, `${FLOW_FIELD_LABELS[f][0].toUpperCase()}${FLOW_FIELD_LABELS[f].slice(1)} (flows)`, () => groupFlows(f))),
+          ]} />
+      </div>
+      <div class="view-group" role="group" aria-label="Color by">
+        <span class="view-group-label">Color by</span>
+        ${choice(colorMode === "group", COLOR_MODES.group, COLOR_HINTS.group, () => colorBy("group"))}
+        ${choice(colorMode === "type", COLOR_MODES.type, COLOR_HINTS.type, () => colorBy("type"))}
+        <${PopupMenu} label=${moreLabel(colorMore)} className=${colorMore.length ? "primary" : ""}
+          title="Colour by another criterion: location, activity type, compartment. One at a time"
+          items=${["location", "activity_type", "compartment"].map((k) => item(colorMode === k, `${COLOR_MODES[k]}${k === "compartment" ? " (flows)" : ""}`, () => colorBy(k), COLOR_HINTS[k]))} />
+      </div>
+      ${colorMode !== "none" && html`
+        <div class="color-legend" aria-label="Colours in use">
+          ${shownLegend.map((c) => html`
+            <label key=${c.key} title=${`${c.name}: click to change its colour`}>
+              <input type="color" class="swatch" value=${colorHex(c.color)} onInput=${(e) => onPick(c.key, e.target.value)} aria-label=${`Colour of ${c.name}`} />${c.name}</label>`)}
+          ${legend.length > LEGEND_MAX && html`<span class="muted">+${legend.length - LEGEND_MAX} more</span>`}
+          ${legend.length === 0 && html`<span class="muted">${colorMode === "group" ? "No rule matches these rows." : "Nothing to colour in these rows."}</span>`}
+          <button class="link" onClick=${onColours} title="The palette, and every colour picked">Colours…</button>
+        </div>`}
+      <div class="view-group" role="group" aria-label="Rows">
+        <span class="view-group-label">Rows</span>
+        ${toggle("hideOthers", "Hide others", "No others rows in the tree")}
+        ${toggle("collapseSingletons", "Collapse singletons", "A process made of only one process (a market of one supplier…) shows as that process, down the chain")}
+      </div>
     </div>`;
 }
 
@@ -3875,7 +3994,8 @@ function baseRowNames(r, byId, view) {
 // The colours of the bars of a chart, each with what it stands for: a rule of the Rules panel, or a type of exchange; the
 // bars with no colour are "no rule"
 function legendOf(items, colors, byId, view) {
-  if (!view.groupColors) return [];
+  const mode = colorModeOf(view);
+  if (mode === "none") return [];
   const keys = new Map();
   let plain = false;
   for (const p of items.slice().reverse()) {
@@ -3883,12 +4003,12 @@ function legendOf(items, colors, byId, view) {
     const colour = colors.get(row.id);
     if (!colour) { plain = true; continue; }
     let name;
-    if (view.colorBy === "type") { const t = flowTypeOf(row); name = t ? FLOW_TYPES[t].label : null; }
+    if (mode !== "group") name = colorKeyOf(row, mode)?.name;
     else { let r = row; while (r && !r.rule) r = byId.get(r.parent); name = r?.rule; }
     if (name && !keys.has(name)) keys.set(name, colour);
   }
   const out = [...keys].map(([name, color]) => ({ name, color }));
-  if (out.length && plain) out.push({ name: view.colorBy === "type" ? "other" : "no rule", color: cssVar("--bar") });
+  if (out.length && plain) out.push({ name: mode === "group" ? "no rule" : "other", color: cssVar("--bar") });
   return out;
 }
 
@@ -3993,8 +4113,8 @@ function ChartPanel({ data, info, method, chartMethods, onPickMethods, view, hea
 
   const byId = useMemo(() => new Map(data.rows.map((r) => [r.id, r])), [data]);
   const parts = useMemo(
-    () => nameItems(chartItems(data.rows, byId), naming, recipe, byId, !!view.splitByType),
-    [data, byId, naming, recipe, view.splitByType],
+    () => nameItems(chartItems(data.rows, byId), naming, recipe, byId, view.organize === "type"),
+    [data, byId, naming, recipe, view.organize],
   );
   const unit = info.methods[method].unit;
   const total = parts.reduce((s, p) => s + p.impacts[0], 0);
@@ -4408,7 +4528,7 @@ function GroupPanel({ info, rules, setRules, selectedRow, view, setView, shared,
               onDragEnd=${() => { setDragging(null); setDropAt(null); }}
               onContextMenu=${(e) => { e.preventDefault(); startEdit(i); }}>
               ${rules.length > 1 && html`<span class="grip" title="Drag to reorder (rules apply in list order)" aria-hidden="true">⠿</span>`}
-              ${!(r.target === "flows" && r.by) && view.groupColors && html`
+              ${!(r.target === "flows" && r.by) && colorModeOf(view) === "group" && html`
                 <input type="color" class="swatch" value=${colorHex(colorOf(ruleKey(r)))}
                   onInput=${(e) => pickColor(ruleKey(r), e.target.value)}
                   onContextMenu=${(e) => { e.preventDefault(); e.stopPropagation(); pickColor(ruleKey(r), null); }}
@@ -4431,7 +4551,7 @@ function GroupPanel({ info, rules, setRules, selectedRow, view, setView, shared,
       <${Fold} id="quick" title="Quick groups" open=${false}>
         <div class="row">${PRESETS.map((p) => {
           const key = ruleKey(p.rule);
-          const used = view.groupColors && rules.some((r) => !r.disabled && r.target !== "flows" && ruleKey(r) === key);
+          const used = colorModeOf(view) === "group" && rules.some((r) => !r.disabled && r.target !== "flows" && ruleKey(r) === key);
           const fill = used ? colorOf(key) : null;
           return html`<button style=${used ? { background: fill, borderColor: fill, color: textOn(fill) } : null}
             title=${used ? "In the active rules, in this colour" : undefined} onClick=${() => add(p.rule)}>${p.label}</button>`;
@@ -4691,7 +4811,7 @@ function GlobalPanel({ info, root, amount, method, rules, view, rule, setRule, o
       .catch((e) => setError(e.message));
   }
   // A group has the colour of its rule in the Rules panel (and of its rows in the tree)
-  const colorOfGroup = (n) => n === "other" ? cssVar("--muted") : view.groupColors ? colorOf(ruleOf[n] ?? n) : undefined;
+  const colorOfGroup = (n) => n === "other" ? cssVar("--muted") : colorModeOf(view) === "group" ? colorOf(ruleOf[n] ?? n) : undefined;
   const option = useMemo(() => {
     const o = baseOption();
     o.yAxis = { ...o.yAxis, type: "category", data: entries.map(([n]) => n), inverse: true, triggerEvent: true };
@@ -4704,7 +4824,7 @@ function GlobalPanel({ info, root, amount, method, rules, view, rule, setRule, o
       })),
       label: { show: true, position: "right", formatter: (d) => pct(d.value / total), color: cssVar("--muted") } }];
     return o;
-  }, [result, k, group, view.groupColors, paletteStamp]);
+  }, [result, k, group, view.groupColors, view.colorBy, paletteStamp]);
 
   return html`
     <div class="panel">
@@ -4723,7 +4843,7 @@ function GlobalPanel({ info, root, amount, method, rules, view, rule, setRule, o
             <th class="num">${unit}</th><th class="num">Share</th></tr></thead>
           <tbody>${entries.map(([n, v]) => html`
             <tr class="clickable ${n === group ? "selected" : ""}" onClick=${() => choose(n)}>
-              <td>${n === group ? "▾" : "▸"} ${view.groupColors && html`<span class="swatch" style=${{ background: colorOfGroup(n) }}></span>`}${n}${n in flowGroups && html` <span class="loc-chip">flows</span>`}</td>
+              <td>${n === group ? "▾" : "▸"} ${colorModeOf(view) === "group" && html`<span class="swatch" style=${{ background: colorOfGroup(n) }}></span>`}${n}${n in flowGroups && html` <span class="loc-chip">flows</span>`}</td>
               <td class="num">${fmt(v)}</td><td class="num">${pct(v / total)}</td>
             </tr>`)}
           </tbody>
@@ -4891,7 +5011,7 @@ const LENS_KEY = `${STORAGE_KEY}.lens`;
 // The options of the view as kept in the preferences; a pop-up's explorer lists its exchanges by section, in full names
 // The view of the explorer in a pop-up (the exchanges of a process): the plain tree, in the sections of the form of a new
 // process, whatever the options of the tabs are
-const PLAIN_VIEW = { ...DEFAULT_VIEW, splitByType: true, groupByRules: true, columns: DEFAULT_COLUMNS };
+const PLAIN_VIEW = { ...DEFAULT_VIEW, organize: "type", organizeFlows: "type", groupByRules: true, columns: DEFAULT_COLUMNS };
 const initialView = (embedded) => (embedded ? { ...PLAIN_VIEW, recipe: { ...DEFAULT_RECIPE } } : preferredView());
 // An option as the preferences keep it (see DEFAULT_VIEW), back to its value (the default when it does not read)
 function loadOption(key, fallback) {
@@ -4904,10 +5024,10 @@ function loadOption(key, fallback) {
 }
 const saveOption = (key, value) => savePreference(key, typeof value === "boolean" ? (value ? "1" : "0") : typeof value === "string" ? value : JSON.stringify(value));
 const RECIPE_PREFERENCES = { main: "recipeMain", secondary: "recipeSecondary", flowMain: "recipeFlowMain", flowSecondary: "recipeFlowSecondary" };
-const preferredView = () => ({
+const preferredView = () => oneGrouping(withOrganize({
   ...Object.fromEntries(Object.entries(DEFAULT_VIEW).map(([key, fallback]) => [key, loadOption(key, fallback)])),
   recipe: Object.fromEntries(Object.entries(RECIPE_PREFERENCES).map(([part, key]) => [part, loadPreference(key, DEFAULT_RECIPE[part])])),
-});
+}, { splitByType: loadPreference("splitByType", "0") === "1", ...(loadPreference("organize", "") ? { organize: true } : {}) }));
 function saveViewPreferences({ view, display, orientation, cycles }) {
   for (const key of Object.keys(DEFAULT_VIEW)) saveOption(key, view[key] ?? DEFAULT_VIEW[key]);
   for (const [part, key] of Object.entries(RECIPE_PREFERENCES)) savePreference(key, view.recipe[part] ?? DEFAULT_RECIPE[part]);
@@ -5160,7 +5280,12 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
   const [display, setDisplay] = useState(() => (embedded ? "list" : loadPreference("display", "list")));
   const [orientation, setOrientation] = useState(() => loadPreference("orientation", "horizontal"));
   const [cycles, setCycles] = useState(() => loadPreference("cycles", "off") === "on");
-  useEffect(() => { if (!embedded) saveViewPreferences({ view, display, orientation, cycles }); }, [view, display, orientation, cycles]);
+  // kept once changed, not at the first render (the defaults of a first start are not written: see DEFAULT_VIEW_COLUMNS)
+  const viewChanged = useRef(false);
+  useEffect(() => {
+    if (!viewChanged.current) { viewChanged.current = true; return; }
+    if (!embedded) saveViewPreferences({ view, display, orientation, cycles });
+  }, [view, display, orientation, cycles]);
   const [undo, setUndo] = useState(null);
   // Pop-ups: { key, target, history, pinned, rect }. At most one is not pinned: opening a pop-up
   // from outside replaces it, and a click outside or Esc closes it. Pinned ones stay open.
@@ -5204,8 +5329,8 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
   const [renaming, setRenaming] = useState(null);
   const allData = useMemo(() => {
     const rows = withLabels(rawData.rows, editing ? {} : labels);
-    return { ...rawData, rows: view.splitByType ? splitRows(rows) : rows };
-  }, [rawData, labels, editing, view.splitByType]);
+    return { ...rawData, rows: organizing(view) ? splitRows(rows, view) : rows };
+  }, [rawData, labels, editing, view.organize, view.organizeFlows]);
   // Hide others: the others rows are left out of the list, the tree and the Sankey (the chart keeps them)
   const data = useMemo(() => (view.hideOthers ? { ...allData, rows: withoutOthers(allData.rows) } : allData),
     [allData, view.hideOthers]);
@@ -5252,7 +5377,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
     const { target } = found;
     const same = found.same && (sameLayout || !saved.layout);
     setRoot(target); setAmount(saved.amount ?? 1);
-    setCutoff(saved.cutoff ?? 1); setCutoffBasis(saved.cutoffBasis || "parent");
+    setCutoff(saved.cutoff ?? DEFAULT_CUTOFF); setCutoffBasis(saved.cutoffBasis || "parent");
     setOwnRules(embedded ? [] : same ? (saved.rules || []).filter((r) => r.scope !== "*") : []);
     setExpanded(new Set(same ? saved.expanded : [String(target.index)]));
     setPinned(new Set(same ? saved.pinned || [] : []));
@@ -5270,7 +5395,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
     // explorer of a pop-up starts with the rules it is given
     const base = initial?.inherit;
     if (base) {
-      setCutoff(base.cutoff ?? 1);
+      setCutoff(base.cutoff ?? DEFAULT_CUTOFF);
       setCutoffBasis(base.cutoffBasis || "parent");
       if (embedded) setOwnRules((base.rules || []).filter((rule) => rule.scope === "*"));
     }
@@ -5642,8 +5767,8 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
       if (saved.display) {
         // Views saved before the columns menu have a Comments switch
         const { comments, ...display } = saved.display;
-        setView({ ...DEFAULT_VIEW, recipe: display.recipe || view.recipe, ...pick(display, Object.keys(DEFAULT_VIEW)),
-          ...(!display.columns && comments ? { columns: [...DEFAULT_COLUMNS, "comment"] } : {}) });
+        setView(oneGrouping(withOrganize({ ...DEFAULT_VIEW, recipe: display.recipe || view.recipe, ...pick(display, Object.keys(DEFAULT_VIEW)),
+          ...(!display.columns && comments ? { columns: [...DEFAULT_COLUMNS, "comment"] } : {}) }, display)));
       }
       setSelection(new Set());
       setError(null);
@@ -5863,9 +5988,10 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
       ${Object.entries(CUTOFF_MODES).map(([key, mode]) => html`<option value=${key} title=${mode.hint}>${mode.label}</option>`)}
     </select>`;
   const viewBar = html`<${ViewBar} view=${view} setView=${setDisplayView} fields=${info.group_by_fields}
+    legend=${colorLegend(allData.rows, view)} onPick=${embedded ? undefined : lens.pickColor} onColours=${embedded ? undefined : lens.showColours}
     example=${(() => { const r = data.rows.find((x) => x.kind === "process" && x.depth > 0); return r ? rowNames(r, rowsById, view) : null; })()} />`;
   const viewOptions = html`
-    <${Fold} id="viewoptions" title="Options" actions=${html`<span style="flex:1"></span>
+    <${Fold} id="viewoptions" title="Options" open=${false} actions=${html`<span style="flex:1"></span>
       <button class="icon-plain" disabled=${!root} onClick=${resetView} aria-label="Reset the view" title="Reset: the process alone, undoable"><${ResetIcon} /></button>
       <${SaveMenu} icon disabled=${!root} onSave=${exportView} onLoad=${loadView} onCopy=${copyView} onDefaults=${loadDefaults} />`}>
       <div class="view-options">
@@ -6758,28 +6884,60 @@ function ShortcutsDialog({ onClose }) {
     <//>`;
 }
 
-// The settings of the workspace, from the status bar: the colours of the rules (a palette, and a colour picked for a rule),
-// the same in every tab, chart and comparison
+// The settings of the workspace, from the status bar (and Colours… under Color by): the colours of every Color by mode, the
+// same in every tab, chart and comparison. One palette for all (Automatic: a hue from each rule's or value's name, and the
+// exchange types' own colours); a colour picked wins over it.
+const VALUE_PREFIXES = ["location", "activity_type", "compartment"];
 function SettingsDialog({ lens, onClose }) {
   const picked = lens.ruleColors || {};
   const keys = [...new Set(lens.rules.filter((r) => !(r.target === "flows" && r.by)).map(ruleKey))];
+  const values = Object.keys(picked).filter((k) => VALUE_PREFIXES.some((p) => k.startsWith(`${p}:`))).sort();
+  const swatch = (key, name, title) => html`
+    <li key=${key} title=${title}>
+      <input type="color" class="swatch" value=${colorHex(colorFor(key))} onInput=${(e) => lens.pickColor(key, e.target.value)}
+        aria-label=${`Colour of ${name}`} />
+      <span>${name}</span>
+      ${picked[key] && html`<button class="link" onClick=${() => lens.pickColor(key, null)} title="Back to the palette's colour">reset</button>`}
+    </li>`;
   return html`
     <${Modal} title="Settings" className="settings-dialog" onClose=${onClose}>
       <section>
-        <h3>Colours of the rules <${InfoTip} text="Rows, bars and groups take the colour of the rule that matches them (with Colours: Rules in the Custom view). A colour picked for a rule wins over the palette; choosing a palette clears them." label="About the colours" /></h3>
+        <h3>Colours <${InfoTip} text="Rows, bars and groups take these colours with Color by in the Custom view: by rules, by type, or by location, activity type or compartment. The palette serves every mode; a colour picked (here, or on the swatches under Color by) wins over it; choosing a palette clears them." label="About the colours" /></h3>
         <${PaletteSwitch} palette=${lens.palette} setPalette=${lens.setPalette} palettes=${lens.palettes} addPalette=${lens.addPalette}
           customized=${Object.keys(picked).length > 0} />
-        <ul class="rule-colours">${keys.map((key) => html`
-          <li key=${key}>
-            <input type="color" class="swatch" value=${colorHex(colorOf(key))} onInput=${(e) => lens.pickColor(key, e.target.value)}
-              aria-label=${`Colour of ${key}`} />
-            <span>${key}</span>
-            ${picked[key] && html`<button class="link" onClick=${() => lens.pickColor(key, null)} title="Back to the palette's colour">reset</button>`}
-          </li>`)}
-        </ul>
+        <h4>Rules</h4>
+        <ul class="rule-colours">${keys.map((key) => swatch(key, key))}</ul>
         ${keys.length === 0 && html`<p class="muted small">The rule set in use has no rules yet.</p>`}
+        <h4>Types</h4>
+        <ul class="rule-colours">${Object.entries(FLOW_TYPES).map(([type, t]) => swatch(`type:${type}`, t.label, t.hint))}</ul>
+        <h4>Locations, activity types, compartments</h4>
+        <ul class="rule-colours">${values.map((key) => {
+          const [mode, ...rest] = key.split(":");
+          return swatch(key, `${rest.join(":")} (${COLOR_MODES[mode].toLowerCase()})`);
+        })}</ul>
+        <p class="muted small">${values.length ? "Others follow the palette." : "From the palette; click a swatch under Color by to pick one."}</p>
       </section>
     <//>`;
+}
+
+// The panels at a first start (see DEFAULT_VIEW_COLUMNS): the tree and its chart. The left panel (processes, methods, rules)
+// opens with its icon, the method or rule set of the status bar, or Ctrl/⌘ + ←. Until a panel is resized by hand its width
+// follows the window: the side panel 42 % of it, leaving the tree at least 720 px (its three columns and names); a width
+// dragged is kept, and fitted to a smaller window.
+const FIRST_PANELS = { leftOpen: false, sideOpen: true, leftWidth: 340 };
+const PANEL_MIN = { left: 260, side: 280 };
+const sideWidthFor = (width) => Math.max(PANEL_MIN.side, width
+  ? Math.min(width, window.innerWidth - 320) : Math.min(Math.round(window.innerWidth * 0.42), window.innerWidth - 720));
+const leftWidthFor = (width) => Math.max(PANEL_MIN.left, Math.min(width ?? FIRST_PANELS.leftWidth, window.innerWidth - 400));
+const keptWidth = (name) => Number(loadPreference(name, "")) || null;
+// Keeps ``value`` as the preference ``name`` when it changes (not at the first render: a default that was never chosen is
+// not written, so that a later version's defaults still apply)
+function useChangeSaved(name, value) {
+  const first = useRef(true);
+  useEffect(() => {
+    if (first.current) { first.current = false; return; }
+    savePreference(name, value);
+  }, [value]);
 }
 
 function App() {
@@ -6829,17 +6987,24 @@ function App() {
   const [titles, setTitles] = useState({});
   const [dragging, setDragging] = useState(null);
   const [drop, setDrop] = useState(null);
-  const [sideOpen, setSideOpen] = useState(() => loadPreference("sideOpen", "1") === "1");
-  const [sideWidth, setSideWidth] = useState(() => Number(loadPreference("sideWidth", "0")) || Math.round(window.innerWidth * 0.42));
-  useEffect(() => savePreference("sideOpen", sideOpen ? "1" : "0"), [sideOpen]);
-  useEffect(() => savePreference("sideWidth", String(sideWidth)), [sideWidth]);
+  // The panels as the user left them, else those of a first start (FIRST_PANELS); a width is null until dragged
+  const [sideOpen, setSideOpen] = useState(() => loadPreference("sideOpen", FIRST_PANELS.sideOpen ? "1" : "0") === "1");
+  const [sideWidth, setSideWidth] = useState(() => keptWidth("sideWidth"));
+  useChangeSaved("sideOpen", sideOpen ? "1" : "0");
+  useChangeSaved("sideWidth", sideWidth ? String(sideWidth) : "");
   // The left panel: the impact methods and the group rules (the lens of the workspace)
-  const [leftOpen, setLeftOpen] = useState(() => loadPreference("leftOpen", "1") === "1");
-  const [leftWidth, setLeftWidth] = useState(() => Number(loadPreference("leftWidth", "0")) || 380);
+  const [leftOpen, setLeftOpen] = useState(() => loadPreference("leftOpen", FIRST_PANELS.leftOpen ? "1" : "0") === "1");
+  const [leftWidth, setLeftWidth] = useState(() => keptWidth("leftWidth"));
   const [leftTab, setLeftTab] = useState(() => { const t = loadPreference("leftTab", "processes"); return t === "compare" || t === "view" ? "processes" : t; });
-  useEffect(() => savePreference("leftOpen", leftOpen ? "1" : "0"), [leftOpen]);
-  useEffect(() => savePreference("leftWidth", String(leftWidth)), [leftWidth]);
+  useChangeSaved("leftOpen", leftOpen ? "1" : "0");
+  useChangeSaved("leftWidth", leftWidth ? String(leftWidth) : "");
   useEffect(() => savePreference("leftTab", leftTab), [leftTab]);
+  // The panels' widths follow the window until dragged
+  useEffect(() => {
+    const onResize = () => setTick((t) => t + 1);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
   watchStates.current = comparing || (leftOpen && leftTab === "processes");
   // A side pane that is opened takes the focus (its panel's tab: ← and → switch panel)
   const opened = useRef({ left: leftOpen, side: sideOpen, mounted: false });
@@ -7114,9 +7279,12 @@ function App() {
     chooseSet: (set) => setLens((l) => ({ ...l, set })),
     // The rules of a view file as a set of their own, now in use
     loadSet: (name, rules) => setLens((l) => { const n = freshName(name, l.sets); return { ...l, set: n, sets: { ...l.sets, [n]: rules } }; }),
-    // The settings of a first start: the method, the methods shown together, the rules, the names and the palette
-    resetDefaults: () => setLens((l) => ({ ...l, method: info.default_method, chartMethods: familyOf(info, info.default_method),
-      sets: { ...l.sets, Default: defaultRules() }, set: "Default", palette: "auto", ruleColors: {}, nameFormat: DEFAULT_NAME_FORMAT, attribution: "first_match" })),
+    // The settings of a first start: the method, the methods shown together, the rules, the names and the palette, and the panels
+    resetDefaults: () => {
+      setLens((l) => ({ ...l, method: info.default_method, chartMethods: familyOf(info, info.default_method),
+        sets: { ...l.sets, Default: defaultRules() }, set: "Default", palette: "auto", ruleColors: {}, nameFormat: DEFAULT_NAME_FORMAT, attribution: "first_match" }));
+      setLeftOpen(FIRST_PANELS.leftOpen); setSideOpen(FIRST_PANELS.sideOpen); setLeftWidth(null); setSideWidth(null);
+    },
     addSet: (name, copy) => setLens((l) => { const n = freshName(name, l.sets); return { ...l, set: n, sets: { ...l.sets, [n]: copy ? l.sets[l.set] : [] } }; }),
     renameSet: (name) => setLens((l) => {
       const n = freshName(name, l.sets);
@@ -7125,6 +7293,8 @@ function App() {
     deleteSet: () => setLens((l) => { const { [l.set]: gone, ...sets } = l.sets; return { ...l, sets, set: Object.keys(sets)[0] }; }),
     // Show the Methods or Rules panel
     show: (what) => { setLeftTab(what); setLeftOpen(true); },
+    // The colours (Settings pop-up)
+    showColours: () => setSettingsOpen(true),
   };
   // ``centre``: the search of a process (a model is open), in the middle of the bar
   const topBar = (centre) => html`
@@ -7176,18 +7346,19 @@ function App() {
   const showStaged = !editing && !!origin && pending.length > 0;
   const focusedTab = activeTabOf(focus);
   const compareTabs = allTabs.filter((id) => states.current[id]?.root).map((id) => ({ id, state: states.current[id], title: titles[id] }));
+  const sideShown = sideWidthFor(sideWidth), leftShown = leftWidthFor(leftWidth);
   function startSideResize(e) {
     e.preventDefault();
-    const start = e.clientX, width = sideWidth;
-    const move = (ev) => setSideWidth(Math.max(280, Math.min(window.innerWidth - 320, width + start - ev.clientX)));
+    const start = e.clientX, width = sideShown;
+    const move = (ev) => setSideWidth(sideWidthFor(width + start - ev.clientX));
     const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
   }
   function startLeftResize(e) {
     e.preventDefault();
-    const start = e.clientX, width = leftWidth;
-    const move = (ev) => setLeftWidth(Math.max(260, Math.min(window.innerWidth - 400, width + ev.clientX - start)));
+    const start = e.clientX, width = leftShown;
+    const move = (ev) => setLeftWidth(leftWidthFor(width + ev.clientX - start));
     const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
@@ -7218,7 +7389,7 @@ function App() {
         </div>`}
       <div class="body">
         ${!leftOpen && html`<button class="side-reopen left" onClick=${() => setLeftOpen(true)} title="Show the Processes, Methods and Rules panel (Ctrl/⌘ + ←)" aria-label="Show the Processes, Methods and Rules panel"><${SidePanelIcon} left /></button>`}
-        <aside class="leftbar" style=${{ width: `${leftWidth}px`, display: leftOpen ? "" : "none" }}>
+        <aside class="leftbar" style=${{ width: `${leftShown}px`, display: leftOpen ? "" : "none" }}>
           <${LensPanel} info=${info} lens=${lensApi} tab=${leftTab} setTab=${setLeftTab} tabs=${allTabs} focusedTab=${focusedTab} comparing=${comparing}
             view=${TAB_API[focusedTab] || Object.values(TAB_API)[0]} compareTabs=${compareTabs} compare=${compare} setCompare=${setCompare} onCollapse=${() => setLeftOpen(false)}
             adder=${origin && DATABASE ? { origin, onAdded: () => request("/api/info").then((i) => { clearAnswers(); setInfo(i); }).catch((e) => setError(e.message)) } : null}
@@ -7237,7 +7408,7 @@ function App() {
         ${!comparing && (sideOpen
           ? html`<div class="side-resizer" onPointerDown=${startSideResize} title="Drag to resize"></div>`
           : html`<button class="side-reopen" onClick=${() => setSideOpen(true)} title="Show the side panel (Ctrl/⌘ + →)" aria-label="Show the side panel"><${SidePanelIcon} /></button>`)}
-        <aside class="sidebar" style=${{ width: `${sideWidth}px`, display: sideOpen && !comparing ? "" : "none" }}>
+        <aside class="sidebar" style=${{ width: `${sideShown}px`, display: sideOpen && !comparing ? "" : "none" }}>
           ${allTabs.map((id) => html`<div key=${id} id=${`side-${id}`} class="side-slot" style=${{ display: id === focusedTab && !editing ? "" : "none" }}></div>`)}
           ${editing && html`<${EditPanel} origin=${origin} dataset=${dataset} pending=${pending} affected=${pendingView.affected}
             locked=${pendingView.locked} outdated=${outdated} onForm=${setDatasetOpen} stage=${stage} unstage=${unstage} unstageAll=${unstageAll}
@@ -7257,7 +7428,7 @@ function App() {
           ${methodSummary(info, lens.method, lens.chartMethods)}</button>
         <button class="status-text" onClick=${() => lensApi.show("groups")} title="The rule set shared by all tabs">Rules: ${lens.set} · ${lensApi.rules.filter((r) => !r.disabled).length}</button>
         <span class="spacer"></span>
-        <button class="status-button" onClick=${() => setSettingsOpen(true)} aria-label="Settings" title="Settings: the colours of the rules"><${PaletteIcon} /></button>
+        <button class="status-button" onClick=${() => setSettingsOpen(true)} aria-label="Settings" title="Settings: the colours (rules, types, locations…)"><${PaletteIcon} /></button>
         <button class="status-button" onClick=${() => setShortcutsOpen(true)} aria-label="Shortcuts" title="Keyboard shortcuts"><${KeyboardIcon} /></button>
       </footer>
       </div>
