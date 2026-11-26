@@ -355,6 +355,18 @@ def _flows(path: Path) -> list[dict]:
     return flows
 
 
+def flow_record(base, project: str, node_id: int) -> dict:
+    """The record of one elementary flow of a project by its node id (CAS number, synonyms, formula, location,
+    comment: what the biosphere database has), {} when there is none."""
+    path = project_dir(base, project) / "lci" / "databases.db"
+    with closing(sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)) as con:
+        row = con.execute("SELECT location, data FROM activitydataset WHERE id = ?", (int(node_id),)).fetchone()
+    if row is None:
+        return {}
+    data = _project_data(row[1])
+    return {**data, "location": data.get("location") or row[0]}
+
+
 _process_cache: dict[str, tuple[float, pd.DataFrame]] = {}
 
 

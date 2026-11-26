@@ -326,10 +326,10 @@ def test_flow_info_gives_factors_and_the_exchange_of_each_emitter(flows_model):
     info = client.get("/api/flow/2?method=0&activities=1,2").json()
     assert info["name"] == "Dinitrogen monoxide" and info["compartment"] == "air"
     assert info["cf"] == 273.0
-    assert info["factors"] == [{"method": 0, "cf": 273.0}]  # no factor for water use
+    assert info["factors"] == [{"method": 0, "cf": 273.0, "rank": 1, "of": 3}]  # no factor for water use
     assert [e["activity"]["location"] for e in info["exchanges"]] == ["FR", "DE"]
     # water: a factor only in the second method
-    assert client.get("/api/flow/3?method=0").json()["factors"] == [{"method": 1, "cf": 1.0}]
+    assert client.get("/api/flow/3?method=0").json()["factors"] == [{"method": 1, "cf": 1.0, "rank": 1, "of": 1}]
     assert client.get("/api/flow/99").status_code == 404
 
 

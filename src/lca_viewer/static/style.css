@@ -1027,3 +1027,21 @@ textarea.editing { width: 100%; box-sizing: border-box; }
 .category-table th .col-unit { display: block; font-size: 10.5px; font-weight: 400; color: var(--muted); white-space: nowrap; }
 .category-table .chip.only { font-size: 11px; padding: 0 6px; border-radius: 9px; border: 1px solid var(--category); color: var(--category); background: none; }
 .category-unlinked { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 6px; }
+
+/* Flows (the abstract elementary flow): an icon in the colour of its type (resource / emission) on tabs, rows and headers */
+.flow-icon { flex: none; vertical-align: -1px; }
+.pane-tab.flow { box-shadow: inset 0 2px 0 var(--flow-color); }
+.pane-tab.flow.drop-before { box-shadow: inset 2px 0 0 var(--accent), inset 0 2px 0 var(--flow-color); }
+.flow-title { border-left: 3px solid var(--flow-color, transparent); padding-left: 6px; }
+.process-row.flow-row .compare-tab { gap: 6px; }
+.process-row.flow-row .name .loc { margin-left: 4px; }
+.flow-tab { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--panel); }
+.flow-tab-head { padding: 10px 12px 4px; }
+.flow-tab .info-body { flex: 1; overflow: auto; max-height: none; }
+table.same-substance td { white-space: nowrap; }
+.flow-title a { color: var(--accent); }
+.flow-title .flow-compartment { color: var(--muted); font-weight: normal; }
+table.sortable th { cursor: pointer; user-select: none; }
+table.sortable th.sorted { color: var(--text); }
+table.sortable .filter-row th { padding: 2px 4px; cursor: default; }
+table.sortable .filter-row input { width: 100%; box-sizing: border-box; font-size: 12px; padding: 2px 4px; }

@@ -3496,89 +3496,239 @@ function PopupFrame({ target, win, label, className = "", title, subtitle, foote
     <//>`;
 }
 
-// Right-click on an elementary flow: the exchanges of the processes emitting it (amount,
-// comment, uncertainty as recorded in their datasets), its characterisation factors and
-// its metadata. ``target.flows``: several flows of one substance (switch compartment).
-function FlowInfoPopup({ target, win, method, methods, onClose, onOpen, onBack }) {
-  const [current, setCurrent] = useState(target.flow);
+// ---------------------------------------------------------------- flows
+// Words (see docs/ui.md): a **flow** is the elementary flow itself, a node of the biosphere (no quantity: its factors,
+// who emits it); an **exchange** is a flow in one dataset (an amount per unit of the process, comment, uncertainty);
+// an **inventory flow** is a flow in a supply chain (B·s): a flow seen with a scope, the chip of the flow's panels.
+// A flow target: { flow, flows?: several flows of one substance (compartment chips), labels?, activities?: the
+// processes whose exchange it is, exchange?: i (the exchange only), tab?: the panel to open on, scope?: { index, name,
+// location, amount }: the process (functional unit) of the tab it was opened from }
+
+// The icon of a flow (a drop), in the colour of its type: resource (from nature) or emission (to nature)
+function FlowIcon({ resource, size = 12 }) {
+  const t = FLOW_TYPES[resource ? "resource" : "emission"];
+  return html`<svg class="flow-icon" width=${size} height=${size} viewBox="0 0 12 12" aria-label=${t.label} role="img" style=${{ color: t.color }}>
+    <title>${`Flow (${t.label.toLowerCase()})`}</title>
+    <path d="M6 1 C6 1 2 5.6 2 7.8 A4 4 0 0 0 10 7.8 C10 5.6 6 1 6 1 Z" fill="currentColor" />
+  </svg>`;
+}
+
+// The flow itself (``/api/flow``), asked again when the flow or the method changes
+function useFlowInfo(index, method) {
+  // The Brightway project the model was built from: the flow's metadata (CAS, synonyms…) of models built before
+  // they were kept in the model
+  const { origin } = useContext(EditorContext);
+  const project = origin ? `&folder=${encodeURIComponent(origin.folder)}&project=${encodeURIComponent(origin.project)}` : "";
   const [info, setInfo] = useState(null);
   const [error, setError] = useState(null);
-  const [tab, setTab] = useState(null);
-  const [filter, setFilter] = useState("");
-  useEffect(() => { setCurrent(target.flow); setTab(null); }, [target.flow, target.x, target.y]);
   useEffect(() => {
-    setInfo(null);
+    if (index == null) return;
+    let live = true;
     setError(null);
-    request(`/api/flow/${current}?method=${method}&activities=${(target.activities || []).join(",")}`)
-      .then(setInfo).catch((e) => setError(e.message));
-  }, [current, method, target.activities]);
-  const compartment = info ? [info.compartment, info.subcompartment].filter(Boolean).join(", ") : "";
-  const hasExchanges = info && info.exchanges.length > 0;
-  const tabs = info ? [
-    hasExchanges && { id: "exchange", label: info.exchanges.length > 1 ? `Exchanges · ${info.exchanges.length}` : "Exchange" },
-    { id: "factors", label: `Characterisation · ${info.factors.length}` },
-    { id: "metadata", label: "Metadata" },
-  ].filter(Boolean) : [];
-  const shown = tabs.some((t) => t.id === tab) ? tab : tabs[0]?.id;
-  const words = filter.toLowerCase().split(/\s+/).filter(Boolean);
-  const factors = info ? info.factors.filter((f) => words.every((w) => methods[f.method].name.join(" | ").toLowerCase().includes(w))) : [];
-  const body = useRef(null);
+    request(`/api/flow/${index}?method=${method}${project}`).then((i) => live && setInfo(i)).catch((e) => live && setError(e.message));
+    return () => { live = false; };
+  }, [index, method, project]);
+  return { info: info?.index === index ? info : null, error };
+}
+
+const flowTabsOf = (info) => (info ? [
+  { id: "factors", label: `Characterisation · ${info.factors.length}` },
+  { id: "emitters", label: `${info.resource ? "Taken by" : "Emitted by"} · ${info.emitters}` },
+  info.same_substance > 0 && { id: "same", label: `Same substance · ${info.same_substance}` },
+  { id: "metadata", label: "Metadata" },
+].filter(Boolean) : []);
+
+// The title of a flow: its icon, name and compartment (what the flow is, as the name: plain text) and, if it carries
+// one, its location (a chip, as a process's); under it, its kind and unit
+function FlowHead({ info, kind = "Flow" }) {
+  if (!info) return html`<div class="info-title">…</div>`;
   return html`
-    <${PopupWindow} target=${target} win=${win} label="Elementary flow information" onClose=${onClose} onBack=${onBack}
-      onKeyDown=${popupKeys({ tabs, shown, setTab, body, onClose })}
+    <div class="info-title flow-title" style=${{ "--flow-color": FLOW_TYPES[info.resource ? "resource" : "emission"].color }}>
+      <${FlowIcon} resource=${info.resource} size=${13} /> ${info.name}<span class="flow-compartment">, ${info.place || "no compartment"}</span>
+      ${info.location && html` <span class="loc-chip" title="Location of the flow">${info.location}</span>`}</div>
+    <div class="muted">${kind} · ${info.resource ? "resource" : "emission"} · ${unit(info.unit)}</div>`;
+}
+
+// A table whose columns sort (click a header; again: the other way) and filter (right-click a header: a row of filter
+// boxes under the headers; a number column takes "> 10", "< 0.1" or a value it contains). ``columns``: { key, label,
+// num?, title?, value(row), cell(row) }; ``rowClass(row)``.
+function SortableTable({ columns, rows, initial, className = "", rowClass, rowKey }) {
+  const [sort, setSort] = useState(initial || { key: null, desc: false });
+  const [filters, setFilters] = useState(null);  // null: no filter row; else { key: text }
+  const passes = (c, r) => {
+    const text = (filters?.[c.key] || "").trim().toLowerCase();
+    if (!text) return true;
+    const v = c.value(r);
+    const m = c.num && text.match(/^([<>]=?)\s*(-?[\d.eE+-]+)$/);
+    if (m) {
+      const x = Number(m[2]);
+      return { "<": v < x, "<=": v <= x, ">": v > x, ">=": v >= x }[m[1]];
+    }
+    return text.split(/\s+/).every((w) => String(v ?? "").toLowerCase().includes(w));
+  };
+  let shown = rows.filter((r) => columns.every((c) => passes(c, r)));
+  const by = columns.find((c) => c.key === sort.key);
+  if (by) {
+    const cmp = (a, b) => {
+      const x = by.value(a), y = by.value(b);
+      return by.num ? x - y : String(x ?? "").localeCompare(String(y ?? ""));
+    };
+    shown = [...shown].sort((a, b) => (sort.desc ? -cmp(a, b) : cmp(a, b)));
+  }
+  const click = (c) => setSort((s) => (s.key === c.key ? { key: c.key, desc: !s.desc } : { key: c.key, desc: !!c.num }));
+  return html`
+    <table class=${`flows sortable ${className}`}>
+      <thead>
+        <tr>${columns.map((c) => html`
+          <th class=${`${c.num ? "num" : ""} ${sort.key === c.key ? "sorted" : ""}`} title=${`${c.title ? `${c.title}. ` : ""}Click: sort. Right-click: filter.`}
+            onClick=${() => click(c)} onContextMenu=${(e) => { e.preventDefault(); setFilters((f) => (f ? null : {})); }}>
+            ${c.label}${sort.key === c.key ? (sort.desc ? " ↓" : " ↑") : ""}</th>`)}</tr>
+        ${filters && html`<tr class="filter-row">${columns.map((c, i) => html`
+          <th><input value=${filters[c.key] || ""} placeholder=${c.num ? "> 0, < 10…" : "contains…"} aria-label=${`Filter ${c.label}`}
+            ref=${i === 0 ? (el) => el && !el.dataset.done && (el.dataset.done = "1", el.focus()) : undefined}
+            onInput=${(e) => setFilters((f) => ({ ...f, [c.key]: e.target.value }))}
+            onKeyDown=${(e) => { if (e.key === "Escape") { e.stopPropagation(); setFilters(null); } }} /></th>`)}</tr>`}
+      </thead>
+      <tbody>${shown.map((r) => html`
+        <tr key=${rowKey(r)} class=${rowClass?.(r) || ""}>${columns.map((c) => html`<td class=${c.num ? "num" : ""}>${c.cell ? c.cell(r) : c.value(r)}</td>`)}</tr>`)}
+      </tbody>
+    </table>
+    ${shown.length < rows.length && html`<p class="muted">${shown.length} of ${rows.length} shown · <button class="link" onClick=${() => setFilters(null)}>clear the filters</button></p>`}`;
+}
+
+// The panels of a flow (pop-up and tab): ``shown`` is the panel; ``onActivity(index)``: a process clicked,
+// ``onExchange(flow, activity)``: its exchange of this flow; ``onFlow(index)``: another flow of the same substance
+function FlowPanels({ info, shown, method, methods, scope, scoped, onActivity, onExchange, onFlow, body }) {
+  const [all, setAll] = useState(false);
+  const root = scoped && scope ? `&root=${scope.index}&amount=${scope.amount ?? 1}` : "";
+  const index = info.index;
+  const emitters = useGet(`/api/flow/${index}/emitters?limit=${all ? 2000 : 50}${root}`, shown === "emitters");
+  const same = useGet(`/api/flow/${index}/same-substance?method=${method}`, shown === "same");
+  useEffect(() => setAll(false), [index]);
+  const u = unit(info.unit);
+  const processCell = (p) => html`<td class="user" title=${`${p.reference_product} | ${p.name} | ${p.location}`}>
+    <a href="#" onClick=${(e) => { e.preventDefault(); onActivity(p.index); }}>${p.name}</a> <span class="loc-chip">${p.location}</span></td>`;
+  const error = emitters.error || same.error;
+  const d = info.description || {};
+  const parts = info.name_parts || { substance: info.name, qualifiers: [] };
+  return html`
+    <div class="info-body" ref=${body}>
+      ${error && html`<div class="error">${error}</div>`}
+      ${shown === "factors" && html`
+        <section>
+          ${info.factors.length === 0 ? html`<p class="text muted">No method of this model characterises this flow.</p>` : html`
+            <${SortableTable} className="factors" rowKey=${(f) => f.method} rowClass=${(f) => (f.method === method ? "current" : "")}
+              rows=${info.factors.map((f) => ({ ...f, label: methodLabel(methods[f.method]), unit: `${methods[f.method].unit} / ${u}` }))}
+              columns=${[
+                { key: "method", label: "Method", value: (f) => f.label, cell: (f) => html`<span title=${f.label}>${f.label}</span>` },
+                { key: "cf", label: "Factor", num: true, value: (f) => f.cf, cell: (f) => fmt(f.cf) },
+                { key: "unit", label: "Unit", value: (f) => f.unit },
+                { key: "rank", label: "Rank", num: true, title: "Rank of this flow by |factor| among the flows of the model the method characterises",
+                  value: (f) => f.rank, cell: (f) => html`<span class="muted">${ordinal(f.rank)} of ${f.of}</span>` },
+              ]} />`}
+        </section>`}
+      ${shown === "emitters" && html`
+        <section>
+          ${!emitters.data ? html`<${Waiting} text="Reading the exchanges…" />` : emitters.data.count === 0 ? html`<p class="text muted">No process of the database has an exchange of this flow.</p>` : html`
+            <table class="flows users plist emitters">
+              <thead><tr><th>Process</th>
+                <th class="num" title=${`Amount per unit of the process's product, as in its dataset`}>Per unit</th><th>Unit</th>
+                ${scoped && scope && html`<th class="num" title=${`In the supply chain of ${scope.name} (B·s)`}>In chain</th><th>Unit</th>
+                  <th class="pct" title="Share of the amount in the supply chain">Share</th>`}</tr></thead>
+              <tbody>${emitters.data.emitters.map((p) => html`
+                <tr key=${p.index} ...${dragProcess(p.index)} title="Right-click: its exchange of this flow"
+                  onContextMenu=${(e) => { e.preventDefault(); onExchange?.(index, p, e); }}>
+                  ${processCell(p)}
+                  <td class="num">${fmtAmount(p.per_unit)}</td><td class="muted">${u}/${unit(p.unit)}</td>
+                  ${scoped && scope && html`<td class="num">${p.amount ? fmtAmount(p.amount) : "–"}</td><td class="muted">${p.amount ? u : ""}</td>
+                    <td class="pct">${p.share ? pct(p.share) : ""}</td>`}
+                </tr>`)}
+              </tbody>
+            </table>
+            ${emitters.data.count > emitters.data.emitters.length && !all && html`
+              <button class="link" onClick=${() => setAll(true)}>Show all ${emitters.data.count}</button>`}`}
+        </section>`}
+      ${shown === "same" && html`
+        <section>
+          ${!same.data ? html`<${Waiting} text="…" />` : html`
+            <p class="muted">${info.name} in each compartment of the model, with its factor in ${methodLabel(methods[method])}: a factor in one
+              and none in another often means a method that does not cover a compartment. Click one to open it.</p>
+            <table class="flows same-substance">
+              <thead><tr><th>Compartment</th><th class="num" title="Processes with an exchange of it">processes</th>
+                <th class="num">factor</th><th>unit</th></tr></thead>
+              <tbody>${same.data.flows.map((f) => html`
+                <tr key=${f.flow} class=${f.current ? "current" : ""}>
+                  <td>${f.current ? f.compartment || "–" : html`<a href="#" onClick=${(e) => { e.preventDefault(); onFlow(f.flow); }}>${f.compartment || "–"}</a>`}</td>
+                  <td class="num">${f.emitters}</td>
+                  <td class=${`num ${f.cfs[0] === 0 ? "muted" : ""}`}>${f.cfs[0] === 0 ? "none" : fmt(f.cfs[0])}</td>
+                  <td class="muted">${f.cfs[0] === 0 ? "" : `${methods[method].unit} / ${u}`}</td>
+                </tr>`)}
+              </tbody>
+            </table>`}
+        </section>`}
+      ${shown === "metadata" && html`
+        <section>
+          <table class="kv">
+            <tr><th>Name</th><td>${info.name}</td></tr>
+            <tr><th>Substance</th><td>${parts.substance}${parts.qualifiers.length > 0 && html` <span class="muted">· ${parts.qualifiers.join(", ")}</span>`}
+              <span class="muted" title="Read from the structure of the name: the substance, then its qualifiers"> (from the name)</span></td></tr>
+            ${d.cas && html`<tr><th>CAS number</th><td class="mono">${d.cas}</td></tr>`}
+            ${d.formula && html`<tr><th>Formula</th><td class="mono">${d.formula}</td></tr>`}
+            ${d.synonyms && html`<tr><th>Synonyms</th><td>${d.synonyms.join("; ")}</td></tr>`}
+            <tr><th>Compartment</th><td>${info.compartment || "–"}</td></tr>
+            <tr><th>Subcompartment</th><td>${info.subcompartment || "–"}</td></tr>
+            <tr><th>Location</th><td>${info.location || html`<span class="muted">none (the flow carries no location)</span>`}</td></tr>
+            <tr><th>Unit</th><td>${info.unit}</td></tr>
+            <tr><th>Type</th><td>${info.resource ? "Resource (from nature)" : "Emission (to nature)"}</td></tr>
+            ${d.comment && html`<tr><th>Comment</th><td>${d.comment}</td></tr>`}
+            ${info.id && html`<tr><th>Database id</th><td class="mono">${info.id}</td></tr>`}
+          </table>
+          ${!d.cas && !d.synonyms && html`<p class="text muted">No CAS number or synonym: the biosphere record has none, or the model was
+            built before they were kept and is not opened from its Brightway project (rebuild it, or open it from <i>Projects</i>).</p>`}
+        </section>`}
+    </div>`;
+}
+const ordinal = (n) => `${n}${n % 100 >= 11 && n % 100 <= 13 ? "th" : ["th", "st", "nd", "rd"][n % 10] || "th"}`;
+
+function FlowTabsBar({ tabs, shown, setTab }) {
+  return html`<div class="tabs info-tabs" role="tablist" onKeyDown=${tabKeys(tabs.map((t) => t.id), shown, setTab)}>
+    ${tabs.map((t) => html`
+      <button role="tab" aria-selected=${t.id === shown} class=${t.id === shown ? "active" : ""} onClick=${() => setTab(t.id)}>${t.label}</button>`)}
+  </div>`;
+}
+
+// Space on a flow: the flow pop-up (no exchange data: that is i). ``target.flows``: several flows of one substance
+// (compartment chips). Drag it to a tab list (or *Open in new tab*) to make it a tab.
+function FlowInfoPopup({ target, win, method, methods, chartMethods, scope, onClose, onOpen, onExchange, onOpenTab, onBack }) {
+  const [current, setCurrent] = useState(target.flow);
+  const [tab, setTab] = useState(target.tab || null);
+  const scoped = !!scope;  // opened from a process tab: its panels are in that supply chain
+  useEffect(() => { setCurrent(target.flow); setTab(target.tab || null); }, [target.flow, target.x, target.y]);
+  const { info, error } = useFlowInfo(current, method);
+  const tabs = flowTabsOf(info);
+  const shown = tabs.some((t) => t.id === tab) ? tab : tabs[0]?.id;
+  const body = useRef(null);
+  const asTab = (place) => { onOpenTab({ flow: current, name: info.name, place: info.place, unit: info.unit, resource: info.resource, scope: scoped ? scope : null }, place); onClose(); };
+  return html`
+    <${PopupWindow} target=${target} win=${win} label="Flow" className="flow-popup" width=${720} onClose=${onClose} onBack=${onBack}
+      onDock=${info && onOpenTab ? asTab : null}
+      menu=${info && onOpenTab ? [{ label: "Open in new tab", title: "Open the flow in a new tab (or drag the pop-up by its header to a tab list or the edge of a pane)", run: () => asTab() }] : []}
+      onKeyDown=${(e) => {
+        // Ctrl/⌘+Enter: the flow in a new tab
+        if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && info && onOpenTab) { e.preventDefault(); e.stopPropagation(); asTab(); return; }
+        popupKeys({ tabs, shown, setTab, body, onClose })(e);
+      }}
       head=${html`
-        <div class="info-title">${info?.name ?? "…"} ${info && html`<span class="loc-chip">${compartment || "no compartment"}</span>`}</div>
-        ${info && html`<div class="muted">Elementary flow · ${unit(info.unit)} · ${fmt(info.cf)} ${methods[method].unit} / ${unit(info.unit)} in ${methodLabel(methods[method])}</div>`}
+        <${FlowHead} info=${info} />
         ${target.flows?.length > 1 && html`
           <div class="flow-compartments" role="group" aria-label="Compartment">${target.flows.map((f, i) => html`
             <button class=${`chip ${f === current ? "active" : ""}`} onClick=${() => setCurrent(f)}>${target.labels?.[i] || `flow ${i + 1}`}</button>`)}</div>`}`}>
       ${error && html`<div class="error">${error}</div>`}
       ${info && html`
-        <div class="tabs info-tabs" role="tablist">
-          ${tabs.map((t) => html`
-            <button role="tab" aria-selected=${t.id === shown} class=${t.id === shown ? "active" : ""}
-              onClick=${() => setTab(t.id)}>${t.label}</button>`)}
-        </div>
-        <div class="info-body" ref=${body}>
-          ${shown === "exchange" && info.exchanges.map(({ activity, exchanges }) => html`
-            <section key=${activity.index}>
-              <h4>In the dataset of <a href="#" onClick=${(e) => { e.preventDefault(); onOpen(activity.index); }}>${activity.name}</a>
-                <span class="loc-chip">${activity.location}</span></h4>
-              ${exchanges.length === 0 && html`<p class="text muted">${info.exchanges_available
-                ? "No exchange of this flow recorded in the dataset."
-                : "This model has no exchange metadata — rebuild it to see comments and uncertainty."}</p>`}
-              ${exchanges.map((e) => html`
-                <table class="kv"><tr><th>Amount</th><td>${fmtAmount(e.amount)} ${unit(e.unit || info.unit)} <span class="muted">as recorded in the dataset</span></td></tr></table>
-                ${hasExchangeMeta(e) ? html`<${ExchangeMeta} e=${e} />` : html`<p class="text muted">No comment or uncertainty recorded for this exchange.</p>`}`)}
-            </section>`)}
-          ${shown === "factors" && html`
-            <section>
-              <h4>Characterisation factors</h4>
-              ${info.factors.length === 0 ? html`<p class="text muted">No method of this model characterises this flow.</p>` : html`
-                ${info.factors.length > 8 && html`<input class="factor-filter" placeholder="Filter methods" value=${filter}
-                  onInput=${(e) => setFilter(e.target.value)} aria-label="Filter methods" />`}
-                <table class="flows factors">
-                  <thead><tr><th>Method</th><th class="num">factor</th></tr></thead>
-                  <tbody>${factors.map((f) => html`
-                    <tr key=${f.method} class=${f.method === method ? "current" : ""}>
-                      <td title=${methodLabel(methods[f.method])}>${methodLabel(methods[f.method])}</td>
-                      <td class="num">${fmt(f.cf)} ${methods[f.method].unit} / ${unit(info.unit)}</td>
-                    </tr>`)}
-                  </tbody>
-                </table>`}
-            </section>`}
-          ${shown === "metadata" && html`
-            <section>
-              <h4>Metadata</h4>
-              <table class="kv">
-                <tr><th>Name</th><td>${info.name}</td></tr>
-                <tr><th>Compartment</th><td>${info.compartment || "–"}</td></tr>
-                <tr><th>Subcompartment</th><td>${info.subcompartment || "–"}</td></tr>
-                <tr><th>Unit</th><td>${info.unit}</td></tr>
-                ${info.id && html`<tr><th>Database id</th><td class="mono">${info.id}</td></tr>`}
-              </table>
-            </section>`}
-        </div>`}
+        <${FlowTabsBar} tabs=${tabs} shown=${shown} setTab=${setTab} />
+        <${FlowPanels} info=${info} shown=${shown} method=${method} methods=${methods} chartMethods=${chartMethods} scope=${scope} scoped=${scoped}
+          onActivity=${onOpen} onFlow=${setCurrent} body=${body}
+          onExchange=${(f, p) => onExchange({ flow: f, activities: [p.index], exchange: true })} />`}
     <//>`;
 }
 
@@ -3791,6 +3941,93 @@ function CategoryPopup({ target, win, info, onClose, onBack, onFlow }) {
           ${data.unlinked && html`<${UnlinkedFactors} unlinked=${data.unlinked} both=${both} a=${a} b=${b} open=${outside} setOpen=${setOutside} words=${words} />`}`}
       </div>
     <//>`;
+}
+
+// i on a flow: its exchange in the dataset of the process emitting it (amount, comment, uncertainty, pedigree,
+// formula), one per process (a merged or grouped emitter) and per flow (a substance over several compartments)
+function FlowExchangePopup({ target, win, method, methods, onClose, onOpen, onFlow, onBack }) {
+  const flowIds = target.flows?.length ? target.flows : [target.flow];
+  const [found, setFound] = useState(null);
+  const [error, setError] = useState(null);
+  const body = useRef(null);
+  const activities = (target.activities || []).join(",");
+  useEffect(() => {
+    let live = true;
+    setFound(null);
+    Promise.all(flowIds.map((f) => request(`/api/flow/${f}?method=${method}&activities=${activities}`)))
+      .then((list) => live && setFound(list)).catch((e) => live && setError(e.message));
+    return () => { live = false; };
+  }, [flowIds.join(","), activities, method]);
+  const first = found?.[0];
+  const sections = (found || []).flatMap((f) => f.exchanges.filter((x) => x.amount !== 0 || x.exchanges.length).map((x) => ({ flow: f, ...x })));
+  const single = sections.length === 1 ? sections[0] : null;
+  return html`
+    <${PopupWindow} target=${target} win=${win} label="Exchange information" onClose=${onClose} onBack=${onBack}
+      onKeyDown=${popupKeys({ tabs: [], shown: null, setTab: () => {}, body, onClose, exchange: true })}
+      head=${html`
+        <div class="info-title flow-title">${first ? html`<${FlowIcon} resource=${first.resource} size=${13} />` : ""}
+          ${single ? html`Exchange of <a href="#" title="The flow (Space)" onClick=${(e) => { e.preventDefault(); onFlow({ flow: single.flow.index }); }}>${single.flow.name}</a>
+            in ${single.activity.name} <span class="loc-chip">${single.activity.location}</span>`
+            : first ? html`Exchanges of <a href="#" title="The flow (Space)" onClick=${(e) => { e.preventDefault(); onFlow({ flow: first.index, flows: target.flows, labels: target.labels }); }}>${first.name}</a>` : "…"}</div>
+        ${first && html`<div class="muted">Exchange · ${single ? single.flow.place || "no compartment" : `${sections.length} exchanges`} · ${unit(first.unit)}</div>`}`}>
+      ${error && html`<div class="error">${error}</div>`}
+      <div class="info-body" ref=${body}>
+        ${found && sections.length === 0 && html`<p class="text muted">No exchange of this flow in these datasets.</p>`}
+        ${sections.map(({ flow, activity, exchanges, amount }) => html`
+          <section key=${`${flow.index}-${activity.index}`}>
+            ${!single && html`<h4>${flow.place} in <a href="#" onClick=${(e) => { e.preventDefault(); onOpen(activity.index); }}>${activity.name}</a>
+              <span class="loc-chip">${activity.location}</span></h4>`}
+            <table class="kv"><tr><th>Amount</th><td>${fmtAmount(exchanges[0]?.amount ?? amount)} ${unit(exchanges[0]?.unit || flow.unit)}
+              <span class="muted">${exchanges[0] ? "as recorded in the dataset" : "per operation of the process (matrix)"}</span></td></tr></table>
+            ${exchanges.length === 0 ? html`<p class="text muted">${flow.exchanges_available
+              ? "No comment or uncertainty recorded for this exchange."
+              : "This model has no exchange metadata — rebuild it to see comments and uncertainty."}</p>`
+              : exchanges.map((e) => (hasExchangeMeta(e) ? html`<${ExchangeMeta} e=${e} />` : html`<p class="text muted">No comment or uncertainty recorded for this exchange.</p>`))}
+          </section>`)}
+      </div>
+    <//>`;
+}
+
+// A flow as a tab: the flow's panels in the pane, no tree. Its state: { flow: { flow, name, place, unit, resource, scope } }
+function FlowTab({ id, info: model, initial, visible, onSave, onTitle, onOpenTab }) {
+  const lens = useContext(LensContext);
+  const start = initial?.state?.flow || initial?.flow;
+  const [current, setCurrent] = useState(start.flow);
+  const [scope] = useState(start.scope || null);
+  const scoped = !!start.scope;
+  const [tab, setTab] = useState(start.tab || null);
+  const { info, error } = useFlowInfo(current, lens.method);
+  useEffect(() => {
+    if (!info) return;
+    const flow = { flow: current, name: info.name, place: info.place, unit: info.unit, resource: info.resource, scope: scoped ? scope : null, tab };
+    onSave(id, { flow });
+    onTitle(id, { name: info.name, location: info.place, flow: current, resource: info.resource });
+  }, [info, scoped, tab]);
+  const tabs = flowTabsOf(info);
+  const shown = tabs.some((t) => t.id === tab) ? tab : tabs[0]?.id;
+  const openActivity = (index) => request(`/api/activity/${index}?method=${lens.method}`).then((a) => onOpenTab(id, a)).catch(() => {});
+  return html`
+    <div class="flow-tab" style=${{ display: visible ? "" : "none" }}>
+      <div class="flow-tab-head"><${FlowHead} info=${info} /></div>
+      ${error && html`<div class="error">${error}</div>`}
+      ${info && html`
+        <${FlowTabsBar} tabs=${tabs} shown=${shown} setTab=${setTab} />
+        <${FlowPanels} info=${info} shown=${shown} method=${lens.method} methods=${model.methods} chartMethods=${lens.chartMethods}
+          scope=${scope} scoped=${scoped} onActivity=${openActivity} onFlow=${setCurrent} />`}
+    </div>`;
+}
+
+// A GET of the server for a component, when ``enabled``: { data, error } (the last answer stays while the next comes)
+function useGet(url, enabled = true) {
+  const [state, setState] = useState({ data: null, error: null, url: null });
+  useEffect(() => {
+    if (!enabled) return;
+    let live = true;
+    setState((s) => ({ ...s, error: null }));
+    request(url).then((data) => live && setState({ data, error: null, url }), (e) => live && setState((s) => ({ ...s, error: e.message })));
+    return () => { live = false; };
+  }, [url, enabled]);
+  return state.url === url ? state : { data: null, error: state.error };
 }
 
 // The processes in whose dataset a row (or a bundle's members) is an input: the nearest
@@ -4813,6 +5050,26 @@ function GroupPanel({ info, rules, setRules, selectedRow, view, setView, shared,
 
 // ---------------------------------------------------------------- global grouping panel
 // Right-click menu of a process listed in the side panel: go to it in the tree, or its details
+// A small right-click menu: ``open(e, items)``, items { label, run, title? }; ``element`` to render
+function useContextMenu() {
+  const [menu, setMenu] = useState(null);
+  useEffect(() => {
+    if (!menu) return;
+    const close = () => setMenu(null);
+    const onKey = (e) => e.key === "Escape" && close();
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("mousedown", close); document.removeEventListener("keydown", onKey); };
+  }, [menu]);
+  const open = (e, items) => { e.preventDefault(); e.stopPropagation?.(); setMenu({ x: e.clientX, y: e.clientY, items }); };
+  const element = menu && html`
+    <div class="menu context" style=${{ left: `${Math.min(menu.x, window.innerWidth - 200)}px`, top: `${Math.min(menu.y, window.innerHeight - 90)}px` }}
+         onMouseDown=${(e) => e.stopPropagation()}>
+      ${menu.items.map((it) => html`<button title=${it.title || ""} onClick=${() => { setMenu(null); it.run(menu); }}>${it.label}</button>`)}
+    </div>`;
+  return { open, element };
+}
+
 function useProcessMenu(goTo, onInfo, onExchange) {
   const [menu, setMenu] = useState(null);
   useEffect(() => {
@@ -5308,7 +5565,8 @@ function FlowContribution({ info, root, amount, method, onLocate, onInfo, onFlow
   // it: also its exchange of that flow (comment, uncertainty)
   const flowTarget = (it) => ({ flow: it.flows[0], flows: it.flows, labels: it.compartments || [it.compartment] });
   const menu = useProcessMenu(goTo, onInfo, (c, at) =>
-    onFlowInfo({ ...flowTarget(flow), flow: c.flow, activities: [c.index] }, { preventDefault() {}, clientX: at.x, clientY: at.y }));
+    onFlowInfo({ flow: c.flow, activities: [c.index], exchange: true }, { preventDefault() {}, clientX: at.x, clientY: at.y }));
+  const rowMenu = useContextMenu();
   const methodUnit = info.methods[method].unit;
   const total = result?.total || 0;
   const ofTotal = (v) => pct(total ? v / total : 0);
@@ -5331,7 +5589,12 @@ function FlowContribution({ info, root, amount, method, onLocate, onInfo, onFlow
           head=${html`${!keys.length ? "Flow" : withName ? "Substance" : keys.join(", ")} <span class="muted">· click for the processes emitting it</span>`}
           name=${(it) => html`${it.name} <span class="muted">${it.compartment}</span>`}
           columns=${[{ head: "amount", cell: (it) => (it.unit ? `${fmtAmount(it.amount)} ${unit(it.unit)}` : ""), csv: (it) => it.amount }]}
-          rowProps=${(it) => ({ title: "Click for the processes emitting it, right-click for its details", onContextMenu: (e) => onFlowInfo(flowTarget(it), e) })}
+          rowProps=${(it) => ({ title: "Click for the processes emitting it, right-click: the flow, or who emits it in this supply chain",
+            onContextMenu: (e) => rowMenu.open(e, [
+              { label: "Flow…", title: "The flow: its factors, who emits it, its intensity (Space)", run: (m) => onFlowInfo(flowTarget(it), { preventDefault() {}, clientX: m.x, clientY: m.y }) },
+              { label: "Emitted by…", title: "The processes with an exchange of it, in the supply chain of this process (i)",
+                run: (m) => onFlowInfo({ ...flowTarget(it), tab: "emitters" }, { preventDefault() {}, clientX: m.x, clientY: m.y }) },
+            ]) })}
           csv=${{ header: ["name", "compartment", "unit"], cells: (it) => [it.name, it.compartment, it.unit] }} />`}
       ${flow && html`
         <div class="contributors" ref=${contributorsBox}>
@@ -5376,6 +5639,7 @@ function FlowContribution({ info, root, amount, method, onLocate, onInfo, onFlow
             </div>`}
         </div>`}
       ${menu.element}
+      ${rowMenu.element}
     </div>`;
 }
 
@@ -5596,7 +5860,7 @@ const tabKeys = (ids, current, setCurrent) => (e) => {
 // methods and the group rules are chosen: *Processes*, *Methods* and *Rules* (the rule sets and the rules). The rules
 // shown are those of the tab in focus, which its own component puts in its slot (``groups-<tab id>``); in Compare mode
 // they are those of the workspace's set (``view``: a tab's view, where the colours picked for rules are kept).
-function LensPanel({ info, lens, tab, setTab, tabs, focusedTab, comparing, view, compareTabs, compare, setCompare, windows, onCollapse, adder, onCategory }) {
+function LensPanel({ info, lens, tab, setTab, tabs, focusedTab, comparing, view, compareTabs, flowTabs = [], compare, setCompare, windows, onCollapse, adder, onCategory }) {
   const methods = lens.method < info.methods.length;
   return html`
     <div class="tabs" role="tablist" onKeyDown=${tabKeys(["processes", "methods", "groups"], tab, setTab)}>
@@ -5606,7 +5870,7 @@ function LensPanel({ info, lens, tab, setTab, tabs, focusedTab, comparing, view,
       <button class="collapse-side" onClick=${onCollapse} title="Hide the panel (Ctrl/⌘ + ←)" aria-label="Hide the panel"><${SidePanelIcon} open left /></button>
     </div>
     <div class="panel" style=${{ display: tab === "processes" ? "" : "none" }}>
-      <${ProcessesPanel} tabs=${compareTabs} compare=${compare} setCompare=${setCompare} windows=${windows} />
+      <${ProcessesPanel} tabs=${compareTabs} flowTabs=${flowTabs} compare=${compare} setCompare=${setCompare} windows=${windows} />
     </div>
     <div class="panel methods-panel" style=${{ display: tab === "methods" ? "" : "none" }}>
       ${methods && html`<${MethodMenu} info=${info} method=${lens.method} setMethod=${lens.setMethod} chartMethods=${lens.chartMethods} setChartMethods=${lens.setChartMethods}
@@ -6010,13 +6274,21 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
   // The pop-up of a row: a process (or direct emissions: its emitter), a flow, or the
   // members of a bundle (others, merged, group); null when there is nothing to show
   // ``exchange``: a process's exchange (comment, uncertainty) rather than its activity
+  const flowMenu = useContextMenu();
   function infoTargetOf(row, exchange = false) {
     if (row.kind === "rest" || row.kind === "merged" || row.kind === "group") return { bundle: row.id };
-    if (row.kind === "flow") return { flow: row.flow.index, activities: (row.emitters || []).map((m) => m.index) };
+    if (row.kind === "flow") return { flow: row.flow.index, activities: (row.emitters || []).map((m) => m.index), exchange };
     return row.meta ? { index: row.meta.index, row, direct: row.kind === "direct", exchange } : null;
   }
   function showInfo(row, e, exchange = false) {
     e.preventDefault();
+    if (row.kind === "flow" && e.type === "contextmenu") {
+      flowMenu.open(e, [
+        { label: "Flow…", title: "The flow: its factors, who emits it, its intensity (Space)", run: (m) => openInfo({ ...infoTargetOf(row), x: m.x, y: m.y }) },
+        { label: "Exchange…", title: "Its exchange in the dataset of the process: amount, comment, uncertainty (i)", run: (m) => openInfo({ ...infoTargetOf(row, true), x: m.x, y: m.y }) },
+      ]);
+      return;
+    }
     const target = infoTargetOf(row, exchange);
     if (target) openInfo({ ...target, x: e.clientX, y: e.clientY });
   }
@@ -6368,8 +6640,12 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
           : { index: part.index, row: null, parents: suppliedTo(bundle, rowsById) })} />`;
     if (t.category !== undefined) return html`<${CategoryPopup} ...${common} info=${info}
         onFlow=${(next) => follow(next)} />`;
-    if (t.flow !== undefined) return html`<${FlowInfoPopup} ...${common} method=${t.method ?? method} methods=${info.methods}
-        onOpen=${(index) => follow({ index, row: null })} />`;
+    if (t.flow !== undefined && t.exchange) return html`<${FlowExchangePopup} ...${common} method=${method} methods=${info.methods}
+        onOpen=${(index) => follow({ index, row: null })} onFlow=${(next) => follow(next)} />`;
+    if (t.flow !== undefined) return html`<${FlowInfoPopup} ...${common} method=${t.method ?? method} methods=${info.methods} chartMethods=${chartMethods}
+        scope=${root && !embedded ? { index: root.index, name: root.name, location: root.location, amount } : t.scope || null}
+        onOpen=${(index) => follow({ index, row: null })} onExchange=${(next) => follow(next)}
+        onOpenTab=${embedded ? null : (f, place) => onOpenTab(id, f, place)} />`;
     if (t.bundle) return null;
     return html`<${InfoPopup} ...${common} model=${info} method=${method} methodInfo=${methodInfo} rootImpact=${rootImpact} rowsById=${rowsById}
         onUseAsRoot=${selectRoot} onOpenTab=${(r, place) => onOpenTab(id, r, place)} root=${root} amount=${amount}
@@ -6424,6 +6700,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
                 onUngroup=${ungroup} onRegroup=${regroup} ungroupable=${ungroupable} groupLocked=${groupLocked} onMergeGroup=${(r) => mergeRows([r])} onUnpin=${unpin} onPin=${pinSelected} onMoveToOthers=${moveSelectedToOthers} onInfo=${showInfo} onUnmerge=${unmerge} view=${view}
                 orientation=${orientation} setOrientation=${setOrientation} cycles=${cycles} setCycles=${setCycles} sankey=${display === "sankey"} focus=${focus} />`}
           ${popups.map(renderPopup)}
+          ${flowMenu.element}
           ${selection.size > 1 && html`
             <div class="selection-bar">
               <span>${selection.size} selected · o or × moves them to others</span>
@@ -6886,7 +7163,7 @@ function compareSelection(tabs, compare) {
 // row of the explorer or a panel to open it in a new tab. What each does is in its tooltip.
 // ``windows``: { panes, current: the pane used last, select(pane, tab), focus(pane), close(tab), closePane(pane), drag(tab),
 // move(tab, pane, zone, before), openProcess(index, pane, zone), reopen(at), history: [{ at, label }] of what was closed, dragging: tab }
-function ProcessesPanel({ tabs, compare, setCompare, windows }) {
+function ProcessesPanel({ tabs, flowTabs = [], compare, setCompare, windows }) {
   const { labels, fullLabels, common, chosen, baseline } = compareSelection(tabs, compare);
   const [over, setOver] = useState(null);  // where a drop would go: { pane, before } or { fresh: true }
   const set = (patch) => setCompare((c) => ({ ...c, ...patch }));
@@ -6938,7 +7215,18 @@ function ProcessesPanel({ tabs, compare, setCompare, windows }) {
       </div>
     </div>`;
   };
-  const groups = windows.panes.map((pane) => ({ pane, items: pane.tabs.map((id) => tabs.find((t) => t.id === id)).filter(Boolean) })).filter((g) => g.items.length);
+  // A flow tab: its icon and name; no tick or baseline (flows are not compared)
+  const flowRow = (t, pane) => html`<div key=${t.id} class="process-row flow-row ${pane.active === t.id ? "shown" : ""} ${over?.pane === pane.id && over.before === t.id ? "drop-before" : ""}"
+      draggable="true" onDragStart=${(e) => { e.dataTransfer.setData("text/plain", t.id); e.dataTransfer.effectAllowed = "move"; windows.drag(t.id); }}
+      onDragEnd=${() => { windows.drag(null); setOver(null); }} ...${target(pane, t.id)}>
+      <div class="compare-tab">
+        <${FlowIcon} resource=${t.flow.resource} />
+        <span class="name" title=${`Flow: ${t.flow.name} (${t.flow.place}). Click: show it. Drag: move it to another window.`} onClick=${() => showTab(pane, t)}>${t.flow.name}
+          <span class="loc">${t.flow.place}</span></span>
+        <button class="close-tab" onClick=${() => windows.close(t.id)} aria-label=${`Close ${t.flow.name}`} title="Close it (w); Undo brings it back">×</button>
+      </div>
+    </div>`;
+  const groups = windows.panes.map((pane) => ({ pane, items: pane.tabs.map((id) => tabs.find((t) => t.id === id) || flowTabs.find((t) => t.id === id)).filter(Boolean) })).filter((g) => g.items.length);
   return html`
     <div class="lens-menu" ...${target(windows.panes.find((q) => q.id === windows.current) || lastPane)}>
       ${common && html`<div class="muted compare-common" title=${common}>${common}</div>`}
@@ -6948,7 +7236,7 @@ function ProcessesPanel({ tabs, compare, setCompare, windows }) {
             : [{ label: "Nothing closed yet", disabled: true, run: () => {} }]} />
       </div>
       <div class="compare-tabs">
-        ${tabs.length === 0 && html`<div class="muted">No process yet.</div>`}
+        ${tabs.length === 0 && flowTabs.length === 0 && html`<div class="muted">No process yet.</div>`}
         ${groups.map(({ pane, items }, n) => html`
           <div key=${pane.id} class="window-group ${windows.panes.length > 1 && pane.id === windows.current ? "focused" : ""} ${over?.pane === pane.id && !over.before ? "drop-here" : ""}"
             ...${target(pane)}>
@@ -6956,7 +7244,7 @@ function ProcessesPanel({ tabs, compare, setCompare, windows }) {
               <span title="A window of the workspace: a split pane">Window ${n + 1}</span>
               <button class="close-tab" onClick=${() => windows.closePane(pane.id)} aria-label=${`Close window ${n + 1}`} title="Close this window and its tabs; Undo brings them back">×</button>
             </div>
-            ${items.map((t) => row(t, pane))}
+            ${items.map((t) => (t.flow ? flowRow(t, pane) : row(t, pane)))}
           </div>`)}
         ${dragging && html`<div class="window-new ${over?.fresh ? "drop-here" : ""}" ...${fresh}>Drop here: a new window</div>`}
       </div>
@@ -7167,13 +7455,15 @@ function PaneView({ pane, focused, multiple, titles, dragging, drop, setDrop, ac
       <div class="pane-tabs" role="tablist" data-pane=${pane.id} onDragOver=${over("center")} onDrop=${dropHere}>
         ${pane.tabs.map((id) => html`
           <div key=${id} role="tab" aria-selected=${id === pane.active} draggable="true"
-               class="pane-tab ${id === pane.active ? "active" : ""} ${drop?.pane === pane.id && drop.before === id ? "drop-before" : ""}"
+               class="pane-tab ${id === pane.active ? "active" : ""} ${titles[id]?.flow !== undefined ? "flow" : ""} ${drop?.pane === pane.id && drop.before === id ? "drop-before" : ""}"
+               style=${titles[id]?.flow !== undefined ? { "--flow-color": FLOW_TYPES[titles[id].resource ? "resource" : "emission"].color } : null}
                title=${titles[id] ? `${titles[id].name} (${titles[id].location})` : "New tab: choose a process"}
                onClick=${() => actions.select(pane.id, id)}
                onAuxClick=${(e) => e.button === 1 && actions.close(id)}
                onDragStart=${(e) => { e.dataTransfer.setData("text/plain", id); e.dataTransfer.effectAllowed = "move"; actions.drag(id); }}
                onDragEnd=${() => actions.drag(null)}
                onDragOver=${over("center", id)}>
+            ${titles[id]?.flow !== undefined && html`<${FlowIcon} resource=${titles[id].resource} />`}
             <span class="pane-tab-title">${title(id)}</span>
             ${titles[id] && html`<span class="loc">${titles[id].location}</span>`}
             <button class="close" aria-label="Close tab" title="Close (w, or middle-click)"
@@ -7542,7 +7832,8 @@ function App() {
         states.current = saved.tabs || {};
         const first = panesOf(saved.layout)[0];
         seed = states.current[first.active] || states.current[first.tabs[0]] || null;
-        setTitles(Object.fromEntries(Object.entries(states.current).map(([id, s]) => [id, s?.root ? { name: s.root.name, location: s.root.location, index: s.root.index } : null])));
+        setTitles(Object.fromEntries(Object.entries(states.current).map(([id, s]) => [id, s?.root ? { name: s.root.name, location: s.root.location, index: s.root.index }
+          : s?.flow ? { name: s.flow.name, location: s.flow.place, flow: s.flow.flow, resource: s.flow.resource } : null])));
         setLayout(saved.layout);
         setFocus(panesOf(saved.layout).some((p) => p.id === saved.focus) ? saved.focus : panesOf(saved.layout)[0].id);
       } else {
@@ -7563,7 +7854,13 @@ function App() {
   const activeTabOf = (paneId) => (layout ? panesOf(layout).find((p) => p.id === paneId)?.active : null);
   // The comparison, and the list of tabs of the left panel, read the states of the tabs: they are drawn again when one changes
   const onSave = (id, state) => { states.current[id] = state; persist(); if (watchStates.current) setTick((t) => t + 1); };
-  const onTitle = (id, root) => setTitles((t) => ({ ...t, [id]: root ? { name: root.name, location: root.location, index: root.index } : null }));
+  const onTitle = (id, root) => setTitles((t) => ({ ...t, [id]: root ? (root.flow !== undefined ? { name: root.name, location: root.location, flow: root.flow, resource: root.resource }
+    : { name: root.name, location: root.location, index: root.index }) : null }));
+  // A flow tab (its panels, no tree): its state, or how it starts, has ``flow``
+  const flowOf = (id) => states.current[id]?.flow || starts.current[id]?.state?.flow || starts.current[id]?.flow || null;
+  // What a new tab opened from tab ``from`` starts with: a flow, or a process with the settings of ``from``
+  const startFrom = (from, root) => (root?.flow !== undefined ? { flow: root }
+    : { inherit: flowOf(from) ? null : states.current[from], root });
   function openTab(paneId, start, zone = "center") {
     const id = newId("t");
     starts.current[id] = start;
@@ -7614,7 +7911,7 @@ function App() {
   const actions = {
     focus: (paneId) => paneId !== focus && setFocus(paneId),
     select: (paneId, id) => setLayout((l) => mapPanes(l, (p) => (p.id === paneId ? { ...p, active: id } : p))),
-    add: (paneId) => openTab(paneId, { inherit: states.current[activeTabOf(paneId)] }),
+    add: (paneId) => openTab(paneId, { inherit: flowOf(activeTabOf(paneId)) ? null : states.current[activeTabOf(paneId)] }),
     // Split = a copy of the active tab in a new pane (same process, to compare settings)
     split: (paneId, zone) => {
       const source = activeTabOf(paneId);
@@ -7664,7 +7961,7 @@ function App() {
     openProcess: async (index, paneId, zone = "center") => {
       try {
         const found = await request(`/api/activity/${index}?method=${lens.method}`);
-        openTab(paneId, { inherit: states.current[activeTabOf(paneId)], root: found }, zone);
+        openTab(paneId, startFrom(activeTabOf(paneId), found), zone);
       } catch { /* not a process of this database */ }
     },
     reopen: (at) => reopenClosed(at),
@@ -7767,6 +8064,8 @@ function App() {
   const focusedTab = activeTabOf(focus);
   const compareTabs = allTabs.filter((id) => states.current[id]?.root).map((id) => ({ id, state: states.current[id], title: titles[id] }));
   const sideShown = sideWidthFor(sideWidth), leftShown = leftWidthFor(leftWidth);
+  // The Processes panel lists the flow tabs too (with their icon; they are not compared)
+  const flowTabs = allTabs.filter((id) => flowOf(id)).map((id) => ({ id, flow: flowOf(id), title: titles[id] }));
   function startSideResize(e) {
     e.preventDefault();
     const start = e.clientX, width = sideShown;
@@ -7785,23 +8084,25 @@ function App() {
   }
   // The search of the top bar: the process becomes the process of the tab in focus, or opens in a new tab
   const pickRoot = (r, inTab) => {
-    if (inTab) openTab(focus, { inherit: states.current[focusedTab], root: r });
-    else ROOT_SETTERS[focusedTab]?.(r);
+    if (inTab || !ROOT_SETTERS[focusedTab] || flowOf(focusedTab)) openTab(focus, startFrom(focusedTab, r));
+    else ROOT_SETTERS[focusedTab](r);
   };
   const renderPane = (pane) => html`
     <${PaneView} key=${pane.id} pane=${pane} focused=${pane.id === focus} multiple=${allTabs.length > 1 && panesOf(layout).length > 1}
       titles=${titles} dragging=${dragging} drop=${drop} setDrop=${setDrop} actions=${actions}>
-      ${pane.tabs.map((id) => html`
+      ${pane.tabs.map((id) => flowOf(id) ? html`
+        <${FlowTab} key=${id} id=${id} info=${info} initial=${initialOf(id)} visible=${id === pane.active} onSave=${onSave} onTitle=${onTitle}
+          onOpenTab=${(from, root, place) => openTab(place?.pane ?? paneOfTab(layout, from).id, startFrom(from, root), place?.zone)} />` : html`
         <${FUView} key=${id} id=${id} info=${info} initial=${initialOf(id)} visible=${id === pane.active}
           onSave=${onSave} onTitle=${onTitle} onCollapseSide=${() => setSideOpen(false)}
           onNewTab=${(from) => actions.add(paneOfTab(layout, from).id)} onCloseTab=${(from) => actions.close(from)}
-          onOpenTab=${(from, root, place) => openTab(place?.pane ?? paneOfTab(layout, from).id, { inherit: states.current[from], root }, place?.zone)} />`)}
+          onOpenTab=${(from, root, place) => openTab(place?.pane ?? paneOfTab(layout, from).id, startFrom(from, root), place?.zone)} />`)}
     <//>`;
   return html`
     <${EditorContext.Provider} value=${editor}>
     <${LensContext.Provider} value=${lensApi}>
     <div class=${`app ${stale ? "stale" : ""} ${editing ? "editing" : ""} ${comparing ? "comparing" : ""} ${showStaged ? "has-staged" : ""}`}>
-      ${topBar(comparing ? null : html`<${FunctionalUnit} root=${focusedRoot} fields=${info.query_fields} onSelect=${pickRoot} />`)}
+      ${topBar(comparing ? null : html`<${FunctionalUnit} root=${focusedRoot?.flow !== undefined ? null : focusedRoot} fields=${info.query_fields} onSelect=${pickRoot} />`)}
       ${showStaged && html`
         <div class="staged-warning" role="status">
           <span>⚠ ${pending.length} staged change${pending.length === 1 ? "" : "s"} not applied to the project yet.</span>
@@ -7811,13 +8112,13 @@ function App() {
         ${!leftOpen && html`<button class="side-reopen left" onClick=${() => setLeftOpen(true)} title="Show the Processes, Methods and Rules panel (Ctrl/⌘ + ←)" aria-label="Show the Processes, Methods and Rules panel"><${SidePanelIcon} left /></button>`}
         <aside class="leftbar" style=${{ width: `${leftShown}px`, display: leftOpen ? "" : "none" }}>
           <${LensPanel} info=${info} lens=${lensApi} tab=${leftTab} setTab=${setLeftTab} tabs=${allTabs} focusedTab=${focusedTab} comparing=${comparing}
-            view=${TAB_API[focusedTab] || Object.values(TAB_API)[0]} compareTabs=${compareTabs} compare=${compare} setCompare=${setCompare} onCollapse=${() => setLeftOpen(false)}
+            view=${TAB_API[focusedTab] || Object.values(TAB_API)[0]} compareTabs=${compareTabs} flowTabs=${flowTabs} compare=${compare} setCompare=${setCompare} onCollapse=${() => setLeftOpen(false)}
             adder=${origin && DATABASE ? { origin, onAdded: () => request("/api/info").then((i) => { clearAnswers(); setInfo(i); }).catch((e) => setError(e.message)) } : null}
             onCategory=${(category, x, y) => CATEGORY_OPENERS[focusedTab]?.(category, x, y)}
             windows=${{ panes: panesOf(layout), current: focus, select: actions.select, focus: actions.focus, close: actions.close, drag: actions.drag, move: actions.move,
               closePane: actions.closePane, openProcess: actions.openProcess, reopen: actions.reopen, dragging,
               history: closedStack.current.map((list, at) => {
-                const roots = list.map((snap) => snap.state?.root).filter(Boolean);
+                const roots = list.map((snap) => snap.state?.root || (snap.state?.flow && { name: snap.state.flow.name, location: snap.state.flow.place })).filter(Boolean);
                 return { at, label: list.length > 1 ? `${list.length} tabs: ${roots.map((r) => r.name).join(", ")}` : roots[0] ? `${roots[0].name} (${roots[0].location})` : "An empty tab" };
               }).reverse() }} />
         </aside>

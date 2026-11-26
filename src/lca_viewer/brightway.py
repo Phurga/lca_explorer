@@ -312,6 +312,12 @@ def from_brightway(project: str, database: str, methods: list[tuple], log=None) 
             "name": [flow_records[i].get("name") for i in flow_ids],
             "categories": [tuple(flow_records[i].get("categories") or ()) for i in flow_ids],
             "unit": [flow_records[i].get("unit") for i in flow_ids],
+            # the metadata of a flow (its pop-up): what the biosphere record has, if anything
+            "location": [flow_records[i].get("location") for i in flow_ids],
+            "cas": [flow_records[i].get("CAS number") for i in flow_ids],
+            "formula": [flow_records[i].get("formula") or flow_records[i].get("chemical formula") for i in flow_ids],
+            "synonyms": [tuple(flow_records[i].get("synonyms") or ()) for i in flow_ids],
+            "comment": [flow_records[i].get("comment") for i in flow_ids],
         }
     )
 
