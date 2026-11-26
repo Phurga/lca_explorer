@@ -354,7 +354,8 @@ mkdir -p data/brightway && export BRIGHTWAY2_DIR=$PWD/data/brightway
 lca-viewer serve --open
 ```
 
-The app opens in your browser at **http://localhost:8765**; stop it with Ctrl+C. It starts with no database:
+The app opens in your browser at **http://localhost:8765** (or 8766, 8767… if another program already
+uses that port: the terminal says which); stop it with Ctrl+C. It starts with no database:
 load one from **Projects**, or import one with **+ Add database** (see above). Next time, only this step is
 needed, in a terminal where the `lca_viewer` environment is active.
 

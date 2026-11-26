@@ -67,6 +67,37 @@ def _per_model(values, n: int, name: str) -> list:
     return values
 
 
+DEFAULT_PORT = 8765
+
+
+def _port_free(host: str, port: int) -> bool:
+    """Whether a server can listen on ``host:port`` now (no SO_REUSEADDR: on Windows it would let
+    the test bind succeed on a port another program listens on)."""
+    import socket
+
+    with socket.socket(socket.AF_INET6 if ":" in host else socket.AF_INET) as s:
+        try:
+            s.bind((host, port))
+        except OSError:
+            return False
+    return True
+
+
+def _choose_port(host: str, port: int | None) -> int:
+    """The port asked for, or else the first free one from :data:`DEFAULT_PORT` (another program,
+    e.g. a mail client's add-on, may already use it)."""
+    if port is not None:
+        if not _port_free(host, port):
+            raise SystemExit(f"Port {port} is already used by another program: choose another with --port")
+        return port
+    for candidate in range(DEFAULT_PORT, DEFAULT_PORT + 50):
+        if _port_free(host, candidate):
+            if candidate != DEFAULT_PORT:
+                print(f"Port {DEFAULT_PORT} is already used by another program, using {candidate}")
+            return candidate
+    raise SystemExit(f"No free port from {DEFAULT_PORT} to {DEFAULT_PORT + 49}: choose one with --port")
+
+
 def init_brightway() -> None:
     """Brightway's data folder, created with a ``default`` project the first time the app runs (as
     Brightway itself would), in a separate process: the server never imports bw2data."""
@@ -95,6 +126,7 @@ def serve(args) -> None:
     import uvicorn
 
     init_brightway()
+    args.port = _choose_port(args.host, args.port)
 
     if args.model:
         n = len(args.model)
@@ -433,7 +465,8 @@ def main(argv=None) -> None:
     p.add_argument("--default-root", action="append",
                    help='Process shown at start, as "activity name|location"; once, or once per --model')
     p.add_argument("--host", default="127.0.0.1")
-    p.add_argument("--port", type=int, default=8765)
+    p.add_argument("--port", type=int,
+                   help=f"Port to serve on (default: {DEFAULT_PORT}, or the next free one if another program uses it)")
     p.add_argument("--reload", action="store_true", help="Restart automatically when the Python code changes (development)")
     p.add_argument("--open", action="store_true", help="Open the app in the browser once it is ready")
     p.set_defaults(func=serve)
