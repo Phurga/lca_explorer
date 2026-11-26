@@ -591,12 +591,19 @@ table.flow-results tfoot th { font-weight: 600; border-bottom: none; }
 .method-select select { min-width: 0; max-width: 280px; }
 .coverage-summary { margin: 6px 0; }
 .coverage-summary .gap-count, table.coverage-numbers .gap-count { color: var(--accent); }
-table.coverage-table { width: 100%; border-collapse: collapse; }
-table.coverage-table td, table.coverage-table th { padding: 2px 6px; }
-table.coverage-table td.num { text-align: right; white-space: nowrap; }
-table.coverage-table tr.unit-head th { text-align: left; padding-top: 10px; border-bottom: 1px solid var(--border); }
-table.coverage-table tr.gap td { background: color-mix(in srgb, var(--accent) 12%, transparent); }
-table.coverage-table tr.more td { color: var(--muted); }
+/* The coverage lists: a table like the tree's, one foldable row per unit */
+.flow-search { min-width: 0; width: 180px; }
+.coverage-tree { flex: none; overflow: visible; background: none; }
+.coverage-tree table { min-width: 0; }
+.coverage-tree tr.unit-row { cursor: pointer; }
+.coverage-tree tr.unit-row td { font-weight: 500; }
+.coverage-tree tr.unit-row .loc { font-weight: 400; }
+.coverage-tree tr.unit-row .label { flex: none; }
+.coverage-tree tr.unit-row .loc { overflow: hidden; text-overflow: ellipsis; }
+.coverage-tree td.gap-count { color: var(--accent); font-family: inherit; }
+.coverage-tree tr.gap td { background-color: color-mix(in srgb, var(--accent) 12%, transparent); }
+.coverage-tree tr.gap:hover td { background-color: color-mix(in srgb, var(--accent) 20%, transparent); }
+.coverage-tree tr.more td { color: var(--muted); font-size: 12px; padding-left: 42px; }
 .load-dialog.coverage-dialog { width: min(880px, 100%); max-height: 92vh; }
 table.coverage-numbers { border-collapse: collapse; margin: 8px 0; }
 table.coverage-numbers td { padding: 2px 6px; vertical-align: top; }

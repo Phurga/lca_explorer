@@ -145,11 +145,14 @@ def test_api_coverage(model):
     client = TestClient(create_app(model))
     body = client.get("/api/methods/0/coverage?reference=2").json()
     assert body["linked"] == 5 and body["inventory"] == 6 and body["characterised_unused"] == 1
-    assert [it["name"] for it in body["uncharacterised"]["items"]] == ["Water", "Nitrate"]
+    units = body["uncharacterised"]["units"]
+    assert [(g["unit"], [it["name"] for it in g["items"]]) for g in units] in (
+        [("cubic meter", ["Water"]), ("kilogram", ["Nitrate"])], [("kilogram", ["Nitrate"]), ("cubic meter", ["Water"])])
     assert body["uncharacterised"]["gaps"] == 0
     water = client.get("/api/methods/1/coverage?reference=0").json()["uncharacterised"]
     assert water["gaps"] == 4  # CO2 ×2, N2O, methane: characterised by climate change; nitrate is not
-    assert [it["name"] for it in water["items"]][-1] == "Nitrate"
+    kg = water["units"][0]
+    assert kg["unit"] == "kilogram" and kg["gaps"] == 4 and [it["name"] for it in kg["items"]][-1] == "Nitrate"
     assert body["unlinked"]["count"] == 3 and body["unlinked"]["same"] == 1
     first = body["unlinked"]["items"][0]
     assert first["name"] == "Sulfur hexafluoride" and first["match"] is None and first["compartment"] == "air"
@@ -157,3 +160,17 @@ def test_api_coverage(model):
     assert co2["match"]["flow"] == 0
     assert TestClient(create_app(_model(unlinked=False))).get("/api/methods/0/coverage").json()["unlinked"] is None
     assert client.get("/api/methods/7/coverage").status_code == 404
+
+
+def test_api_search_and_unit_totals(model):
+    client = TestClient(create_app(model))
+    body = client.post("/api/flows/uncharacterised", json={"root": 0, "method": 1, "reference": 0, "query": "CARBON air"}).json()
+    assert body["count"] == 4 and body["gaps"] == 3 and body["matched"] == 2  # counts of all, the units of the matches
+    kg = body["units"][0]
+    assert kg["count"] == 2 and kg["gaps"] == 2 and kg["total"] == pytest.approx(2.0)
+    assert {it["name"] for it in kg["items"]} == {"Carbon dioxide, fossil"}
+    assert client.post("/api/flows/uncharacterised", json={"root": 0, "method": 1, "query": "zinc"}).json()["units"] == []
+    found = client.get("/api/methods/0/coverage", params={"query": "hexafluoride"}).json()
+    assert found["unlinked"]["count"] == 3 and found["unlinked"]["matched"] == 1
+    assert [it["name"] for it in found["unlinked"]["items"]] == ["Sulfur hexafluoride"]
+    assert found["uncharacterised"]["matched"] == 0 and found["uncharacterised"]["units"] == []

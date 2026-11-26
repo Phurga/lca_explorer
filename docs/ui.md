@@ -245,8 +245,9 @@ API in `src/lca_viewer/server.py`.
   so a model built before says to rebuild it), each with the flow of the model that has the same name and
   compartments (*same flow, other id*: the method was made for another biosphere database or version) or the
   same name only, and the flows that processes exchange and it has **no factor** for, most emitting processes
-  first, with the *Compare with* reference of the *Uncharacterised* flows (its gaps first). API:
-  `GET /api/methods/{k}/coverage?reference=` (`analysis.method_coverage`). The round mark is the
+  first, by unit as in the *Uncharacterised* tab, with its *Compare with* reference (its gaps first) and its
+  flow search, which also filters the factors outside the model. API:
+  `GET /api/methods/{k}/coverage?reference=&query=` (`analysis.method_coverage`). The round mark is the
   **active method** (tree, charts, totals, comparison), the ticks the methods **shown
   together** (the *Several methods* chart, the *Multi indicator matrix*; default: the
   family of the method). *Rules* lists the **rule sets** (*New*, *Copy*, *Rename*,
@@ -554,17 +555,22 @@ API in `src/lca_viewer/server.py`.
     Right-click a substance or flow for its pop-up (below). API:
     `/api/flows`, `/api/flows/contributors` (`analysis.flow_contribution`,
     `flow_contributors`).
-    **Show: Contribution / Uncharacterised** (top of the panel). *Uncharacterised* lists the flows of the
-    same inventory that the active method has **no factor** for, which the score leaves out: one table per unit
-    (amounts in different units do not compare), the largest amount first, with how many processes of the
-    supply chain emit each one and how many methods of the model characterise it. **Compare with** picks a
-    reference method (e.g. the one a new method replaces; kept in `localStorage` by name, shared with the
-    coverage report): its factor is added as a column, and the flows it characterises, likely gaps of the
-    active method, come first and are highlighted, with their count in the summary. Right-click a flow for its
-    pop-up; *CSV* exports the list. API: `POST /api/flows/uncharacterised` (`analysis.uncharacterised`).
-    Decision: a switch in this panel rather than a panel of its own, since it reads the same inventory, and a
-    reference method chosen by the user rather than matched by category name, which differs between method
-    families.
+  - *Uncharacterised*: the flows of the same inventory that the active method has **no factor** for, which the
+    score leaves out. A table like the tree's: one foldable row per unit, named by what it measures (*Mass (kg)*,
+    *Radioactivity (kBq)*, *Land occupation (m2·a)*…; amounts in different units do not add up) with its number
+    of flows and their total, the flows under it, largest amount first, with how many processes of the supply
+    chain emit each one and how many methods of the model characterise it. Folded units stay folded from one
+    process to the next (`localStorage`); while searching, every unit is open. **Search the flows** keeps the
+    flows whose name or compartment has all the words typed (on the server, so the flows past the first 200 of
+    a unit are found too). **Compare with** picks a reference method among those **ticked in the Methods
+    panel** (e.g. the one a new method replaces; kept in `localStorage` by name, shared with the coverage
+    report, and back when it is ticked again): its factor is added as a column, and the flows it characterises,
+    likely gaps of the active method, come first and are highlighted, with their count in the summary and on
+    each unit's row. Right-click a flow for its pop-up; *CSV* exports the list. API: `POST
+    /api/flows/uncharacterised` (`analysis.uncharacterised`; `query` for the search). Decisions: a tab of its
+    own rather than a switch in *Flow contribution* (first version), as it answers another question (what the
+    score leaves out, not what makes it); a reference among the ticked methods, which keeps the list short, and
+    chosen by the user rather than matched by category name, which differs between method families.
   - *Rules* (in the **left panel**, *Rules*, not in the side panel): active rules (reorder, **edit** — the form below is filled in with
     the rule, with *Save rule* and *Cancel*; a group made from selected rows or a nested
     query can only be renamed —, remove; the eye switches a rule off and on without losing

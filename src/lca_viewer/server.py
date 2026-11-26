@@ -175,6 +175,8 @@ class UncharacterisedRequest(BaseModel):
     """A method whose factors are shown next to the flows (e.g. the one the new method replaces)."""
     limit: int = 200
     """At most this many flows per unit (the largest amounts)."""
+    query: str = ""
+    """Only the flows whose name or compartment has all these words."""
 
 
 class ProcessFlowsRequest(BaseModel):
@@ -783,14 +785,20 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
         return {"flow": int(f), "name": flows["name"].iat[f], "compartment": flows["place"].iat[f],
                 "unit": flows["unit"].iat[f]}
 
-    def by_unit(items: list[dict], key, limit: int) -> list[dict]:
+    def matching(items: list[dict], query: str) -> list[dict]:
+        """The ``items`` whose name and compartment have all the words of ``query`` (any case)."""
+        words = query.lower().split()
+        return [it for it in items if all(w in f"{it['name']} {it['compartment']}".lower() for w in words)] if words else items
+
+    def by_unit(items: list[dict], key, limit: int, total: bool = False) -> list[dict]:
         """``items`` in one list per unit (amounts in different units do not compare), largest |key| first in each,
         those the reference method characterises (likely gaps) before the others; the units with the most flows
-        first."""
+        first. ``total``: with the sum of ``key`` over each unit's items."""
         units: dict[str, list[dict]] = {}
         for it in items:
             units.setdefault(it["unit"] or "", []).append(it)
-        out = [{"unit": u, "count": len(rows),
+        out = [{"unit": u, "count": len(rows), "gaps": sum(1 for it in rows if it.get("reference_cf")),
+                **({"total": float(sum(key(it) for it in rows))} if total else {}),
                 "items": sorted(rows, key=lambda it: (not it.get("reference_cf"), -abs(key(it))))[:limit]}
                for u, rows in units.items()]
         return sorted(out, key=lambda g: -g["count"])
@@ -805,15 +813,18 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
                   "methods": int(found["methods"][i]),
                   **({"reference_cf": float(found["reference_cf"][i])} if req.reference is not None else {})}
                  for i, f in enumerate(found["flows"])]
-        return {"method": req.method, "reference": req.reference,
+        shown = matching(items, req.query)
+        return {"method": req.method, "reference": req.reference, "query": req.query,
                 "inventory": found["inventory"], "characterised": found["characterised"], "count": len(items),
-                "gaps": sum(1 for it in items if it.get("reference_cf")),
-                "units": by_unit(items, lambda it: it["amount"], req.limit)}
+                "gaps": sum(1 for it in items if it.get("reference_cf")), "matched": len(shown),
+                "units": by_unit(shown, lambda it: it["amount"], req.limit, total=True)}
 
     @app.get("/api/methods/{method}/coverage")
-    def coverage(method: int, reference: int | None = None, limit: int = 300):
+    def coverage(method: int, reference: int | None = None, limit: int = 300, query: str = ""):
         """How the method covers the flows of the whole model: its factors on flows of the model, the flows activities
-        exchange that it has no factor for (most emitters first) and its factors on flows outside the model."""
+        exchange that it has no factor for (by unit, those the reference characterises then the most emitted first, at
+        most ``limit`` per unit) and its factors on flows outside the model (``limit`` of them, largest first). ``query``:
+        only the flows whose name or compartment has all these words."""
         check(method=[method, reference])
         found = method_coverage(model, method, reference)
         missing = found["uncharacterised"]
@@ -821,21 +832,26 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
                   **({"reference_cf": float(missing["reference_cf"][i])} if reference is not None else {})}
                  for i, f in enumerate(missing["flows"])]
         gaps = sum(1 for it in items if it.get("reference_cf"))
-        items = sorted(items, key=lambda it: not it.get("reference_cf"))[:limit]  # likely gaps first (stable sort)
+        shown = matching(items, query)
         unlinked = None
         if found["unlinked"] is not None:
             table = found["unlinked"]
+            words = query.lower().split()
+            text = (table["name"].astype(str) + " " + table["categories"].map(lambda c: ", ".join(str(x) for x in c if x))).str.lower()
+            shown_unlinked = table[text.map(lambda t: all(w in t for w in words))] if words else table
             unlinked = {
                 "count": int(len(table)),
                 "same": int((table["match_kind"] == "same").sum()),
+                "matched": int(len(shown_unlinked)),
                 "items": [{"name": r.name, "compartment": ", ".join(str(c) for c in r.categories if c), "unit": r.unit,
                            "cf": float(r.cf), "id": int(r.id) if r.id >= 0 else None, "match_kind": r.match_kind,
                            "match": flow_row(int(r.match)) if r.match >= 0 else None}
-                          for r in table.sort_values("cf", key=lambda c: -c.abs()).head(limit).itertuples(index=False)],
+                          for r in shown_unlinked.sort_values("cf", key=lambda c: -c.abs()).head(limit).itertuples(index=False)],
             }
-        return {"method": method, "reference": reference, "linked": found["linked"],
+        return {"method": method, "reference": reference, "query": query, "linked": found["linked"],
                 "characterised_unused": found["characterised_unused"], "inventory": found["inventory"],
-                "uncharacterised": {"count": int(len(missing["flows"])), "gaps": gaps, "items": items},
+                "uncharacterised": {"count": int(len(missing["flows"])), "gaps": gaps, "matched": len(shown),
+                                    "units": by_unit(shown, lambda it: it["emitters"], limit)},
                 "unlinked": unlinked}
 
     @app.post("/api/flows/of-process")
