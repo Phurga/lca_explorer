@@ -3665,9 +3665,9 @@ function CategoryPopup({ target, win, info, onClose, onBack, onFlow }) {
   const flowTarget = (it) => ({ flow: it.flows[0], flows: it.flows, labels: it.compartments, method });
   const choices = useMemo(() => compareChoices(methods, method), [methods, method]);
   const csv = () => downloadCsv(`category-${methodLabel(a).replace(/[^\w-]+/g, "_")}.csv`,
-    ["name", "compartment", "unit", both ? "factor_a" : "factor", ...(both ? ["factor_b", "ratio_b_a"] : ["relative"]), "emitters"],
+    ["name", "compartment", "unit", both ? "factor_ref" : "factor", ...(both ? ["factor_comp", "ratio_comp_ref"] : ["relative"]), "emitters"],
     items.map((it) => [it.name, it.compartment, it.unit, it.a.max, ...(both ? [it.b.max, it.ratio ?? ""] : [it.a.rel]), it.emitters]),
-    [`# ${both ? `A: ${methodTitle(a)} (${a.unit}); B: ${methodTitle(b)} (${b.unit})` : `${methodTitle(a)} (${a.unit})`}`, "# whole database"]);
+    [`# ${both ? `ref.: ${methodTitle(a)} (${a.unit}); comp.: ${methodTitle(b)} (${b.unit})` : `${methodTitle(a)} (${a.unit})`}`, "# whole database"]);
   const factorUnit = (m, it) => `${m.unit} / ${unit(it.unit)}`;
   const columns = both ? 5 : 4;
   // in a section, the row says what the header does not
@@ -3681,16 +3681,19 @@ function CategoryPopup({ target, win, info, onClose, onBack, onFlow }) {
     const lo = Math.min(...v), hi = Math.max(...v);
     return lo === hi ? fmt(hi) : `${fmt(lo)} … ${fmt(hi)}`;
   };
-  const legend = (letter, m) => html`
-    <div class="category-legend"><span class=${`chip side side-${letter.toLowerCase()}`}>${letter}</span> ${methodTitle(m)}${!methodTitle(m).includes(m.unit) && html` <span class="muted">· ${m.unit}</span>`}</div>`;
+  // ref.: the method of the pop-up (its title); comp.: the one chosen in *Compare with*. Each name shows once, where it
+  // was chosen; their units show beside them and under the factor columns, flagged when they differ
+  const picked = compare !== null ? methods[compare] : null;
+  const otherUnit = !!picked && picked.unit !== a.unit;
+  const unitHead = (m) => html`<span class="col-unit">${m.unit}</span>`;
   return html`
     <${PopupWindow} target=${target} win=${win} label="Impact category" className="category-popup" width=${760} onClose=${onClose} onBack=${onBack}
       menu=${[{ label: "Export CSV", run: csv, title: "The rows of the table (all of them, filtered)" }]}
       onKeyDown=${popupKeys({ tabs: [], shown: null, setTab: () => {}, body, onClose })}
       head=${html`
         <div class="info-title"><span class="kind-mark category" title="Impact category: its elementary flows"><${CategoryIcon} /></span>
-          ${methodLabel(a)}</div>
-        ${both ? html`${legend("A", a)}${legend("B", b)}` : html`<div class="muted">${a.unit}</div>`}`}>
+          ${methodLabel(a)}${picked && html` <span class="role-tag ref" title="The reference: the method of this pop-up">ref.</span>`}</div>
+        <div class="muted">${a.unit}</div>`}>
       <div class="category-controls">
         <div class="view-group" role="group" aria-label="Organize by">
           <span class="view-group-label">Organize by</span>
@@ -3700,6 +3703,7 @@ function CategoryPopup({ target, win, info, onClose, onBack, onFlow }) {
           </span>
         </div>
         <label class="view-group compare-with">
+          ${picked && html`<span class="role-tag comp" title="The method compared with the reference">comp.</span>`}
           <span class="view-group-label">Compare with</span>
           <select value=${compare ?? ""} onChange=${(e) => setCompare(e.target.value === "" ? null : Number(e.target.value))} aria-label="Compare with another method">
             <option value="">—</option>
@@ -3708,9 +3712,11 @@ function CategoryPopup({ target, win, info, onClose, onBack, onFlow }) {
             ${choices.families.map(([family, list]) => html`<optgroup label=${family}>
               ${list.map((i) => html`<option value=${i}>${methods[i].name.slice(1).join(" | ") || family}</option>`)}</optgroup>`)}
           </select>
+          ${picked && html`<span class=${`category-unit ${otherUnit ? "differs" : ""}`}
+            title=${otherUnit ? `Not the unit of the reference (${a.unit}): comp. / ref. mixes units` : "Its unit, the same as the reference's"}>${picked.unit}</span>`}
         </label>
         <input class="category-filter" placeholder="Filter flows" value=${filter} onInput=${(e) => setFilter(e.target.value)} aria-label="Filter flows" />
-        <${InfoTip} label="About this table" text=${`The flows of this model that the method characterises, in the whole database. Relative: the factor over the largest of the method among the flows of the same unit. Emitters: the processes emitting (or taking) the flow directly. ${both ? "A is the method of this pop-up, B the one it is compared with; B / A: the ratio of their factors. " : ""}A factor of the method on a flow that no process emits is not listed. Right-click a flow for its details.`} />
+        <${InfoTip} label="About this table" text=${`The flows of this model that the method characterises, in the whole database. Relative: the factor over the largest of the method among the flows of the same unit. Emitters: the processes emitting (or taking) the flow directly. ${both ? "ref.: the method of this pop-up; comp.: the one it is compared with; comp. / ref.: the ratio of their factors (in their units). " : ""}A factor of the method on a flow that no process emits is not listed. Right-click a flow for its details.`} />
       </div>
       ${error && html`<div class="error">${error}</div>`}
       <div class="info-body" ref=${body}>
@@ -3719,9 +3725,9 @@ function CategoryPopup({ target, win, info, onClose, onBack, onFlow }) {
           <table class="flows category-table">
             <thead><tr>
               <th>${organize === "name" ? "Substance / compartment" : organize ? "Compartment / flow" : "Flow"}</th>
-              ${both ? html`<th class="num" title=${`${methodTitle(a)} (${a.unit})`}>factor <span class="chip side side-a">A</span></th>
-                  <th class="num" title=${`${methodTitle(b)} (${b.unit})`}>factor <span class="chip side side-b">B</span></th>
-                  <th class="num" title="Factor B over factor A">B / A</th>`
+              ${both ? html`<th class="num" title=${`${methodTitle(a)} (${a.unit})`}>ref.${unitHead(a)}</th>
+                  <th class="num" title=${`${methodTitle(b)} (${b.unit})`}>comp.${unitHead(b)}</th>
+                  <th class="num" title="The factor of comp. over that of ref.">comp. / ref.${b.unit !== a.unit && html`<span class="col-unit differs">${b.unit} / ${a.unit}</span>`}</th>`
                 : html`<th class="num">factor</th><th class="rel" title="Relative to the largest factor of the same unit">relative</th>`}
               <th class="num" title="Processes emitting it directly, in the whole database">emitters</th>
             </tr></thead>
@@ -3739,7 +3745,7 @@ function CategoryPopup({ target, win, info, onClose, onBack, onFlow }) {
                 ${both ? html`
                   <td class="num" title=${factorUnit(a, it)}>${it.only === "b" ? html`<span class="muted">–</span>` : fmt(it.a.max)}</td>
                   <td class="num" title=${factorUnit(b, it)}>${it.only === "a" ? html`<span class="muted">–</span>` : fmt(it.b.max)}</td>
-                  <td class="num">${it.only ? html`<span class=${`chip only only-${it.only}`}>only ${it.only.toUpperCase()}</span>` : it.ratio !== null ? fmt(it.ratio) : ""}</td>`
+                  <td class="num">${it.only ? html`<span class=${`chip only only-${it.only}`}>only ${it.only === "a" ? "ref." : "comp."}</span>` : it.ratio !== null ? fmt(it.ratio) : ""}</td>`
                 : html`
                   <td class="num" title=${factorUnit(a, it)}>${fmt(it.a.max)} <span class="muted">/ ${unit(it.unit)}</span></td>
                   <td class="rel"><span class="rel-bar" style=${{ width: `${Math.max(1, it.a.rel * 100)}%` }}></span></td>`}

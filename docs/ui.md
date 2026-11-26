@@ -545,8 +545,10 @@ API in `src/lca_viewer/server.py`.
   sections come in the order of their largest flow. Decision: organize rather than group, since summing factors makes
   no sense. A filter box, the first 300 flows then *Show all*, *Export CSV* in its ⋯ menu. **Compare with** (the
   methods of the same category name first, e.g. the climate change of another family or version, then by family)
-  names the two methods on two lines of the header, with an *A* and a *B* badge also on the columns: *factor A*,
-  *factor B*, *B / A* and *only A* / *only B* for the flows one method does not characterise. Right-click or
+  calls the method of the pop-up *ref.* (a tag by its title) and the chosen one *comp.* (a tag by the select, its
+  unit beside it): each name shows once, where it was chosen. Columns *ref.*, *comp.*, *comp. / ref.*, with their units
+  under the headers, and *only ref.* / *only comp.* for the flows one method does not characterise. When the units
+  differ (EF acidification in mol H+-Eq, CML in kg SO2-Eq), the unit of comp. and that of the ratio are flagged. Right-click or
   double-click a flow opens its pop-up, with the factor of this category in its header, and ← comes back. The pop-up
   has the amber colour of impact categories (a top border and the list icon), apart from processes. Only flows of the
   model are known: a factor on a flow that no process emits was dropped when the model was built (the response's
