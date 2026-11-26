@@ -838,7 +838,57 @@ function FunctionalUnit({ root, onSelect, fields }) {
     </div>`;
 }
 
-const openDatabase = (key) => { location.href = `/db/${encodeURIComponent(key)}/`; };
+// Started on your own computer (lca_explorer), the server stops with its last tab (see lifetime.py): each tab says it
+// is open, and closing one asks first. ``leaving``: the page goes to another of its own pages (no question then);
+// ``stopped``: the server is gone (no question either).
+let leaving = false, stopped = false;
+const goTo = (url) => { leaving = true; location.href = url; };
+const LIFETIME = fetch("/api/app").then((r) => (r.ok ? r.json() : {})).catch(() => ({}));
+const TAB = crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+LIFETIME.then(({ stops_with_browser }) => {
+  if (!stops_with_browser) return;
+  const alive = () => {
+    if (!stopped) fetch(`/api/tab/alive?tab=${TAB}`, { method: "POST" }).catch(() => { stopped = true; });
+  };
+  alive();
+  setInterval(alive, 20000);
+  addEventListener("pageshow", (e) => { if (e.persisted) { leaving = false; alive(); } });  // back from the history
+  addEventListener("pagehide", () => { if (!stopped) navigator.sendBeacon(`/api/tab/bye?tab=${TAB}`); });
+  // The browser's own question (its words: a page cannot choose them)
+  addEventListener("beforeunload", (e) => { if (!leaving && !stopped) { e.preventDefault(); e.returnValue = ""; } });
+});
+
+function Stopped({ waiting }) {
+  // Until the server is gone (it may finish a job first)
+  const [gone, setGone] = useState(false);
+  useEffect(() => {
+    const timer = setInterval(() => fetch("/api/app").catch(() => { setGone(true); clearInterval(timer); }), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  return html`
+    <div class="stopped">
+      <h1>LCA Explorer</h1>
+      ${gone ? html`<p>The app has stopped. You can close this tab.</p><p class="hint">Start it again with lca_explorer.</p>`
+        : html`<p>Stopping${waiting.length ? ` once ${waiting.join(", ")} finishes` : ""}…</p>`}
+    </div>`;
+}
+
+async function shutDown() {
+  if (!confirm("Shut down LCA Explorer? The server stops and every tab of the app with it.")) return;
+  let waiting = [];
+  try { ({ waiting = [] } = await fetch("/api/shutdown", { method: "POST" }).then((r) => r.json())); } catch { /* already gone */ }
+  stopped = true;
+  render(html`<${Stopped} waiting=${waiting} />`, document.getElementById("app"));
+}
+
+function ShutDownButton() {
+  const [shown, setShown] = useState(false);
+  useEffect(() => { LIFETIME.then((a) => setShown(!!a.stops_with_browser)); }, []);
+  return shown && html`<button class="shut-down" onClick=${shutDown}
+    title="Stop LCA Explorer and close its terminal (closing its last tab does too)">Shut down</button>`;
+}
+
+const openDatabase = (key) => goTo(`/db/${encodeURIComponent(key)}/`);
 const count = (n) => n.toLocaleString("en-US");
 
 function DatabaseSelect({ databases }) {
@@ -1477,7 +1527,7 @@ function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
   const start = (body) => { if (body.project) noteProject(body.project); startJob("/api/load", body, body.project); };
   const busy = job?.status === "running" || (job?.status === "done" && !!job.key);
   const unload = (key) => serverRequest("/api/unload", { key }).then((list) => {
-    if (key === DATABASE) { location.href = "/"; return; }
+    if (key === DATABASE) { goTo("/"); return; }
     onDatabases?.(list);
     refresh();
     listProjects(folder);
@@ -7092,6 +7142,7 @@ function App() {
       </div>
       <div class="top-centre">${centre}</div>
       <div class="top-right">
+      <${ShutDownButton} />
       <a class="source-link" href=${SOURCE_URL} target="_blank" rel="noopener noreferrer"
         title="Source code of LCA Explorer, free software under the GNU AGPL 3.0 or later">Source</a>
       ${databases && html`

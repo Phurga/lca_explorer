@@ -355,7 +355,11 @@ lca-viewer serve --open
 ```
 
 The app opens in your browser at **http://localhost:8765** (or 8766, 8767… if another program already
-uses that port: the terminal says which); stop it with Ctrl+C. It starts with no database:
+uses that port: the terminal says which). It stops with its browser tab: closing the last tab of the app
+asks first (the browser's own "Leave site?"), and once it is closed the app stops a few seconds later, after
+an import or a build under way finishes (a reload does not stop it). **Shut down**, at the top right, stops it
+too, and so does Ctrl+C in the terminal (`lca_explorer.cmd` runs it in the background instead: its terminal
+closes once the app is open, the output is in `data/server.log`). It starts with no database:
 load one from **Projects**, or import one with **+ Add database** (see above). Next time, only this step is
 needed, in a terminal where the `lca_viewer` environment is active.
 

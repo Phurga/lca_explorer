@@ -1041,6 +1041,8 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
     app = FastAPI(title="lca_viewer")
     loaded: dict[str, dict] = {}  # key -> {"key", "title", "path", "activities", "route"}
     jobs: dict[str, dict] = {}
+    # The jobs under way, which the server finishes before it stops (see lifetime.Lifetime)
+    app.state.running_jobs = lambda: [job["title"] for job in list(jobs.values()) if job["status"] == "running"]
     lock = threading.Lock()
     projects_cache: dict[str, list] = {}  # Brightway data folder -> its projects, as the Projects page last read them
     counts_file = data / "cache" / "node-counts.json"

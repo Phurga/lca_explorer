@@ -164,9 +164,26 @@ def serve(args) -> None:
         import webbrowser
 
         host = "localhost" if args.host in ("127.0.0.1", "0.0.0.0") else args.host
-        print("Stop with Ctrl+C")
+        print("Stops when you close its browser tabs, or with Ctrl+C")
         threading.Timer(1.5, webbrowser.open, [f"http://{host}:{args.port}"]).start()
-    uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
+    server = uvicorn.Server(uvicorn.Config(app, host=args.host, port=args.port, log_level="warning",
+                                           timeout_graceful_shutdown=5))
+    lifetime = None
+    if args.open:  # on your own computer: the server stops with its last tab, or the page's Shut down
+        from .lifetime import Lifetime
+
+        def stop():
+            why = ("Shut down from the page" if lifetime.asked else "Its browser tabs are closed" if lifetime.seen
+                   else f"No browser tab opened it in {lifetime.first:.0f} s")
+            print(f"{why}: LCA Explorer stops", flush=True)
+            server.should_exit = True
+
+        lifetime = Lifetime(stop, app.state.running_jobs)
+        lifetime.watch()
+    from .lifetime import add_routes
+
+    add_routes(app, lifetime)
+    server.run()
 
 
 def setup(args) -> None:
@@ -468,7 +485,8 @@ def main(argv=None) -> None:
     p.add_argument("--port", type=int,
                    help=f"Port to serve on (default: {DEFAULT_PORT}, or the next free one if another program uses it)")
     p.add_argument("--reload", action="store_true", help="Restart automatically when the Python code changes (development)")
-    p.add_argument("--open", action="store_true", help="Open the app in the browser once it is ready")
+    p.add_argument("--open", action="store_true", help="Open the app in the browser once it is ready, and stop when its last tab "
+                        "is closed (not for a server reached through SSH)")
     p.set_defaults(func=serve)
 
     args = parser.parse_args(argv)
