@@ -21,7 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .analysis import (OTHER, flow_contribution, flow_contributors, group_contributors, main_path, matched,
-                       supply_chain_contribution)
+                       method_coverage, supply_chain_contribution, uncharacterised)
 from .model import LCAModel
 from .query import (EXCHANGE_FIELDS, EXCHANGE_TYPES, FLOW_EXCHANGE_TYPES, derived_activities, derived_flows, evaluate,
                     field_options, search, suggest_values, without_exchange)
@@ -165,6 +165,18 @@ class FlowContributorsRequest(BaseModel):
     method: int = 0
     flows: list[int]
     cut: Cut = Cut(value=50)
+
+
+class UncharacterisedRequest(BaseModel):
+    root: int
+    amount: float = 1.0
+    method: int = 0
+    reference: int | None = None
+    """A method whose factors are shown next to the flows (e.g. the one the new method replaces)."""
+    limit: int = 200
+    """At most this many flows per unit (the largest amounts)."""
+    query: str = ""
+    """Only the flows whose name or compartment has all these words."""
 
 
 class ProcessFlowsRequest(BaseModel):
@@ -768,6 +780,79 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
             "items": [items[i] for i in shown],
             "others": others,
         }
+
+    def flow_row(f: int) -> dict:
+        return {"flow": int(f), "name": flows["name"].iat[f], "compartment": flows["place"].iat[f],
+                "unit": flows["unit"].iat[f]}
+
+    def matching(items: list[dict], query: str) -> list[dict]:
+        """The ``items`` whose name and compartment have all the words of ``query`` (any case)."""
+        words = query.lower().split()
+        return [it for it in items if all(w in f"{it['name']} {it['compartment']}".lower() for w in words)] if words else items
+
+    def by_unit(items: list[dict], key, limit: int, total: bool = False) -> list[dict]:
+        """``items`` in one list per unit (amounts in different units do not compare), largest |key| first in each,
+        those the reference method characterises (likely gaps) before the others; the units with the most flows
+        first. ``total``: with the sum of ``key`` over each unit's items."""
+        units: dict[str, list[dict]] = {}
+        for it in items:
+            units.setdefault(it["unit"] or "", []).append(it)
+        out = [{"unit": u, "count": len(rows), "gaps": sum(1 for it in rows if it.get("reference_cf")),
+                **({"total": float(sum(key(it) for it in rows))} if total else {}),
+                "items": sorted(rows, key=lambda it: (not it.get("reference_cf"), -abs(key(it))))[:limit]}
+               for u, rows in units.items()]
+        return sorted(out, key=lambda g: -g["count"])
+
+    @app.post("/api/flows/uncharacterised")
+    def flows_uncharacterised(req: UncharacterisedRequest):
+        """The elementary flows of the functional unit's inventory that the method has no factor for: what its score
+        leaves out, by unit, largest amount first, with the factor of a ``reference`` method."""
+        check(activity=[req.root], method=[req.method, req.reference])
+        found = uncharacterised(model, supply(req.root, req.amount), req.method, req.reference)
+        items = [{**flow_row(f), "amount": float(found["amounts"][i]), "emitters": int(found["emitters"][i]),
+                  "methods": int(found["methods"][i]),
+                  **({"reference_cf": float(found["reference_cf"][i])} if req.reference is not None else {})}
+                 for i, f in enumerate(found["flows"])]
+        shown = matching(items, req.query)
+        return {"method": req.method, "reference": req.reference, "query": req.query,
+                "inventory": found["inventory"], "characterised": found["characterised"], "count": len(items),
+                "gaps": sum(1 for it in items if it.get("reference_cf")), "matched": len(shown),
+                "units": by_unit(shown, lambda it: it["amount"], req.limit, total=True)}
+
+    @app.get("/api/methods/{method}/coverage")
+    def coverage(method: int, reference: int | None = None, limit: int = 300, query: str = ""):
+        """How the method covers the flows of the whole model: its factors on flows of the model, the flows activities
+        exchange that it has no factor for (by unit, those the reference characterises then the most emitted first, at
+        most ``limit`` per unit) and its factors on flows outside the model (``limit`` of them, largest first). ``query``:
+        only the flows whose name or compartment has all these words."""
+        check(method=[method, reference])
+        found = method_coverage(model, method, reference)
+        missing = found["uncharacterised"]
+        items = [{**flow_row(f), "emitters": int(missing["emitters"][i]), "methods": int(missing["methods"][i]),
+                  **({"reference_cf": float(missing["reference_cf"][i])} if reference is not None else {})}
+                 for i, f in enumerate(missing["flows"])]
+        gaps = sum(1 for it in items if it.get("reference_cf"))
+        shown = matching(items, query)
+        unlinked = None
+        if found["unlinked"] is not None:
+            table = found["unlinked"]
+            words = query.lower().split()
+            text = (table["name"].astype(str) + " " + table["categories"].map(lambda c: ", ".join(str(x) for x in c if x))).str.lower()
+            shown_unlinked = table[text.map(lambda t: all(w in t for w in words))] if words else table
+            unlinked = {
+                "count": int(len(table)),
+                "same": int((table["match_kind"] == "same").sum()),
+                "matched": int(len(shown_unlinked)),
+                "items": [{"name": r.name, "compartment": ", ".join(str(c) for c in r.categories if c), "unit": r.unit,
+                           "cf": float(r.cf), "id": int(r.id) if r.id >= 0 else None, "match_kind": r.match_kind,
+                           "match": flow_row(int(r.match)) if r.match >= 0 else None}
+                          for r in shown_unlinked.sort_values("cf", key=lambda c: -c.abs()).head(limit).itertuples(index=False)],
+            }
+        return {"method": method, "reference": reference, "query": query, "linked": found["linked"],
+                "characterised_unused": found["characterised_unused"], "inventory": found["inventory"],
+                "uncharacterised": {"count": int(len(missing["flows"])), "gaps": gaps, "matched": len(shown),
+                                    "units": by_unit(shown, lambda it: it["emitters"], limit)},
+                "unlinked": unlinked}
 
     @app.post("/api/flows/of-process")
     def flows_of_process(req: ProcessFlowsRequest):
@@ -1387,12 +1472,13 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
             import pickle
 
             with open(out, "rb") as f:
-                methods = pickle.load(f)
+                read = pickle.load(f)
         finally:
             chosen.unlink(missing_ok=True)
             out.unlink(missing_ok=True)
+        methods, unlinked = (read["methods"], read.get("unlinked")) if isinstance(read, dict) else (read, None)
         job["message"] = f"Computing the impacts of {len(methods)} methods"
-        added = model.add_methods(methods)
+        added = model.add_methods(methods, unlinked=unlinked)
         return {"added": added, "message": f"{added} impact {'method' if added == 1 else 'methods'} added"}
 
     @app.post("/api/methods/add")

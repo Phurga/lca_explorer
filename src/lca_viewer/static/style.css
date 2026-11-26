@@ -285,7 +285,15 @@ input.swatch::-moz-color-swatch { border: none; border-radius: 4px; }
 .method-row:hover { background: var(--hover); }
 .method-head .count { font-weight: 400; font-size: 11px; }
 .method-tree input[type=checkbox] { accent-color: var(--accent); }
-.method-tree input.main { accent-color: var(--bar-negative); }
+/* A method's mark, clicked in turn: empty, ✓ shown together, ★ the main method */
+.method-mark {
+  flex: none; width: 15px; height: 15px; padding: 0; border: 1.5px solid var(--muted); border-radius: 3px; background: none;
+  font: 700 10px/12px system-ui, sans-serif; color: var(--panel); display: inline-flex; align-items: center; justify-content: center; cursor: pointer;
+}
+.method-mark:hover { border-color: var(--accent); }
+.method-mark.ticked { background: var(--accent); border-color: var(--accent); }
+.method-mark.main { background: var(--bar-negative); border-color: var(--bar-negative); font-size: 11px; }
+.method-row.main .name { font-weight: 600; }
 .rules li.dragging { opacity: 0.4; }
 .rules li button.icon-btn { display: inline-flex; align-items: center; padding: 3px 6px; }
 .rules li.disabled button.icon-btn { color: var(--muted); }
@@ -584,6 +592,24 @@ table.results tr.selected td { background: var(--selected); }
 table.flow-results th.num { text-align: right; }
 table.flow-results td.num { white-space: nowrap; }
 table.flow-results tfoot th { font-weight: 600; border-bottom: none; }
+/* Coverage of the flows by a method: the Uncharacterised tab of the side panel */
+.method-select { display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 100%; }
+.method-select select { min-width: 0; max-width: 280px; }
+.coverage-summary { margin: 6px 0; }
+.coverage-summary .gap-count { color: var(--accent); }
+/* The coverage lists: a table like the tree's, one foldable row per unit */
+.flow-search { min-width: 0; width: 180px; }
+.coverage-tree { flex: none; overflow: visible; background: none; }
+.coverage-tree table { min-width: 0; }
+.coverage-tree tr.unit-row { cursor: pointer; }
+.coverage-tree tr.unit-row td { font-weight: 500; }
+.coverage-tree tr.unit-row .loc { font-weight: 400; }
+.coverage-tree tr.unit-row .label { flex: none; }
+.coverage-tree tr.unit-row .loc { overflow: hidden; text-overflow: ellipsis; }
+.coverage-tree td.gap-count { color: var(--accent); font-family: inherit; }
+.coverage-tree tr.gap td { background-color: color-mix(in srgb, var(--accent) 12%, transparent); }
+.coverage-tree tr.gap:hover td { background-color: color-mix(in srgb, var(--accent) 20%, transparent); }
+.coverage-tree tr.more td { color: var(--muted); font-size: 12px; padding-left: 42px; }
 table.results tr.muted td { color: var(--muted); }
 /* Elementary flow pop-up */
 .flow-compartments { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }

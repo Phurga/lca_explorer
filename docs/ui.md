@@ -32,7 +32,8 @@ API in `src/lca_viewer/server.py`.
   a database now has one state and two buttons. **Open** (*Shown* for the one on screen; *Build and open* the
   first time and *Rebuild and open* when the project changed since the build, about a minute for
   ecoinvent, kept in `data/cache`), and **Options ▾**: *Close (free its memory)* for one that is open,
-  *Open the old build* when a rebuild is due, *Lock* / *Unlock*, *Rename…*, *Add database…* and *Remove…*. A project
+  *Open the old build* when a rebuild is due, *Rebuild and open* when none is (for what a newer version of the
+  app records, as the method factors on flows outside the model), *Lock* / *Unlock*, *Rename…*, *Add database…* and *Remove…*. A project
   has *Options ▾* too: *Add database…* and *Delete project…*. The projects are listed with the last one opened first
   (a project with an open database on top) and their databases folded, a click on a project's arrow
   shows them; both are remembered. Models that no listed database explains (built from
@@ -238,10 +239,17 @@ API in `src/lca_viewer/server.py`.
   *Process contribution* panel and a third in Compare mode; rules copied from tab to tab,
   which then drifted apart). A first version let a tab have its own (a link in its header);
   it is dropped for now, which keeps the page simpler, and can come back. *Methods* is one
-  list nested by family (fold, filter box): the round mark is the
-  **active method** (tree, charts, totals, comparison), the ticks the methods **shown
-  together** (the *Several methods* chart, the *Multi indicator matrix*; default: the
-  family of the method). *Rules* lists the **rule sets** (*New*, *Copy*, *Rename*,
+  list nested by family (fold, filter box); the coverage of a method over the whole model (its factors on flows of the model
+  and on flows that are **not in the model**, which the LCA drops without a word, recorded at build in
+  `unlinked.pkl`; the flows processes exchange that it has no factor for) is served by
+  `GET /api/methods/{k}/coverage?reference=&query=` (`analysis.method_coverage`), for the method pop-up to come;
+  a first version showed it in a dialog from an (i) on each method, dropped as not good enough. Each method has
+  one box, clicked in turn: **✓** shown together (the *Several methods* chart, the *Multi indicator
+  matrix*; default: the family of the method), then **★** (orange) the **active method** (tree, charts,
+  totals, comparison; the one before stays ✓), then unticked (the first other ticked method becomes the active
+  one; the active method alone cannot be unticked). A click on the name does the same; the family box ticks or
+  unticks the family but the active method. Decision: one control in place of a tick and a radio at
+  the right of the row, as the active method is always one of those shown. *Rules* lists the **rule sets** (*New*, *Copy*, *Rename*,
   *Delete*); one is in use, and its rules are built below the list (the form that was in
   the side panel's *Rules* panel, now here: it shows the rules of the tab in focus, and
   those of the workspace's set in Compare mode). The **Rule set** header and
@@ -546,6 +554,22 @@ API in `src/lca_viewer/server.py`.
     Right-click a substance or flow for its pop-up (below). API:
     `/api/flows`, `/api/flows/contributors` (`analysis.flow_contribution`,
     `flow_contributors`).
+  - *Uncharacterised*: the flows of the same inventory that the active method has **no factor** for, which the
+    score leaves out. A table like the tree's: one foldable row per unit, named by what it measures (*Mass (kg)*,
+    *Radioactivity (kBq)*, *Land occupation (m2·a)*…; amounts in different units do not add up) with its number
+    of flows and their total, the flows under it, largest amount first, with how many processes of the supply
+    chain emit each one and how many methods of the model characterise it. Folded units stay folded from one
+    process to the next (`localStorage`); while searching, every unit is open. **Search the flows** keeps the
+    flows whose name or compartment has all the words typed (on the server, so the flows past the first 200 of
+    a unit are found too). **Compare with** picks a reference method among those **ticked in the Methods
+    panel** (e.g. the one a new method replaces; kept in `localStorage` by name, and back when it is ticked
+    again): its factor is added as a column, and the flows it characterises,
+    likely gaps of the active method, come first and are highlighted, with their count in the summary and on
+    each unit's row. Right-click a flow for its pop-up; *CSV* exports the list. API: `POST
+    /api/flows/uncharacterised` (`analysis.uncharacterised`; `query` for the search). Decisions: a tab of its
+    own rather than a switch in *Flow contribution* (first version), as it answers another question (what the
+    score leaves out, not what makes it); a reference among the ticked methods, which keeps the list short, and
+    chosen by the user rather than matched by category name, which differs between method families.
   - *Rules* (in the **left panel**, *Rules*, not in the side panel): active rules (reorder, **edit** — the form below is filled in with
     the rule, with *Save rule* and *Cancel*; a group made from selected rows or a nested
     query can only be renamed —, remove; the eye switches a rule off and on without losing

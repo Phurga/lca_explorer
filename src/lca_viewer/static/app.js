@@ -17,7 +17,7 @@ const SOURCE_URL = "https://github.com/Phurga/lca_explorer";
 // The calculations that only read the model (the rows of a tree, the contributions, the comparison) keep their answer
 // for the same question: a panel opened again, or a comparison of what a tab already shows, does not calculate again.
 // ``clearAnswers`` when the model changes.
-const CACHED = /^\/api\/(rows|global|global\/contributors|flows|flows\/contributors|flows\/of-process|compare)$/;
+const CACHED = /^\/api\/(rows|global|global\/contributors|flows|flows\/contributors|flows\/of-process|flows\/uncharacterised|compare)$/;
 const answers = new Map();  // question -> { promise, value }
 const clearAnswers = () => answers.clear();
 function request(url, body) {
@@ -122,9 +122,9 @@ const UNITS = {
   kilogram: "kg", "kilowatt hour": "kWh", megajoule: "MJ", "cubic meter": "m3", hectare: "ha",
   "ton kilometer": "tkm", "square meter": "m2", "square meter-year": "m2·a", "meter-year": "m·a",
   "cubic meter-year": "m3·a", "kilogram day": "kg·d", "person kilometer": "pkm", "vehicle kilometer": "vkm",
-  "metric ton*km": "tkm", meter: "m", unit: "unit", hour: "h", litre: "l", "kilo becquerel": "kBq",
+  "metric ton*km": "tkm", meter: "m", unit: "unit", hour: "h", litre: "l", "kilo becquerel": "kBq", "standard cubic meter": "Sm3",
 };
-const unit = (u) => UNITS[u] || u;
+const unit = (u) => UNITS[u] || (typeof u === "string" && UNITS[u.toLowerCase()]) || u;
 const movable = (r) => r.depth > 0 && r.kind !== "rest";
 // Rows with details: a pop-up (processes, direct emissions, flows) or a members panel (bundles)
 const hasDetails = (r) => ["rest", "merged", "group", "flow"].includes(r.kind) || !!r.meta;
@@ -1657,6 +1657,10 @@ function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
     return [
       ...(open ? [{ label: "Close (free its memory)", title: "Stop serving this database", run: () => unload(open) }] : []),
       ...(d.model?.outdated && !open && d.processes ? [{ label: "Open the old build", disabled: busy, title: "Open the model built before the database changed", run: () => start(body) }] : []),
+      // A build up to date can still lack what newer versions record (e.g. the factors of the methods outside the model)
+      ...(d.model && !d.model.outdated && !open && d.processes ? [{ label: "Rebuild and open", disabled: busy,
+        title: "Build the model again (about a minute for ecoinvent): for what a newer version of the app records, as the method factors on flows outside the model",
+        run: () => start({ ...body, rebuild: true }) }] : []),
       { label: "Rename…", disabled: busy || d.locked || !!open, title: d.locked ? "Unlock it first" : open ? "Close it first" : "Give the database another name", run: () => setForm({ kind: "renameDb", project: p.name, database: d.name }) },
       { label: "Remove…", danger: true, disabled: busy || d.locked, title: "Delete this database from the project", run: () => setForm({ kind: "removeDb", project: p.name, database: d.name }) },
     ];
@@ -4100,6 +4104,7 @@ const PANEL_TIPS = {
   view: "How the tree is shown (display, cut-off, rows), and the chart of its rows.",
   chart: "What each process of the supply chain adds by its own emissions, wherever it is in the tree.",
   flows: "Which substances drive the score, and which processes emit them.",
+  missing: "The flows of the inventory that the active method has no factor for: what the score leaves out, and which another method characterises.",
   groups: "Group processes by your own criteria, beyond how individual flow or process contribute.",
   processes: "Your open tabs: compare, reorder, close. Drop a process here to open it.",
   methods: "The indicator of the tree and charts, and the ones to show together.",
@@ -4889,10 +4894,187 @@ function GlobalPanel({ info, root, amount, method, rules, view, rule, setRule, o
     </div>`;
 }
 
+// ---------------------------------------------------------------- coverage of the flows by a method
+// What a unit of elementary flows measures: the headings of the lists by unit
+const QUANTITIES = {
+  kilogram: "Mass", "kilo becquerel": "Radioactivity", "square meter": "Area", "square meter-year": "Land occupation",
+  "cubic meter": "Volume", "standard cubic meter": "Volume", "cubic meter-year": "Volume × time", litre: "Volume",
+  megajoule: "Energy", "kilowatt hour": "Energy", hectare: "Area", meter: "Length", "meter-year": "Length × time",
+  "kilogram day": "Mass × time", hour: "Time", unit: "Items",
+};
+const quantityLabel = (u) => {
+  if (!u) return "No unit";
+  const q = QUANTITIES[u.toLowerCase()];
+  return q ? `${q} (${unit(u)})` : unit(u);
+};
+
+// A value that follows ``value`` once it has stopped changing for ``ms`` (what is typed in a search)
+function useSettled(value, ms = 250) {
+  const [settled, setSettled] = useState(value);
+  useEffect(() => {
+    const timer = setTimeout(() => setSettled(value), ms);
+    return () => clearTimeout(timer);
+  }, [value]);
+  return settled;
+}
+
+// A method to read the factors of another against (e.g. the one a new method replaces), among ``choices`` (the methods
+// ticked in the Methods panel): kept by name, since positions move when a model is rebuilt, and shared by the
+// Uncharacterised panels
+function useReferenceMethod(info, choices) {
+  const [name, setName] = useState(() => { try { return JSON.parse(loadPreference("coverageReference", "null")); } catch { return null; } });
+  const k = name ? methodNamed(info, name) : -1;
+  const choose = (i) => {
+    const n = i >= 0 ? info.methods[i].name : null;
+    setName(n);
+    savePreference("coverageReference", JSON.stringify(n));
+  };
+  return [k >= 0 && choices.includes(k) ? k : null, choose];
+}
+
+// The methods ticked in the Methods panel (but the active one), by family
+function MethodSelect({ info, value, onChange, choices, exclude, label = "Compare with" }) {
+  const families = useMemo(() => {
+    const map = new Map();
+    [...choices].sort((a, b) => a - b).filter((i) => i !== exclude)
+      .forEach((i) => map.set(info.methods[i].name[0], [...(map.get(info.methods[i].name[0]) || []), i]));
+    return [...map];
+  }, [info, choices, exclude]);
+  const none = families.length === 0;
+  return html`
+    <label class="method-select" title=${none ? "Tick methods in the Methods panel to compare with them"
+      : "Its factors are shown next to the flows: a flow it characterises and the active method does not is likely a gap. The methods ticked in the Methods panel."}>
+      <span class="view-group-label">${label}</span>
+      <select value=${value ?? ""} disabled=${none} onChange=${(e) => onChange(e.target.value === "" ? -1 : Number(e.target.value))} aria-label=${label}>
+        <option value="">${none ? "no other method ticked" : "no other method"}</option>
+        ${families.map(([family, indices]) => html`
+          <optgroup key=${family} label=${family}>
+            ${indices.map((i) => html`<option key=${i} value=${i}>${info.methods[i].name.slice(1).join(" | ") || family}</option>`)}
+          </optgroup>`)}
+      </select>
+    </label>`;
+}
+
+// A search of the flows by name and compartment, for the lists of the coverage
+function FlowSearch({ value, onChange }) {
+  return html`
+    <input type="search" class="flow-search" placeholder="Search the flows" value=${value} onInput=${(e) => onChange(e.target.value)}
+      aria-label="Search the flows by name and compartment" title="Only the flows whose name or compartment has all these words" />`;
+}
+
+// The units of a list that are folded: kept between processes; while searching, every unit is open but those folded
+// during this search
+function useFoldedUnits(query) {
+  const [folded, setFolded] = useState(() => { try { return new Set(JSON.parse(loadPreference("foldedUnits", "[]"))); } catch { return new Set(); } });
+  const [foldedInSearch, setFoldedInSearch] = useState(new Set());
+  useEffect(() => setFoldedInSearch(new Set()), [query]);
+  const isOpen = (u) => !(query ? foldedInSearch : folded).has(u);
+  const toggle = (u) => {
+    if (query) { setFoldedInSearch((s) => { const next = new Set(s); next.has(u) ? next.delete(u) : next.add(u); return next; }); return; }
+    const next = new Set(folded);
+    next.has(u) ? next.delete(u) : next.add(u);
+    setFolded(next);
+    savePreference("foldedUnits", JSON.stringify([...next]));
+  };
+  return [isOpen, toggle];
+}
+
+// The flows of a list as a table like the tree's: one foldable row per unit (amounts in different units do not add up),
+// the flows under it, with the factor of the reference method
+function CoverageTable({ groups, reference, info, amount = false, onFlowInfo, emittersHead, isOpen, toggle }) {
+  const refUnit = reference != null ? info.methods[reference].unit : "";
+  const columns = 3 + (amount ? 1 : 0) + (reference != null ? 1 : 0);
+  return html`
+    <div class="tree coverage-tree">
+      <table>
+        <colgroup><col />${amount && html`<col style="width: 100px" />`}<col style="width: 76px" /><col style="width: 66px" />${reference != null && html`<col style="width: 84px" />`}</colgroup>
+        <thead><tr>
+          <th>Flow</th>
+          ${amount && html`<th class="num" title="Amount in the inventory of the process, its supply chain included">Amount</th>`}
+          <th class="num" title=${emittersHead}>Processes</th>
+          <th class="num" title="Methods of the model with a factor on it">Methods</th>
+          ${reference != null && html`<th class="num" title=${`Factor in ${methodLabel(info.methods[reference])}, ${refUnit} per unit of the flow`}>Reference</th>`}
+        </tr></thead>
+        ${groups.map((g) => {
+          const open = isOpen(g.unit);
+          return html`
+            <tbody key=${g.unit}>
+              <tr class="unit-row" onClick=${() => toggle(g.unit)}>
+                <td style="--depth: 0"><div class="name">
+                  <button class="toggle" aria-expanded=${open} aria-label=${`${open ? "Fold" : "Unfold"} ${quantityLabel(g.unit)}`}
+                    onClick=${(e) => { e.stopPropagation(); toggle(g.unit); }}>${open ? "▾" : "▸"}</button>
+                  <span class="label">${quantityLabel(g.unit)}</span>
+                  <span class="loc">${g.count} ${g.count === 1 ? "flow" : "flows"}</span>
+                </div></td>
+                ${amount && html`<td class="num" title="Their total in the inventory">${g.total != null ? `${fmtAmount(g.total)} ${unit(g.unit)}` : ""}</td>`}
+                <td></td><td></td>
+                ${reference != null && html`<td class=${`num ${g.gaps ? "gap-count" : "muted"}`} title="Flows of this unit with a factor in the reference: likely gaps of the active method">${g.gaps ? `${g.gaps} ${g.gaps === 1 ? "gap" : "gaps"}` : "–"}</td>`}
+              </tr>
+              ${open && g.items.map((it) => html`
+                <tr key=${it.flow} class=${reference != null && it.reference_cf ? "gap" : ""}
+                    title=${onFlowInfo ? "Right-click for its details: its factors in every method, its metadata" : ""}
+                    onContextMenu=${onFlowInfo && ((e) => onFlowInfo({ flow: it.flow, flows: [it.flow], labels: [it.compartment] }, e))}>
+                  <td style="--depth: 1"><div class="name" style="padding-left: 16px">
+                    <span class="toggle"></span>
+                    <span class="label" title=${`${it.name} · ${it.compartment}`}>${it.name} <span class="loc">${it.compartment}</span></span>
+                  </div></td>
+                  ${amount && html`<td class="num" title=${`${it.amount} ${it.unit}`}>${fmtAmount(it.amount)} ${unit(it.unit)}</td>`}
+                  <td class="num">${it.emitters}</td>
+                  <td class="num">${it.methods}</td>
+                  ${reference != null && html`<td class="num" title=${it.reference_cf ? `${it.reference_cf} ${refUnit}/${unit(it.unit)}` : "No factor in the reference"}>${it.reference_cf ? fmt(it.reference_cf) : html`<span class="muted">–</span>`}</td>`}
+                </tr>`)}
+              ${open && g.count > g.items.length && html`<tr class="more"><td colspan=${columns}>+ ${g.count - g.items.length} more: search to find them</td></tr>`}
+            </tbody>`;
+        })}
+      </table>
+    </div>`;
+}
+
+// The right pane's *Uncharacterised* tab: the flows of the inventory that the active method has no factor for
+function UncharacterisedPanel({ info, root, amount, method, chartMethods, onFlowInfo }) {
+  const [reference, setReference] = useReferenceMethod(info, chartMethods);
+  const ref = reference === method ? null : reference;
+  const [text, setText] = useState("");
+  const query = useSettled(text.trim());
+  const [isOpen, toggle] = useFoldedUnits(query);
+  const { data: answer, error } = useRequest("/api/flows/uncharacterised",
+    { root: root.index, amount, method, ...(ref != null ? { reference: ref } : {}), ...(query ? { query } : {}) });
+  // The last answer stays while the next one comes: not one for another method or reference, read as this one's
+  const data = answer && answer.method === method && answer.reference === ref ? answer : null;
+  const gaps = data?.gaps || 0;
+  const exportCsv = () => downloadCsv("uncharacterised-flows.csv",
+    ["name", "compartment", "unit", "amount", "processes", "methods", ...(ref != null ? [`factor in ${methodLabel(info.methods[ref])}`] : [])],
+    data.units.flatMap((g) => g.items.map((it) => [it.name, it.compartment, it.unit, it.amount, it.emitters, it.methods,
+      ...(ref != null ? [it.reference_cf] : [])])),
+    [`Flows of the inventory of ${root.name ?? `process ${root.index}`} with no factor in ${methodLabel(info.methods[method])}${data.query ? `, matching "${data.query}"` : ""}`]);
+  return html`
+    <div class="panel coverage">
+      <div class="row">
+        <${MethodSelect} info=${info} value=${ref} exclude=${method} choices=${chartMethods} onChange=${setReference} />
+        <${FlowSearch} value=${text} onChange=${setText} />
+        <span style="flex:1"></span>
+        ${data?.matched > 0 && html`<button onClick=${exportCsv} title="The flows listed as a CSV file">CSV</button>`}
+      </div>
+      ${error && html`<div class="error">${error}</div>`}
+      ${!data && !error && html`<${Waiting} text="Reading the inventory…" />`}
+      ${data && html`
+        <p class="coverage-summary">
+          <b>${data.count}</b> of the ${data.inventory} flows of the inventory have no factor in <i>${methodLabel(info.methods[method])}</i>
+          ${ref != null && data.count > 0 && html`; <b class=${gaps ? "gap-count" : ""}>${gaps}</b> of them have one in the reference`}
+          ${data.query && html`; <b>${data.matched}</b> match the search`}
+          <${InfoTip} label="About the uncharacterised flows" text="The elementary flows of this process's whole inventory (its supply chain included) that the active method gives no factor to: the score leaves them out. Amounts in different units do not add up, so there is one foldable list per unit, the largest amount first. Processes: how many processes of the supply chain emit it; methods: how many methods of the model characterise it. Compare with: one of the methods ticked in the Methods panel; a flow it characterises (highlighted, listed first) is likely a gap of the active method. Right-click a flow for its details." />
+        </p>
+        ${data.count === 0 ? html`<div class="empty">Every flow of the inventory has a factor in this method.</div>`
+          : data.matched === 0 ? html`<div class="empty">No uncharacterised flow matches the search.</div>`
+          : html`<${CoverageTable} groups=${data.units} reference=${ref} info=${info} amount=${true} onFlowInfo=${onFlowInfo}
+              emittersHead="Processes of the supply chain emitting it" isOpen=${isOpen} toggle=${toggle} />`}`}
+    </div>`;
+}
+
 // ---------------------------------------------------------------- elementary flow contribution
 // The whole inventory of the process, characterised: which substances make the
 // score. Clicking a flow lists the processes emitting it.
-function FlowPanel({ info, root, amount, method, onLocate, onInfo, onFlowInfo, rules, setRules }) {
+function FlowContribution({ info, root, amount, method, onLocate, onInfo, onFlowInfo, rules, setRules }) {
   // The rows: by substance, by compartment, by subcompartment, alone or together; none: one row per flow
   const [grouped, setGrouped] = useState({ name: true, compartment: false, subcompartment: false });
   const keys = ["name", "compartment", "subcompartment"].filter((k) => grouped[k]);
@@ -5080,8 +5262,8 @@ const methodSummary = (info, method, chartMethods) => {
   return `${m.name[0]} · ${m.name.slice(1).join(" | ") || m.name[0]}${more ? ` (+${more})` : ""}`;
 };
 
-// The impact methods in one list nested by family: the round mark is the active method, the ticks the methods shown
-// together. ``note``: what a change here applies to.
+// The impact methods in one list nested by family: one mark per method, ✓ shown together, ★ the main (active)
+// method. ``note``: what a change here applies to.
 function MethodMenu({ info, method, setMethod, chartMethods, setChartMethods, note, format, setFormat, adder }) {
   return html`
     <div class="lens-menu">
@@ -5109,7 +5291,7 @@ function MethodMenu({ info, method, setMethod, chartMethods, setChartMethods, no
         <p class="note">${methodTitle(info.methods[method])}</p>
       <//>`}
       <h3 class="fold-head method-selection">Method selection
-        <${InfoTip} text="Legend. Round mark: the main method, for the single indicator, the tree and the charts. Tick: shown together, in the multi indicator charts and the matrix." label="Legend of the method selection" /></h3>
+        <${InfoTip} text="Click a method's box in turn: ✓ shown together, in the multi indicator charts and the matrix; ★ the main method, for the single indicator, the tree and the charts (the one before stays ticked); again to untick it (the first other ticked method becomes the main one). The family box ticks or unticks the whole family." label="Legend of the method selection" /></h3>
       <${MethodTree} info=${info} main=${method} setMain=${setMethod} selected=${chartMethods} setSelected=${setChartMethods} />
       ${adder && html`<${AddMethods} info=${info} ...${adder} />`}
     </div>`;
@@ -6063,8 +6245,8 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
         : treeNode}
       ${!embedded && html`<${Portal} slot=${`side-${id}`}>
         <section class="side">
-          <div class="tabs" role="tablist" onKeyDown=${tabKeys(["view", "chart", "flows", "global"], tab, setTab)}>
-            ${[["view", "Custom view"], ["chart", "Process contribution"], ["flows", "Flow contribution"], ["global", "Rules contributions"]].map(([key, label]) => html`
+          <div class="tabs" role="tablist" onKeyDown=${tabKeys(["view", "chart", "flows", "missing", "global"], tab, setTab)}>
+            ${[["view", "Custom view"], ["chart", "Process contribution"], ["flows", "Flow contribution"], ["missing", "Uncharacterised"], ["global", "Rules contributions"]].map(([key, label]) => html`
               <${TabButton} role="tab" class=${tab === key ? "active" : ""} onClick=${() => setTab(key)} tip=${PANEL_TIPS[key]}>${label}<//>`)}
             <span class="spacer"></span>
             <button class="collapse-side" onClick=${onCollapseSide} title="Hide the side panel (Ctrl/⌘ + →)" aria-label="Hide the side panel"><${SidePanelIcon} open /></button>
@@ -6075,7 +6257,9 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
             : html`<div class="panel">${viewOptions}</div>`)}
           ${tab === "chart" && root && html`<${ProcessContributions} info=${info} root=${root} amount=${amount} method=${method}
               onInfo=${(index, x, y) => openInfo({ index, row: null, x, y })} />`}
-          ${tab === "flows" && root && html`<${FlowPanel} info=${info} root=${root} amount=${amount} method=${method}
+          ${tab === "missing" && root && html`<${UncharacterisedPanel} info=${info} root=${root} amount=${amount} method=${method}
+              chartMethods=${chartMethods} onFlowInfo=${showFlowInfo} />`}
+          ${tab === "flows" && root && html`<${FlowContribution} info=${info} root=${root} amount=${amount} method=${method}
               onLocate=${goTo} onInfo=${(index, x, y) => openInfo({ index, row: null, x, y })} onFlowInfo=${showFlowInfo}
               rules=${rules} setRules=${setRules} />`}
           ${tab === "global" && html`<${GlobalPanel} info=${info} root=${root} amount=${amount} method=${method} rules=${rules} view=${view}
@@ -6359,10 +6543,9 @@ function CompareDifference({ results, base, target, setTarget, unitLabel, names,
     </table>`;
 }
 
-// The impact methods in one list nested by family: a tick for each method (or the whole family) shown together (the several
-// methods chart, the *Impact categories* heat map), and a round mark for the active method (tree, charts, comparison)
+// The impact methods in one list nested by family: one box per method, ✓ shown together (the several methods chart, the
+// *Impact categories* heat map), ★ the active method (tree, charts, comparison); a family box ticks the whole family
 function MethodTree({ info, main, setMain, selected, setSelected }) {
-  const group = useRef(newId("m")).current;  // radios of two lists open at once are not one group
   const [text, setText] = useState("");
   const [open, setOpen] = useState(() => new Set([info.methods[main].name[0]]));
   const families = useMemo(() => {
@@ -6374,7 +6557,28 @@ function MethodTree({ info, main, setMain, selected, setSelected }) {
   const matches = (i) => !words.length || words.every((w) => info.methods[i].name.join(" ").toLowerCase().includes(w));
   const ticked = new Set(selected);
   const toggleOpen = (family) => setOpen((o) => { const next = new Set(o); next.has(family) ? next.delete(family) : next.add(family); return next; });
-  const tick = (indices, on) => setSelected(on ? [...new Set([...selected, ...indices])] : selected.filter((i) => !indices.includes(i)));
+  // The family box ticks or unticks its methods but the main one, which stays ticked
+  const tick = (indices, on) => setSelected(on ? [...new Set([...selected, ...indices])] : selected.filter((i) => i === main || !indices.includes(i)));
+  // One mark per method, clicked in turn: not shown → ✓ shown together → ★ main → not shown. The main method is
+  // always ticked; unticking it makes the first other ticked method the main one, so it needs another ticked
+  const stateOf = (i) => (i === main ? "main" : ticked.has(i) ? "ticked" : "off");
+  const others = selected.filter((i) => i !== main);
+  const step = (i) => {
+    const state = stateOf(i);
+    if (state === "off") setSelected([...selected, i]);
+    else if (state === "ticked") { setMain(i); if (!ticked.has(main)) setSelected([...selected, main]); }
+    else if (others.length) {
+      setMain([...others].sort((a, b) => a - b)[0]);
+      setSelected(others);
+    }
+  };
+  const MARKS = {
+    off: ["", "Not shown: click to show it together with the others"],
+    ticked: ["✓", "Shown together with the others: click to make it the main method"],
+    main: ["★", "The main method (single indicator, tree, charts, comparison): click to untick it"],
+  };
+  const markTitle = (i) => (stateOf(i) === "main" && !others.length
+    ? "The main method (single indicator, tree, charts, comparison): tick another method to untick this one" : MARKS[stateOf(i)][1]);
   return html`
     <input class="method-filter" placeholder="Filter the methods" value=${text} onInput=${(e) => setText(e.target.value)} aria-label="Filter the methods" />
     <div class="method-tree">
@@ -6382,7 +6586,7 @@ function MethodTree({ info, main, setMain, selected, setSelected }) {
         const shown = indices.filter(matches);
         if (!shown.length) return null;
         const expanded = open.has(family) || words.length > 0;
-        const n = shown.filter((i) => ticked.has(i)).length;
+        const n = shown.filter((i) => ticked.has(i) || i === main).length;  // the main method counts as ticked
         return html`
           <div class="method-family" key=${family}>
             <div class="method-head">
@@ -6393,12 +6597,11 @@ function MethodTree({ info, main, setMain, selected, setSelected }) {
               <span class="muted count">${n}/${shown.length}</span>
             </div>
             ${expanded && shown.map((i) => html`
-              <div class="method-row" key=${i}>
-                <input type="checkbox" checked=${ticked.has(i)} onChange=${(e) => tick([i], e.target.checked)}
-                  aria-label=${`${methodLabel(info.methods[i])} shown together`} title="Shown together with the others ticked" />
-                <span class="name" title=${methodLabel(info.methods[i])} onClick=${() => tick([i], !ticked.has(i))}>${methodParts(info.methods[i]).main}${methodParts(info.methods[i]).qual && html` <span class="muted">${methodParts(info.methods[i]).qual}</span>`}</span>
-                <input type="radio" class="main" name=${group} checked=${i === main} onChange=${() => setMain(i)}
-                  aria-label=${`${methodLabel(info.methods[i])}: the active method`} title="The active method: the tree, the charts and the comparison" />
+              <div class=${`method-row ${stateOf(i)}`} key=${i}>
+                <button class=${`method-mark ${stateOf(i)}`} onClick=${() => step(i)} title=${markTitle(i)}
+                  aria-label=${`${methodLabel(info.methods[i])}: ${{ off: "not shown", ticked: "shown together", main: "the main method" }[stateOf(i)]}`}>${MARKS[stateOf(i)][0]}</button>
+                <span class="name" title=${`${methodLabel(info.methods[i])}
+${markTitle(i)}`} onClick=${() => step(i)}>${methodParts(info.methods[i]).main}${methodParts(info.methods[i]).qual && html` <span class="muted">${methodParts(info.methods[i]).qual}</span>`}</span>
               </div>`)}
           </div>`;
       })}

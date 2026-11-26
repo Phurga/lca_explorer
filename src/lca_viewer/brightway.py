@@ -178,6 +178,69 @@ def method_factors(names: list[tuple], flow_ids) -> list[Method]:
     return out
 
 
+def _cf_value(cf) -> float:
+    """A characterisation factor as Brightway stores it: a number, or an uncertainty dict with its ``amount``."""
+    if isinstance(cf, dict):
+        cf = cf.get("amount", 0.0)
+    try:
+        return float(cf)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _unlinked_factors(methods: list[tuple], flow_ids: np.ndarray) -> pd.DataFrame:
+    """The characterisation factors of ``methods`` on flows that are not rows of the model's ``B`` (flows that no
+    activity of the model exchanges, or of another biosphere database): what the LCA drops without a word. One row
+    per factor: ``method`` (position in ``methods``), ``id`` (Brightway node id, -1 when the flow is not in the
+    project), ``name``, ``categories``, ``unit``, ``cf``. Methods whose factors cannot be read are left out."""
+    import bw2data as bd
+    from bw2data.backends import ActivityDataset as AD
+
+    linked = set(int(i) for i in flow_ids)
+    found: list[tuple[int, object, float]] = []  # (method, flow reference, cf)
+    for k, name in enumerate(methods):
+        try:
+            data = bd.Method(name).load()
+        except Exception:  # noqa: BLE001  (a method without data: nothing to say about it)
+            continue
+        for row in data:
+            if len(row) < 2:
+                continue
+            ref, cf = row[0], _cf_value(row[1])
+            if cf == 0 or (isinstance(ref, (int, np.integer)) and int(ref) in linked):
+                continue
+            found.append((k, ref, cf))
+    # Flows referred to by key (database, code) in older projects: their ids, in one query per database
+    keys = {tuple(ref) for _, ref, _ in found if isinstance(ref, (tuple, list))}
+    key_ids: dict[tuple, int] = {}
+    for db in {d for d, _ in keys}:
+        codes = [c for d, c in keys if d == db]
+        for start in range(0, len(codes), 500):
+            for ds in AD.select(AD.id, AD.code).where((AD.database == db) & AD.code.in_(codes[start:start + 500])):
+                key_ids[(db, ds.code)] = ds.id
+    rows = []
+    for k, ref, cf in found:
+        node = key_ids.get(tuple(ref), -1) if isinstance(ref, (tuple, list)) else int(ref)
+        if node in linked:
+            continue
+        rows.append((k, node, ref, cf))
+    ids = sorted({node for _, node, _, _ in rows if node >= 0})
+    records: dict[int, dict] = {}
+    for start in range(0, len(ids), 500):
+        for ds in AD.select(AD.id, AD.data).where(AD.id.in_(ids[start:start + 500])):
+            records[ds.id] = ds.data
+    out = {"method": [], "id": [], "name": [], "categories": [], "unit": [], "cf": []}
+    for k, node, ref, cf in rows:
+        data = records.get(node, {})
+        out["method"].append(k)
+        out["id"].append(node)
+        out["name"].append(data.get("name") or (str(ref[1]) if isinstance(ref, (tuple, list)) else str(ref)))
+        out["categories"].append(tuple(data.get("categories") or ()))
+        out["unit"].append(data.get("unit") or "")
+        out["cf"].append(cf)
+    return pd.DataFrame(out).astype({"method": "int32", "id": "int64", "cf": "float64"})
+
+
 def from_brightway(project: str, database: str, methods: list[tuple], log=None) -> LCAModel:
     """Load the technosphere of ``database`` and of the databases it links to, with ``methods``.
 
@@ -254,8 +317,11 @@ def from_brightway(project: str, database: str, methods: list[tuple], log=None) 
 
     log(f"Reading {len(methods)} impact methods")
     loaded = method_factors(methods, flow_ids)
+    log("Reading the factors of the methods on flows outside the model")
+    unlinked = _unlinked_factors(methods, flow_ids)
 
     details = [_details(records[i]) for i in activity_ids]
     log("Reading the exchanges")
     exchanges = _exchanges(lca, rows, activity_ids)
-    return LCAModel(A=A, B=B, activities=activities, flows=flows, methods=loaded, details=details, exchanges=exchanges)
+    return LCAModel(A=A, B=B, activities=activities, flows=flows, methods=loaded, details=details, exchanges=exchanges,
+                    unlinked=unlinked)

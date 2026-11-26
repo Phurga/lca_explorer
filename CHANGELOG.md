@@ -38,6 +38,19 @@ Large databases: one built with hundreds of thousands of processes opens, and ev
 - **Fixed**: *Group by* let several groupings be chosen, but only the first applied (it leaves nothing for the next). It
   now takes one for the processes (*Product*, or a field of *By…*) and one for the flows (*Substance*, *Compartment*,
   *Subcompartment*), choosing one replaces the other, and *By…* names what it applies.
+- **Coverage of an impact method**: does a method characterise your model well, and which flows does it miss?
+  - A new **Uncharacterised** tab in the side panel: the flows of a process's inventory that the active method
+    has no factor for, in a table like the tree's, one foldable row per unit named by what it measures
+    (*Mass (kg)*, *Radioactivity (kBq)*…), largest amount first, with a search by name and compartment.
+    **Compare with** one of the methods ticked in the *Methods* panel (e.g. the one a new method replaces) adds
+    its factors, and puts the flows it characterises, likely gaps, first.
+  - Models record, when they are built, the factors of each method on flows that are not in the model (which
+    the calculation drops), for a method's coverage over the whole model (API only for now): **rebuild** a
+    model to record them (*Projects*, *Options ▾* → *Rebuild and open*, now offered for a model that is up to
+    date too).
+
+- **Method selection**: one box per method instead of a tick and a round mark. Click it in turn: ✓ shown
+  together, ★ the main method (the one before stays ✓), then unticked.
 
 ## 1.5.1 - 2026-11-24
 
