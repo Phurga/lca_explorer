@@ -50,6 +50,9 @@ Large databases: one built with hundreds of thousands of processes opens, and ev
     another biosphere version), with the same table and search. Models record these factors when they are built: **rebuild** a model to see them
     (*Projects*, *Options ▾* → *Rebuild and open*, now offered for a model that is up to date too).
 
+- **Method selection**: one box per method instead of a tick and a round mark. Click it in turn: ✓ shown
+  together, ★ the main method (the one before stays ✓), then unticked.
+
 ## 1.5.1 - 2026-11-24
 
 LCA Explorer becomes free and open-source software, under the GNU AGPL 3.0 or later.

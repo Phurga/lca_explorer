@@ -247,10 +247,13 @@ API in `src/lca_viewer/server.py`.
   same name only, and the flows that processes exchange and it has **no factor** for, most emitting processes
   first, by unit as in the *Uncharacterised* tab, with its *Compare with* reference (its gaps first) and its
   flow search, which also filters the factors outside the model. API:
-  `GET /api/methods/{k}/coverage?reference=&query=` (`analysis.method_coverage`). The round mark is the
-  **active method** (tree, charts, totals, comparison), the ticks the methods **shown
-  together** (the *Several methods* chart, the *Multi indicator matrix*; default: the
-  family of the method). *Rules* lists the **rule sets** (*New*, *Copy*, *Rename*,
+  `GET /api/methods/{k}/coverage?reference=&query=` (`analysis.method_coverage`). Each method has
+  one box, clicked in turn: **✓** shown together (the *Several methods* chart, the *Multi indicator
+  matrix*; default: the family of the method), then **★** (orange) the **active method** (tree, charts,
+  totals, comparison; the one before stays ✓), then unticked (the first other ticked method becomes the active
+  one; the active method alone cannot be unticked). A click on the name does the same; the family box ticks or
+  unticks the family but the active method. Decision: one control in place of a tick and a radio at
+  the right of the row, as the active method is always one of those shown. *Rules* lists the **rule sets** (*New*, *Copy*, *Rename*,
   *Delete*); one is in use, and its rules are built below the list (the form that was in
   the side panel's *Rules* panel, now here: it shows the rules of the tab in focus, and
   those of the workspace's set in Compare mode). The **Rule set** header and

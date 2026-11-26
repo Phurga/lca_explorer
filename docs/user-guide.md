@@ -22,8 +22,8 @@ create datasets, add Agribalyse, run it on a shared server, set it up by hand an
 - **Search** a process at the top of the page (what you type fills a first filter, *activity name contains*;
   add filters for the location, product or classification under the box; the **(i)** of a
   filter lists its values and what codes stand for); ↑/↓ and Enter to choose.
-- Pick the **impact method** in the *Methods* panel of the left panel (the round mark is the
-  active method, the ticks the ones shown together) and the group rules in its *Rules* tab (a rule
+- Pick the **impact method** in the *Methods* panel of the left panel (click a method's box
+  in turn: ✓ shown together, ★ the active method, then unticked) and the group rules in its *Rules* tab (a rule
   set shared by all tabs). The *Processes* tab lists the tabs open (right-click one for its pop-up). The
   **cut-off** and the other options of the view (List / Tree, names, colours…) are in the pane that
   the sliders icon of the status bar (or **v**) opens. **Ctrl/⌘ + ←** and **→** hide or show the left and the

@@ -285,7 +285,15 @@ input.swatch::-moz-color-swatch { border: none; border-radius: 4px; }
 .method-row:hover { background: var(--hover); }
 .method-head .count { font-weight: 400; font-size: 11px; }
 .method-tree input[type=checkbox] { accent-color: var(--accent); }
-.method-tree input.main { accent-color: var(--bar-negative); }
+/* A method's mark, clicked in turn: empty, ✓ shown together, ★ the main method */
+.method-mark {
+  flex: none; width: 15px; height: 15px; padding: 0; border: 1.5px solid var(--muted); border-radius: 3px; background: none;
+  font: 700 10px/12px system-ui, sans-serif; color: var(--panel); display: inline-flex; align-items: center; justify-content: center; cursor: pointer;
+}
+.method-mark:hover { border-color: var(--accent); }
+.method-mark.ticked { background: var(--accent); border-color: var(--accent); }
+.method-mark.main { background: var(--bar-negative); border-color: var(--bar-negative); font-size: 11px; }
+.method-row.main .name { font-weight: 600; }
 .rules li.dragging { opacity: 0.4; }
 .rules li button.icon-btn { display: inline-flex; align-items: center; padding: 3px 6px; }
 .rules li.disabled button.icon-btn { color: var(--muted); }

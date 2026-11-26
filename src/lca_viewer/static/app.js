@@ -5331,8 +5331,8 @@ const methodSummary = (info, method, chartMethods) => {
   return `${m.name[0]} · ${m.name.slice(1).join(" | ") || m.name[0]}${more ? ` (+${more})` : ""}`;
 };
 
-// The impact methods in one list nested by family: the round mark is the active method, the ticks the methods shown
-// together. ``note``: what a change here applies to.
+// The impact methods in one list nested by family: one mark per method, ✓ shown together, ★ the main (active)
+// method. ``note``: what a change here applies to.
 function MethodMenu({ info, method, setMethod, chartMethods, setChartMethods, note, format, setFormat, adder }) {
   return html`
     <div class="lens-menu">
@@ -5360,7 +5360,7 @@ function MethodMenu({ info, method, setMethod, chartMethods, setChartMethods, no
         <p class="note">${methodTitle(info.methods[method])}</p>
       <//>`}
       <h3 class="fold-head method-selection">Method selection
-        <${InfoTip} text="Legend. Round mark: the main method, for the single indicator, the tree and the charts. Tick: shown together, in the multi indicator charts and the matrix." label="Legend of the method selection" /></h3>
+        <${InfoTip} text="Click a method's box in turn: ✓ shown together, in the multi indicator charts and the matrix; ★ the main method, for the single indicator, the tree and the charts (the one before stays ticked); again to untick it (the first other ticked method becomes the main one). The family box ticks or unticks the whole family." label="Legend of the method selection" /></h3>
       <${MethodTree} info=${info} main=${method} setMain=${setMethod} selected=${chartMethods} setSelected=${setChartMethods} />
       ${adder && html`<${AddMethods} info=${info} ...${adder} />`}
     </div>`;
@@ -6612,10 +6612,9 @@ function CompareDifference({ results, base, target, setTarget, unitLabel, names,
     </table>`;
 }
 
-// The impact methods in one list nested by family: a tick for each method (or the whole family) shown together (the several
-// methods chart, the *Impact categories* heat map), and a round mark for the active method (tree, charts, comparison)
+// The impact methods in one list nested by family: one box per method, ✓ shown together (the several methods chart, the
+// *Impact categories* heat map), ★ the active method (tree, charts, comparison); a family box ticks the whole family
 function MethodTree({ info, main, setMain, selected, setSelected }) {
-  const group = useRef(newId("m")).current;  // radios of two lists open at once are not one group
   const [text, setText] = useState("");
   const [coverage, setCoverage] = useState(null);  // the method whose coverage report is open
   const [open, setOpen] = useState(() => new Set([info.methods[main].name[0]]));
@@ -6628,7 +6627,28 @@ function MethodTree({ info, main, setMain, selected, setSelected }) {
   const matches = (i) => !words.length || words.every((w) => info.methods[i].name.join(" ").toLowerCase().includes(w));
   const ticked = new Set(selected);
   const toggleOpen = (family) => setOpen((o) => { const next = new Set(o); next.has(family) ? next.delete(family) : next.add(family); return next; });
-  const tick = (indices, on) => setSelected(on ? [...new Set([...selected, ...indices])] : selected.filter((i) => !indices.includes(i)));
+  // The family box ticks or unticks its methods but the main one, which stays ticked
+  const tick = (indices, on) => setSelected(on ? [...new Set([...selected, ...indices])] : selected.filter((i) => i === main || !indices.includes(i)));
+  // One mark per method, clicked in turn: not shown → ✓ shown together → ★ main → not shown. The main method is
+  // always ticked; unticking it makes the first other ticked method the main one, so it needs another ticked
+  const stateOf = (i) => (i === main ? "main" : ticked.has(i) ? "ticked" : "off");
+  const others = selected.filter((i) => i !== main);
+  const step = (i) => {
+    const state = stateOf(i);
+    if (state === "off") setSelected([...selected, i]);
+    else if (state === "ticked") { setMain(i); if (!ticked.has(main)) setSelected([...selected, main]); }
+    else if (others.length) {
+      setMain([...others].sort((a, b) => a - b)[0]);
+      setSelected(others);
+    }
+  };
+  const MARKS = {
+    off: ["", "Not shown: click to show it together with the others"],
+    ticked: ["✓", "Shown together with the others: click to make it the main method"],
+    main: ["★", "The main method (single indicator, tree, charts, comparison): click to untick it"],
+  };
+  const markTitle = (i) => (stateOf(i) === "main" && !others.length
+    ? "The main method (single indicator, tree, charts, comparison): tick another method to untick this one" : MARKS[stateOf(i)][1]);
   return html`
     <input class="method-filter" placeholder="Filter the methods" value=${text} onInput=${(e) => setText(e.target.value)} aria-label="Filter the methods" />
     <div class="method-tree">
@@ -6636,7 +6656,7 @@ function MethodTree({ info, main, setMain, selected, setSelected }) {
         const shown = indices.filter(matches);
         if (!shown.length) return null;
         const expanded = open.has(family) || words.length > 0;
-        const n = shown.filter((i) => ticked.has(i)).length;
+        const n = shown.filter((i) => ticked.has(i) || i === main).length;  // the main method counts as ticked
         return html`
           <div class="method-family" key=${family}>
             <div class="method-head">
@@ -6647,14 +6667,13 @@ function MethodTree({ info, main, setMain, selected, setSelected }) {
               <span class="muted count">${n}/${shown.length}</span>
             </div>
             ${expanded && shown.map((i) => html`
-              <div class="method-row" key=${i}>
-                <input type="checkbox" checked=${ticked.has(i)} onChange=${(e) => tick([i], e.target.checked)}
-                  aria-label=${`${methodLabel(info.methods[i])} shown together`} title="Shown together with the others ticked" />
-                <span class="name" title=${methodLabel(info.methods[i])} onClick=${() => tick([i], !ticked.has(i))}>${methodParts(info.methods[i]).main}${methodParts(info.methods[i]).qual && html` <span class="muted">${methodParts(info.methods[i]).qual}</span>`}</span>
+              <div class=${`method-row ${stateOf(i)}`} key=${i}>
+                <button class=${`method-mark ${stateOf(i)}`} onClick=${() => step(i)} title=${markTitle(i)}
+                  aria-label=${`${methodLabel(info.methods[i])}: ${{ off: "not shown", ticked: "shown together", main: "the main method" }[stateOf(i)]}`}>${MARKS[stateOf(i)][0]}</button>
+                <span class="name" title=${`${methodLabel(info.methods[i])}
+${markTitle(i)}`} onClick=${() => step(i)}>${methodParts(info.methods[i]).main}${methodParts(info.methods[i]).qual && html` <span class="muted">${methodParts(info.methods[i]).qual}</span>`}</span>
                 <button class="info-btn" title="Coverage: the flows of the model it has no factor for, its factors on flows outside the model"
                   aria-label=${`Coverage of ${methodLabel(info.methods[i])}`} onClick=${() => setCoverage(i)}>i</button>
-                <input type="radio" class="main" name=${group} checked=${i === main} onChange=${() => setMain(i)}
-                  aria-label=${`${methodLabel(info.methods[i])}: the active method`} title="The active method: the tree, the charts and the comparison" />
               </div>`)}
           </div>`;
       })}
