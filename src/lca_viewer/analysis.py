@@ -415,6 +415,84 @@ def method_coverage(model: LCAModel, method: int, reference: int | None = None) 
     return out
 
 
+def direct_emitters(model: LCAModel) -> sp.csr_matrix:
+    """``B`` by rows (flows), explicit zeros dropped: row ``f`` lists the activities emitting (or taking) flow ``f``
+    directly. Worth keeping: ``np.diff(indptr)`` counts them."""
+    B = model.B.tocsr(copy=True)
+    B.eliminate_zeros()
+    return B
+
+
+def _relative(cfs: np.ndarray, units: np.ndarray) -> np.ndarray:
+    """|CF| over the largest |CF| of the flows of the same unit (factors in kg and in kBq do not compare)."""
+    out = np.zeros(len(cfs))
+    for u in pd.unique(units):
+        same = units == u
+        top = np.abs(cfs[same]).max(initial=0.0)
+        if top:
+            out[same] = np.abs(cfs[same]) / top
+    return out
+
+
+def compare_methods(model: LCAModel, a: int, b: int | None = None, s: np.ndarray | None = None,
+                    emitters: sp.csr_matrix | None = None) -> pd.DataFrame:
+    """The elementary flows of the model that impact category ``a`` (and ``b``, when given) characterises, one row per
+    flow (index: the row of ``B``), largest first.
+
+    Columns: ``cf_a``, ``rel_a`` (|CF| relative to the largest of the same unit in the method), ``emitters`` (activities
+    emitting it directly); with ``b``: ``cf_b``, ``rel_b``, ``ratio`` (``cf_b / cf_a``, NaN unless both have one) and
+    ``only`` ("a", "b" or ""); with ``s`` (operation levels of a functional unit): ``amount`` (its inventory, ``B·s``)
+    and ``impact_a`` (``impact_b``), the contribution of the flow to the score. Sorted by the largest share of a score
+    when ``s`` is given, else by the largest relative factor.
+
+    Only flows of ``B`` are known: a factor of the method on a flow that no activity of the model emits is not seen
+    here (it was dropped when the model was built).
+    """
+    # TODO(EF roadmap, phase 1): add the method's factors that link to no flow of B (recorded at build) as rows of
+    # their own (no index, ``linked = False``), once the model keeps them.
+    cf_a = model.methods[a].cfs
+    cf_b = model.methods[b].cfs if b is not None else np.zeros_like(cf_a)
+    flows = np.flatnonzero((cf_a != 0) | (cf_b != 0))
+    units = model.flows["unit"].astype(str).to_numpy() if "unit" in model.flows else np.full(len(cf_a), "")
+    emitters = direct_emitters(model) if emitters is None else emitters
+    table = pd.DataFrame({
+        "cf_a": cf_a[flows],
+        "rel_a": _relative(cf_a, units)[flows],
+        "emitters": np.diff(emitters.indptr)[flows],
+    }, index=pd.Index(flows, name="flow"))
+    weight = table["rel_a"].to_numpy().copy()
+    if b is not None:
+        table["cf_b"] = cf_b[flows]
+        table["rel_b"] = _relative(cf_b, units)[flows]
+        both = (table["cf_a"] != 0) & (table["cf_b"] != 0)
+        table["ratio"] = np.where(both, table["cf_b"] / table["cf_a"].where(both, 1.0), np.nan)
+        table["only"] = np.where(both, "", np.where(table["cf_a"] != 0, "a", "b"))
+        weight = np.maximum(weight, table["rel_b"].to_numpy())
+    if s is not None:
+        amount = (model.B @ s)[flows]
+        table["amount"] = amount
+        shares = []
+        for key, cfs in (("a", cf_a), ("b", cf_b if b is not None else None)):
+            if cfs is None:
+                continue
+            impact = amount * cfs[flows]
+            table[f"impact_{key}"] = impact
+            scale = np.abs(impact).sum()
+            shares.append(np.abs(impact) / scale if scale else np.zeros(len(flows)))
+        weight = np.maximum.reduce(shares)
+        # flows of the inventory first, then by factor: what this process emits leads, what it does not is still listed
+        order = np.lexsort((-table[["rel_a", "rel_b"] if b is not None else ["rel_a"]].max(axis=1).to_numpy(), -weight))
+    else:
+        order = np.argsort(-weight, kind="stable")
+    return table.iloc[order]
+
+
+def category_flows(model: LCAModel, method: int, s: np.ndarray | None = None,
+                   emitters: sp.csr_matrix | None = None) -> pd.DataFrame:
+    """The elementary flows that impact category ``method`` characterises: :func:`compare_methods` with one method."""
+    return compare_methods(model, method, None, s, emitters)
+
+
 def main_path(model: LCAModel, product: int, target: int, method: int,
               blocked: np.ndarray | None = None) -> list[int] | None:
     """Products from ``product`` to ``target`` along the path that carries the largest

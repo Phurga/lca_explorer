@@ -3582,6 +3582,142 @@ function FlowInfoPopup({ target, win, method, methods, onClose, onOpen, onBack }
     <//>`;
 }
 
+// ---------------------------------------------------------------- impact category (EF roadmap, phase 4)
+// The icon of an impact category seen from its flows (a ranked list): its pop-up, and the button that opens it
+function CategoryIcon() {
+  return html`<svg class="category-icon" width="13" height="13" viewBox="0 0 16 16" aria-hidden="true" fill="currentColor">
+    <rect x="1" y="2" width="14" height="2.4" rx="1" /><rect x="1" y="6.8" width="10" height="2.4" rx="1" /><rect x="1" y="11.6" width="5.5" height="2.4" rx="1" /></svg>`;
+}
+const CATEGORY_LIMIT = 300;  // rows drawn before "Show all"
+// A factor, or the range of factors of a group of flows
+const fmtRange = (s) => (s.min === s.max ? fmt(s.max) : `${fmt(s.min)} … ${fmt(s.max)}`);
+// The other methods, for *Compare with*: those of the same category name first (the same impact in another family or
+// version), then the others by family
+function compareChoices(methods, method) {
+  const category = (methods[method].name[1] || "").toLowerCase();
+  const same = [], families = new Map();
+  methods.forEach((m, i) => {
+    if (i === method) return;
+    if (category && (m.name[1] || "").toLowerCase() === category) same.push(i);
+    else families.set(m.name[0], [...(families.get(m.name[0]) || []), i]);
+  });
+  return { same, families: [...families] };
+}
+
+// An impact category seen from its elementary flows (the Methods panel: the list icon of a method): the flows of the
+// model that it characterises, their factor, the factor relative to the largest one of the same unit, how many
+// processes emit them directly and, in the supply chain of the process of the tab, their amount and contribution.
+// *Compare with* lines it up with another method (the factors of both, their ratio, the flows only one of them
+// characterises). Right-click (or double-click) a flow: its pop-up. ``target.category``: the method.
+function CategoryPopup({ target, win, info, root, amount, onClose, onBack, onFlow }) {
+  const method = target.category;
+  const methods = info.methods;
+  const [compare, setCompare] = useState(target.compare ?? null);
+  const [scoped, setScoped] = useState(true);
+  const [grouped, setGrouped] = useState({ name: false, compartment: false, subcompartment: false });
+  const [filter, setFilter] = useState("");
+  const [all, setAll] = useState(false);
+  useEffect(() => { setCompare(target.compare ?? null); setAll(false); }, [method]);
+  const keys = ["name", "compartment", "subcompartment"].filter((k) => grouped[k]);
+  const inProcess = scoped && !!root;
+  const { data, error } = useRequest("/api/category", {
+    method, ...(compare !== null ? { compare } : {}), ...(inProcess ? { root: root.index, amount } : {}), ...(keys.length ? { keys } : {}),
+  });
+  const body = useRef(null);
+  const both = !!data && data.compare !== null && data.compare !== undefined;
+  const a = methods[method], b = both ? methods[data.compare] : null;
+  const words = filter.toLowerCase().split(/\s+/).filter(Boolean);
+  const items = data ? data.items.filter((it) => words.every((w) => `${it.name} ${it.compartment}`.toLowerCase().includes(w))) : [];
+  const shown = all ? items : items.slice(0, CATEGORY_LIMIT);
+  const withAmount = !!data && data.in_inventory !== null;
+  const share = (v, k) => (data.totals[k] ? pct(v / data.totals[k]) : "");
+  // its pop-up shows its factor in this category, not in the method of the tab
+  const flowTarget = (it) => ({ flow: it.flows[0], flows: it.flows, labels: it.compartments, method });
+  const choices = useMemo(() => compareChoices(methods, method), [methods, method]);
+  const things = !keys.length ? "flows" : keys.includes("name") ? "substances" : "groups";
+  const csv = () => downloadCsv(`category-${methodLabel(a).replace(/[^\w-]+/g, "_")}.csv`,
+    ["name", "compartment", "unit", "factor_a_min", "factor_a_max", ...(both ? ["factor_b_min", "factor_b_max", "ratio_b_a"] : []),
+      "emitters", ...(withAmount ? ["amount", "impact_a", ...(both ? ["impact_b"] : [])] : [])],
+    items.map((it) => [it.name, it.compartment, it.unit, it.a.min, it.a.max, ...(both ? [it.b.min, it.b.max, it.ratio ?? ""] : []),
+      it.emitters, ...(withAmount ? [it.amount ?? "", it.a.impact, ...(both ? [it.b.impact] : [])] : [])]),
+    [`# ${methodTitle(a)}${both ? ` compared with ${methodTitle(b)}` : ""}`,
+      `# ${inProcess ? `in the supply chain of ${amount} ${root.unit || ""} ${root.name} (${root.location})` : "whole database"}`]);
+  const factorUnit = (m, it) => `${m.unit} / ${unit(it.unit)}`;
+  return html`
+    <${PopupWindow} target=${target} win=${win} label="Impact category" className="category-popup" width=${800} onClose=${onClose} onBack=${onBack}
+      menu=${[{ label: "Export CSV", run: csv, title: "The rows of the table (all of them, filtered)" }]}
+      onKeyDown=${popupKeys({ tabs: [], shown: null, setTab: () => {}, body, onClose })}
+      head=${html`
+        <div class="info-title"><span class="kind-mark category" title="Impact category: its elementary flows"><${CategoryIcon} /></span>
+          ${methodLabel(a)}</div>
+        <div class="muted">Impact category · ${a.unit}${data ? ` · ${data.flows} flows of this model characterised${both ? " by either method" : ""}` : ""}</div>`}>
+      <div class="category-controls">
+        <div class="view-group" role="group" aria-label="Scope">
+          <span class="view-group-label">In</span>
+          <span class="segmented">
+            <button class=${inProcess ? "primary" : ""} disabled=${!root} onClick=${() => setScoped(true)}
+              title=${root ? `The supply chain of ${root.name} (${root.location}): amount and contribution of each flow` : "No process in this tab"}>
+              ${root ? truncate(root.name, 32) : "The process"}</button>
+            <button class=${inProcess ? "" : "primary"} onClick=${() => setScoped(false)} title="The whole database: factors and emitters only">Database</button>
+          </span>
+        </div>
+        <div class="view-group" role="group" aria-label="Group by">
+          <span class="view-group-label">Group by</span>
+          ${[["name", "Substance", "Flows of a substance together"], ["compartment", "Compartment", "By compartment"], ["subcompartment", "Subcompartment", "By subcompartment"]].map(([k, label, hint]) => html`
+            <button class=${grouped[k] ? "primary" : ""} aria-pressed=${grouped[k]} title=${hint} onClick=${() => setGrouped({ ...grouped, [k]: !grouped[k] })}>${label}</button>`)}
+        </div>
+        <label class="view-group compare-with">
+          <span class="view-group-label">Compare with</span>
+          <select value=${compare ?? ""} onChange=${(e) => setCompare(e.target.value === "" ? null : Number(e.target.value))} aria-label="Compare with another method">
+            <option value="">—</option>
+            ${choices.same.length > 0 && html`<optgroup label=${`Same category: ${a.name[1]}`}>
+              ${choices.same.map((i) => html`<option value=${i}>${methods[i].name.join(" | ")}</option>`)}</optgroup>`}
+            ${choices.families.map(([family, list]) => html`<optgroup label=${family}>
+              ${list.map((i) => html`<option value=${i}>${methods[i].name.slice(1).join(" | ") || family}</option>`)}</optgroup>`)}
+          </select>
+        </label>
+        <input class="category-filter" placeholder="Filter flows" value=${filter} onInput=${(e) => setFilter(e.target.value)} aria-label="Filter flows" />
+      </div>
+      ${error && html`<div class="error">${error}</div>`}
+      <div class="info-body" ref=${body}>
+        ${!data && !error && html`<${Waiting} text="Reading the factors…" />`}
+        ${data && html`
+          <p class="note">${items.length} ${things}${words.length ? " matching" : ""}${withAmount ? ` · ${data.in_inventory} flows in the inventory of the process` : ""}.${both ? ` A: ${methodLabel(a)}; B: ${methodLabel(b)}.` : ""}
+            <${InfoTip} label="About this table" text=${`Relative: the factor over the largest of the method among the flows of the same unit. Emitters: the processes of the database emitting (or taking) the flow directly. ${withAmount ? "Amount: in the inventory of the process (its whole supply chain); impact and share: its contribution to the score. " : ""}Only flows of this model are listed: a factor of the method on a flow that no process emits is not known here. Right-click a flow for its details.`} /></p>
+          <table class="flows category-table">
+            <thead><tr>
+              <th>${!keys.length ? "Flow" : keys.includes("name") ? "Substance" : keys.join(", ")}</th>
+              ${both ? html`<th class="num" title=${methodTitle(a)}>factor A</th><th class="num" title=${methodTitle(b)}>factor B</th><th class="num" title="Factor B over factor A">B / A</th>`
+                : html`<th class="num">factor</th><th class="rel" title="Relative to the largest factor of the same unit">relative</th>`}
+              <th class="num" title="Processes emitting it directly, in the whole database">emitters</th>
+              ${withAmount && html`<th class="num">amount</th>`}
+              ${withAmount && (both ? html`<th class="num" title=${a.unit}>impact A</th><th class="num" title=${b.unit}>impact B</th>`
+                : html`<th class="num">${a.unit}</th><th class="pct">share</th>`)}
+            </tr></thead>
+            <tbody>${shown.map((it) => html`
+              <tr key=${it.flows.join(",")} class=${`${withAmount && !it.amount ? "absent" : ""} ${it.only ? `only-${it.only}` : ""}`}
+                  title="Right-click or double-click: its details" onContextMenu=${(e) => { e.preventDefault(); onFlow(flowTarget(it)); }}
+                  onDblClick=${() => onFlow(flowTarget(it))}>
+                <td>${it.name} <span class="muted">${it.compartment}</span></td>
+                ${both ? html`
+                  <td class="num" title=${factorUnit(a, it)}>${it.only === "b" ? html`<span class="muted">–</span>` : fmtRange(it.a)}</td>
+                  <td class="num" title=${factorUnit(b, it)}>${it.only === "a" ? html`<span class="muted">–</span>` : fmtRange(it.b)}</td>
+                  <td class="num">${it.only ? html`<span class=${`chip only only-${it.only}`}>only ${it.only.toUpperCase()}</span>` : it.ratio !== null ? fmt(it.ratio) : ""}</td>`
+                : html`
+                  <td class="num" title=${factorUnit(a, it)}>${fmtRange(it.a)} <span class="muted">/ ${unit(it.unit)}</span></td>
+                  <td class="rel"><span class="rel-bar" style=${{ width: `${Math.max(1, it.a.rel * 100)}%` }}></span></td>`}
+                <td class="num">${it.emitters}</td>
+                ${withAmount && html`<td class="num">${it.amount === null ? "" : it.amount ? `${fmtAmount(it.amount)} ${unit(it.unit)}` : html`<span class="muted">0</span>`}</td>`}
+                ${withAmount && (both ? html`<td class="num">${fmt(it.a.impact)}</td><td class="num">${fmt(it.b.impact)}</td>`
+                  : html`<td class="num">${fmt(it.a.impact)}</td><td class="pct">${share(it.a.impact, "a")}</td>`)}
+              </tr>`)}
+            </tbody>
+          </table>
+          ${!all && items.length > CATEGORY_LIMIT && html`<p class="note"><button class="link" onClick=${() => setAll(true)}>Show all ${items.length} ${things}</button></p>`}`}
+      </div>
+    <//>`;
+}
+
 // The processes in whose dataset a row (or a bundle's members) is an input: the nearest
 // process or merged row above it, past group and others rows
 function suppliedTo(row, rowsById) {
@@ -5264,7 +5400,7 @@ const methodSummary = (info, method, chartMethods) => {
 
 // The impact methods in one list nested by family: one mark per method, ✓ shown together, ★ the main (active)
 // method. ``note``: what a change here applies to.
-function MethodMenu({ info, method, setMethod, chartMethods, setChartMethods, note, format, setFormat, adder }) {
+function MethodMenu({ info, method, setMethod, chartMethods, setChartMethods, note, format, setFormat, adder, onCategory }) {
   return html`
     <div class="lens-menu">
       ${note && html`<p class="note">${note}</p>`}
@@ -5292,7 +5428,7 @@ function MethodMenu({ info, method, setMethod, chartMethods, setChartMethods, no
       <//>`}
       <h3 class="fold-head method-selection">Method selection
         <${InfoTip} text="Click a method's box in turn: ✓ shown together, in the multi indicator charts and the matrix; ★ the main method, for the single indicator, the tree and the charts (the one before stays ticked); again to untick it (the first other ticked method becomes the main one). The family box ticks or unticks the whole family." label="Legend of the method selection" /></h3>
-      <${MethodTree} info=${info} main=${method} setMain=${setMethod} selected=${chartMethods} setSelected=${setChartMethods} />
+      <${MethodTree} info=${info} main=${method} setMain=${setMethod} selected=${chartMethods} setSelected=${setChartMethods} onCategory=${onCategory} />
       ${adder && html`<${AddMethods} info=${info} ...${adder} />`}
     </div>`;
 }
@@ -5385,7 +5521,7 @@ const tabKeys = (ids, current, setCurrent) => (e) => {
 // methods and the group rules are chosen: *Processes*, *Methods* and *Rules* (the rule sets and the rules). The rules
 // shown are those of the tab in focus, which its own component puts in its slot (``groups-<tab id>``); in Compare mode
 // they are those of the workspace's set (``view``: a tab's view, where the colours picked for rules are kept).
-function LensPanel({ info, lens, tab, setTab, tabs, focusedTab, comparing, view, compareTabs, compare, setCompare, windows, onCollapse, adder }) {
+function LensPanel({ info, lens, tab, setTab, tabs, focusedTab, comparing, view, compareTabs, compare, setCompare, windows, onCollapse, adder, onCategory }) {
   const methods = lens.method < info.methods.length;
   return html`
     <div class="tabs" role="tablist" onKeyDown=${tabKeys(["processes", "methods", "groups"], tab, setTab)}>
@@ -5399,7 +5535,7 @@ function LensPanel({ info, lens, tab, setTab, tabs, focusedTab, comparing, view,
     </div>
     <div class="panel methods-panel" style=${{ display: tab === "methods" ? "" : "none" }}>
       ${methods && html`<${MethodMenu} info=${info} method=${lens.method} setMethod=${lens.setMethod} chartMethods=${lens.chartMethods} setChartMethods=${lens.setChartMethods}
-        format=${lens.nameFormat} setFormat=${lens.setNameFormat} adder=${adder} />`}
+        format=${lens.nameFormat} setFormat=${lens.setNameFormat} adder=${adder} onCategory=${comparing ? null : onCategory} />`}
     </div>
     <div class="groups-panel" style=${{ display: tab === "groups" ? "" : "none" }}>
       ${comparing && view && html`<${GroupPanel} info=${info} rules=${lens.rules} setRules=${lens.setRules} selectedRow=${null} view=${view.view} setView=${view.setView}
@@ -5413,6 +5549,7 @@ function LensPanel({ info, lens, tab, setTab, tabs, focusedTab, comparing, view,
 let keyboardOwner = null;
 const TAB_API = {};  // tab id -> { view, setView } of the tab: the comparison's group rules take their colours from a view
 const POPUP_OPENERS = {};  // tab id -> the function that opens the pop-up of the process of the tab at (x, y): the Processes panel
+const CATEGORY_OPENERS = {};  // tab id -> the function that opens the pop-up of an impact category (the Methods panel)
 const ROOT_SETTERS = {};  // tab id -> the function that makes a process the process of the tab (the search in the top bar)
 // ``initial``: { state } a saved view, { inherit, root? } settings taken from another tab,
 // or { defaultRoot: true } (first start: the model's default process)
@@ -5589,6 +5726,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
   if (!embedded) {
     ROOT_SETTERS[id] = (r) => { keyboardOwner = id; selectRoot(r); };
     POPUP_OPENERS[id] = (x, y) => root && openInfo({ index: root.index, row: null, x, y });
+    CATEGORY_OPENERS[id] = (category, x, y) => openInfo({ category, x, y });
     TAB_API[id] = { view, setView };
   }
   function selectRoot(r) {
@@ -6153,7 +6291,9 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
         onPart=${(part) => follow(part.flow !== undefined
           ? { flow: part.flow, activities: (bundle.emitters || []).map((m) => m.index) }
           : { index: part.index, row: null, parents: suppliedTo(bundle, rowsById) })} />`;
-    if (t.flow !== undefined) return html`<${FlowInfoPopup} ...${common} method=${method} methods=${info.methods}
+    if (t.category !== undefined) return html`<${CategoryPopup} ...${common} info=${info} root=${root} amount=${amount}
+        onFlow=${(next) => follow(next)} />`;
+    if (t.flow !== undefined) return html`<${FlowInfoPopup} ...${common} method=${t.method ?? method} methods=${info.methods}
         onOpen=${(index) => follow({ index, row: null })} />`;
     if (t.bundle) return null;
     return html`<${InfoPopup} ...${common} model=${info} method=${method} methodInfo=${methodInfo} rootImpact=${rootImpact} rowsById=${rowsById}
@@ -6545,7 +6685,7 @@ function CompareDifference({ results, base, target, setTarget, unitLabel, names,
 
 // The impact methods in one list nested by family: one box per method, ✓ shown together (the several methods chart, the
 // *Impact categories* heat map), ★ the active method (tree, charts, comparison); a family box ticks the whole family
-function MethodTree({ info, main, setMain, selected, setSelected }) {
+function MethodTree({ info, main, setMain, selected, setSelected, onCategory }) {
   const [text, setText] = useState("");
   const [open, setOpen] = useState(() => new Set([info.methods[main].name[0]]));
   const families = useMemo(() => {
@@ -6602,6 +6742,8 @@ function MethodTree({ info, main, setMain, selected, setSelected }) {
                   aria-label=${`${methodLabel(info.methods[i])}: ${{ off: "not shown", ticked: "shown together", main: "the main method" }[stateOf(i)]}`}>${MARKS[stateOf(i)][0]}</button>
                 <span class="name" title=${`${methodLabel(info.methods[i])}
 ${markTitle(i)}`} onClick=${() => step(i)}>${methodParts(info.methods[i]).main}${methodParts(info.methods[i]).qual && html` <span class="muted">${methodParts(info.methods[i]).qual}</span>`}</span>
+                ${onCategory && html`<button class="icon-plain category-open" onClick=${(e) => onCategory(i, e.clientX, e.clientY)}
+                  aria-label=${`The flows of ${methodLabel(info.methods[i])}`} title="Its elementary flows: factors, emitters; compare with another method"><${CategoryIcon} /></button>`}
               </div>`)}
           </div>`;
       })}
@@ -7596,6 +7738,7 @@ function App() {
           <${LensPanel} info=${info} lens=${lensApi} tab=${leftTab} setTab=${setLeftTab} tabs=${allTabs} focusedTab=${focusedTab} comparing=${comparing}
             view=${TAB_API[focusedTab] || Object.values(TAB_API)[0]} compareTabs=${compareTabs} compare=${compare} setCompare=${setCompare} onCollapse=${() => setLeftOpen(false)}
             adder=${origin && DATABASE ? { origin, onAdded: () => request("/api/info").then((i) => { clearAnswers(); setInfo(i); }).catch((e) => setError(e.message)) } : null}
+            onCategory=${(category, x, y) => CATEGORY_OPENERS[focusedTab]?.(category, x, y)}
             windows=${{ panes: panesOf(layout), current: focus, select: actions.select, focus: actions.focus, close: actions.close, drag: actions.drag, move: actions.move,
               closePane: actions.closePane, openProcess: actions.openProcess, reopen: actions.reopen, dragging,
               history: closedStack.current.map((list, at) => {

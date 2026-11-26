@@ -51,6 +51,13 @@ Large databases: one built with hundreds of thousands of processes opens, and ev
 
 - **Method selection**: one box per method instead of a tick and a round mark. Click it in turn: ✓ shown
   together, ★ the main method (the one before stays ✓), then unticked.
+- **Impact category view** (elementary flows, phase 4 of the roadmap): the list icon of a method in the *Methods*
+  panel opens a pop-up of the flows of the model that it characterises: factor, factor relative to the largest of the
+  same unit, the processes emitting each flow directly and, in the supply chain of the process of the tab (or the
+  whole database), its amount, impact and share of the score. Group by substance, compartment or subcompartment,
+  filter, export as CSV. **Compare with** another method (the same category of other families first) lines up the
+  factors of both, their ratio and the flows only one of them characterises. Right-click a flow for its pop-up.
+  API: `POST /api/category`.
 
 ## 1.5.1 - 2026-11-24
 

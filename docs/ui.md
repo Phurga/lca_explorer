@@ -533,6 +533,24 @@ API in `src/lca_viewer/server.py`.
   highlighted, filterable) and *Metadata* (name, compartment, unit, database
   id). For a substance spread over several compartments, chips switch between
   them. API: `/api/flow/{index}?method=&activities=`.
+- **Impact category pop-up** (the list icon at the right of a method in the *Methods* panel; not in Compare
+  mode): an impact category seen from its elementary flows, in the tab in focus. Decision: the "elementary flow
+  database" of a method is this view, reached from the method, rather than a database of its own on the Projects
+  page. The table lists the flows of the model with a factor ≠ 0: *factor* (a range for a group), *relative* (|factor|
+  over the largest of the method among the flows of the same unit, as a bar: factors in kg and in kBq do not
+  compare), *emitters* (processes of the database with the flow in their own inventory) and, with the scope on the
+  process of the tab (*In*: the process / *Database*), *amount* in its inventory, *impact* and *share* of the score
+  (the impacts add up to the score; flows not in the inventory are greyed and come last, by factor). *Group by*
+  substance, compartment, subcompartment (as in *Flow contribution*), a filter box, the first 300 rows then *Show
+  all*, *Export CSV* in its ⋯ menu. **Compare with** (the methods of the same category name first, e.g. the climate
+  change of another family or version, then by family) shows *factor A*, *factor B*, *B / A* and *only A* / *only B*
+  for the flows one method does not characterise, and both impacts; sorted by the largest share of either score
+  (else by relative factor). Right-click or double-click a flow (a substance: all its compartments) opens its
+  pop-up, with the factor of this category in its header, and ← comes back. The pop-up has the amber colour of
+  impact categories (a top border and the list icon), apart from processes. Only flows of the model are known: a
+  factor on a flow that no process emits was dropped when the model was built (the response's `unlinked` is for
+  that, once the build keeps them). API: `POST /api/category` (`method`, `compare`, `root`, `amount`, `keys`;
+  `analysis.compare_methods`, `category_flows`).
 - **Side panel — tabs** (what each shows is explained in a popup on its name, not in the panel):
   - *Custom view*: the view options (above), then the chart of the tree's rows: **single indicator**, the
     bars of the main method, or **multi indicator**, the methods ticked in the Methods panel as 100 % stacked

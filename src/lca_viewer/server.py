@@ -22,6 +22,7 @@ from pydantic import BaseModel
 
 from .analysis import (OTHER, flow_contribution, flow_contributors, group_contributors, main_path, matched,
                        method_coverage, supply_chain_contribution, uncharacterised)
+from .analysis import compare_methods, direct_emitters
 from .model import LCAModel
 from .query import (EXCHANGE_FIELDS, EXCHANGE_TYPES, FLOW_EXCHANGE_TYPES, derived_activities, derived_flows, evaluate,
                     field_options, search, suggest_values, without_exchange)
@@ -186,6 +187,18 @@ class ProcessFlowsRequest(BaseModel):
     activity: int
     """The process, in the supply chain of ``root``, whose own emissions are split by elementary flow."""
     cut: Cut = Cut()
+
+
+class CategoryRequest(BaseModel):
+    """The flows of an impact category (``method``), alone or against another one (``compare``)."""
+    method: int
+    compare: int | None = None
+    root: int | None = None
+    """A functional unit (with ``amount``): the amount of each flow in its inventory and its contribution. None: the
+    whole database (factors and emitters only)."""
+    amount: float = 1.0
+    keys: list[str] | None = None
+    """Group the flows by these fields (``name``, ``compartment``, ``subcompartment``), as ``/api/flows`` does."""
 
 
 class LocateRequest(ViewState):
@@ -888,6 +901,93 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
             "contributors": [{**meta(int(members[i])), "amount": float(amounts[i]), "impact": float(impacts[i]),
                               "flow": int(main[i])} for i in shown],
             "others": others,
+        }
+
+    emitter_rows: list = []  # B by rows, made at the first request (a few hundred ms on ecoinvent)
+
+    @app.post("/api/category")
+    def category(req: CategoryRequest):
+        """An impact category seen from its elementary flows: the flows of the model it characterises, their factor
+        (and that of ``compare``), the activities emitting them and, for ``root``, their contribution, largest first."""
+        if req.keys is not None and (not req.keys or any(k not in ("name", "compartment", "subcompartment") for k in req.keys)):
+            raise HTTPException(400, f"Unknown grouping {req.keys!r}")
+        check(activity=[req.root], method=[req.method, req.compare])
+        if not emitter_rows:
+            emitter_rows.append(direct_emitters(model))
+        rows = emitter_rows[0]
+        s = supply(req.root, req.amount) if req.root is not None else None
+        both = req.compare is not None
+        table = compare_methods(model, req.method, req.compare, s, rows)
+        table = table.join(flows[["name", "compartment", "subcompartment", "place", "unit"]].fillna(""))
+        sides = ["a", "b"] if both else ["a"]
+        totals = {k: float(table[f"impact_{k}"].sum()) for k in sides} if s is not None else {}
+        scales = {k: float(table[f"impact_{k}"].abs().sum()) for k in sides} if s is not None else {}
+
+        def item(g: pd.DataFrame, name: str, compartment: str, unit_: str, with_amount: bool) -> dict:
+            index = [int(i) for i in g.index]
+            side = {}
+            for k in sides:
+                cf = g[f"cf_{k}"]
+                side[k] = {"min": float(cf.min()), "max": float(cf.max()), "rel": float(g[f"rel_{k}"].max()),
+                           "impact": float(g[f"impact_{k}"].sum()) if s is not None else None}
+            single = len(index) == 1 or all(side[k]["min"] == side[k]["max"] for k in sides)
+            out = {
+                "name": name, "compartment": compartment, "unit": unit_, "flows": index,
+                "compartments": list(g["place"]),
+                "emitters": int(g["emitters"].iat[0]) if len(index) == 1 else int(np.unique(rows[index].indices).size),
+                "amount": float(g["amount"].sum()) if s is not None and with_amount else None,
+                "a": side["a"], "b": side.get("b"),
+                "ratio": None, "only": "",
+            }
+            if both:
+                a_on, b_on = (g["cf_a"] != 0).any(), (g["cf_b"] != 0).any()
+                out["only"] = "" if a_on and b_on else ("a" if a_on else "b")
+                if single and side["a"]["max"] and side["b"]["max"]:
+                    out["ratio"] = side["b"]["max"] / side["a"]["max"]
+            weight = max(side[k]["rel"] for k in sides)
+            if s is not None:
+                weight = max(abs(side[k]["impact"]) / scales[k] if scales[k] else 0.0 for k in sides) + 1e-9 * weight
+            return out, weight
+
+        if req.keys is None:  # one row per flow, in the order of compare_methods (thousands for some categories)
+            columns = {c: table[c].tolist() for c in table.columns}
+            made = []
+            for n, f in enumerate(table.index):
+                side = {k: {"min": columns[f"cf_{k}"][n], "max": columns[f"cf_{k}"][n], "rel": columns[f"rel_{k}"][n],
+                            "impact": columns[f"impact_{k}"][n] if s is not None else None} for k in sides}
+                ratio = columns["ratio"][n] if both else None
+                made.append(({
+                    "name": columns["name"][n], "compartment": columns["place"][n], "unit": columns["unit"][n],
+                    "flows": [int(f)], "compartments": [columns["place"][n]], "emitters": int(columns["emitters"][n]),
+                    "amount": columns["amount"][n] if s is not None else None,
+                    "a": side["a"], "b": side.get("b"),
+                    "ratio": None if ratio is None or ratio != ratio else ratio,  # NaN: not both
+                    "only": columns["only"][n] if both else "",
+                }, 0.0))
+        else:
+            columns = [*req.keys, *(["unit"] if "name" in req.keys else [])]
+            made = []
+            for key, g in table.groupby(columns, sort=False):
+                values = dict(zip(columns, key if isinstance(key, tuple) else (key,)))
+                places = ", ".join(str(values[c]) for c in ("compartment", "subcompartment") if values.get(c))
+                if "name" in values:
+                    n = g["compartment"].nunique()
+                    compartment = places or (f"{n} compartments" if n > 1 else g["place"].iat[0] if len(g) == 1
+                                             else f"{g['compartment'].iat[0]} · {len(g)} subcompartments")
+                    made.append(item(g, values["name"], compartment, values["unit"], True))
+                else:
+                    made.append(item(g, places or "(unspecified)", "", g["unit"].iat[0] if g["unit"].nunique() == 1 else "",
+                                     g["unit"].nunique() == 1))
+            made.sort(key=lambda x: -x[1])
+        return {
+            "method": req.method, "compare": req.compare,
+            "flows": int(len(table)),  # flows of the model characterised (by either method)
+            "in_inventory": int(np.count_nonzero(table["amount"])) if s is not None else None,
+            "totals": totals,
+            "items": [x for x, _ in made],
+            # TODO(EF roadmap, phase 1): the factors of the method(s) on flows that are not in the model (recorded at
+            # build); None until the model keeps them.
+            "unlinked": None,
         }
 
     @app.post("/api/locate")
