@@ -19,7 +19,8 @@
    tree diff, flow-level diff, what-ifs (substitutions) in a comparison.
 4. "Transparent markets" option.
 5. Elementary flows across the whole supply chain ("all N2O, wherever
-   emitted"); flow query builder in the grouping panel.
+   emitted"): done with the flow pop-up's *Emitted by* (7.2); flow query builder
+   in the grouping panel still to do.
 6. ~~Load a model directly from a Brightway project in the UI~~: done
    (*Projects*, see [data-import.md](data-import.md#loading-from-the-app)).
 7. **Elementary flows as objects of their own**, in phases (each one usable on its own):
@@ -27,10 +28,12 @@
       flows does it miss? *Uncharacterised* flows of a process's inventory with a reference method's factors,
       and the coverage of a method over the whole model, with its factors on flows outside the model
       (recorded at build; API only, to show in the method pop-up). See [ui.md](ui.md).
-   2. Flow tab: a flow opened as a tab (icon and flow type colour to tell it from a process), with its
-      factors and their rank in each category, its emitters (in the database, or in the supply chain of the
-      process it was opened from) and its supply-chain intensity per product (one solve with Aᵀ, as `G`).
-      Takes item 5 in.
+   2. ~~Flow pop-up and flow tab~~: first version done. *Flow* (the biosphere node), *exchange* (a flow in one
+      dataset) and *inventory flow* (a flow in a supply chain) told apart; Space opens the flow, i its exchange;
+      panels *Characterisation* (sortable, filterable, with the rank in each method), *Emitted by* (in the
+      database, and in the supply chain of the process it was opened from), *Same substance*, *Metadata* (CAS,
+      synonyms, name parts); a flow opened as a tab (icon and flow type colour). The supply-chain intensity per
+      product was tried and dropped. See [ui.md](ui.md).
    3. Flow search: a Processes / Flows switch in the search, with compartment, unit and "has a factor in
       the active method" filters.
    4. Impact category tab: the flows of a category with their factors, matched or not, how many processes

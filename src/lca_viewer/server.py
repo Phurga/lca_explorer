@@ -11,6 +11,7 @@ from __future__ import annotations
 import mimetypes
 import os
 import re
+import sqlite3
 from pathlib import Path
 
 import numpy as np
@@ -574,26 +575,142 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
         }
 
     @app.get("/api/flow/{index}")
-    def flow_info(index: int, method: int | None = None, activities: str = ""):
+    def flow_info(index: int, method: int | None = None, activities: str = "", folder: str | None = None,
+                  project: str | None = None):
         """An elementary flow: metadata, its characterisation factor in every method where it
         has one and, for ``activities`` (comma-separated), the exchanges of this flow in their
         datasets (amount, comment, uncertainty)."""
-        if not 0 <= index < len(flows):
-            raise HTTPException(404, f"No flow {index}")
+        check_flow(index)
+        check(method=[method])
         k = default_method if method is None else method
         f = flows.iloc[index]
-        factors = [{"method": i, "cf": float(m.cfs[index])} for i, m in enumerate(model.methods) if m.cfs[index] != 0]
+        # Rank of the flow in each method that characterises it: by |factor| among the flows of the model it characterises
+        CF = np.abs(model.CF)
+        mine = CF[:, index]
+        characterised = np.flatnonzero(mine)
+        ranks = (CF[characterised] > mine[characterised, None]).sum(axis=1) + 1
+        counts = np.count_nonzero(CF[characterised], axis=1)
+        factors = [{"method": int(i), "cf": float(model.methods[i].cfs[index]), "rank": int(r), "of": int(n)}
+                   for i, r, n in zip(characterised, ranks, counts)]
         exchanges = []
+        B = flow_rows()
         for j in (int(a) for a in activities.split(",") if a.strip()):
             check(activity=[j])
             records = [{k_: v for k_, v in e.items() if k_ not in ("type", "row")}
                        for e in model.exchange_details(j) if e.get("type") == "biosphere" and e.get("row") == index]
-            exchanges.append({"activity": meta(j), "exchanges": records})
+            exchanges.append({"activity": meta(j), "exchanges": records, "amount": float(B[index, j])})
+        description = flow_description(index, folder, project)
+        siblings = np.flatnonzero((flows["name"].to_numpy() == f["name"]) & (flows["unit"].to_numpy() == f["unit"]))
         return {
             "index": index, "name": f["name"], "compartment": f["compartment"], "subcompartment": f["subcompartment"],
-            "unit": f["unit"], "id": None if "id" not in flows or pd.isna(f["id"]) else str(f["id"]),
-            "method": k, "cf": float(model.methods[k].cfs[index]), "factors": factors,
+            "place": f["place"], "unit": f["unit"], "id": None if "id" not in flows or pd.isna(f["id"]) else str(f["id"]),
+            "resource": is_resource(index), "method": k, "cf": float(model.methods[k].cfs[index]), "factors": factors,
+            "location": description.pop("location", None), "description": description, "name_parts": name_parts(f["name"]),
+            "emitters": int(B[index].nnz), "same_substance": int(len(siblings) - 1),
             "exchanges_available": model.has_exchanges, "exchanges": exchanges,
+        }
+
+    # ------------------------------------------------ a flow (abstract: no quantity), its panels
+
+    flow_matrix = {}
+
+    def flow_rows() -> sp.csr_matrix:
+        """``B`` by rows (row f: the activities with an exchange of flow f), made once."""
+        if "B" not in flow_matrix:
+            flow_matrix["B"] = model.B.tocsr()
+        return flow_matrix["B"]
+
+    def check_flow(index: int) -> None:
+        if not 0 <= index < len(flows):
+            raise HTTPException(404, f"No flow {index}")
+
+    def is_resource(index: int) -> bool:
+        """A flow taken from nature (its compartment says so), else an emission."""
+        c = str(flows["compartment"].iat[index]).lower()
+        return c.startswith("natural resource") or c in ("resource", "raw", "raw materials", "land")
+
+    def flow_description(index: int, folder: str | None, project: str | None) -> dict:
+        """CAS number, formula, synonyms, location and comment of a flow: from the model (built with them), else from
+        the record of the Brightway project it was built from (``folder``, ``project``: models built before)."""
+        f = flows.iloc[index]
+        record = {}
+        if folder and project and "id" in flows and not pd.isna(f["id"]):
+            try:
+                from . import sources
+
+                base = str(Path(folder.strip().strip("'\"")).expanduser().resolve())
+                record = sources.flow_record(base, project, int(f["id"]))
+            except (OSError, ValueError, sqlite3.Error):
+                record = {}
+        out = {}
+        for field, key in (("cas", "CAS number"), ("formula", "formula"), ("synonyms", "synonyms"),
+                           ("location", "location"), ("comment", "comment")):
+            v = f.get(field) if field in flows else None
+            if v is None or (not isinstance(v, (tuple, list)) and pd.isna(v)) or (isinstance(v, (tuple, list)) and not v):
+                v = record.get(key) or (record.get("chemical formula") if field == "formula" else None)
+            if isinstance(v, (tuple, list)):
+                v = [str(x) for x in v if x] or None
+            elif v is not None and str(v).strip() == "":
+                v = None
+            if v is not None:
+                out[field] = v if isinstance(v, list) else str(v)
+        return out
+
+    def name_parts(name: str) -> dict:
+        """What the name of a flow says by its structure (ecoinvent: "Substance, qualifier, …"): the substance and
+        its qualifiers (fossil, biogenic, ion, in ground, …)."""
+        parts = [p.strip() for p in str(name).split(", ") if p.strip()]  # ", ": not the commas of "1,4-Butanediol"
+        return {"substance": parts[0] if parts else str(name), "qualifiers": parts[1:]}
+
+    def flow_meta(index: int) -> dict:
+        return {"flow": int(index), "name": flows["name"].iat[index], "compartment": flows["place"].iat[index],
+                "unit": flows["unit"].iat[index]}
+
+    @app.get("/api/flow/{index}/emitters")
+    def flow_emitters(index: int, root: int | None = None, amount: float = 1.0, limit: int = 50):
+        """The processes with an exchange of this flow (*Emitted by*, *Taken by* for a resource): the amount per unit
+        of their product, largest first; with ``root``, also the amount in that functional unit's supply chain
+        (the inventory flow: B·s), and they are ranked by it."""
+        check_flow(index)
+        check(activity=[root])
+        row = flow_rows()[index]
+        users, values = row.indices, row.data
+        keep = values != 0
+        users, values = users[keep], values[keep]
+        per_unit = values / model.diagonal[users]
+        if root is not None:
+            s = supply(root, amount)
+            scoped = values * s[users]
+            order = np.lexsort((-np.abs(per_unit), -np.abs(scoped)))
+            total = float(scoped.sum())
+        else:
+            scoped, total = np.zeros(len(users)), None
+            order = np.argsort(-np.abs(per_unit))
+        shown = order[:limit]
+        return {
+            **flow_meta(index), "resource": is_resource(index), "count": int(len(users)),
+            "in_supply_chain": int(np.count_nonzero(scoped)) if root is not None else None,
+            "total": total,
+            "emitters": [{**meta(int(users[i])), "per_unit": float(per_unit[i]),
+                          "amount": float(scoped[i]) if root is not None else None,
+                          "share": float(scoped[i] / total) if root is not None and total else None}
+                         for i in shown],
+        }
+
+    @app.get("/api/flow/{index}/same-substance")
+    def flow_same_substance(index: int, method: int | None = None):
+        """The flows of the same substance (name and unit) in other compartments, with their factor in ``method``
+        (default: the default method)."""
+        check_flow(index)
+        check(method=[method])
+        ks = [default_method if method is None else method]
+        name, unit = flows["name"].iat[index], flows["unit"].iat[index]
+        same = np.flatnonzero((flows["name"].to_numpy() == name) & (flows["unit"].to_numpy() == unit))
+        B = flow_rows()
+        return {
+            **flow_meta(index), "methods": ks,
+            "flows": [{**flow_meta(int(g)), "current": int(g) == index, "emitters": int(B[g].nnz),
+                       "cfs": [float(model.methods[k].cfs[g]) for k in ks]} for g in same],
         }
 
     @app.get("/api/activity/{index}/users")
