@@ -104,6 +104,20 @@ def test_single_product_dataset_in_an_existing_database(project):
     assert np.isclose(model.score(cheese)[0], 2 * 0.1 - 1 * 0.5)  # avoided feed is credited
 
 
+def test_build_reads_the_project_in_chunks(project, monkeypatch):
+    """Large databases (300k processes) go over SQLite's cap on the parameters of one statement: every
+    lookup by id or code is chunked, so a build with tiny chunks gives the same model."""
+    from lca_viewer import brightway
+
+    editing.write_dataset("toy", spec())
+    whole = brightway.from_brightway("toy", "my datasets", [GWP])
+    monkeypatch.setattr(brightway, "SQL_CHUNK", 1)
+    chunked = brightway.from_brightway("toy", "my datasets", [GWP])
+    assert whole.activities.equals(chunked.activities) and whole.flows.equals(chunked.flows)
+    assert (whole.A != chunked.A).nnz == 0 and whole.details == chunked.details
+    assert sorted(map(repr, whole.exchanges)) == sorted(map(repr, chunked.exchanges))
+
+
 def test_dataset_errors(project):
     with pytest.raises(ValueError, match="add up to 100"):
         editing.write_dataset("toy", spec(products=[{"name": "a", "amount": 1, "allocation": 50},

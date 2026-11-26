@@ -9,6 +9,15 @@ version, `main` can be ahead of it with work in progress.
 
 Changes on `dev`, not released yet.
 
+Large databases: one built with hundreds of thousands of processes opens, and every database is solved faster.
+
+- **New solver**: the processes are ordered suppliers first, so that only the loops of the technosphere (the
+  processes that supply each other) need a full factorisation, and the rest is solved step by step. One
+  factorisation serves the tree and the contributions alike. On a database of 300 000 processes on top of
+  ecoinvent it takes 2 s, where the previous solver ran out of time and memory; without Pardiso (macOS on
+  Apple silicon) ecoinvent is factorised in 4 s instead of 2 minutes.
+- **Fixed**: building a database of more than about 30 000 processes failed with "too many SQL variables".
+
 ## 1.5.1 - 2026-11-24
 
 LCA Explorer becomes free and open-source software, under the GNU AGPL 3.0 or later.
