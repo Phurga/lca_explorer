@@ -174,3 +174,25 @@ def test_api_search_and_unit_totals(model):
     assert found["unlinked"]["count"] == 3 and found["unlinked"]["matched"] == 1
     assert [it["name"] for it in found["unlinked"]["items"]] == ["Sulfur hexafluoride"]
     assert found["uncharacterised"]["matched"] == 0 and found["uncharacterised"]["units"] == []
+
+
+def test_added_methods_bring_their_unlinked_factors(tmp_path):
+    model = _model()
+    model.save(tmp_path / "m")
+    model = LCAModel.load(tmp_path / "m")
+    acid = Method(("acidification",), "mol H+-eq", np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]))
+    again = Method(("water use",), "m3", np.zeros(7))  # there already: passed over, its rows too
+    fresh = Method(("land use",), "pt", np.zeros(7))
+    unlinked = pd.DataFrame({"method": [0, 1, 2, 2], "id": [5, 6, 7, 8], "name": ["SO2", "Water", "Land A", "Land B"],
+                             "categories": [("air",), ("water",), ("soil",), ("soil",)], "unit": ["kilogram", "cubic meter",
+                             "square meter", "square meter"], "cf": [1.3, 1.0, 2.0, 3.0]}).astype({"method": "int32"})
+    assert model.add_methods([acid, again, fresh], unlinked=unlinked) == 2
+    assert [m.name[0] for m in model.methods][3:] == ["acidification", "land use"]
+    rows = model.unlinked[model.unlinked["method"] >= 3]
+    assert sorted(zip(rows["method"], rows["name"])) == [(3, "SO2"), (4, "Land A"), (4, "Land B")]
+    assert method_coverage(model, 4)["unlinked"]["name"].tolist() == ["Land A", "Land B"]
+    assert len(LCAModel.load(tmp_path / "m").unlinked) == 6  # written with the model
+    # A model built without them keeps none: a few would read as all of them
+    bare = _model(unlinked=False)
+    bare.add_methods([acid], unlinked=unlinked)
+    assert bare.unlinked is None
