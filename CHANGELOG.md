@@ -23,6 +23,21 @@ Large databases: one built with hundreds of thousands of processes opens, and ev
   Apple silicon) ecoinvent is factorised in 4 s instead of 2 minutes.
 - **Fixed**: building a database of more than about 30 000 processes failed with "too many SQL variables".
 - Impact methods are read from the project directly when a database is built: the same factors as before, faster.
+- **First start made simple**: the tree has the room, with its *Amount*, *Impact* and *Share* columns (*Comment* and the
+  others in the columns menu) and the direct emissions organised by compartment; the left panel (processes, methods,
+  rules) is closed and the side panel opens on the chart, its *Options* folded. The panels' widths follow the window
+  (the side panel leaves the tree at least 720 px) until you drag them. Only what you change is remembered, so these
+  defaults reach you where you never chose otherwise; *Default settings* (save menu) brings them all back, panels included.
+- **Organise by**: headings in the list, without grouping anything: the processes by *Type* (what *Split by type* did),
+  *Location* or *Activity type*, and the direct emissions by *Compartment* (the default), *Subcompartment* or *Type*.
+  *Hide others* and *Collapse singletons* are under *Rows*.
+- **Custom view** in one order: *Display*, *Cut-off*, *Names*, *Organise by*, *Group by*, *Color by*, then *Rows*.
+- **Color by** replaces *Colours*: a switch like *Group by* (*Rules*, *Type*, and *By…* location, activity type or
+  compartment), with the colours in use under it, each a swatch to click for another colour. The *Settings* pop-up
+  (*Colours…*) has one palette for every mode and lists the rules, the exchange types and the values given a colour.
+- **Fixed**: *Group by* let several groupings be chosen, but only the first applied (it leaves nothing for the next). It
+  now takes one for the processes (*Product*, or a field of *By…*) and one for the flows (*Substance*, *Compartment*,
+  *Subcompartment*), choosing one replaces the other, and *By…* names what it applies.
 
 ## 1.5.1 - 2026-11-24
 

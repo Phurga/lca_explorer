@@ -402,7 +402,7 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
             if node.flow is not None:
                 f = flows.iloc[node.flow]
                 return {"flow": int(node.flow), "name": f["name"], "location": f["place"], "unit": f["unit"],
-                        "waste": False, **common}
+                        "compartment": f["compartment"], "subcompartment": f["subcompartment"], "waste": False, **common}
             return {**meta(node.product), "unit": activities["unit"].iat[node.product],
                     "waste": bool(model.diagonal[node.product] < 0), **common}
 
