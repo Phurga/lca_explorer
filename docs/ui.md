@@ -533,6 +533,30 @@ API in `src/lca_viewer/server.py`.
   highlighted, filterable) and *Metadata* (name, compartment, unit, database
   id). For a substance spread over several compartments, chips switch between
   them. API: `/api/flow/{index}?method=&activities=`.
+- **Impact category pop-up** (the list icon at the right of a method in the *Methods* panel; not in Compare
+  mode): an impact category seen from its elementary flows, in the whole database. Decision: the "elementary flow
+  database" of a method is this view, reached from the method, rather than a database of its own on the Projects
+  page. The table lists the flows of the model with a factor ≠ 0: *factor*, *relative* (|factor| over the largest of
+  the method among the flows of the same unit, as a bar: factors in kg and in kBq do not compare) and *emitters*
+  (processes of the database with the flow in their own inventory), the largest relative factor first. Decision: not
+  in the supply chain of the process of the tab, for now (a pinned pop-up would have to follow the focus of the tab;
+  the API still takes `root`). **Organize by** *Factor* (one list), *Substance*, *Compartment* or *Subcompartment*:
+  every flow keeps its row, under a section header that folds (a substance's header gives the range of its factors);
+  sections come in the order of their largest flow. Decision: organize rather than group, since summing factors makes
+  no sense. A filter box, the first 300 flows then *Show all*, *Export CSV* in its ⋯ menu. **Compare with** (the
+  methods of the same category name first, e.g. the climate change of another family or version, then by family)
+  calls the method of the pop-up *ref.* (a tag by its title) and the chosen one *comp.* (a tag by the select, its
+  unit beside it): each name shows once, where it was chosen. Columns *ref.*, *comp.*, *comp. / ref.*, with their units
+  under the headers, and *only ref.* / *only comp.* for the flows one method does not characterise. When the units
+  differ (EF acidification in mol H+-Eq, CML in kg SO2-Eq), the unit of comp. and that of the ratio are flagged. Right-click or
+  double-click a flow opens its pop-up, with the factor of this category in its header, and ← comes back. The pop-up
+  has the amber colour of impact categories (a top border and the list icon), apart from processes. **Factors on flows
+  not in the model**, folded under the table: the factors of the method (and of comp.) that the calculation drops,
+  recorded when the model is built (a model built before that has none: rebuild it), the largest first, each with
+  what the model has under that name (*same flow*, *same name* and its compartment, or –). API: `POST /api/category`
+  (`method`, `compare`, `root`, `amount`, `unlinked_limit`; one item per flow, with `top` and `sub` compartments;
+  `unlinked`: per side, `count`, `same` and `items` as in the coverage API; `analysis.compare_methods`,
+  `category_flows`, `unlinked_factors`).
 - **Side panel — tabs** (what each shows is explained in a popup on its name, not in the panel):
   - *Custom view*: the view options (above), then the chart of the tree's rows: **single indicator**, the
     bars of the main method, or **multi indicator**, the methods ticked in the Methods panel as 100 % stacked
