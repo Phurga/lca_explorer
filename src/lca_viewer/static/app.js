@@ -4920,7 +4920,7 @@ function useSettled(value, ms = 250) {
 
 // A method to read the factors of another against (e.g. the one a new method replaces), among ``choices`` (the methods
 // ticked in the Methods panel): kept by name, since positions move when a model is rebuilt, and shared by the
-// Uncharacterised panels and the coverage report
+// Uncharacterised panels
 function useReferenceMethod(info, choices) {
   const [name, setName] = useState(() => { try { return JSON.parse(loadPreference("coverageReference", "null")); } catch { return null; } });
   const k = name ? methodNamed(info, name) : -1;
@@ -5069,75 +5069,6 @@ function UncharacterisedPanel({ info, root, amount, method, chartMethods, onFlow
           : html`<${CoverageTable} groups=${data.units} reference=${ref} info=${info} amount=${true} onFlowInfo=${onFlowInfo}
               emittersHead="Processes of the supply chain emitting it" isOpen=${isOpen} toggle=${toggle} />`}`}
     </div>`;
-}
-
-// The coverage report of a method (the (i) of a method in the Methods panel): over the whole model
-function CoverageDialog({ info, method, choices, onClose }) {
-  const [reference, setReference] = useReferenceMethod(info, choices);
-  const ref = reference === method ? null : reference;
-  const [text, setText] = useState("");
-  const query = useSettled(text.trim());
-  const [isOpen, toggle] = useFoldedUnits(query);
-  const [answer, setAnswer] = useState(null);
-  const [error, setError] = useState(null);
-  useEffect(() => {
-    let live = true;
-    setError(null);
-    const params = new URLSearchParams({ ...(ref != null ? { reference: ref } : {}), ...(query ? { query } : {}) }).toString();
-    request(`/api/methods/${method}/coverage${params ? `?${params}` : ""}`)
-      .then((d) => live && setAnswer(d), (e) => live && setError(e.message));
-    return () => { live = false; };
-  }, [method, ref, query]);
-  // The numbers of another reference would read as those of this one
-  const data = answer && answer.method === method && answer.reference === ref ? answer : null;
-  const m = info.methods[method];
-  const missing = data?.uncharacterised;
-  return html`
-    <${Modal} title=${`Coverage · ${methodLabel(m)}`} className="coverage-dialog" onClose=${onClose}>
-      ${error && html`<div class="error">${error}</div>`}
-      ${!data && !error && html`<${Waiting} text="Reading the factors…" />`}
-      ${data && html`
-        <table class="coverage-numbers">
-          <tr><td class="num">${data.linked}</td><td>factors on flows of this model${data.characterised_unused ? html` <span class="muted">(${data.characterised_unused} on flows no process exchanges)</span>` : ""}</td></tr>
-          <tr><td class="num">${data.unlinked ? data.unlinked.count : "?"}</td><td>factors on flows that are not in the model${data.unlinked
-            ? data.unlinked.same ? html` <span class="muted">(${data.unlinked.same} with the name and compartment of a flow of the model: likely another biosphere version)</span>` : ""
-            : html` <span class="muted">(not recorded for this model: rebuild it to see them)</span>`}</td></tr>
-          <tr><td class="num">${missing.count}</td><td>of the ${data.inventory} flows that processes exchange have no factor${ref != null
-            ? html`; <b class=${missing.gaps ? "gap-count" : ""}>${missing.gaps}</b> of them have one in the reference` : ""}</td></tr>
-        </table>
-        <div class="row">
-          <${MethodSelect} info=${info} value=${ref} exclude=${method} choices=${choices} onChange=${setReference} />
-          <${FlowSearch} value=${text} onChange=${setText} />
-        </div>
-        <section>
-          <h3>Flows with no factor <span class="muted">${data.query ? `${missing.matched} matching the search · ` : ""}by unit, ${ref != null ? "those of the reference, then " : ""}most emitting processes first</span>
-            <${InfoTip} label="About the flows with no factor" text="Elementary flows that at least one process of the model exchanges and that this method does not characterise, whatever the process. Processes: how many emit it; methods: how many methods of the model characterise it; reference: its factor in the method chosen above, among those ticked in the Methods panel (highlighted when it has one: likely a gap)." /></h3>
-          ${missing.count === 0 ? html`<div class="empty">None: every flow exchanged has a factor.</div>`
-            : missing.matched === 0 ? html`<div class="empty">None matches the search.</div>`
-            : html`<${CoverageTable} groups=${missing.units} reference=${ref} info=${info} emittersHead="Processes of the model emitting it"
-                isOpen=${isOpen} toggle=${toggle} />`}
-        </section>
-        ${data.unlinked && data.unlinked.count > 0 && html`
-          <section>
-            <h3>Factors on flows not in the model <span class="muted">${data.query ? `${data.unlinked.matched} matching the search · ` : ""}largest factor first${data.unlinked.items.length < data.unlinked.matched ? ` · the first ${data.unlinked.items.length}` : ""}</span>
-              <${InfoTip} label="About the factors outside the model" text="Factors of this method on flows that no process of the model exchanges: the calculation drops them. Usually flows the inventory never uses. A flow of the model with the same name (and compartment) means the method was made for another biosphere database or version: those factors never apply." /></h3>
-            ${data.unlinked.matched === 0 ? html`<div class="empty">None matches the search.</div>` : html`
-            <div class="tree coverage-tree">
-              <table>
-                <colgroup><col /><col style="width: 150px" /><col style="width: 200px" /></colgroup>
-                <thead><tr><th>Flow</th><th class="num">Factor</th><th>In the model</th></tr></thead>
-                <tbody>
-                  ${data.unlinked.items.map((it, i) => html`
-                    <tr key=${i} class=${it.match_kind === "same" ? "gap" : ""}>
-                      <td><span class="label" title=${`${it.name} · ${it.compartment}`}>${it.name} <span class="loc">${it.compartment}</span></span></td>
-                      <td class="num">${fmt(it.cf)} ${m.unit}/${unit(it.unit)}</td>
-                      <td>${it.match ? html`${it.match_kind === "same" ? "same flow, other id" : "same name"}${it.match_kind === "name" ? html` <span class="loc">${it.match.compartment}</span>` : ""}` : html`<span class="muted">–</span>`}</td>
-                    </tr>`)}
-                </tbody>
-              </table>
-            </div>`}
-          </section>`}`}
-    <//>`;
 }
 
 // ---------------------------------------------------------------- elementary flow contribution
@@ -6616,7 +6547,6 @@ function CompareDifference({ results, base, target, setTarget, unitLabel, names,
 // *Impact categories* heat map), ★ the active method (tree, charts, comparison); a family box ticks the whole family
 function MethodTree({ info, main, setMain, selected, setSelected }) {
   const [text, setText] = useState("");
-  const [coverage, setCoverage] = useState(null);  // the method whose coverage report is open
   const [open, setOpen] = useState(() => new Set([info.methods[main].name[0]]));
   const families = useMemo(() => {
     const map = new Map();
@@ -6672,13 +6602,10 @@ function MethodTree({ info, main, setMain, selected, setSelected }) {
                   aria-label=${`${methodLabel(info.methods[i])}: ${{ off: "not shown", ticked: "shown together", main: "the main method" }[stateOf(i)]}`}>${MARKS[stateOf(i)][0]}</button>
                 <span class="name" title=${`${methodLabel(info.methods[i])}
 ${markTitle(i)}`} onClick=${() => step(i)}>${methodParts(info.methods[i]).main}${methodParts(info.methods[i]).qual && html` <span class="muted">${methodParts(info.methods[i]).qual}</span>`}</span>
-                <button class="info-btn" title="Coverage: the flows of the model it has no factor for, its factors on flows outside the model"
-                  aria-label=${`Coverage of ${methodLabel(info.methods[i])}`} onClick=${() => setCoverage(i)}>i</button>
               </div>`)}
           </div>`;
       })}
-    </div>
-    ${coverage !== null && html`<${CoverageDialog} info=${info} method=${coverage} choices=${selected} onClose=${() => setCoverage(null)} />`}`;
+    </div>`;
 }
 
 function CompareMethods({ results, base, info, methods, sorted, setSorted }) {

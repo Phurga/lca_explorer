@@ -25,8 +25,8 @@
 7. **Elementary flows as objects of their own**, in phases (each one usable on its own):
    1. ~~Coverage of a method~~: first version done. Does a method characterise my model well, which important
       flows does it miss? *Uncharacterised* flows of a process's inventory with a reference method's factors,
-      and a coverage report of a method over the whole model, with its factors on flows outside the model
-      (recorded at build). See [ui.md](ui.md).
+      and the coverage of a method over the whole model, with its factors on flows outside the model
+      (recorded at build; API only, to show in the method pop-up). See [ui.md](ui.md).
    2. Flow tab: a flow opened as a tab (icon and flow type colour to tell it from a process), with its
       factors and their rank in each category, its emitters (in the database, or in the supply chain of the
       process it was opened from) and its supply-chain intensity per product (one solve with Aᵀ, as `G`).

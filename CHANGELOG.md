@@ -44,11 +44,10 @@ Large databases: one built with hundreds of thousands of processes opens, and ev
     (*Mass (kg)*, *Radioactivity (kBq)*…), largest amount first, with a search by name and compartment.
     **Compare with** one of the methods ticked in the *Methods* panel (e.g. the one a new method replaces) adds
     its factors, and puts the flows it characterises, likely gaps, first.
-  - The **(i)** of a method in the *Methods* panel opens its **coverage report** over the whole model: the flows
-    processes exchange that it has no factor for, and its factors on flows that are not in the model (which the
-    calculation drops), with the flow of the model of the same name when there is one (a method made for
-    another biosphere version), with the same table and search. Models record these factors when they are built: **rebuild** a model to see them
-    (*Projects*, *Options ▾* → *Rebuild and open*, now offered for a model that is up to date too).
+  - Models record, when they are built, the factors of each method on flows that are not in the model (which
+    the calculation drops), for a method's coverage over the whole model (API only for now): **rebuild** a
+    model to record them (*Projects*, *Options ▾* → *Rebuild and open*, now offered for a model that is up to
+    date too).
 
 - **Method selection**: one box per method instead of a tick and a round mark. Click it in turn: ✓ shown
   together, ★ the main method (the one before stays ✓), then unticked.

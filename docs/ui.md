@@ -239,15 +239,11 @@ API in `src/lca_viewer/server.py`.
   *Process contribution* panel and a third in Compare mode; rules copied from tab to tab,
   which then drifted apart). A first version let a tab have its own (a link in its header);
   it is dropped for now, which keeps the page simpler, and can come back. *Methods* is one
-  list nested by family (fold, filter box); the **(i)** of a method (on hover) opens its **coverage report**
-  over the whole model: its factors on flows of the model (and how many no process exchanges), its factors on
-  flows that are **not in the model** (the LCA drops them without a word; recorded at build in `unlinked.pkl`,
-  so a model built before says to rebuild it), each with the flow of the model that has the same name and
-  compartments (*same flow, other id*: the method was made for another biosphere database or version) or the
-  same name only, and the flows that processes exchange and it has **no factor** for, most emitting processes
-  first, by unit as in the *Uncharacterised* tab, with its *Compare with* reference (its gaps first) and its
-  flow search, which also filters the factors outside the model. API:
-  `GET /api/methods/{k}/coverage?reference=&query=` (`analysis.method_coverage`). Each method has
+  list nested by family (fold, filter box); the coverage of a method over the whole model (its factors on flows of the model
+  and on flows that are **not in the model**, which the LCA drops without a word, recorded at build in
+  `unlinked.pkl`; the flows processes exchange that it has no factor for) is served by
+  `GET /api/methods/{k}/coverage?reference=&query=` (`analysis.method_coverage`), for the method pop-up to come;
+  a first version showed it in a dialog from an (i) on each method, dropped as not good enough. Each method has
   one box, clicked in turn: **✓** shown together (the *Several methods* chart, the *Multi indicator
   matrix*; default: the family of the method), then **★** (orange) the **active method** (tree, charts,
   totals, comparison; the one before stays ✓), then unticked (the first other ticked method becomes the active
@@ -566,8 +562,8 @@ API in `src/lca_viewer/server.py`.
     process to the next (`localStorage`); while searching, every unit is open. **Search the flows** keeps the
     flows whose name or compartment has all the words typed (on the server, so the flows past the first 200 of
     a unit are found too). **Compare with** picks a reference method among those **ticked in the Methods
-    panel** (e.g. the one a new method replaces; kept in `localStorage` by name, shared with the coverage
-    report, and back when it is ticked again): its factor is added as a column, and the flows it characterises,
+    panel** (e.g. the one a new method replaces; kept in `localStorage` by name, and back when it is ticked
+    again): its factor is added as a column, and the flows it characterises,
     likely gaps of the active method, come first and are highlighted, with their count in the summary and on
     each unit's row. Right-click a flow for its pop-up; *CSV* exports the list. API: `POST
     /api/flows/uncharacterised` (`analysis.uncharacterised`; `query` for the search). Decisions: a tab of its
