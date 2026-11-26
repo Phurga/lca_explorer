@@ -330,6 +330,91 @@ def flow_contributors(model: LCAModel, product: int, flows, method: int, amount:
     return members, amounts[members], impacts[members], flows[per_flow[:, members].argmax(axis=0)]
 
 
+def uncharacterised(model: LCAModel, s: np.ndarray, method: int, reference: int | None = None) -> dict:
+    """The elementary flows of the inventory ``B·s`` (``s``: operation levels of a supply chain) that ``method`` has no
+    factor for, whatever their amount: what the score leaves out. For each flow (index order): its ``amount``, the
+    number of activities of the supply chain emitting it (``emitters``), the number of methods of the model that do
+    characterise it (``methods``) and, with ``reference``, the factor of that method (``reference_cf``). Also the
+    number of flows of the inventory (``inventory``) and of those characterised (``characterised``)."""
+    inventory = model.B @ s
+    cfs = model.methods[method].cfs
+    in_inventory = inventory != 0
+    flows = np.flatnonzero(in_inventory & (cfs == 0))
+    operating = np.flatnonzero(s)
+    B = model.B[:, operating].tocsr()[flows]
+    out = {
+        "flows": flows,
+        "amounts": inventory[flows],
+        "emitters": np.asarray((B != 0).sum(axis=1)).ravel(),
+        "methods": np.count_nonzero(model.CF[:, flows], axis=0) if model.methods else np.zeros(len(flows), dtype=int),
+        "inventory": int(np.count_nonzero(in_inventory)),
+        "characterised": int(np.count_nonzero(in_inventory & (cfs != 0))),
+    }
+    if reference is not None:
+        out["reference_cf"] = model.methods[reference].cfs[flows]
+    return out
+
+
+def _flow_keys(names, categories) -> list[tuple[str, tuple]]:
+    return [(str(n).strip().lower(), tuple(c) if isinstance(c, (tuple, list)) else ()) for n, c in zip(names, categories)]
+
+
+def method_coverage(model: LCAModel, method: int, reference: int | None = None) -> dict:
+    """How well ``method`` covers the elementary flows of the whole model (every activity, not one supply chain).
+
+    - ``linked``: its factors on flows of the model; ``characterised_unused``: of those, on flows no activity
+      exchanges (a row of ``B`` with no amount).
+    - ``uncharacterised``: the flows that at least one activity exchanges and that it has no factor for, as arrays
+      ``flows``, ``emitters`` (number of activities exchanging it), ``methods`` (number of methods of the model that
+      characterise it) and, with ``reference``, ``reference_cf``; most emitters first. ``inventory``: how many flows
+      activities exchange.
+    - ``unlinked``: its factors on flows that are not in the model (a table, see ``LCAModel.unlinked``; None when the
+      model did not record them), each with ``match``: a flow of the model with the same name and compartments
+      (``match_kind`` "same"), else with the same name only ("name"), else -1 (""): a flow of another biosphere
+      version, or one the inventory never uses.
+    """
+    cfs = model.methods[method].cfs
+    emitters = np.asarray((model.B != 0).sum(axis=1)).ravel()
+    used = emitters > 0
+    missing = np.flatnonzero(used & (cfs == 0))
+    order = np.lexsort((missing, -emitters[missing]))
+    missing = missing[order]
+    out = {
+        "linked": int(np.count_nonzero(cfs)),
+        "characterised_unused": int(np.count_nonzero((cfs != 0) & ~used)),
+        "inventory": int(np.count_nonzero(used)),
+        "uncharacterised": {
+            "flows": missing,
+            "emitters": emitters[missing],
+            "methods": np.count_nonzero(model.CF[:, missing], axis=0),
+        },
+        "unlinked": None,
+    }
+    if reference is not None:
+        out["uncharacterised"]["reference_cf"] = model.methods[reference].cfs[missing]
+    if model.unlinked is not None:
+        table = model.unlinked[model.unlinked["method"] == method].reset_index(drop=True).copy()
+        flows = model.flows
+        categories = flows["categories"] if "categories" in flows else pd.Series([()] * len(flows))
+        exact: dict[tuple, int] = {}
+        by_name: dict[str, int] = {}
+        for i, key in enumerate(_flow_keys(flows["name"], categories)):
+            exact.setdefault(key, i)
+            by_name.setdefault(key[0], i)
+        match, kind = [], []
+        for key in _flow_keys(table["name"], table["categories"]):
+            if key in exact:
+                match.append(exact[key]); kind.append("same")
+            elif key[0] in by_name:
+                match.append(by_name[key[0]]); kind.append("name")
+            else:
+                match.append(-1); kind.append("")
+        table["match"] = np.asarray(match, dtype=int)
+        table["match_kind"] = kind
+        out["unlinked"] = table
+    return out
+
+
 def main_path(model: LCAModel, product: int, target: int, method: int,
               blocked: np.ndarray | None = None) -> list[int] | None:
     """Products from ``product`` to ``target`` along the path that carries the largest

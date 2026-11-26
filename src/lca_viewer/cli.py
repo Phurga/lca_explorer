@@ -41,20 +41,23 @@ def _chosen_methods(bd, path) -> list[tuple]:
 
 def add_methods(args) -> None:
     """Read the factors of more impact methods for a built model, on its elementary flows, to a pickle
-    that the server adds to the model (:meth:`LCAModel.add_methods`)."""
+    that the server adds to the model (:meth:`LCAModel.add_methods`): ``{"methods", "unlinked"}``, the
+    methods and their factors on flows outside the model (``unlinked``'s ``method``: position in ``methods``)."""
     import pickle
 
     import bw2data as bd
     import pandas as pd
 
-    from .brightway import method_factors
+    from .brightway import _unlinked_factors, method_factors
 
     bd.projects.set_current(args.project)
     methods = _chosen_methods(bd, args.methods_file)
     print(f"Reading {len(methods)} impact methods", flush=True)
-    flows = pd.read_pickle(Path(args.model) / "flows.pkl")
+    flow_ids = pd.read_pickle(Path(args.model) / "flows.pkl")["id"].to_numpy()
+    loaded = method_factors(methods, flow_ids)
+    print("Reading the factors of the methods on flows outside the model", flush=True)
     with open(args.output, "wb") as f:
-        pickle.dump(method_factors(methods, flows["id"].to_numpy()), f)
+        pickle.dump({"methods": loaded, "unlinked": _unlinked_factors(methods, flow_ids)}, f)
 
 
 def _per_model(values, n: int, name: str) -> list:

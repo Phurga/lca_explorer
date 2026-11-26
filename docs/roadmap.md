@@ -22,6 +22,21 @@
    emitted"); flow query builder in the grouping panel.
 6. ~~Load a model directly from a Brightway project in the UI~~: done
    (*Projects*, see [data-import.md](data-import.md#loading-from-the-app)).
+7. **Elementary flows as objects of their own**, in phases (each one usable on its own):
+   1. ~~Coverage of a method~~: first version done. Does a method characterise my model well, which important
+      flows does it miss? *Uncharacterised* flows of a process's inventory with a reference method's factors,
+      and a coverage report of a method over the whole model, with its factors on flows outside the model
+      (recorded at build). See [ui.md](ui.md).
+   2. Flow tab: a flow opened as a tab (icon and flow type colour to tell it from a process), with its
+      factors and their rank in each category, its emitters (in the database, or in the supply chain of the
+      process it was opened from) and its supply-chain intensity per product (one solve with Aᵀ, as `G`).
+      Takes item 5 in.
+   3. Flow search: a Processes / Flows switch in the search, with compartment, unit and "has a factor in
+      the active method" filters.
+   4. Impact category tab: the flows of a category with their factors, matched or not, how many processes
+      emit them and their share in the current process; *Compare with* another method, flow by flow.
+   Parked: biosphere databases listed in *Projects*; mapping unlinked factors to flows (Edit mode);
+   regionalised factors; Sankey by flow.
 
 ## Ideas parked
 

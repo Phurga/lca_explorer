@@ -143,6 +143,10 @@ class LCAModel:
     """Optional metadata of each exchange (comment, uncertainty, pedigree, …) as ``(activity, type,
     row, data)``: ``row`` is a product (row of ``A``), or a flow (row of ``B``) for "biosphere"
     exchanges. Cached in an SQLite file, read one activity at a time."""
+    unlinked: pd.DataFrame | None = None
+    """Optional characterisation factors of the methods on flows that are not rows of ``B`` (dropped by the LCA): one
+    row per factor with ``method`` (position in ``methods``), ``id``, ``name``, ``categories``, ``unit`` and ``cf``.
+    None when not recorded (models built before it, or by importers that do not read the methods' own factors)."""
 
     def __post_init__(self):
         self.A = sp.csc_matrix(self.A, dtype=float)
@@ -261,10 +265,13 @@ class LCAModel:
         out = self.solver.solve_transposed(np.asarray(direct, dtype=float).T)
         return out.reshape(self.size, -1)
 
-    def add_methods(self, methods: list[Method]) -> int:
+    def add_methods(self, methods: list[Method], unlinked: pd.DataFrame | None = None) -> int:
         """Add impact methods to the model (those it has already are passed over), after the others, so the
         positions of these do not move. Only their columns of ``G`` are computed (one solve), and the model's
-        files are written again with them when it was loaded from a folder. Returns how many were added."""
+        files are written again with them when it was loaded from a folder. ``unlinked``: their factors on flows
+        outside the model, as :attr:`unlinked` (``method``: position in ``methods``), added to the model's when it
+        has them recorded (a model built without them keeps none: a part would read as the whole). Returns how
+        many were added."""
         import pickle
 
         have = {tuple(m.name) for m in self.methods}
@@ -285,6 +292,16 @@ class LCAModel:
                     pickle.dump(self.methods, f)
                 os.replace(tmp, self._directory / "methods.pkl")
                 self._write_cached_G(self._G)
+        if unlinked is not None and self.unlinked is not None:
+            at = {id(m): len(self.methods) - len(new) + j for j, m in enumerate(new)}  # their positions in the model
+            position = {k: at[id(m)] for k, m in enumerate(methods) if id(m) in at}
+            rows = unlinked[unlinked["method"].isin(list(position))].copy()
+            rows["method"] = rows["method"].map(position).astype("int32")
+            self.unlinked = pd.concat([self.unlinked, rows], ignore_index=True)
+            if self._directory is not None:
+                tmp = self._directory / "unlinked.tmp.pkl"
+                self.unlinked.to_pickle(tmp)
+                os.replace(tmp, self._directory / "unlinked.pkl")
         return len(new)
 
     def save(self, directory) -> None:
@@ -304,6 +321,10 @@ class LCAModel:
                 pickle.dump(self.details, f)
         if self.exchanges is not None:
             _write_exchanges(directory / "exchanges.sqlite", self.exchanges)
+        if self.unlinked is not None:
+            self.unlinked.to_pickle(directory / "unlinked.pkl")
+        else:
+            (directory / "unlinked.pkl").unlink(missing_ok=True)
 
     @staticmethod
     def method_names(directory) -> list[list[str]]:
@@ -330,6 +351,7 @@ class LCAModel:
             activities=pd.read_pickle(directory / "activities.pkl"),
             flows=pd.read_pickle(directory / "flows.pkl"),
             methods=methods,
+            unlinked=pd.read_pickle(directory / "unlinked.pkl") if (directory / "unlinked.pkl").exists() else None,
         )
         if (directory / "details.pkl").exists():
             model._details_path = directory / "details.pkl"

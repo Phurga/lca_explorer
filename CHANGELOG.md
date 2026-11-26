@@ -38,6 +38,15 @@ Large databases: one built with hundreds of thousands of processes opens, and ev
 - **Fixed**: *Group by* let several groupings be chosen, but only the first applied (it leaves nothing for the next). It
   now takes one for the processes (*Product*, or a field of *By…*) and one for the flows (*Substance*, *Compartment*,
   *Subcompartment*), choosing one replaces the other, and *By…* names what it applies.
+- **Coverage of an impact method**: does a method characterise your model well, and which flows does it miss?
+  - *Flow contribution* → **Uncharacterised**: the flows of a process's inventory that the active method has no
+    factor for, by unit, largest amount first. **Compare with** another method (e.g. the one a new method
+    replaces) adds its factors, and puts the flows it characterises, likely gaps, first.
+  - The **(i)** of a method in the *Methods* panel opens its **coverage report** over the whole model: the flows
+    processes exchange that it has no factor for, and its factors on flows that are not in the model (which the
+    calculation drops), with the flow of the model of the same name when there is one (a method made for
+    another biosphere version). Models record these factors when they are built: **rebuild** a model to see them
+    (*Projects*, *Options ▾* → *Rebuild and open*, now offered for a model that is up to date too).
 
 ## 1.5.1 - 2026-11-24
 

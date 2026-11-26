@@ -17,7 +17,7 @@ const SOURCE_URL = "https://github.com/Phurga/lca_explorer";
 // The calculations that only read the model (the rows of a tree, the contributions, the comparison) keep their answer
 // for the same question: a panel opened again, or a comparison of what a tab already shows, does not calculate again.
 // ``clearAnswers`` when the model changes.
-const CACHED = /^\/api\/(rows|global|global\/contributors|flows|flows\/contributors|flows\/of-process|compare)$/;
+const CACHED = /^\/api\/(rows|global|global\/contributors|flows|flows\/contributors|flows\/of-process|flows\/uncharacterised|compare)$/;
 const answers = new Map();  // question -> { promise, value }
 const clearAnswers = () => answers.clear();
 function request(url, body) {
@@ -1657,6 +1657,10 @@ function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
     return [
       ...(open ? [{ label: "Close (free its memory)", title: "Stop serving this database", run: () => unload(open) }] : []),
       ...(d.model?.outdated && !open && d.processes ? [{ label: "Open the old build", disabled: busy, title: "Open the model built before the database changed", run: () => start(body) }] : []),
+      // A build up to date can still lack what newer versions record (e.g. the factors of the methods outside the model)
+      ...(d.model && !d.model.outdated && !open && d.processes ? [{ label: "Rebuild and open", disabled: busy,
+        title: "Build the model again (about a minute for ecoinvent): for what a newer version of the app records, as the method factors on flows outside the model",
+        run: () => start({ ...body, rebuild: true }) }] : []),
       { label: "Rename…", disabled: busy || d.locked || !!open, title: d.locked ? "Unlock it first" : open ? "Close it first" : "Give the database another name", run: () => setForm({ kind: "renameDb", project: p.name, database: d.name }) },
       { label: "Remove…", danger: true, disabled: busy || d.locked, title: "Delete this database from the project", run: () => setForm({ kind: "removeDb", project: p.name, database: d.name }) },
     ];
@@ -4892,7 +4896,189 @@ function GlobalPanel({ info, root, amount, method, rules, view, rule, setRule, o
 // ---------------------------------------------------------------- elementary flow contribution
 // The whole inventory of the process, characterised: which substances make the
 // score. Clicking a flow lists the processes emitting it.
+// ---------------------------------------------------------------- coverage of the flows by a method
+// A method to read the factors of another against (e.g. the one a new method replaces): kept by name, since positions
+// move when a model is rebuilt, and shared by the Flow contribution panels and the coverage report
+function useReferenceMethod(info) {
+  const [name, setName] = useState(() => { try { return JSON.parse(loadPreference("coverageReference", "null")); } catch { return null; } });
+  const k = name ? methodNamed(info, name) : -1;
+  const choose = (i) => {
+    const n = i >= 0 ? info.methods[i].name : null;
+    setName(n);
+    savePreference("coverageReference", JSON.stringify(n));
+  };
+  return [k >= 0 ? k : null, choose];
+}
+
+function MethodSelect({ info, value, onChange, exclude, label = "Compare with" }) {
+  const families = useMemo(() => {
+    const map = new Map();
+    info.methods.forEach((m, i) => map.set(m.name[0], [...(map.get(m.name[0]) || []), i]));
+    return [...map];
+  }, [info]);
+  return html`
+    <label class="method-select" title="Its factors are shown next to the flows: a flow it characterises and the active method does not is likely a gap">
+      <span class="view-group-label">${label}</span>
+      <select value=${value ?? ""} onChange=${(e) => onChange(e.target.value === "" ? -1 : Number(e.target.value))} aria-label=${label}>
+        <option value="">no other method</option>
+        ${families.map(([family, indices]) => html`
+          <optgroup key=${family} label=${family}>
+            ${indices.map((i) => html`<option key=${i} value=${i} disabled=${i === exclude}>${info.methods[i].name.slice(1).join(" | ") || family}</option>`)}
+          </optgroup>`)}
+      </select>
+    </label>`;
+}
+
+// The flows of a list, one table per unit (amounts in different units do not add up), with the factor of the reference
+function CoverageTable({ groups, reference, info, amount = false, onFlowInfo, emittersHead }) {
+  const refUnit = reference != null ? info.methods[reference].unit : "";
+  const columns = 3 + (amount ? 1 : 0) + (reference != null ? 1 : 0);
+  return html`
+    <table class="flow-results coverage-table">
+      <thead><tr>
+        <th>Flow</th>
+        ${amount && html`<th class="num">amount</th>`}
+        <th class="num" title=${emittersHead}>processes</th>
+        <th class="num" title="Methods of the model with a factor on it">methods</th>
+        ${reference != null && html`<th class="num" title=${`Factor in ${methodLabel(info.methods[reference])}`}>reference</th>`}
+      </tr></thead>
+      ${groups.map((g) => html`
+        <tbody key=${g.unit}>
+          <tr class="unit-head"><th colspan=${columns}>${unit(g.unit) || "no unit"} <span class="muted">· ${g.count} ${g.count === 1 ? "flow" : "flows"}</span></th></tr>
+          ${g.items.map((it) => html`
+            <tr key=${it.flow} class=${reference != null && it.reference_cf ? "gap" : ""}
+                title=${onFlowInfo ? "Right-click for its details: its factors in every method, its metadata" : ""}
+                onContextMenu=${onFlowInfo && ((e) => onFlowInfo({ flow: it.flow, flows: [it.flow], labels: [it.compartment] }, e))}>
+              <td>${it.name} <span class="muted">${it.compartment}</span></td>
+              ${amount && html`<td class="num">${fmtAmount(it.amount)}</td>`}
+              <td class="num">${it.emitters}</td>
+              <td class="num">${it.methods}</td>
+              ${reference != null && html`<td class="num">${it.reference_cf ? `${fmt(it.reference_cf)} ${refUnit}/${unit(it.unit)}` : html`<span class="muted">–</span>`}</td>`}
+            </tr>`)}
+          ${g.count > g.items.length && html`<tr class="more"><td colspan=${columns}>+ ${g.count - g.items.length} more</td></tr>`}
+        </tbody>`)}
+    </table>`;
+}
+
+// The Flow contribution panel, *Uncharacterised*: the flows of the inventory that the active method has no factor for
+function UncharacterisedFlows({ info, root, amount, method, onFlowInfo }) {
+  const [reference, setReference] = useReferenceMethod(info);
+  const ref = reference === method ? null : reference;
+  const { data: answer, error } = useRequest("/api/flows/uncharacterised", { root: root.index, amount, method, ...(ref != null ? { reference: ref } : {}) });
+  // The last answer stays while the next one comes: not one for another method or reference, read as this one's
+  const data = answer && answer.method === method && answer.reference === ref ? answer : null;
+  const gaps = data?.gaps || 0;
+  const exportCsv = () => downloadCsv("uncharacterised-flows.csv",
+    ["name", "compartment", "unit", "amount", "processes", "methods", ...(ref != null ? [`factor in ${methodLabel(info.methods[ref])}`] : [])],
+    data.units.flatMap((g) => g.items.map((it) => [it.name, it.compartment, it.unit, it.amount, it.emitters, it.methods,
+      ...(ref != null ? [it.reference_cf] : [])])),
+    [`Flows of the inventory of ${root.name ?? `process ${root.index}`} with no factor in ${methodLabel(info.methods[method])}`]);
+  return html`
+    <div class="coverage">
+      <div class="row">
+        <${MethodSelect} info=${info} value=${ref} exclude=${method} onChange=${setReference} />
+        <span style="flex:1"></span>
+        ${data?.count > 0 && html`<button onClick=${exportCsv} title="The flows as a CSV file">CSV</button>`}
+      </div>
+      ${error && html`<div class="error">${error}</div>`}
+      ${!data && !error && html`<${Waiting} text="Reading the inventory…" />`}
+      ${data && html`
+        <p class="coverage-summary">
+          <b>${data.count}</b> of the ${data.inventory} flows of the inventory have no factor in <i>${methodLabel(info.methods[method])}</i>
+          ${ref != null && data.count > 0 && html`; <b class=${gaps ? "gap-count" : ""}>${gaps}</b> of them have one in the reference`}
+          <${InfoTip} label="About the uncharacterised flows" text="The elementary flows of this process's whole inventory (its supply chain included) that the active method gives no factor to: the score leaves them out. Amounts in different units do not compare, so there is one list per unit, the largest amount first. Processes: how many processes of the supply chain emit it; methods: how many methods of the model characterise it. A flow that the reference method characterises (highlighted) is likely a gap of the active method. Right-click a flow for its details." />
+        </p>
+        ${data.count === 0
+          ? html`<div class="empty">Every flow of the inventory has a factor in this method.</div>`
+          : html`<${CoverageTable} groups=${data.units} reference=${ref} info=${info} amount=${true} onFlowInfo=${onFlowInfo}
+              emittersHead="Processes of the supply chain emitting it" />`}`}
+    </div>`;
+}
+
+// The coverage report of a method (the (i) of a method in the Methods panel): over the whole model
+function CoverageDialog({ info, method, onClose }) {
+  const [reference, setReference] = useReferenceMethod(info);
+  const ref = reference === method ? null : reference;
+  const [data, setData] = useState(null);
+  const [error, setError] = useState(null);
+  useEffect(() => {
+    let live = true;
+    setError(null);
+    setData(null);  // the numbers of another reference would read as those of this one
+    request(`/api/methods/${method}/coverage${ref != null ? `?reference=${ref}` : ""}`)
+      .then((d) => live && setData(d), (e) => live && setError(e.message));
+    return () => { live = false; };
+  }, [method, ref]);
+  const m = info.methods[method];
+  const missingGroups = useMemo(() => {
+    if (!data) return [];
+    const units = new Map();
+    for (const it of data.uncharacterised.items) units.set(it.unit || "", [...(units.get(it.unit || "") || []), it]);
+    return [...units].map(([u, items]) => ({ unit: u, count: items.length, items }));
+  }, [data]);
+  const shown = data?.uncharacterised.items.length || 0;
+  return html`
+    <${Modal} title=${`Coverage · ${methodLabel(m)}`} className="coverage-dialog" onClose=${onClose}>
+      ${error && html`<div class="error">${error}</div>`}
+      ${!data && !error && html`<${Waiting} text="Reading the factors…" />`}
+      ${data && html`
+        <table class="coverage-numbers">
+          <tr><td class="num">${data.linked}</td><td>factors on flows of this model${data.characterised_unused ? html` <span class="muted">(${data.characterised_unused} on flows no process exchanges)</span>` : ""}</td></tr>
+          <tr><td class="num">${data.unlinked ? data.unlinked.count : "?"}</td><td>factors on flows that are not in the model${data.unlinked
+            ? data.unlinked.same ? html` <span class="muted">(${data.unlinked.same} with the name and compartment of a flow of the model: likely another biosphere version)</span>` : ""
+            : html` <span class="muted">(not recorded for this model: rebuild it to see them)</span>`}</td></tr>
+          <tr><td class="num">${data.uncharacterised.count}</td><td>of the ${data.inventory} flows that processes exchange have no factor${ref != null
+            ? html`; <b class=${data.uncharacterised.gaps ? "gap-count" : ""}>${data.uncharacterised.gaps}</b> of them have one in the reference` : ""}</td></tr>
+        </table>
+        <div class="row"><${MethodSelect} info=${info} value=${ref} exclude=${method} onChange=${setReference} /></div>
+        <section>
+          <h3>Flows with no factor <span class="muted">${ref != null ? "those of the reference, then " : ""}most emitting processes first${shown < data.uncharacterised.count ? ` · the first ${shown}` : ""}</span>
+            <${InfoTip} label="About the flows with no factor" text="Elementary flows that at least one process of the model exchanges and that this method does not characterise, whatever the process. Processes: how many emit it; methods: how many methods of the model characterise it; reference: its factor in the method chosen above (highlighted when it has one: likely a gap)." /></h3>
+          ${data.uncharacterised.count === 0 ? html`<div class="empty">None: every flow exchanged has a factor.</div>`
+            : html`<${CoverageTable} groups=${missingGroups} reference=${ref} info=${info} emittersHead="Processes of the model emitting it" />`}
+        </section>
+        ${data.unlinked && data.unlinked.count > 0 && html`
+          <section>
+            <h3>Factors on flows not in the model <span class="muted">largest factor first${data.unlinked.items.length < data.unlinked.count ? ` · the first ${data.unlinked.items.length}` : ""}</span>
+              <${InfoTip} label="About the factors outside the model" text="Factors of this method on flows that no process of the model exchanges: the calculation drops them. Usually flows the inventory never uses. A flow of the model with the same name (and compartment) means the method was made for another biosphere database or version: those factors never apply." /></h3>
+            <table class="flow-results coverage-table">
+              <thead><tr><th>Flow</th><th class="num">factor</th><th>in the model</th></tr></thead>
+              <tbody>
+                ${data.unlinked.items.map((it, i) => html`
+                  <tr key=${i} class=${it.match_kind === "same" ? "gap" : ""}>
+                    <td>${it.name} <span class="muted">${it.compartment}</span></td>
+                    <td class="num">${fmt(it.cf)} ${m.unit}/${unit(it.unit)}</td>
+                    <td>${it.match ? html`${it.match_kind === "same" ? "same flow, other id" : "same name"}${it.match_kind === "name" ? html` <span class="muted">${it.match.compartment}</span>` : ""}` : html`<span class="muted">–</span>`}</td>
+                  </tr>`)}
+              </tbody>
+            </table>
+          </section>`}`}
+    <//>`;
+}
+
 function FlowPanel({ info, root, amount, method, onLocate, onInfo, onFlowInfo, rules, setRules }) {
+  // What the panel lists: the contribution of the flows to the score, or the flows the method has no factor for
+  const [mode, setMode] = useState("contribution");
+  const modeSwitch = html`
+    <div class="view-group" role="group" aria-label="Flows listed">
+      <span class="view-group-label">Show</span>
+      <span class="segmented">
+        ${[["contribution", "Contribution", "The score split by elementary flow"], ["uncharacterised", "Uncharacterised", "The flows of the inventory that the method has no factor for"]].map(([k, label, hint]) => html`
+          <button class=${mode === k ? "primary" : ""} aria-pressed=${mode === k} title=${hint} onClick=${() => setMode(k)}>${label}</button>`)}
+      </span>
+    </div>`;
+  if (mode === "uncharacterised") {
+    return html`
+      <div class="panel">
+        ${modeSwitch}
+        <${UncharacterisedFlows} info=${info} root=${root} amount=${amount} method=${method} onFlowInfo=${onFlowInfo} />
+      </div>`;
+  }
+  return html`<${FlowContribution} info=${info} root=${root} amount=${amount} method=${method} onLocate=${onLocate} onInfo=${onInfo}
+    onFlowInfo=${onFlowInfo} rules=${rules} setRules=${setRules} top=${modeSwitch} />`;
+}
+
+function FlowContribution({ info, root, amount, method, onLocate, onInfo, onFlowInfo, rules, setRules, top }) {
   // The rows: by substance, by compartment, by subcompartment, alone or together; none: one row per flow
   const [grouped, setGrouped] = useState({ name: true, compartment: false, subcompartment: false });
   const keys = ["name", "compartment", "subcompartment"].filter((k) => grouped[k]);
@@ -4925,6 +5111,7 @@ function FlowPanel({ info, root, amount, method, onLocate, onInfo, onFlowInfo, r
 
   return html`
     <div class="panel">
+      ${top}
       ${error && html`<div class="error">${error}</div>`}
       ${result && html`
         <${ContributionList} items=${result.items} others=${result.others} total=${total} count=${result.count} what=${things}
@@ -6364,6 +6551,7 @@ function CompareDifference({ results, base, target, setTarget, unitLabel, names,
 function MethodTree({ info, main, setMain, selected, setSelected }) {
   const group = useRef(newId("m")).current;  // radios of two lists open at once are not one group
   const [text, setText] = useState("");
+  const [coverage, setCoverage] = useState(null);  // the method whose coverage report is open
   const [open, setOpen] = useState(() => new Set([info.methods[main].name[0]]));
   const families = useMemo(() => {
     const map = new Map();
@@ -6397,12 +6585,15 @@ function MethodTree({ info, main, setMain, selected, setSelected }) {
                 <input type="checkbox" checked=${ticked.has(i)} onChange=${(e) => tick([i], e.target.checked)}
                   aria-label=${`${methodLabel(info.methods[i])} shown together`} title="Shown together with the others ticked" />
                 <span class="name" title=${methodLabel(info.methods[i])} onClick=${() => tick([i], !ticked.has(i))}>${methodParts(info.methods[i]).main}${methodParts(info.methods[i]).qual && html` <span class="muted">${methodParts(info.methods[i]).qual}</span>`}</span>
+                <button class="info-btn" title="Coverage: the flows of the model it has no factor for, its factors on flows outside the model"
+                  aria-label=${`Coverage of ${methodLabel(info.methods[i])}`} onClick=${() => setCoverage(i)}>i</button>
                 <input type="radio" class="main" name=${group} checked=${i === main} onChange=${() => setMain(i)}
                   aria-label=${`${methodLabel(info.methods[i])}: the active method`} title="The active method: the tree, the charts and the comparison" />
               </div>`)}
           </div>`;
       })}
-    </div>`;
+    </div>
+    ${coverage !== null && html`<${CoverageDialog} info=${info} method=${coverage} onClose=${() => setCoverage(null)} />`}`;
 }
 
 function CompareMethods({ results, base, info, methods, sorted, setSorted }) {

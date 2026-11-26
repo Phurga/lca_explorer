@@ -584,6 +584,23 @@ table.results tr.selected td { background: var(--selected); }
 table.flow-results th.num { text-align: right; }
 table.flow-results td.num { white-space: nowrap; }
 table.flow-results tfoot th { font-weight: 600; border-bottom: none; }
+/* Coverage of the flows by a method: the Uncharacterised flows of the Flow contribution panel, the report of a method */
+.method-row .info-btn { visibility: hidden; }
+.method-row:hover .info-btn, .method-row .info-btn:focus-visible { visibility: visible; }
+.method-select { display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 100%; }
+.method-select select { min-width: 0; max-width: 280px; }
+.coverage-summary { margin: 6px 0; }
+.coverage-summary .gap-count, table.coverage-numbers .gap-count { color: var(--accent); }
+table.coverage-table { width: 100%; border-collapse: collapse; }
+table.coverage-table td, table.coverage-table th { padding: 2px 6px; }
+table.coverage-table td.num { text-align: right; white-space: nowrap; }
+table.coverage-table tr.unit-head th { text-align: left; padding-top: 10px; border-bottom: 1px solid var(--border); }
+table.coverage-table tr.gap td { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+table.coverage-table tr.more td { color: var(--muted); }
+.load-dialog.coverage-dialog { width: min(880px, 100%); max-height: 92vh; }
+table.coverage-numbers { border-collapse: collapse; margin: 8px 0; }
+table.coverage-numbers td { padding: 2px 6px; vertical-align: top; }
+table.coverage-numbers td.num { text-align: right; font-weight: 600; white-space: nowrap; }
 table.results tr.muted td { color: var(--muted); }
 /* Elementary flow pop-up */
 .flow-compartments { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }

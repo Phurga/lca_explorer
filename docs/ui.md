@@ -32,7 +32,8 @@ API in `src/lca_viewer/server.py`.
   a database now has one state and two buttons. **Open** (*Shown* for the one on screen; *Build and open* the
   first time and *Rebuild and open* when the project changed since the build, about a minute for
   ecoinvent, kept in `data/cache`), and **Options ▾**: *Close (free its memory)* for one that is open,
-  *Open the old build* when a rebuild is due, *Lock* / *Unlock*, *Rename…*, *Add database…* and *Remove…*. A project
+  *Open the old build* when a rebuild is due, *Rebuild and open* when none is (for what a newer version of the
+  app records, as the method factors on flows outside the model), *Lock* / *Unlock*, *Rename…*, *Add database…* and *Remove…*. A project
   has *Options ▾* too: *Add database…* and *Delete project…*. The projects are listed with the last one opened first
   (a project with an open database on top) and their databases folded, a click on a project's arrow
   shows them; both are remembered. Models that no listed database explains (built from
@@ -238,7 +239,14 @@ API in `src/lca_viewer/server.py`.
   *Process contribution* panel and a third in Compare mode; rules copied from tab to tab,
   which then drifted apart). A first version let a tab have its own (a link in its header);
   it is dropped for now, which keeps the page simpler, and can come back. *Methods* is one
-  list nested by family (fold, filter box): the round mark is the
+  list nested by family (fold, filter box); the **(i)** of a method (on hover) opens its **coverage report**
+  over the whole model: its factors on flows of the model (and how many no process exchanges), its factors on
+  flows that are **not in the model** (the LCA drops them without a word; recorded at build in `unlinked.pkl`,
+  so a model built before says to rebuild it), each with the flow of the model that has the same name and
+  compartments (*same flow, other id*: the method was made for another biosphere database or version) or the
+  same name only, and the flows that processes exchange and it has **no factor** for, most emitting processes
+  first, with the *Compare with* reference of the *Uncharacterised* flows (its gaps first). API:
+  `GET /api/methods/{k}/coverage?reference=` (`analysis.method_coverage`). The round mark is the
   **active method** (tree, charts, totals, comparison), the ticks the methods **shown
   together** (the *Several methods* chart, the *Multi indicator matrix*; default: the
   family of the method). *Rules* lists the **rule sets** (*New*, *Copy*, *Rename*,
@@ -546,6 +554,17 @@ API in `src/lca_viewer/server.py`.
     Right-click a substance or flow for its pop-up (below). API:
     `/api/flows`, `/api/flows/contributors` (`analysis.flow_contribution`,
     `flow_contributors`).
+    **Show: Contribution / Uncharacterised** (top of the panel). *Uncharacterised* lists the flows of the
+    same inventory that the active method has **no factor** for, which the score leaves out: one table per unit
+    (amounts in different units do not compare), the largest amount first, with how many processes of the
+    supply chain emit each one and how many methods of the model characterise it. **Compare with** picks a
+    reference method (e.g. the one a new method replaces; kept in `localStorage` by name, shared with the
+    coverage report): its factor is added as a column, and the flows it characterises, likely gaps of the
+    active method, come first and are highlighted, with their count in the summary. Right-click a flow for its
+    pop-up; *CSV* exports the list. API: `POST /api/flows/uncharacterised` (`analysis.uncharacterised`).
+    Decision: a switch in this panel rather than a panel of its own, since it reads the same inventory, and a
+    reference method chosen by the user rather than matched by category name, which differs between method
+    families.
   - *Rules* (in the **left panel**, *Rules*, not in the side panel): active rules (reorder, **edit** — the form below is filled in with
     the rule, with *Save rule* and *Cancel*; a group made from selected rows or a nested
     query can only be renamed —, remove; the eye switches a rule off and on without losing
