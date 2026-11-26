@@ -392,27 +392,36 @@ def method_coverage(model: LCAModel, method: int, reference: int | None = None) 
     }
     if reference is not None:
         out["uncharacterised"]["reference_cf"] = model.methods[reference].cfs[missing]
-    if model.unlinked is not None:
-        table = model.unlinked[model.unlinked["method"] == method].reset_index(drop=True).copy()
-        flows = model.flows
-        categories = flows["categories"] if "categories" in flows else pd.Series([()] * len(flows))
-        exact: dict[tuple, int] = {}
-        by_name: dict[str, int] = {}
-        for i, key in enumerate(_flow_keys(flows["name"], categories)):
-            exact.setdefault(key, i)
-            by_name.setdefault(key[0], i)
-        match, kind = [], []
-        for key in _flow_keys(table["name"], table["categories"]):
-            if key in exact:
-                match.append(exact[key]); kind.append("same")
-            elif key[0] in by_name:
-                match.append(by_name[key[0]]); kind.append("name")
-            else:
-                match.append(-1); kind.append("")
-        table["match"] = np.asarray(match, dtype=int)
-        table["match_kind"] = kind
-        out["unlinked"] = table
+    out["unlinked"] = unlinked_factors(model, method)
     return out
+
+
+def unlinked_factors(model: LCAModel, method: int) -> pd.DataFrame | None:
+    """The factors of ``method`` on flows that are not in the model (see ``LCAModel.unlinked``; None when the model did
+    not record them), each with ``match``: a flow of the model with the same name and compartments (``match_kind``
+    "same"), else with the same name only ("name"), else -1 (""): a flow of another biosphere version, or one the
+    inventory never uses."""
+    if model.unlinked is None:
+        return None
+    table = model.unlinked[model.unlinked["method"] == method].reset_index(drop=True).copy()
+    flows = model.flows
+    categories = flows["categories"] if "categories" in flows else pd.Series([()] * len(flows))
+    exact: dict[tuple, int] = {}
+    by_name: dict[str, int] = {}
+    for i, key in enumerate(_flow_keys(flows["name"], categories)):
+        exact.setdefault(key, i)
+        by_name.setdefault(key[0], i)
+    match, kind = [], []
+    for key in _flow_keys(table["name"], table["categories"]):
+        if key in exact:
+            match.append(exact[key]); kind.append("same")
+        elif key[0] in by_name:
+            match.append(by_name[key[0]]); kind.append("name")
+        else:
+            match.append(-1); kind.append("")
+    table["match"] = np.asarray(match, dtype=int)
+    table["match_kind"] = kind
+    return table
 
 
 def direct_emitters(model: LCAModel) -> sp.csr_matrix:
@@ -445,11 +454,9 @@ def compare_methods(model: LCAModel, a: int, b: int | None = None, s: np.ndarray
     and ``impact_a`` (``impact_b``), the contribution of the flow to the score. Sorted by the largest share of a score
     when ``s`` is given, else by the largest relative factor.
 
-    Only flows of ``B`` are known: a factor of the method on a flow that no activity of the model emits is not seen
-    here (it was dropped when the model was built).
+    Only flows of ``B`` are listed: the factors of a method on flows that are not in the model are in
+    :func:`unlinked_factors` (when the model recorded them).
     """
-    # TODO(EF roadmap, phase 1): add the method's factors that link to no flow of B (recorded at build) as rows of
-    # their own (no index, ``linked = False``), once the model keeps them.
     cf_a = model.methods[a].cfs
     cf_b = model.methods[b].cfs if b is not None else np.zeros_like(cf_a)
     flows = np.flatnonzero((cf_a != 0) | (cf_b != 0))

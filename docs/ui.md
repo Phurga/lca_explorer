@@ -550,10 +550,13 @@ API in `src/lca_viewer/server.py`.
   under the headers, and *only ref.* / *only comp.* for the flows one method does not characterise. When the units
   differ (EF acidification in mol H+-Eq, CML in kg SO2-Eq), the unit of comp. and that of the ratio are flagged. Right-click or
   double-click a flow opens its pop-up, with the factor of this category in its header, and ← comes back. The pop-up
-  has the amber colour of impact categories (a top border and the list icon), apart from processes. Only flows of the
-  model are known: a factor on a flow that no process emits was dropped when the model was built (the response's
-  `unlinked` is for that, once the build keeps them). API: `POST /api/category` (`method`, `compare`, `root`,
-  `amount`; one item per flow, with `top` and `sub` compartments; `analysis.compare_methods`, `category_flows`).
+  has the amber colour of impact categories (a top border and the list icon), apart from processes. **Factors on flows
+  not in the model**, folded under the table: the factors of the method (and of comp.) that the calculation drops,
+  recorded when the model is built (a model built before that has none: rebuild it), the largest first, each with
+  what the model has under that name (*same flow*, *same name* and its compartment, or –). API: `POST /api/category`
+  (`method`, `compare`, `root`, `amount`, `unlinked_limit`; one item per flow, with `top` and `sub` compartments;
+  `unlinked`: per side, `count`, `same` and `items` as in the coverage API; `analysis.compare_methods`,
+  `category_flows`, `unlinked_factors`).
 - **Side panel — tabs** (what each shows is explained in a popup on its name, not in the panel):
   - *Custom view*: the view options (above), then the chart of the tree's rows: **single indicator**, the
     bars of the main method, or **multi indicator**, the methods ticked in the Methods panel as 100 % stacked

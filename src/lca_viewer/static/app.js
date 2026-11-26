@@ -3623,6 +3623,38 @@ function organizeFlows(items, by) {
   return [...sections.values()];
 }
 
+// The factors of the method(s) of the category pop-up on flows that are not in the model (dropped by the calculation,
+// recorded when the model is built): folded under the table, each with what the model has under that name
+function UnlinkedFactors({ unlinked, both, a, b, open, setOpen, words }) {
+  const sides = [["a", a], ...(both && unlinked.b ? [["b", b]] : [])];
+  const rows = sides.flatMap(([k, m]) => unlinked[k].items.map((it) => ({ ...it, side: k, m })))
+    .filter((it) => words.every((w) => `${it.name} ${it.compartment}`.toLowerCase().includes(w)));
+  const count = (k) => unlinked[k].count;
+  const summary = sides.map(([k]) => `${both ? `${k === "a" ? "ref." : "comp."} ` : ""}${count(k)}`).join(" · ");
+  const match = (it) => (it.match_kind === "same" ? html`<span title="A flow of the model has the same name and compartments (another biosphere version?)">same flow</span>`
+    : it.match_kind === "name" ? html`<span title=${`A flow of the model has the same name: ${it.match.name} (${it.match.compartment})`}>same name · <span class="muted">${it.match.compartment}</span></span>`
+    : html`<span class="muted">–</span>`);
+  return html`
+    <div class="category-unlinked">
+      <button class="fold-toggle" onClick=${() => setOpen(!open)} aria-expanded=${open}
+        title="Factors of the method on flows that no process of the model has: the calculation drops them">
+        <span class="caret">${open ? "▾" : "▸"}</span> Factors on flows not in the model <span class="muted">· ${summary}</span></button>
+      ${open && html`
+        <table class="flows category-table">
+          <thead><tr>${both && html`<th></th>`}<th>Flow</th><th class="num">factor</th><th title="What the model has under that name">in the model</th></tr></thead>
+          <tbody>${rows.map((it, n) => html`
+            <tr key=${n}>
+              ${both && html`<td><span class=${`role-tag ${it.side === "a" ? "ref" : "comp"}`}>${it.side === "a" ? "ref." : "comp."}</span></td>`}
+              <td>${it.name} <span class="muted">${it.compartment}</span></td>
+              <td class="num" title=${`${it.m.unit} / ${unit(it.unit)}`}>${fmt(it.cf)} <span class="muted">/ ${unit(it.unit)}</span></td>
+              <td>${match(it)}</td>
+            </tr>`)}
+          </tbody>
+        </table>
+        ${sides.some(([k]) => count(k) > unlinked[k].items.length) && html`<p class="note">The largest ${unlinked.a.items.length} of each method.</p>`}`}
+    </div>`;
+}
+
 // An impact category seen from its elementary flows (the Methods panel: the list icon of a method), in the whole
 // database: the flows of the model that it characterises, their factor, the factor relative to the largest one of the
 // same unit and how many processes emit them directly. *Organize by* arranges them in sections (substance,
@@ -3637,6 +3669,7 @@ function CategoryPopup({ target, win, info, onClose, onBack, onFlow }) {
   const [folded, setFolded] = useState(new Set());
   const [filter, setFilter] = useState("");
   const [all, setAll] = useState(false);
+  const [outside, setOutside] = useState(false);  // the factors on flows not in the model, unfolded
   useEffect(() => { setCompare(target.compare ?? null); setAll(false); }, [method]);
   useEffect(() => setFolded(new Set()), [organize]);
   const { data, error } = useRequest("/api/category", { method, ...(compare !== null ? { compare } : {}) });
@@ -3716,7 +3749,7 @@ function CategoryPopup({ target, win, info, onClose, onBack, onFlow }) {
             title=${otherUnit ? `Not the unit of the reference (${a.unit}): comp. / ref. mixes units` : "Its unit, the same as the reference's"}>${picked.unit}</span>`}
         </label>
         <input class="category-filter" placeholder="Filter flows" value=${filter} onInput=${(e) => setFilter(e.target.value)} aria-label="Filter flows" />
-        <${InfoTip} label="About this table" text=${`The flows of this model that the method characterises, in the whole database. Relative: the factor over the largest of the method among the flows of the same unit. Emitters: the processes emitting (or taking) the flow directly. ${both ? "ref.: the method of this pop-up; comp.: the one it is compared with; comp. / ref.: the ratio of their factors (in their units). " : ""}A factor of the method on a flow that no process emits is not listed. Right-click a flow for its details.`} />
+        <${InfoTip} label="About this table" text=${`The flows of this model that the method characterises, in the whole database. Relative: the factor over the largest of the method among the flows of the same unit. Emitters: the processes emitting (or taking) the flow directly. ${both ? "ref.: the method of this pop-up; comp.: the one it is compared with; comp. / ref.: the ratio of their factors (in their units). " : ""}Factors of the method on flows that are not in the model are under the table${data && !data.unlinked ? " once the model is rebuilt (it did not record them)" : ""}. Right-click a flow for its details.`} />
       </div>
       ${error && html`<div class="error">${error}</div>`}
       <div class="info-body" ref=${body}>
@@ -3754,7 +3787,8 @@ function CategoryPopup({ target, win, info, onClose, onBack, onFlow }) {
             </tbody>
           </table>
           ${hidden && html`<p class="note"><button class="link" onClick=${() => setAll(true)}>Show all ${items.length} flows</button></p>`}
-          ${!items.length && html`<p class="note">No flow${words.length ? " matching" : ""}.</p>`}`}
+          ${!items.length && html`<p class="note">No flow${words.length ? " matching" : ""}.</p>`}
+          ${data.unlinked && html`<${UnlinkedFactors} unlinked=${data.unlinked} both=${both} a=${a} b=${b} open=${outside} setOpen=${setOutside} words=${words} />`}`}
       </div>
     <//>`;
 }

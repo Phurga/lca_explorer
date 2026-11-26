@@ -56,6 +56,8 @@ Large databases: one built with hundreds of thousands of processes opens, and ev
   to the largest of the same unit and the processes emitting each flow directly. Organize by substance, compartment or
   subcompartment (foldable sections), filter, export as CSV. **Compare with** another method (the same category of other families first) lines up the
   factors of both, their ratio and the flows only one of them characterises. Right-click a flow for its pop-up.
+  Under the table, the factors of the methods on flows that are not in the model (recorded at build), with what
+  the model has under that name.
   API: `POST /api/category`.
 
 ## 1.5.1 - 2026-11-24

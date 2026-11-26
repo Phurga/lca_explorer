@@ -130,3 +130,22 @@ def test_api_category_items_carry_their_compartments_for_the_pop_up_to_organize(
 def test_api_category_rejects_unknown_input(client):
     assert client.post("/api/category", json={"method": 5}).status_code == 404
     assert client.post("/api/category", json={"method": 0, "compare": 9}).status_code == 404
+
+
+def test_api_category_lists_the_factors_on_flows_outside_the_model(category_model):
+    # recorded at build: factors of the methods on flows that are not rows of B, matched to the model's flows by name
+    category_model.unlinked = pd.DataFrame({
+        "method": [0, 0, 1], "id": [101, 102, 103],
+        "name": ["Methane, fossil", "Dinitrogen monoxide", "Sulfur hexafluoride"],
+        "categories": [("air",), ("air", "lower stratosphere"), ("air",)],
+        "unit": ["kilogram"] * 3, "cf": [29.8, 273.0, 23500.0],
+    })
+    client = TestClient(create_app(category_model))
+    data = client.post("/api/category", json={"method": 0, "compare": 1}).json()
+    a, b = data["unlinked"]["a"], data["unlinked"]["b"]
+    assert a["count"] == 2 and a["same"] == 0
+    assert [it["name"] for it in a["items"]] == ["Dinitrogen monoxide", "Methane, fossil"]  # the largest factor first
+    assert a["items"][0]["match_kind"] == "name" and a["items"][0]["match"]["flow"] == 2
+    assert a["items"][1]["match_kind"] == "" and a["items"][1]["match"] is None
+    assert b["count"] == 1 and b["items"][0]["cf"] == 23500.0
+    assert set(client.post("/api/category", json={"method": 0}).json()["unlinked"]) == {"a"}

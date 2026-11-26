@@ -22,7 +22,7 @@ from pydantic import BaseModel
 
 from .analysis import (OTHER, flow_contribution, flow_contributors, group_contributors, main_path, matched,
                        method_coverage, supply_chain_contribution, uncharacterised)
-from .analysis import compare_methods, direct_emitters
+from .analysis import compare_methods, direct_emitters, unlinked_factors
 from .model import LCAModel
 from .query import (EXCHANGE_FIELDS, EXCHANGE_TYPES, FLOW_EXCHANGE_TYPES, derived_activities, derived_flows, evaluate,
                     field_options, search, suggest_values, without_exchange)
@@ -197,6 +197,8 @@ class CategoryRequest(BaseModel):
     """A functional unit (with ``amount``): the amount of each flow in its inventory and its contribution. None: the
     whole database (factors and emitters only). The pop-up does not use it for now: always the whole database."""
     amount: float = 1.0
+    unlinked_limit: int = 300
+    """At most this many of the factors of each method on flows outside the model (the largest first)."""
 
 
 class LocateRequest(ViewState):
@@ -830,6 +832,13 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
                 "gaps": sum(1 for it in items if it.get("reference_cf")), "matched": len(shown),
                 "units": by_unit(shown, lambda it: it["amount"], req.limit, total=True)}
 
+    def unlinked_items(table: pd.DataFrame, limit: int) -> list[dict]:
+        """The rows of a table of :func:`unlinked_factors`, the largest factor first, at most ``limit``."""
+        return [{"name": r.name, "compartment": ", ".join(str(c) for c in r.categories if c), "unit": r.unit,
+                 "cf": float(r.cf), "id": int(r.id) if r.id >= 0 else None, "match_kind": r.match_kind,
+                 "match": flow_row(int(r.match)) if r.match >= 0 else None}
+                for r in table.sort_values("cf", key=lambda c: -c.abs()).head(limit).itertuples(index=False)]
+
     @app.get("/api/methods/{method}/coverage")
     def coverage(method: int, reference: int | None = None, limit: int = 300, query: str = ""):
         """How the method covers the flows of the whole model: its factors on flows of the model, the flows activities
@@ -854,10 +863,7 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
                 "count": int(len(table)),
                 "same": int((table["match_kind"] == "same").sum()),
                 "matched": int(len(shown_unlinked)),
-                "items": [{"name": r.name, "compartment": ", ".join(str(c) for c in r.categories if c), "unit": r.unit,
-                           "cf": float(r.cf), "id": int(r.id) if r.id >= 0 else None, "match_kind": r.match_kind,
-                           "match": flow_row(int(r.match)) if r.match >= 0 else None}
-                          for r in shown_unlinked.sort_values("cf", key=lambda c: -c.abs()).head(limit).itertuples(index=False)],
+                "items": unlinked_items(shown_unlinked, limit),
             }
         return {"method": method, "reference": reference, "query": query, "linked": found["linked"],
                 "characterised_unused": found["characterised_unused"], "inventory": found["inventory"],
@@ -934,15 +940,23 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
                 "ratio": None if ratio is None or ratio != ratio else ratio,  # NaN: not both
                 "only": columns["only"][n] if both else "",
             })
+        # the factors of each method on flows that are not in the model (None: the model did not record them)
+        unlinked = None
+        if model.unlinked is not None:
+            unlinked = {}
+            for key, m in (("a", req.method), ("b", req.compare)):
+                if m is None:
+                    continue
+                found = unlinked_factors(model, m)
+                unlinked[key] = {"count": int(len(found)), "same": int((found["match_kind"] == "same").sum()),
+                                 "items": unlinked_items(found, req.unlinked_limit)}
         return {
             "method": req.method, "compare": req.compare,
             "flows": int(len(table)),  # flows of the model characterised (by either method)
             "in_inventory": int(np.count_nonzero(table["amount"])) if s is not None else None,
             "totals": totals,
             "items": items,
-            # TODO(EF roadmap, phase 1): the factors of the method(s) on flows that are not in the model (recorded at
-            # build); None until the model keeps them.
-            "unlinked": None,
+            "unlinked": unlinked,
         }
 
     @app.post("/api/locate")
