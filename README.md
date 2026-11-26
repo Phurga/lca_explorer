@@ -86,8 +86,11 @@ sh lca_explorer.cmd
 
 The first run sets everything up: it finds conda (or offers to install Miniforge in your user folder, no admin
 rights), creates a `lca_viewer` conda environment and installs the packages, which takes a few minutes. Every
-run then starts the app and opens http://localhost:8765. Extra arguments go to `lca-viewer serve`
-(`--port 8800`); `lca_explorer.cmd setup` runs the setup again.
+run then starts the app and opens http://localhost:8765 (or the next free port, if another program uses
+8765). The app runs in the background, so the terminal closes once it is open (its output goes to
+`data/server.log`), and it stops once you close its last tab or click **Shut down**. Run again while it runs,
+`lca_explorer.cmd` opens a tab on it. Extra arguments go to `lca-viewer serve` (`--port 8800`);
+`lca_explorer.cmd setup` runs the setup again.
 
 ## Versions and updating
 

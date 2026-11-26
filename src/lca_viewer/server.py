@@ -235,7 +235,12 @@ def _default_method(model: LCAModel) -> int:
     with the ecoinvent release, as ecoinvent_interface writes them), else the first one found.
     Methods with no factor on the model's flows are passed over: they score nothing (those of
     another biosphere of the project, as ecoinvent's on a BAFU added to the project)."""
-    names = [tuple(str(part).lower() for part in m.name) if m.cfs.any() else () for m in model.methods]
+    return _default_index([m.name if m.cfs.any() else () for m in model.methods])
+
+
+def _default_index(names: list) -> int:
+    """Of :func:`_default_method`, on the method names (an empty one: a method to pass over)."""
+    names = [tuple(str(part).lower() for part in name) for name in names]
     ef = ("ef v3.1", "climate change", "global warming potential (gwp100)")
     tests = [
         lambda n: n[-3:] == ef,
@@ -281,7 +286,13 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
     flows = derived_flows(model)
     root = _find(activities, *default_root.split("|", 1)) if default_root else None
     default_method = _default_method(model)
-    layout = _layout(model)
+    layouts = {}  # by number of methods: methods added to the model change it
+
+    def layout_of() -> str:
+        n = len(model.methods)
+        if n not in layouts:
+            layouts[n] = _layout(model)
+        return layouts[n]
 
     META_FIELDS = ["name", "reference_product", "location", "unit", "activity_type", "isic", "cpc", "database", "code"]
     rows_by_product = model.A.tocsr()  # row j: the activities using product j
@@ -329,7 +340,7 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
         return {
             "title": title,
             "activities": model.size,
-            "layout": layout,
+            "layout": layout_of(),
             "methods": [{"name": list(m.name), "unit": m.unit} for m in model.methods],
             "query_fields": QUERY_FIELDS,
             "group_by_fields": GROUP_BY_FIELDS,
@@ -840,6 +851,14 @@ class LoadRequest(BaseModel):
     reopen: bool = False
     """With ``rebuild`` of a database that is open: it keeps being served until the new build is
     ready, then it is replaced by it (the page is reloaded for it)."""
+    methods: list[list[str]] | None = None
+    """The impact methods of a build (names); None: those of the previous build, else all."""
+
+
+class AddMethodsRequest(BaseModel):
+    key: str
+    """A database that is open, built from Brightway."""
+    methods: list[list[str]]
 
 
 class UnloadRequest(BaseModel):
@@ -1022,6 +1041,8 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
     app = FastAPI(title="lca_viewer")
     loaded: dict[str, dict] = {}  # key -> {"key", "title", "path", "activities", "route"}
     jobs: dict[str, dict] = {}
+    # The jobs under way, which the server finishes before it stops (see lifetime.Lifetime)
+    app.state.running_jobs = lambda: [job["title"] for job in list(jobs.values()) if job["status"] == "running"]
     lock = threading.Lock()
     projects_cache: dict[str, list] = {}  # Brightway data folder -> its projects, as the Projects page last read them
     counts_file = data / "cache" / "node-counts.json"
@@ -1083,7 +1104,7 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
                 key, n = f"{model_key(path)}-{n}", n + 1
             route = Mount(f"/db/{key}", app=sub)
             app.router.routes.insert(0, route)  # before the "not loaded" page of /db/<key>/
-            loaded[key] = {"key": key, "title": title, "path": path, "activities": model.size, "route": route}
+            loaded[key] = {"key": key, "title": title, "path": path, "activities": model.size, "route": route, "model": model}
         return key
 
     for m in preload:
@@ -1142,12 +1163,14 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
             raise ValueError(lines[-1] if lines else "no output")
         return lines
 
-    def build(job: dict, folder: str, project: str, database: str, rebuild: bool, reopen: bool = False) -> dict:
+    def build(job: dict, folder: str, project: str, database: str, rebuild: bool, reopen: bool = False,
+              methods: list[list[str]] | None = None) -> dict:
         """The catalog entry of a Brightway database's model, built (in a separate process) if
         there is none yet, or again with ``rebuild`` (the page asks for it when the project
         changed since). A database that is open is not rebuilt, unless ``reopen``: it would mix its
         old matrices with the new metadata files. With ``reopen`` it keeps being served while the
-        new build is made, then is replaced by it (the caller opens it again)."""
+        new build is made, then is replaced by it (the caller opens it again). ``methods``: the
+        impact methods to build it with; None: those of the previous build, else all of the project's."""
         import importlib.util
 
         folder = str(Path(folder).expanduser().resolve())
@@ -1166,13 +1189,24 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
         job["message"] = building
         part = output.with_name(output.name + ".part")
         shutil.rmtree(part, ignore_errors=True)
+        if methods is None:
+            methods = LCAModel.method_names(output) or None  # a rebuild keeps the methods chosen before
+        chosen = output.with_name(output.name + ".methods.json")
+        args = ["build", "--project", project, "--database", database, "--output", str(part)]
+        if methods is not None:
+            if not methods:
+                raise ValueError("Choose at least one impact method")
+            chosen.parent.mkdir(parents=True, exist_ok=True)
+            chosen.write_text(json.dumps(methods), encoding="utf-8")
+            args += ["--methods-file", str(chosen)]
         try:
             # The steps of from_brightway, not Brightway's own messages
-            cli(job, folder, ["build", "--project", project, "--database", database, "--output", str(part)],
-                lambda line: line.startswith("Reading") and f"{building}: {line[0].lower()}{line[1:]}")
+            cli(job, folder, args, lambda line: line.startswith("Reading") and f"{building}: {line[0].lower()}{line[1:]}")
         except ValueError as e:
             shutil.rmtree(part, ignore_errors=True)
             raise ValueError(f"The build failed: {e}") from None
+        finally:
+            chosen.unlink(missing_ok=True)
         old = output.with_name(output.name + ".old")
         shutil.rmtree(old, ignore_errors=True)
         closed, failure = None, None
@@ -1206,7 +1240,7 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
 
     def run(job: dict, req: LoadRequest) -> dict:
         if req.brightway:
-            entry = build(job, req.brightway, req.project, req.database, req.rebuild, req.reopen)
+            entry = build(job, req.brightway, req.project, req.database, req.rebuild, req.reopen, req.methods)
         else:
             entry = next((m for m in sources.catalog(data) if Path(m["path"]) == Path(req.path).resolve()), None)
             if entry is None:
@@ -1243,7 +1277,7 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
                 found = {**(work(job, *args) or {}), "status": "done"}
             except Exception as e:  # reported to the page
                 found = {"status": "failed", "error": str(e) or type(e).__name__}
-            if target[0] != "load":  # before the page, seeing the job end, lists the projects again
+            if target[0] not in ("load", "methods"):  # before the page, seeing the job end, lists the projects again
                 projects_cache.clear()
             job["seconds"] = round(time.perf_counter() - job["_start"], 1)
             job.update(found)
@@ -1307,6 +1341,70 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
         target = ("load", req.path and str(Path(req.path).resolve()),
                   req.brightway and str(Path(req.brightway).expanduser().resolve()), req.project, req.database)
         return start(req.database or Path(req.path).name, target, run, req)
+
+    @app.get("/api/brightway/methods")
+    def brightway_methods(folder: str, project: str, database: str | None = None):
+        """The impact methods of a project, for the choice of those to build a database with:
+        ``selected``, those of its model when it was built before, ``default``, those offered
+        otherwise (the family of the default method: EF v3.1 when the project has it)."""
+        folder = str(Path(folder).expanduser().resolve())
+        try:
+            methods = sources.project_methods(folder, project)
+        except ValueError as e:
+            raise HTTPException(404, str(e))
+        selected = None
+        if database:
+            entry = next((m for m in sources.catalog(data) if built_from(m) == (folder, project, database)), None)
+            if entry and (Path(entry["path"]) / "A.npz").exists():
+                selected = LCAModel.method_names(entry["path"]) or None
+        default = []
+        if methods:
+            family = methods[_default_index([m["name"] for m in methods])]["name"][0]
+            default = [m["name"] for m in methods if m["name"][0] == family]
+        return {"methods": methods, "selected": selected, "default": default}
+
+    def add_methods_job(job: dict, key: str, names: list[list[str]]) -> dict:
+        m = loaded.get(key)
+        if m is None:
+            raise ValueError(f"{key} is not loaded")
+        entry = next((e for e in sources.catalog(data) if Path(e["path"]).resolve() == m["path"]), None)
+        origin = entry and built_from(entry)
+        if not origin:
+            raise ValueError("This database was not built from a Brightway project: its impact methods cannot be added to")
+        folder, project, _ = origin
+        model = m["model"]
+        have = {tuple(x.name) for x in model.methods}
+        names = [n for n in names if tuple(n) not in have]
+        if not names:
+            return {"added": 0, "message": "These methods are there already"}
+        chosen = m["path"].with_name(m["path"].name + ".add-methods.json")
+        out = m["path"].with_name(m["path"].name + ".add-methods.pkl")
+        chosen.write_text(json.dumps(names), encoding="utf-8")
+        job["message"] = f"Reading {len(names)} impact methods from {project}"
+        try:
+            cli(job, folder, ["add-methods", "--project", project, "--model", str(m["path"]),
+                              "--methods-file", str(chosen), "--output", str(out)])
+            import pickle
+
+            with open(out, "rb") as f:
+                methods = pickle.load(f)
+        finally:
+            chosen.unlink(missing_ok=True)
+            out.unlink(missing_ok=True)
+        job["message"] = f"Computing the impacts of {len(methods)} methods"
+        added = model.add_methods(methods)
+        return {"added": added, "message": f"{added} impact {'method' if added == 1 else 'methods'} added"}
+
+    @app.post("/api/methods/add")
+    def add_methods(req: AddMethodsRequest):
+        """Add impact methods to a database that is open (built from Brightway): their factors are read
+        from its project, then only their impacts are computed. Follow it with ``/api/jobs/<id>``."""
+        if req.key not in loaded:
+            raise HTTPException(404, f"{req.key} is not loaded")
+        if not req.methods:
+            raise HTTPException(400, "Choose at least one impact method")
+        return start("Add impact methods", ("methods", req.key), add_methods_job, req.key, req.methods,
+                     message="Reading the impact methods")
 
     @app.get("/api/jobs/{job_id}")
     def job_status(job_id: str):

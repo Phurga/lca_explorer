@@ -11,6 +11,16 @@ import scipy.sparse as sp
 from .model import LCAModel, Method
 
 
+# SQLite caps the parameters of one statement (999 before 3.32, 32766 after), so a lookup
+# on a large database (hundreds of thousands of processes) goes in chunks under that cap.
+SQL_CHUNK = 900
+
+
+def _chunks(values) -> list[list]:
+    values = list(values)
+    return [values[i:i + SQL_CHUNK] for i in range(0, len(values), SQL_CHUNK)]
+
+
 DETAIL_FIELDS = [
     "comment", "product_information", "included_activities_start", "included_activities_end",
     "start_date", "end_date", "activity type", "synonyms", "production amount", "filename",
@@ -61,7 +71,8 @@ def _exchanges(lca, rows: np.ndarray, activity_ids: np.ndarray) -> list[tuple]:
 
     product_of_row = np.empty(len(rows), dtype=int)
     product_of_row[rows] = np.arange(len(rows))  # technosphere row -> model product
-    databases = {db for db, in AD.select(AD.database).where(AD.id.in_(activity_ids.tolist())).distinct().tuples()}
+    databases = {db for chunk in _chunks(activity_ids.tolist())
+                 for db, in AD.select(AD.database).where(AD.id.in_(chunk)).distinct().tuples()}
     node_id = {(db, code): i for i, db, code in AD.select(AD.id, AD.database, AD.code).tuples()}
     out = []
     query = ED.select(ED.type, ED.input_database, ED.input_code, ED.output_database, ED.output_code, ED.data)
@@ -102,13 +113,14 @@ def _product_rows(lca, activity_ids: np.ndarray) -> np.ndarray:
     missing = activity_ids[rows < 0].tolist()
     if not missing:
         return rows
-    key_of = {i: (db, code) for i, db, code in AD.select(AD.id, AD.database, AD.code).where(AD.id.in_(missing)).tuples()}
+    key_of = {i: (db, code) for chunk in _chunks(missing)
+              for i, db, code in AD.select(AD.id, AD.database, AD.code).where(AD.id.in_(chunk)).tuples()}
     product_key, rank = {}, {}
-    for db in {db for db, _ in key_of.values()}:
-        codes = [code for d, code in key_of.values() if d == db]
+    for db, chunk in ((db, chunk) for db in {db for db, _ in key_of.values()}
+                      for chunk in _chunks(code for d, code in key_of.values() if d == db)):
         query = ED.select(ED.output_code, ED.input_database, ED.input_code, ED.type, ED.data).where(
             ED.type.in_(["production", "substitution", "technosphere"]), ED.output_database == db,
-            ED.output_code.in_(codes),
+            ED.output_code.in_(chunk),
         )
         for output_code, input_db, input_code, kind, data in query.tuples():
             # Best candidate first: functional, then a production exchange with an amount
@@ -124,9 +136,8 @@ def _product_rows(lca, activity_ids: np.ndarray) -> np.ndarray:
     id_of = {
         (db, code): i
         for db in {db for db, _ in product_key.values()}
-        for i, code in AD.select(AD.id, AD.code).where(
-            AD.database == db, AD.code.in_([c for d, c in product_key.values() if d == db])
-        ).tuples()
+        for chunk in _chunks({c for d, c in product_key.values() if d == db})
+        for i, code in AD.select(AD.id, AD.code).where(AD.database == db, AD.code.in_(chunk)).tuples()
     }
     for j in np.flatnonzero(rows < 0):
         key = product_key.get(key_of[activity_ids[j]])
@@ -140,6 +151,31 @@ def _product_rows(lca, activity_ids: np.ndarray) -> np.ndarray:
         raise ValueError("Several activities produce the same product, so the technosphere is not square, e.g. "
                          + "; ".join(names.get(int(i), str(i)) for i in shared))
     return rows
+
+
+def method_factors(names: list[tuple], flow_ids) -> list[Method]:
+    """The impact methods ``names`` of the current project, their factors on the elementary flows
+    ``flow_ids`` (node ids, the rows of a model's ``B``), as Brightway's LCA reads them: in float32
+    (its datapackages keep them so), the factors of one flow added up (a method may give it several,
+    by location), flows outside ``flow_ids`` left out."""
+    import bw2data as bd
+
+    row_of = {int(i): r for r, i in enumerate(flow_ids)}
+    out = []
+    for name in names:
+        method = bd.Method(tuple(name))
+        cfs = np.zeros(len(row_of))
+        for cf in method.load():
+            flow, value = cf[0], cf[1]
+            if isinstance(flow, (tuple, list)):  # a key, in data written before node ids
+                flow = bd.get_id(tuple(flow))
+            if isinstance(value, dict):
+                value = value.get("amount", 0.0)
+            r = row_of.get(int(flow))
+            if r is not None:
+                cfs[r] += float(np.float32(value))
+        out.append(Method(tuple(name), method.metadata.get("unit", ""), cfs))
+    return out
 
 
 def from_brightway(project: str, database: str, methods: list[tuple], log=None) -> LCAModel:
@@ -180,7 +216,8 @@ def from_brightway(project: str, database: str, methods: list[tuple], log=None) 
     log(f"Reading {len(activity_ids)} activities")
     records = {
         ds.id: ds.data
-        for ds in AD.select(AD.id, AD.data).where(AD.id.in_(activity_ids.tolist()))
+        for chunk in _chunks(activity_ids.tolist())
+        for ds in AD.select(AD.id, AD.data).where(AD.id.in_(chunk))
     }
     activities = pd.DataFrame(
         {
@@ -203,7 +240,8 @@ def from_brightway(project: str, database: str, methods: list[tuple], log=None) 
         flow_ids[row] = node_id
     flow_records = {
         ds.id: ds.data
-        for ds in AD.select(AD.id, AD.data).where(AD.id.in_(flow_ids.tolist()))
+        for chunk in _chunks(flow_ids.tolist())
+        for ds in AD.select(AD.id, AD.data).where(AD.id.in_(chunk))
     }
     flows = pd.DataFrame(
         {
@@ -215,11 +253,7 @@ def from_brightway(project: str, database: str, methods: list[tuple], log=None) 
     )
 
     log(f"Reading {len(methods)} impact methods")
-    loaded = []
-    for name in methods:
-        lca.switch_method(name)
-        cfs = np.asarray(lca.characterization_matrix.diagonal()).ravel()
-        loaded.append(Method(tuple(name), bd.methods[name].get("unit", ""), cfs))
+    loaded = method_factors(methods, flow_ids)
 
     details = [_details(records[i]) for i in activity_ids]
     log("Reading the exchanges")

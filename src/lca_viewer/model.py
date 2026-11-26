@@ -30,36 +30,13 @@ import pandas as pd
 import scipy.sparse as sp
 
 
-# The server answers requests in several threads, and a Pardiso solver (also a second one, for
-# another matrix) is not safe to use from two at once: overlapping solves return wrong numbers.
-_SOLVER_LOCK = threading.RLock()
+from .solver import SOLVER_LOCK as _SOLVER_LOCK, Solver
 
 
 def _factorized_solver(matrix: sp.csc_matrix):
     """Return ``solve(rhs)`` for ``matrix @ x = rhs``, with ``rhs`` 1D or 2D (safe to call from threads)."""
-    try:
-        from pypardiso import PyPardisoSolver
-
-        solver = PyPardisoSolver()
-        csr = sp.csr_matrix(matrix)
-        with _SOLVER_LOCK:
-            solver.factorize(csr)
-
-        def solve(rhs):
-            with _SOLVER_LOCK:
-                return solver.solve(csr, np.asarray(rhs, dtype=float))
-
-        return solve
-    except ImportError:
-        from scipy.sparse.linalg import splu
-
-        lu = splu(sp.csc_matrix(matrix))
-
-        def solve(rhs):
-            with _SOLVER_LOCK:
-                return lu.solve(np.asarray(rhs, dtype=float))
-
-        return solve
+    with _SOLVER_LOCK:
+        return Solver(matrix).solve
 
 
 # The files of the model that ``G`` is made from: if one changes (the model was built again), the cached ``G`` is not used
@@ -182,8 +159,8 @@ class LCAModel:
         self._G = None
         self._g_lock = threading.Lock()
         self._directory = None  # where the model was loaded from: G is kept there too
-        self._solve_A = None
-        self._solve_AT = None
+        self._solver = None  # one factorisation for A and A^T, made on first use
+        self._solver_lock = threading.Lock()
         self._U = None
         self._CF = None
         self._details_path = None
@@ -217,11 +194,19 @@ class LCAModel:
                 if self._G is None:
                     G = self._read_cached_G()
                     if G is None:
-                        solve = _factorized_solver(self.A.T.tocsc())
-                        G = solve(self.U.T).reshape(self.size, -1)
+                        G = self.solver.solve_transposed(self.U.T).reshape(self.size, -1)
                         self._write_cached_G(G)
                     self._G = G
         return self._G
+
+    @property
+    def solver(self) -> Solver:
+        """Factorisation of ``A``, for ``A`` and ``A^T`` (seconds for ecoinvent), made on first use."""
+        if self._solver is None:
+            with self._solver_lock:
+                if self._solver is None:
+                    self._solver = Solver(self.A)
+        return self._solver
 
     def _g_meta(self) -> dict | None:
         """What the cached ``G`` is made from: the files of the model (size and time) and its shape."""
@@ -267,19 +252,40 @@ class LCAModel:
         demand = np.zeros(self.size)
         demand[product] = amount
         # Factorised once: each functional unit is then one solve, not a new factorisation
-        if self._solve_A is None:
-            self._solve_A = _factorized_solver(self.A)
-        return self._solve_A(demand)
+        return self.solver.solve(demand)
 
     def cumulative(self, direct: np.ndarray) -> np.ndarray:
         """Cumulative impacts per unit of product (products x columns) of ``direct`` impacts per unit of
         activity operation (columns x activities), as ``G`` is of ``U``: ``(A^T)^-1 direct^T``. Used for
-        part of an inventory (a group of flows), so ``G`` itself is not kept factorised: the factorisation
-        of ``A^T`` is made on the first call and kept after it."""
-        if self._solve_AT is None:
-            self._solve_AT = _factorized_solver(self.A.T.tocsc())
-        out = self._solve_AT(np.asarray(direct, dtype=float).T)
+        part of an inventory (a group of flows)."""
+        out = self.solver.solve_transposed(np.asarray(direct, dtype=float).T)
         return out.reshape(self.size, -1)
+
+    def add_methods(self, methods: list[Method]) -> int:
+        """Add impact methods to the model (those it has already are passed over), after the others, so the
+        positions of these do not move. Only their columns of ``G`` are computed (one solve), and the model's
+        files are written again with them when it was loaded from a folder. Returns how many were added."""
+        import pickle
+
+        have = {tuple(m.name) for m in self.methods}
+        new = [m for m in methods if tuple(m.name) not in have and not have.add(tuple(m.name))]
+        if not new:
+            return 0
+        G = self.G  # read or computed first: its columns for the methods already there
+        with self._g_lock:
+            CF = np.vstack([self.CF, *[m.cfs for m in new]])
+            U_new = np.asarray((sp.csr_matrix(np.vstack([m.cfs for m in new])) @ self.B).todense())
+            G_new = self.solver.solve_transposed(U_new.T).reshape(self.size, -1)
+            # The arrays first, then the list of methods: a request in another thread sees no method without them
+            self._CF, self._U, self._G = CF, np.vstack([self.U, U_new]), np.hstack([G, G_new])
+            self.methods = [*self.methods, *new]
+            if self._directory is not None:
+                tmp = self._directory / "methods.tmp.pkl"
+                with open(tmp, "wb") as f:
+                    pickle.dump(self.methods, f)
+                os.replace(tmp, self._directory / "methods.pkl")
+                self._write_cached_G(self._G)
+        return len(new)
 
     def save(self, directory) -> None:
         from pathlib import Path
@@ -298,6 +304,17 @@ class LCAModel:
                 pickle.dump(self.details, f)
         if self.exchanges is not None:
             _write_exchanges(directory / "exchanges.sqlite", self.exchanges)
+
+    @staticmethod
+    def method_names(directory) -> list[list[str]]:
+        """The names of the impact methods of the model saved in ``directory`` ([] when there is none)."""
+        import pickle
+
+        try:
+            with open(Path(directory) / "methods.pkl", "rb") as f:
+                return [list(m.name) for m in pickle.load(f)]
+        except (OSError, pickle.UnpicklingError, EOFError):
+            return []
 
     @classmethod
     def load(cls, directory) -> "LCAModel":

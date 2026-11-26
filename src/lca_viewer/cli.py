@@ -15,7 +15,9 @@ def build(args) -> None:
     from .brightway import from_brightway
 
     bd.projects.set_current(args.project)
-    if args.methods:
+    if args.methods_file:
+        methods = _chosen_methods(bd, args.methods_file)
+    elif args.methods:
         methods = [m for m in bd.methods if m[0] in args.methods]
     else:
         methods = list(bd.methods)
@@ -23,6 +25,36 @@ def build(args) -> None:
     model = from_brightway(args.project, args.database, methods, log=lambda message: print(message, flush=True))
     model.save(args.output)
     print(f"{model.size} activities, {len(model.methods)} methods -> {args.output} ({time.perf_counter() - t:.1f}s)")
+
+
+def _chosen_methods(bd, path) -> list[tuple]:
+    """The methods named in the JSON file ``path`` (a list of names, each a list of strings) that the
+    project has, in the project's order."""
+    import json
+
+    chosen = {tuple(name) for name in json.loads(Path(path).read_text(encoding="utf-8"))}
+    methods = [m for m in bd.methods if tuple(m) in chosen]
+    if not methods:
+        raise SystemExit("None of the chosen impact methods is in the project")
+    return methods
+
+
+def add_methods(args) -> None:
+    """Read the factors of more impact methods for a built model, on its elementary flows, to a pickle
+    that the server adds to the model (:meth:`LCAModel.add_methods`)."""
+    import pickle
+
+    import bw2data as bd
+    import pandas as pd
+
+    from .brightway import method_factors
+
+    bd.projects.set_current(args.project)
+    methods = _chosen_methods(bd, args.methods_file)
+    print(f"Reading {len(methods)} impact methods", flush=True)
+    flows = pd.read_pickle(Path(args.model) / "flows.pkl")
+    with open(args.output, "wb") as f:
+        pickle.dump(method_factors(methods, flows["id"].to_numpy()), f)
 
 
 def _per_model(values, n: int, name: str) -> list:
@@ -33,6 +65,37 @@ def _per_model(values, n: int, name: str) -> list:
     if len(values) != n:
         raise SystemExit(f"Give {name} once, or once per --model ({n})")
     return values
+
+
+DEFAULT_PORT = 8765
+
+
+def _port_free(host: str, port: int) -> bool:
+    """Whether a server can listen on ``host:port`` now (no SO_REUSEADDR: on Windows it would let
+    the test bind succeed on a port another program listens on)."""
+    import socket
+
+    with socket.socket(socket.AF_INET6 if ":" in host else socket.AF_INET) as s:
+        try:
+            s.bind((host, port))
+        except OSError:
+            return False
+    return True
+
+
+def _choose_port(host: str, port: int | None) -> int:
+    """The port asked for, or else the first free one from :data:`DEFAULT_PORT` (another program,
+    e.g. a mail client's add-on, may already use it)."""
+    if port is not None:
+        if not _port_free(host, port):
+            raise SystemExit(f"Port {port} is already used by another program: choose another with --port")
+        return port
+    for candidate in range(DEFAULT_PORT, DEFAULT_PORT + 50):
+        if _port_free(host, candidate):
+            if candidate != DEFAULT_PORT:
+                print(f"Port {DEFAULT_PORT} is already used by another program, using {candidate}")
+            return candidate
+    raise SystemExit(f"No free port from {DEFAULT_PORT} to {DEFAULT_PORT + 49}: choose one with --port")
 
 
 def init_brightway() -> None:
@@ -63,6 +126,7 @@ def serve(args) -> None:
     import uvicorn
 
     init_brightway()
+    args.port = _choose_port(args.host, args.port)
 
     if args.model:
         n = len(args.model)
@@ -100,9 +164,26 @@ def serve(args) -> None:
         import webbrowser
 
         host = "localhost" if args.host in ("127.0.0.1", "0.0.0.0") else args.host
-        print("Stop with Ctrl+C")
+        print("Stops when you close its browser tabs, or with Ctrl+C")
         threading.Timer(1.5, webbrowser.open, [f"http://{host}:{args.port}"]).start()
-    uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
+    server = uvicorn.Server(uvicorn.Config(app, host=args.host, port=args.port, log_level="warning",
+                                           timeout_graceful_shutdown=5))
+    lifetime = None
+    if args.open:  # on your own computer: the server stops with its last tab, or the page's Shut down
+        from .lifetime import Lifetime
+
+        def stop():
+            why = ("Shut down from the page" if lifetime.asked else "Its browser tabs are closed" if lifetime.seen
+                   else f"No browser tab opened it in {lifetime.first:.0f} s")
+            print(f"{why}: LCA Explorer stops", flush=True)
+            server.should_exit = True
+
+        lifetime = Lifetime(stop, app.state.running_jobs)
+        lifetime.watch()
+    from .lifetime import add_routes
+
+    add_routes(app, lifetime)
+    server.run()
 
 
 def setup(args) -> None:
@@ -288,8 +369,16 @@ def main(argv=None) -> None:
     p.add_argument("--project", required=True)
     p.add_argument("--database", required=True)
     p.add_argument("--methods", nargs="*", help="Method families to include (first element of the method tuple); default: all")
+    p.add_argument("--methods-file", help="JSON file listing the impact methods to include (each name a list of strings)")
     p.add_argument("--output", required=True)
     p.set_defaults(func=build)
+
+    p = sub.add_parser("add-methods", help="Read the factors of more impact methods for a model built from Brightway")
+    p.add_argument("--project", required=True)
+    p.add_argument("--model", required=True, help="Folder of the built model")
+    p.add_argument("--methods-file", required=True, help="JSON file listing the impact methods (each name a list of strings)")
+    p.add_argument("--output", required=True, help="Pickle file the methods are written to")
+    p.set_defaults(func=add_methods)
 
     p = sub.add_parser("import", help="Import a database into a Brightway project (before build)")
     p.add_argument("format", choices=["ecospold2", "simapro-csv"])
@@ -393,9 +482,11 @@ def main(argv=None) -> None:
     p.add_argument("--default-root", action="append",
                    help='Process shown at start, as "activity name|location"; once, or once per --model')
     p.add_argument("--host", default="127.0.0.1")
-    p.add_argument("--port", type=int, default=8765)
+    p.add_argument("--port", type=int,
+                   help=f"Port to serve on (default: {DEFAULT_PORT}, or the next free one if another program uses it)")
     p.add_argument("--reload", action="store_true", help="Restart automatically when the Python code changes (development)")
-    p.add_argument("--open", action="store_true", help="Open the app in the browser once it is ready")
+    p.add_argument("--open", action="store_true", help="Open the app in the browser once it is ready, and stop when its last tab "
+                        "is closed (not for a server reached through SSH)")
     p.set_defaults(func=serve)
 
     args = parser.parse_args(argv)

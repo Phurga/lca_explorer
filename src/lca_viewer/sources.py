@@ -247,6 +247,28 @@ def brightway_projects(base, counts_cache: dict | None = None) -> list[dict]:
     return out
 
 
+def project_methods(base, project: str) -> list[dict]:
+    """The impact methods of a project, ``[{"name": [...], "unit"}]``, read from its ``methods.json``
+    (bw2data writes ``[[name, metadata], ...]``; older versions ``{"(name)": metadata}``)."""
+    import ast
+
+    try:
+        methods = json.loads((project_dir(base, project) / "methods.json").read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return []
+    if isinstance(methods, dict):
+        pairs = []
+        for key, meta in methods.items():
+            try:
+                pairs.append((list(ast.literal_eval(key)), meta))
+            except (ValueError, SyntaxError):
+                continue
+    else:
+        pairs = [(m[0], m[1]) for m in methods if isinstance(m, list) and len(m) == 2 and isinstance(m[0], list)]
+    return [{"name": [str(part) for part in name], "unit": (meta or {}).get("unit", "") if isinstance(meta, dict) else ""}
+            for name, meta in pairs]
+
+
 def database_state(project: dict, database: str) -> dict:
     """What a model built from ``database`` of ``project`` (as :func:`brightway_projects` lists
     it) depends on: when the database and the databases it links to (theirs too) were last

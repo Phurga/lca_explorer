@@ -838,7 +838,57 @@ function FunctionalUnit({ root, onSelect, fields }) {
     </div>`;
 }
 
-const openDatabase = (key) => { location.href = `/db/${encodeURIComponent(key)}/`; };
+// Started on your own computer (lca_explorer), the server stops with its last tab (see lifetime.py): each tab says it
+// is open, and closing one asks first. ``leaving``: the page goes to another of its own pages (no question then);
+// ``stopped``: the server is gone (no question either).
+let leaving = false, stopped = false;
+const goTo = (url) => { leaving = true; location.href = url; };
+const LIFETIME = fetch("/api/app").then((r) => (r.ok ? r.json() : {})).catch(() => ({}));
+const TAB = crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+LIFETIME.then(({ stops_with_browser }) => {
+  if (!stops_with_browser) return;
+  const alive = () => {
+    if (!stopped) fetch(`/api/tab/alive?tab=${TAB}`, { method: "POST" }).catch(() => { stopped = true; });
+  };
+  alive();
+  setInterval(alive, 20000);
+  addEventListener("pageshow", (e) => { if (e.persisted) { leaving = false; alive(); } });  // back from the history
+  addEventListener("pagehide", () => { if (!stopped) navigator.sendBeacon(`/api/tab/bye?tab=${TAB}`); });
+  // The browser's own question (its words: a page cannot choose them)
+  addEventListener("beforeunload", (e) => { if (!leaving && !stopped) { e.preventDefault(); e.returnValue = ""; } });
+});
+
+function Stopped({ waiting }) {
+  // Until the server is gone (it may finish a job first)
+  const [gone, setGone] = useState(false);
+  useEffect(() => {
+    const timer = setInterval(() => fetch("/api/app").catch(() => { setGone(true); clearInterval(timer); }), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  return html`
+    <div class="stopped">
+      <h1>LCA Explorer</h1>
+      ${gone ? html`<p>The app has stopped. You can close this tab.</p><p class="hint">Start it again with lca_explorer.</p>`
+        : html`<p>Stopping${waiting.length ? ` once ${waiting.join(", ")} finishes` : ""}…</p>`}
+    </div>`;
+}
+
+async function shutDown() {
+  if (!confirm("Shut down LCA Explorer? The server stops and every tab of the app with it.")) return;
+  let waiting = [];
+  try { ({ waiting = [] } = await fetch("/api/shutdown", { method: "POST" }).then((r) => r.json())); } catch { /* already gone */ }
+  stopped = true;
+  render(html`<${Stopped} waiting=${waiting} />`, document.getElementById("app"));
+}
+
+function ShutDownButton() {
+  const [shown, setShown] = useState(false);
+  useEffect(() => { LIFETIME.then((a) => setShown(!!a.stops_with_browser)); }, []);
+  return shown && html`<button class="shut-down" onClick=${shutDown}
+    title="Stop LCA Explorer and close its terminal (closing its last tab does too)">Shut down</button>`;
+}
+
+const openDatabase = (key) => goTo(`/db/${encodeURIComponent(key)}/`);
 const count = (n) => n.toLocaleString("en-US");
 
 function DatabaseSelect({ databases }) {
@@ -1002,6 +1052,89 @@ const DATABASE_SOURCES = [
 // BAFU on files.brightway.dev), a database added to a project (ecoSpold2, SimaPro CSV, BAFU, ecoinvent
 // with the user's account, with or without the default biosphere and methods), a deletion.
 // Each starts a job.
+// Impact methods to choose from (``methods``: [{ name, unit }]), nested by family, with a filter. ``chosen``: a Set of
+// their keys (``methodKey``).
+const methodKey = (name) => name.join("\u001f");
+function MethodPicker({ methods, chosen, setChosen }) {
+  const [text, setText] = useState("");
+  const [open, setOpen] = useState(() => new Set());
+  const families = useMemo(() => {
+    const map = new Map();
+    methods.forEach((m) => map.set(m.name[0], [...(map.get(m.name[0]) || []), m]));
+    return [...map];
+  }, [methods]);
+  const words = text.toLowerCase().split(/\s+/).filter(Boolean);
+  const matches = (m) => !words.length || words.every((w) => m.name.join(" ").toLowerCase().includes(w));
+  const tick = (list, on) => {
+    const next = new Set(chosen);
+    list.forEach((m) => (on ? next.add(methodKey(m.name)) : next.delete(methodKey(m.name))));
+    setChosen(next);
+  };
+  const toggleOpen = (family) => setOpen((o) => { const next = new Set(o); next.has(family) ? next.delete(family) : next.add(family); return next; });
+  return html`
+    <input class="method-filter" placeholder="Filter the methods" value=${text} onInput=${(e) => setText(e.target.value)} aria-label="Filter the methods" />
+    <div class="method-tree">
+      ${families.map(([family, list]) => {
+        const shown = list.filter(matches);
+        if (!shown.length) return null;
+        const expanded = open.has(family) || words.length > 0;
+        const n = shown.filter((m) => chosen.has(methodKey(m.name))).length;
+        return html`
+          <div class="method-family" key=${family}>
+            <div class="method-head">
+              <button type="button" class="fold-caret" onClick=${() => toggleOpen(family)} aria-expanded=${expanded} aria-label=${`${expanded ? "Fold" : "Unfold"} ${family}`}>${expanded ? "▾" : "▸"}</button>
+              <input type="checkbox" checked=${n === shown.length} ref=${(el) => el && (el.indeterminate = n > 0 && n < shown.length)}
+                onChange=${(e) => tick(shown, e.target.checked)} aria-label=${`All of ${family}`} title="The whole family" />
+              <span class="name" onClick=${() => toggleOpen(family)}>${family}</span>
+              <span class="muted count">${n}/${shown.length}</span>
+            </div>
+            ${expanded && shown.map((m) => html`
+              <div class="method-row" key=${methodKey(m.name)}>
+                <input type="checkbox" checked=${chosen.has(methodKey(m.name))} onChange=${(e) => tick([m], e.target.checked)}
+                  aria-label=${m.name.join(" | ")} />
+                <span class="name" title=${`${m.name.join(" | ")}${m.unit ? ` (${m.unit})` : ""}`} onClick=${() => tick([m], !chosen.has(methodKey(m.name)))}>${methodParts(m).main}${methodParts(m).qual && html` <span class="muted">${methodParts(m).qual}</span>`}</span>
+              </div>`)}
+          </div>`;
+      })}
+    </div>`;
+}
+
+// The impact methods a database is built with: those of its previous build, else the family of the default method
+// (EF v3.1 when the project has it). The impacts of each method are computed with the build: the fewer, the lighter.
+function BuildForm({ form, folder, onJob, actions }) {
+  const [listing, setListing] = useState(null);
+  const [error, setError] = useState(null);
+  const [chosen, setChosen] = useState(() => new Set());
+  useEffect(() => {
+    const q = new URLSearchParams({ folder, project: form.project, database: form.database });
+    serverRequest(`/api/brightway/methods?${q}`).then((r) => {
+      setListing(r);
+      setChosen(new Set((r.selected || r.default).map(methodKey)));
+    }).catch((e) => setError(e.message));
+  }, []);
+  const names = listing ? listing.methods.filter((m) => chosen.has(methodKey(m.name))).map((m) => m.name) : [];
+  const submit = (e) => {
+    e.preventDefault();
+    onJob("/api/load", { brightway: folder, project: form.project, database: form.database, rebuild: !!form.rebuild, methods: names });
+  };
+  const verb = form.rebuild ? "Rebuild" : "Build";
+  return html`
+    <form class="project-form" onSubmit=${submit}>
+      <h4>${verb} ${form.database}: impact methods <${InfoTip} label="About the impact methods"
+        text="The impacts of the methods ticked are computed with the build, for every process: the fewer, the faster and the lighter (a large database with hundreds of methods takes gigabytes). More can be added later, in the Methods panel of the open database: only their impacts are computed then." /></h4>
+      ${error && html`<div class="error">${error}</div>`}
+      ${!listing ? !error && html`<${Waiting} text="Reading the impact methods of the project…" />` : html`
+        <div class="row">
+          <button type="button" onClick=${() => setChosen(new Set(listing.methods.map((m) => methodKey(m.name))))}>All ${listing.methods.length}</button>
+          <button type="button" onClick=${() => setChosen(new Set())}>None</button>
+          <span class="muted small">${listing.selected ? "Ticked: those of the previous build" : "Ticked: the family of the default method"}</span>
+        </div>
+        <${MethodPicker} methods=${listing.methods} chosen=${chosen} setChosen=${setChosen} />`}
+      ${actions(`${verb} and open with ${names.length} ${names.length === 1 ? "method" : "methods"}`,
+        !listing ? true : !names.length && "Choose at least one impact method")}
+    </form>`;
+}
+
 function ProjectForm({ form, folder, projects, onJob, onCancel, onForm, busy }) {
   const project = projects?.projects.find((p) => p.name === form.project);
   const flowDbs = (project?.databases || []).filter((d) => !d.processes).map((d) => d.name);
@@ -1249,6 +1382,7 @@ function ProjectForm({ form, folder, projects, onJob, onCancel, onForm, busy }) 
         </form>
       </div>`;
   }
+  if (form.kind === "build") return html`<${BuildForm} form=${form} folder=${folder} onJob=${onJob} actions=${actions} />`;
   if (form.kind === "renameDb") {
     const users = (project?.databases || []).filter((d) => d.depends.includes(form.database)).map((d) => d.name);
     const taken = (project?.databases || []).some((d) => d.name === name.trim());
@@ -1393,7 +1527,7 @@ function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
   const start = (body) => { if (body.project) noteProject(body.project); startJob("/api/load", body, body.project); };
   const busy = job?.status === "running" || (job?.status === "done" && !!job.key);
   const unload = (key) => serverRequest("/api/unload", { key }).then((list) => {
-    if (key === DATABASE) { location.href = "/"; return; }
+    if (key === DATABASE) { goTo("/"); return; }
     onDatabases?.(list);
     refresh();
     listProjects(folder);
@@ -1424,9 +1558,9 @@ function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
     if (d.model?.key) return html`<button onClick=${() => { noteProject(p.name); openDatabase(d.model.key); }}>${d.model.key === DATABASE ? "Shown" : "Switch to"}</button>`;
     if (d.model && !d.model.outdated) return html`<button class="primary" disabled=${busy} onClick=${() => start(body)}>Open</button>`;
     return html`
-      <button class="primary" disabled=${busy} onClick=${() => start({ ...body, rebuild: !!d.model })}
-        title="Builds the model the app reads (about a minute for ecoinvent), kept for next time in data/cache">
-        ${d.model ? "Rebuild and open" : "Build and open"}</button>`;
+      <button class="primary" disabled=${busy} onClick=${() => { noteProject(p.name); setForm({ kind: "build", project: p.name, database: d.name, rebuild: !!d.model }); }}
+        title="Choose the impact methods, then build the model the app reads (about a minute for ecoinvent), kept for next time in data/cache">
+        ${d.model ? "Rebuild and open…" : "Build and open…"}</button>`;
   };
 
   // The options of a database: close it, rename it, remove it (locked with its lock icon)
@@ -1468,7 +1602,7 @@ function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
       </div>`;
   // Forms on a project, and the jobs started from a project, open under its row (where it was clicked)
   const listed = (name) => !!name && !!projects?.projects.some((p) => p.name === name);
-  const projectForm = form && html`<${ProjectForm} key=${`${form.kind}:${form.project || ""}`} form=${form} folder=${folder}
+  const projectForm = form && html`<${ProjectForm} key=${`${form.kind}:${form.project || ""}:${form.database || ""}`} form=${form} folder=${folder}
     projects=${projects} busy=${busy} onJob=${startJob} onCancel=${() => setForm(null)} onForm=${setForm} />`;
 
   const content = html`
@@ -4828,7 +4962,7 @@ const methodSummary = (info, method, chartMethods) => {
 
 // The impact methods in one list nested by family: the round mark is the active method, the ticks the methods shown
 // together. ``note``: what a change here applies to.
-function MethodMenu({ info, method, setMethod, chartMethods, setChartMethods, note, format, setFormat }) {
+function MethodMenu({ info, method, setMethod, chartMethods, setChartMethods, note, format, setFormat, adder }) {
   return html`
     <div class="lens-menu">
       ${note && html`<p class="note">${note}</p>`}
@@ -4857,7 +4991,56 @@ function MethodMenu({ info, method, setMethod, chartMethods, setChartMethods, no
       <h3 class="fold-head method-selection">Method selection
         <${InfoTip} text="Legend. Round mark: the main method, for the single indicator, the tree and the charts. Tick: shown together, in the multi indicator charts and the matrix." label="Legend of the method selection" /></h3>
       <${MethodTree} info=${info} main=${method} setMain=${setMethod} selected=${chartMethods} setSelected=${setChartMethods} />
+      ${adder && html`<${AddMethods} info=${info} ...${adder} />`}
     </div>`;
+}
+
+// More impact methods for the open database, from its Brightway project: their factors are read and only their impacts
+// computed (the model is not built again). ``onAdded``: the server's model has them, the page reads its info again.
+function AddMethods({ info, origin, onAdded }) {
+  const [open, setOpen] = useState(false);
+  const [listing, setListing] = useState(null);
+  const [error, setError] = useState(null);
+  const [chosen, setChosen] = useState(() => new Set());
+  const [job, setJob] = useState(null);
+  useEffect(() => {
+    if (!open) return;
+    const q = new URLSearchParams({ folder: origin.folder, project: origin.project });
+    serverRequest(`/api/brightway/methods?${q}`).then((r) => setListing(r.methods.filter((m) => methodNamed(info, m.name) < 0)))
+      .catch((e) => setError(e.message));
+  }, [open, info]);
+  useEffect(() => {
+    if (job?.status !== "running" || !job.id) return;
+    const timer = setTimeout(() => serverRequest(`/api/jobs/${job.id}`).then((j) => {
+      setJob(j);
+      if (j.status === "done") { setChosen(new Set()); onAdded(); }
+    }).catch((e) => setJob({ status: "failed", error: e.message })), 700);
+    return () => clearTimeout(timer);
+  }, [job]);
+  const names = (listing || []).filter((m) => chosen.has(methodKey(m.name))).map((m) => m.name);
+  const running = job?.status === "running";
+  const add = () => {
+    setJob({ status: "running", message: "Starting…" });
+    serverRequest("/api/methods/add", { key: DATABASE, methods: names }).then(setJob).catch((e) => setJob({ status: "failed", error: e.message }));
+  };
+  if (!open) return html`
+    <p class="note"><button class="link" onClick=${() => setOpen(true)}
+      title=${`Methods of ${origin.project} that this database was not built with`}>Add impact methods…</button></p>`;
+  return html`
+    <h3 class="fold-head">Add impact methods
+      <${InfoTip} label="About adding methods" text=${`The methods of the project ${origin.project} that this database was not built with. Only their impacts are computed (the model is not built again): seconds, plus a few for each method on a large database. They are kept with the model.`} />
+      <button class="link" onClick=${() => setOpen(false)} aria-label="Close">×</button></h3>
+    ${error && html`<div class="error">${error}</div>`}
+    ${!listing ? !error && html`<${Waiting} text="Reading the impact methods of the project…" />`
+      : !listing.length ? html`<p class="muted small">The database has all the impact methods of ${origin.project}.</p>` : html`
+        <${MethodPicker} methods=${listing} chosen=${chosen} setChosen=${setChosen} />
+        <div class="row">
+          <button class="primary" disabled=${!names.length || running} onClick=${add}>
+            ${running ? "Adding…" : `Add ${names.length || ""} ${names.length === 1 ? "method" : "methods"}`}</button>
+          ${running && html`<span class="spinner" aria-hidden="true"></span><span class="muted small">${job.message}</span>`}
+          ${job?.status === "done" && html`<span class="muted small">${job.message}</span>`}
+        </div>`}
+    ${job?.status === "failed" && html`<div class="error">${job.error}</div>`}`;
 }
 
 // The rule sets of the workspace: the one in use, new / copy / rename / delete. ``note``: what a change here applies to.
@@ -4900,7 +5083,7 @@ const tabKeys = (ids, current, setCurrent) => (e) => {
 // methods and the group rules are chosen: *Processes*, *Methods* and *Rules* (the rule sets and the rules). The rules
 // shown are those of the tab in focus, which its own component puts in its slot (``groups-<tab id>``); in Compare mode
 // they are those of the workspace's set (``view``: a tab's view, where the colours picked for rules are kept).
-function LensPanel({ info, lens, tab, setTab, tabs, focusedTab, comparing, view, compareTabs, compare, setCompare, windows, onCollapse }) {
+function LensPanel({ info, lens, tab, setTab, tabs, focusedTab, comparing, view, compareTabs, compare, setCompare, windows, onCollapse, adder }) {
   const methods = lens.method < info.methods.length;
   return html`
     <div class="tabs" role="tablist" onKeyDown=${tabKeys(["processes", "methods", "groups"], tab, setTab)}>
@@ -4914,7 +5097,7 @@ function LensPanel({ info, lens, tab, setTab, tabs, focusedTab, comparing, view,
     </div>
     <div class="panel methods-panel" style=${{ display: tab === "methods" ? "" : "none" }}>
       ${methods && html`<${MethodMenu} info=${info} method=${lens.method} setMethod=${lens.setMethod} chartMethods=${lens.chartMethods} setChartMethods=${lens.setChartMethods}
-        format=${lens.nameFormat} setFormat=${lens.setNameFormat} />`}
+        format=${lens.nameFormat} setFormat=${lens.setNameFormat} adder=${adder} />`}
     </div>
     <div class="groups-panel" style=${{ display: tab === "groups" ? "" : "none" }}>
       ${comparing && view && html`<${GroupPanel} info=${info} rules=${lens.rules} setRules=${lens.setRules} selectedRow=${null} view=${view.view} setView=${view.setView}
@@ -6959,6 +7142,7 @@ function App() {
       </div>
       <div class="top-centre">${centre}</div>
       <div class="top-right">
+      <${ShutDownButton} />
       <a class="source-link" href=${SOURCE_URL} target="_blank" rel="noopener noreferrer"
         title="Source code of LCA Explorer, free software under the GNU AGPL 3.0 or later">Source</a>
       ${databases && html`
@@ -7037,6 +7221,7 @@ function App() {
         <aside class="leftbar" style=${{ width: `${leftWidth}px`, display: leftOpen ? "" : "none" }}>
           <${LensPanel} info=${info} lens=${lensApi} tab=${leftTab} setTab=${setLeftTab} tabs=${allTabs} focusedTab=${focusedTab} comparing=${comparing}
             view=${TAB_API[focusedTab] || Object.values(TAB_API)[0]} compareTabs=${compareTabs} compare=${compare} setCompare=${setCompare} onCollapse=${() => setLeftOpen(false)}
+            adder=${origin && DATABASE ? { origin, onAdded: () => request("/api/info").then((i) => { clearAnswers(); setInfo(i); }).catch((e) => setError(e.message)) } : null}
             windows=${{ panes: panesOf(layout), current: focus, select: actions.select, focus: actions.focus, close: actions.close, drag: actions.drag, move: actions.move,
               closePane: actions.closePane, openProcess: actions.openProcess, reopen: actions.reopen, dragging,
               history: closedStack.current.map((list, at) => {

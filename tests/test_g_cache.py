@@ -15,7 +15,7 @@ def test_g_is_read_from_its_cache_the_second_time(linear_chain_model, tmp_path, 
     def no_solve(*args, **kwargs):
         raise AssertionError("G was computed again")
 
-    monkeypatch.setattr(model_module, "_factorized_solver", no_solve)
+    monkeypatch.setattr(model_module, "Solver", no_solve)
     second = LCAModel.load(tmp_path)
     np.testing.assert_allclose(second.G, G)
 
