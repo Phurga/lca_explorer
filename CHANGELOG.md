@@ -13,7 +13,7 @@ Changes on `dev`, not released yet.
   view options of that tab in a pop-up (*Display*, *Cut-off*, *Names*, *Organise by*, *Group by*, *Color by*, *Rows*,
   with *Reset* and *Save ▾*); the tab is shown in its window first. Key **v** in View mode opens those of the tab in
   focus. Flow tabs have none.
-- **Side panel tabs renamed**: *Custom* (the chart of the tree's rows; it was *Explore view*, formerly *Custom view*,
+- **Side panel tabs renamed**: *Explore* (the chart of the tree's rows; it was *Explore view*, formerly *Custom view*,
   and keeps only that chart), *Process*, *Flow*, *Uncharacterised* and *Rules* (they were *Process contribution*,
   *Flow contribution* and *Rules contributions*). When the panel is too narrow for the names, the tab bar shows an icon
   per panel instead, its name in the tooltip.

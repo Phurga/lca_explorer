@@ -266,7 +266,7 @@ API in `src/lca_viewer/server.py`.
   left panel; the status bar has no icon of its own for it any more (the edge of the page and Ctrl/⌘ + ← do it).
 - **First start** (nothing kept in the browser): the plain reading first, complexity when asked for. A tab is a list
   with *Amount*, *Impact* and *Share*, no cut-off, nothing grouped, the direct emissions organised by compartment, full names, no colours; the left
-  panel is closed, the side panel open on *Custom* (the chart; the view options are in their pop-up, closed). Widths follow the window until dragged
+  panel is closed, the side panel open on *Explore* (the chart; the view options are in their pop-up, closed). Widths follow the window until dragged
   (side panel 42 % of it, leaving the tree 720 px). Constants `DEFAULT_VIEW`, `DEFAULT_CUTOFF` and `FIRST_PANELS` in
   `app.js`. Decision: a preference is written when the user changes it, not at the first render, so a default never
   chosen can still change in a later version; *Default settings* (save menu) restores all of it, panels included.
@@ -719,14 +719,14 @@ API in `src/lca_viewer/server.py`.
   without the tick and baseline of Compare mode (flows are not compared); the search of the top bar, Enter on a flow
   tab, opens the process in a new tab. Decision: one shell for both kinds of tabs (a tab's saved state holds `root` for a
   process, `flow` for a flow), so saving, closing, *Undo* and the open history work for both.
-- **Side panel — tabs** (what each shows is explained in a popup on its name, not in the panel): *Custom*,
+- **Side panel — tabs** (what each shows is explained in a popup on its name, not in the panel): *Explore*,
   *Process*, *Flow*, *Uncharacterised*, *Rules* (`SIDE_PANELS`). Decision: short names, the side panel's place saying
   that they are contributions (they were *Explore view*, *Process contribution*, *Flow contribution*, *Rules
   contributions*). When the panel is too narrow for the names, the bar shows **icons** instead (`SidePanelTabs`: a
   chart, a factory, a drop, a question mark, a funnel), each with its name as `aria-label` and at the head of its
   popup. A `ResizeObserver` measures the bar: names that overflow it switch to icons, and the width they took is kept
   to switch back once the bar is that wide again (no flicker at the threshold).
-  - *Custom* (formerly *Explore view*): the chart of the tree's rows (the view options are in their pop-up, above): **single indicator**, the
+  - *Explore* (formerly *Explore view*): the chart of the tree's rows (the view options are in their pop-up, above): **single indicator**, the
     bars of the main method, or **multi indicator**, the methods ticked in the Methods panel as 100 % stacked
     bars; CSV export.
   - *Process* (formerly *Process contribution*): what each process contributes by its own emissions (direct contributions, wherever

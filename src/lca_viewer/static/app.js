@@ -5520,7 +5520,7 @@ const PANEL_TIPS = {
   global: "The score split by your rules over the whole supply chain, to see what each rule weighs.",
 };
 // The panels of the side panel of a process tab, in the order of its tab bar
-const SIDE_PANELS = [["view", "Custom"], ["chart", "Process"], ["flows", "Flow"], ["missing", "Uncharacterised"], ["global", "Rules"]];
+const SIDE_PANELS = [["view", "Explore"], ["chart", "Process"], ["flows", "Flow"], ["missing", "Uncharacterised"], ["global", "Rules"]];
 // The icon of a side panel's tab, when the panel is too narrow for their names
 const SIDE_PANEL_ICONS = {
   view: "M2.5 13.5h11M4 13.5v-4M7 13.5V4.5M10 13.5v-6M13 13.5v-8",  // bars: the chart of the tree's rows

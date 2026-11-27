@@ -94,7 +94,7 @@ def test_view_options_open_from_each_process_of_the_processes_panel():
     assert "VIEW_OPTIONS_OPENERS[id] =" in body("FUView")
     assert "<${ViewOptionsPopup}" in body("FUView") and "<${PagePortal}>" in body("FUView")
     assert "VIEW_OPTIONS_OPENERS" not in body("FlowTab")  # flow tabs have no view options
-    assert '["view", "Custom"]' in APP and "<${SidePanelTabs}" in body("FUView") and "header=${viewOptions}" not in body("FUView")
+    assert '["view", "Explore"]' in APP and "<${SidePanelTabs}" in body("FUView") and "header=${viewOptions}" not in body("FUView")
     # key v: the view options of the tab in focus
     assert 'new CustomEvent("lca:custom-view", { detail: { id } })' in body("App")
 
@@ -133,8 +133,8 @@ def test_information_names_the_unit_and_the_location():
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
 def test_the_side_panel_tabs_have_short_names_and_icons_when_narrow():
-    # Custom, Process, Flow, Uncharacterised, Rules: the side panel says they are contributions
-    assert ('const SIDE_PANELS = [["view", "Custom"], ["chart", "Process"], ["flows", "Flow"], ["missing", "Uncharacterised"], '
+    # Explore, Process, Flow, Uncharacterised, Rules: the side panel says they are contributions
+    assert ('const SIDE_PANELS = [["view", "Explore"], ["chart", "Process"], ["flows", "Flow"], ["missing", "Uncharacterised"], '
             '["global", "Rules"]];') in APP
     for old in ("Explore view", "Process contribution", "Flow contribution", "Rules contributions"):
         assert f'"{old}"' not in APP

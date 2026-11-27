@@ -47,7 +47,7 @@ create datasets, add Agribalyse, run it on a shared server, set it up by hand an
   toolbar) apply to the tree and the chart.
 - **Save ▾**: download the view as a file; the arrow menu loads a saved view
   back (or copies it as JSON).
-- The *Custom* chart of the side panel shows exactly the rows visible in the tree:
+- The *Explore* chart of the side panel shows exactly the rows visible in the tree:
   expand, collapse or group to change it. Export as PNG or CSV.
 - *Flow* splits the score by elementary flow (substance, or
   substance and compartment) over the whole supply chain; click one to list
