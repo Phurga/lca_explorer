@@ -445,10 +445,31 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
                 return []
             found: list[dict] = []
             for j in [above.node.product] if above.kind == "process" else [m.product for m in above.merged]:
-                if j not in datasets:
-                    datasets[j] = model.exchange_details(int(j))
-                found += [e for e in datasets[j] if e["type"] != "biosphere" and e["row"] == r.node.product]
+                found += [e for e in dataset(j) if e["type"] != "biosphere" and e["row"] == r.node.product]
             return found
+
+        def dataset(j) -> list[dict]:
+            if j not in datasets:
+                datasets[j] = model.exchange_details(int(j))
+            return datasets[j]
+
+        def emitted(r) -> list[dict]:
+            """The exchange(s) of a flow row: the flow in the dataset(s) of the process(es) emitting it."""
+            return [e for j, _ in r.sources or [] for e in dataset(j) if e["type"] == "biosphere" and e["row"] == r.node.flow]
+
+        def exchange_columns(out: dict, recorded: list[dict]) -> None:
+            """The comment(s) of the exchange(s) a row stands for, and what the exchange columns show (uncertainty,
+            pedigree, formula), one entry per exchange: the same for a process (supplied) and a flow (emitted)."""
+            comments: list[str] = []
+            for e in recorded:
+                text = (e.get("comment") or "").strip()
+                if text and text not in comments:
+                    comments.append(text)
+            if comments:
+                out["comment"] = "\n".join(comments)
+            shown = [{k: e[k] for k in EXCHANGE_COLUMNS if e.get(k) not in (None, "")} for e in recorded]
+            if any(shown):
+                out["exchanges"] = shown
 
         def serialise(r) -> dict:
             out = {
@@ -476,18 +497,7 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
                 out["replaced"] = r.replaced
                 if r.chain:
                     out["chain"] = [meta(n.product) for n in r.chain]  # the processes made of this one alone, first first
-                supplied = supplying(r)
-                comments: list[str] = []
-                for e in supplied:
-                    text = (e.get("comment") or "").strip()
-                    if text and text not in comments:
-                        comments.append(text)
-                if comments:
-                    out["comment"] = "\n".join(comments)
-                # What the exchange columns show (uncertainty, pedigree, formula), one entry per exchange
-                recorded = [{k: e[k] for k in EXCHANGE_COLUMNS if e.get(k) not in (None, "")} for e in supplied]
-                if any(recorded):
-                    out["exchanges"] = recorded
+                exchange_columns(out, supplying(r))
             elif r.kind == "direct" and len(r.node.path) > 1 and isinstance(r.node.path[-2], int):
                 out["meta"] = meta(r.node.path[-2])  # the process emitting
             elif r.kind == "merged":
@@ -503,6 +513,7 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
                 f = flows.iloc[r.node.flow]
                 out["flow"] = {"index": int(r.node.flow), "name": f["name"], "compartment": f["compartment"],
                                "subcompartment": f["subcompartment"]}
+                exchange_columns(out, emitted(r))  # comments were those of technosphere exchanges only
             if r.regroup:
                 out["regroup"] = r.regroup
             if r.kind != "direct" and r.sources is not None:
@@ -766,6 +777,29 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
                  "relative": float(model.G[j, k] / current - 1) if current else None}
                 for j in shown
             ],
+        }
+
+    @app.get("/api/activity/{index}/characterisation")
+    def activity_characterisation(index: int, method: int | None = None, limit: int = 500):
+        """The *Characterisation* panel of a process's pop-up: its own exchanges with nature per unit of its product,
+        split by elementary flow in ``method`` (amount, factor, impact), largest |impact| first, at most ``limit``;
+        with its direct and cumulative scores per unit (``U`` and ``G``: one column of ``B``, nothing solved)."""
+        check(activity=[index], method=[method])
+        k = default_method if method is None else method
+        per_unit = 1 / model.diagonal[index]
+        amounts = model.B[:, index].toarray().ravel() * per_unit
+        cfs = np.asarray(model.methods[k].cfs, dtype=float)
+        impacts = amounts * cfs
+        exchanged = np.flatnonzero(amounts)
+        characterised = exchanged[impacts[exchanged] != 0]
+        shown = characterised[np.argsort(-np.abs(impacts[characterised]), kind="stable")][:limit]
+        return {
+            "method": k, "unit": units[index],
+            "direct": float(model.U[k, index] * per_unit), "cumulative": float(model.G[index, k]),
+            "count": int(len(characterised)), "uncharacterised": int(len(exchanged) - len(characterised)),
+            "flows": [{"flow": int(f), "name": flows["name"].iat[f], "compartment": flows["place"].iat[f],
+                       "unit": flows["unit"].iat[f], "resource": is_resource(int(f)), "amount": float(amounts[f]),
+                       "cf": float(cfs[f]), "impact": float(impacts[f])} for f in shown],
         }
 
     @app.post("/api/global")
@@ -1043,6 +1077,12 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
         # one row per flow, in the order of compare_methods (thousands for some categories); the pop-up arranges them
         # by substance or compartment itself
         columns = {c: table[c].tolist() for c in table.columns}
+        # the location of each flow (regionalised flows), for *Organize by location*: models built before the flows kept
+        # theirs have no such column (``locations``: False, the pop-up asks for a rebuild)
+        located = "location" in flows
+        if located:
+            where = flows["location"].reindex(table.index)
+            places = [None if not isinstance(v, str) or not v.strip() else v for v in where.tolist()]
         items = []
         for n, f in enumerate(table.index):
             side = {k: {"min": columns[f"cf_{k}"][n], "max": columns[f"cf_{k}"][n], "rel": columns[f"rel_{k}"][n],
@@ -1056,6 +1096,7 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
                 "a": side["a"], "b": side.get("b"),
                 "ratio": None if ratio is None or ratio != ratio else ratio,  # NaN: not both
                 "only": columns["only"][n] if both else "",
+                **({"location": places[n]} if located else {}),
             })
         # the factors of each method on flows that are not in the model (None: the model did not record them)
         unlinked = None
@@ -1072,6 +1113,7 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
             "flows": int(len(table)),  # flows of the model characterised (by either method)
             "in_inventory": int(np.count_nonzero(table["amount"])) if s is not None else None,
             "totals": totals,
+            "locations": located,
             "items": items,
             "unlinked": unlinked,
         }

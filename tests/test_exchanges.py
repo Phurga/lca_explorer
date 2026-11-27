@@ -67,3 +67,15 @@ def test_flow_info_carries_the_exchange_comment(model):
     bread, flour = info["exchanges"]
     assert bread["exchanges"] == [EXCHANGES[2][3]]  # amount, comment, formula as recorded
     assert flour["exchanges"] == []  # activity 1 has no CO2 exchange recorded
+
+
+def test_rows_carry_the_comments_of_flow_exchanges(model):
+    """The *Comment* column of the list: a flow row has the comment of its exchange, in the dataset of the process
+    emitting it, as a process row has that of the exchange supplying it (it used to be technosphere only)."""
+    client = TestClient(create_app(model))
+    state = {"root": [2], "expanded": ["2", "2/-1"], "method": 0}
+    rows = {r["id"]: r for r in client.post("/api/rows", json=state).json()["rows"]}
+    assert rows["2/1"]["comment"] == "literature"  # flour, supplied to bread
+    co2 = next(r for r in rows.values() if r["kind"] == "flow" and r["flow"]["index"] == 0)
+    assert co2["comment"] == "literature" and co2["exchanges"] == [{"formula": "a * 2"}]
+    assert all("comment" not in r for r in rows.values() if r["kind"] == "flow" and r is not co2)  # none recorded

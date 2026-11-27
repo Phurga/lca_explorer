@@ -10,7 +10,7 @@ from lca_viewer.lifetime import Lifetime, add_routes
 
 def make(busy=()):
     stops = []
-    lifetime = Lifetime(lambda: stops.append(True), lambda: list(busy), grace=10, silence=150)
+    lifetime = Lifetime(lambda: stops.append(True), lambda: list(busy), grace=10, silence=30, silence_hidden=150)
     return lifetime, stops
 
 
@@ -57,13 +57,47 @@ def test_a_reload_comes_back_in_time():
 
 
 def test_a_silent_tab_counts_as_closed():
+    # Its goodbye was lost (a browser that quit, crashed, or closed it without unloading it)
     lifetime, stops = make()
     lifetime.alive("a")  # heard of at time.monotonic(), then never again
     heard = lifetime.tabs["a"]
-    since = lifetime.check(heard + 151, None)
+    assert lifetime.check(heard + 25, None) is None  # a ping or two late: still open
+    since = lifetime.check(heard + 31, None)
     assert "a" not in lifetime.tabs and since is not None
+    lifetime.check(heard + 41, since)
+    assert stops
+
+
+def test_a_hidden_tab_has_longer_to_speak():
+    # Browsers slow the timers of hidden tabs to once a minute
+    lifetime, stops = make()
+    lifetime.alive("a", hidden=True)
+    heard = lifetime.tabs["a"]
+    assert lifetime.check(heard + 120, None) is None and "a" in lifetime.tabs
+    since = lifetime.check(heard + 151, None)
+    assert "a" not in lifetime.tabs and "a" not in lifetime.hidden
     lifetime.check(heard + 161, since)
     assert stops
+
+
+def test_a_tab_shown_again_is_waited_for_as_a_shown_one():
+    lifetime, stops = make()
+    lifetime.alive("a", hidden=True)
+    lifetime.alive("a")  # on screen again
+    assert "a" not in lifetime.hidden
+    lifetime.check(lifetime.tabs["a"] + 31, None)
+    assert "a" not in lifetime.tabs
+
+
+def test_a_missed_ping_does_not_close_a_tab():
+    # One ping lost (the network changing on waking up): the next one keeps the tab
+    lifetime, stops = make()
+    lifetime.alive("a")
+    heard = lifetime.tabs["a"]
+    assert lifetime.check(heard + 20, None) is None
+    lifetime.alive("a")
+    assert lifetime.check(lifetime.tabs["a"] + 25, None) is None
+    assert not stops
 
 
 def test_jobs_under_way_finish_first():
@@ -89,9 +123,11 @@ def test_routes():
     client = TestClient(app)
     assert client.get("/api/app").json() == {"stops_with_browser": True}
     client.post("/api/tab/alive", params={"tab": "t1"})
-    assert "t1" in lifetime.tabs
+    assert "t1" in lifetime.tabs and "t1" not in lifetime.hidden
+    client.post("/api/tab/alive", params={"tab": "t1", "hidden": "1"})
+    assert "t1" in lifetime.hidden
     client.post("/api/tab/bye", params={"tab": "t1"})
-    assert not lifetime.tabs
+    assert not lifetime.tabs and not lifetime.hidden
     assert client.post("/api/shutdown").json() == {"waiting": []}
     lifetime.check(0.0, None)
     assert stops
