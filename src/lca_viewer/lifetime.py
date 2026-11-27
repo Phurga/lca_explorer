@@ -2,14 +2,21 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The app started on your own computer stops with its browser tabs.
 
-Each tab of the page says it is open (``/api/tab/alive``, every 20 s) and that it closes
+Each tab of the page says it is open (``/api/tab/alive``, every 10 s, from a worker so that a
+dialog or a long calculation on the page does not hold it back) and that it closes
 (``/api/tab/bye``, as it goes). Once no tab is left for :attr:`Lifetime.grace` seconds (a
 reload is back before), or when the page's Shut down button asks, the server stops, after
-the jobs under way (an import, a build) finish. A tab not heard of for
-:attr:`Lifetime.silence` seconds counts as closed (a browser that crashed); browsers slow the
-timers of hidden tabs to once a minute, hence the margin. When no tab opens the app within
-:attr:`Lifetime.first` seconds (the browser did not open it), the server stops too: started by
-lca_explorer, it runs without a window, and nothing else would stop it.
+the jobs under way (an import, a build) finish.
+
+The goodbye is not always heard: a browser that quits, crashes or is killed, or closes a tab
+without unloading it, says nothing. So a tab not heard of for a while counts as closed:
+:attr:`Lifetime.silence` seconds for a tab on screen, :attr:`Lifetime.silence_hidden` for a
+hidden one (each ping says which), because browsers slow the timers of hidden tabs to once a
+minute. A single ping that fails (the network changing on waking up) is followed by the next.
+
+When no tab opens the app within :attr:`Lifetime.first` seconds (the browser did not open it),
+the server stops too: started by lca_explorer, it runs without a window, and nothing else
+would stop it.
 
 Not used for a server reached through SSH: a tunnel that drops would stop it.
 """
@@ -23,24 +30,28 @@ from typing import Callable
 
 class Lifetime:
     def __init__(self, stop: Callable[[], None], busy: Callable[[], list[str]] = lambda: [],
-                 grace: float = 10.0, silence: float = 150.0, first: float = 120.0, tick: float = 1.0):
+                 grace: float = 10.0, silence: float = 30.0, silence_hidden: float = 150.0, first: float = 120.0,
+                 tick: float = 1.0):
         self.stop, self.busy = stop, busy
-        self.grace, self.silence, self.first, self.tick = grace, silence, first, tick
+        self.grace, self.silence, self.silence_hidden, self.first, self.tick = grace, silence, silence_hidden, first, tick
         self.started = time.monotonic()
         self.tabs: dict[str, float] = {}  # tab -> when it was last heard of (time.monotonic)
+        self.hidden: set[str] = set()  # the tabs that said they are hidden
         self.seen = False  # a tab opened once: until then (the browser starting) nothing stops
         self.asked = False  # the page asked to shut down
         self.stopped = False
         self._lock = threading.Lock()
 
-    def alive(self, tab: str) -> None:
+    def alive(self, tab: str, hidden: bool = False) -> None:
         with self._lock:
             self.tabs[tab] = time.monotonic()
+            (self.hidden.add if hidden else self.hidden.discard)(tab)
             self.seen = True
 
     def bye(self, tab: str) -> None:
         with self._lock:
             self.tabs.pop(tab, None)
+            self.hidden.discard(tab)
 
     def shut_down(self) -> list[str]:
         """Stop as soon as no job runs; the titles of those it waits for."""
@@ -51,8 +62,9 @@ class Lifetime:
         """One look: stops the server when it is time; when the tabs were all gone (None: some open)."""
         with self._lock:
             for tab, heard in list(self.tabs.items()):
-                if now - heard > self.silence:
+                if now - heard > (self.silence_hidden if tab in self.hidden else self.silence):
                     del self.tabs[tab]
+                    self.hidden.discard(tab)
             empty = self.seen and not self.tabs
         if empty and empty_since is None:
             empty_since = now
@@ -98,8 +110,8 @@ def add_routes(app, lifetime: Lifetime | None) -> None:
 
     # async: answered on the event loop even when every worker thread is calculating
     @app.post("/api/tab/alive")
-    async def tab_alive(tab: str):
-        lifetime.alive(tab)
+    async def tab_alive(tab: str, hidden: bool = False):
+        lifetime.alive(tab, hidden)
         return {}
 
     @app.post("/api/tab/bye")

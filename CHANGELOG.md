@@ -22,6 +22,11 @@ Large databases: one built with hundreds of thousands of processes opens, and ev
   ecoinvent it takes 2 s, where the previous solver ran out of time and memory; without Pardiso (macOS on
   Apple silicon) ecoinvent is factorised in 4 s instead of 2 minutes.
 - **Fixed**: building a database of more than about 30 000 processes failed with "too many SQL variables".
+- **Fixed**: when the browser closed the app's last tab without saying so (it quit, crashed, or closed the tab without
+  unloading it), the app kept running for about 2½ minutes. A tab on screen now counts as closed after 30 s of
+  silence (a hidden one, which browsers slow down, still after 2½ minutes), so the app stops within about 40 s; its
+  pings come from a worker, so a dialog or a long calculation on the page no longer holds them up, and one ping that
+  fails (on waking up) no longer silences the tab for good.
 - Impact methods are read from the project directly when a database is built: the same factors as before, faster.
 - **First start made simple**: the tree has the room, with its *Amount*, *Impact* and *Share* columns (*Comment* and the
   others in the columns menu) and the direct emissions organised by compartment; the left panel (processes, methods,

@@ -926,23 +926,42 @@ function FunctionalUnit({ root, onSelect, fields }) {
 }
 
 // Started on your own computer (lca_explorer), the server stops with its last tab (see lifetime.py): each tab says it
-// is open, and closing one asks first. ``leaving``: the page goes to another of its own pages (no question then);
-// ``stopped``: the server is gone (no question either).
-let leaving = false, stopped = false;
+// is open every 10 s, and whether it is hidden (the server then waits longer for the next time: browsers slow the
+// timers of hidden tabs), and closing one asks first. The pings come from a worker: a dialog (confirm) or a long
+// calculation holds up the page's own timers, not the worker's. ``leaving``: the page goes to another of its own pages
+// (no question then); ``stopped``: the server was shut down, ``unreachable``: the last ping failed (no question either;
+// the next ping tries again: one that fails, on waking up for instance, does not silence the tab).
+let leaving = false, stopped = false, unreachable = false;
 const goTo = (url) => { leaving = true; location.href = url; };
 const LIFETIME = fetch("/api/app").then((r) => (r.ok ? r.json() : {})).catch(() => ({}));
 const TAB = crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+const PINGS = `let url = "", hidden = false;
+const ping = () => url && fetch(url + (hidden ? "&hidden=1" : ""), { method: "POST" })
+  .then((r) => postMessage(r.ok), () => postMessage(false));
+onmessage = (e) => { ({ url, hidden } = e.data); if (e.data.now) ping(); };
+setInterval(ping, 10000);`;
 LIFETIME.then(({ stops_with_browser }) => {
   if (!stops_with_browser) return;
-  const alive = () => {
-    if (!stopped) fetch(`/api/tab/alive?tab=${TAB}`, { method: "POST" }).catch(() => { stopped = true; });
+  const url = `${location.origin}/api/tab/alive?tab=${TAB}`;
+  let worker = null;
+  try {
+    worker = new Worker(URL.createObjectURL(new Blob([PINGS], { type: "text/javascript" })));
+    worker.onmessage = (e) => { unreachable = !e.data; };
+  } catch { /* no worker: the page pings itself */ }
+  // ``now``: ping at once (a tab going hidden does not: a tab that closes says nothing more than its goodbye)
+  const alive = (now = true) => {
+    if (stopped) return;
+    if (worker) worker.postMessage({ url, hidden: document.hidden, now });
+    else if (now) fetch(url + (document.hidden ? "&hidden=1" : ""), { method: "POST" })
+      .then((r) => { unreachable = !r.ok; }, () => { unreachable = true; });
   };
   alive();
-  setInterval(alive, 20000);
+  if (!worker) setInterval(alive, 10000);
+  addEventListener("visibilitychange", () => alive(!document.hidden));
   addEventListener("pageshow", (e) => { if (e.persisted) { leaving = false; alive(); } });  // back from the history
   addEventListener("pagehide", () => { if (!stopped) navigator.sendBeacon(`/api/tab/bye?tab=${TAB}`); });
   // The browser's own question (its words: a page cannot choose them)
-  addEventListener("beforeunload", (e) => { if (!leaving && !stopped) { e.preventDefault(); e.returnValue = ""; } });
+  addEventListener("beforeunload", (e) => { if (!leaving && !stopped && !unreachable) { e.preventDefault(); e.returnValue = ""; } });
 });
 
 function Stopped({ waiting }) {
