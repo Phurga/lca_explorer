@@ -41,6 +41,17 @@ def test_right_click_on_a_tree_flow_row_opens_its_popup_not_a_menu():
     assert "flowMenu" not in body("FUView")
 
 
+def test_view_options_open_from_each_process_of_the_processes_panel():
+    # The view options left the side panel: each process row opens those of its tab, drawn by the tab on the page
+    assert "VIEW_OPTIONS_OPENERS[t.id]" in body("ProcessesPanel")
+    assert "VIEW_OPTIONS_OPENERS[id] =" in body("FUView")
+    assert "<${ViewOptionsPopup}" in body("FUView") and "<${PagePortal}>" in body("FUView")
+    assert "VIEW_OPTIONS_OPENERS" not in body("FlowTab")  # flow tabs have no view options
+    assert '["view", "Explore view"]' in body("FUView") and "header=${viewOptions}" not in body("FUView")
+    # key v: the view options of the tab in focus
+    assert 'new CustomEvent("lca:custom-view", { detail: { id } })' in body("App")
+
+
 @pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
 def test_app_js_parses(tmp_path):
     copy = tmp_path / "app.mjs"  # an ES module (its imports)

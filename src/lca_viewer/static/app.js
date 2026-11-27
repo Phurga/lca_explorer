@@ -5032,7 +5032,7 @@ function RecipeEditor({ recipe, setRecipe, example }) {
 // ---------------------------------------------------------------- chart panel
 // What each tab of the side panel shows, in a popup on its name
 const PANEL_TIPS = {
-  view: "How the tree is shown (display, cut-off, rows), and the chart of its rows.",
+  view: "The chart of the tree's rows: single indicator, or the methods shown together. The view options (display, cut-off, rows) are on each process of the Processes panel (v).",
   chart: "What each process of the supply chain adds by its own emissions, wherever it is in the tree.",
   flows: "Which substances drive the score, and which processes emit them.",
   missing: "The flows of the inventory that the active method has no factor for: what the score leaves out, and which another method characterises.",
@@ -5152,7 +5152,7 @@ function ChartPanel({ data, info, method, chartMethods, onPickMethods, view, hea
     </div>`;
 }
 
-// The filters of a flat list of rows, the cut-offs of the Custom view that make sense for it (the server cuts the list as
+// The filters of a flat list of rows, the cut-offs of the view options that make sense for it (the server cuts the list as
 // it cuts the tree): the largest ``value`` rows, the rows under ``value`` % of the total (to others), the largest rows until
 // ``value`` % of all the rows
 const LIST_CUTS = {
@@ -6144,7 +6144,7 @@ function Portal({ slot, children }) {
 // ---------------------------------------------------------------- lens: impact methods and group rules
 // The impact methods and the group rules are chosen once for the workspace and shared by all tabs (the Methods and
 // Rules panel on the left). The options of the view (display, cut-off, names, colours, columns…) belong to each tab
-// (the Custom view panel of the side panel shows those of the tab in focus). Methods: the *active* method (tree, charts, totals) and the ones *shown together* (the several
+// (the view options pop-up, from the tab's row in the Processes panel or key v). Methods: the *active* method (tree, charts, totals) and the ones *shown together* (the several
 // methods chart, the heat map). Rules: named sets, one of them active; rules scoped to a row of one tree stay in
 // their tab. Kept per database in ``localStorage``, by method name (positions change when a model is rebuilt).
 const LENS_KEY = `${STORAGE_KEY}.lens`;
@@ -6368,6 +6368,45 @@ function LensPanel({ info, lens, tab, setTab, tabs, focusedTab, comparing, view,
     </div>`;
 }
 
+// ---------------------------------------------------------------- view options (a pop-up per process tab)
+// Children drawn in a box of the page itself, as BodyPortal, but presses in it reach the page: the menus inside (Save ▾,
+// By…) close on a press elsewhere in it. The pop-up of a tab's view options shows even while its tab is hidden.
+function PagePortal({ children }) {
+  const host = useRef(null);
+  if (!host.current) host.current = document.createElement("div");
+  useEffect(() => {
+    document.body.appendChild(host.current);
+    return () => { render(null, host.current); host.current.remove(); };
+  }, []);
+  useEffect(() => { render(children, host.current); });
+  return null;
+}
+// The icon of the view options (sliders), on each process of the Processes panel
+function SlidersIcon() {
+  return html`
+    <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round">
+      <path d="M2.5 4H4M7 4h6.5M2.5 8H9M12 8h1.5M2.5 12h3M8.5 12h5" />
+      <circle cx="5.5" cy="4" r="1.5" /><circle cx="10.5" cy="8" r="1.5" /><circle cx="7" cy="12" r="1.5" />
+    </svg>`;
+}
+// Where the view options of a tab open when asked by the keyboard (v): beside its button in the Processes panel when
+// it is in sight, else near the top left of the workspace
+function viewOptionsPlace(id) {
+  const button = document.querySelector(`[data-view-options="${CSS.escape(id)}"]`);
+  const r = button?.getBoundingClientRect();
+  return r && r.width ? [r.right, r.top - 8] : [Math.round(window.innerWidth / 4), 96];
+}
+// The view options of a process tab: Display, Cut-off, Names, Organise by, Group by, Color by, Rows, with Reset and
+// Save ▾. Drawn by the tab (``FUView``), which gives the options (``children``) and the buttons (``actions``).
+function ViewOptionsPopup({ target, win, title, actions, onClose, children }) {
+  return html`
+    <${PopupWindow} target=${target} win=${win} label="View options" className="view-options-popup" width=${430} onClose=${onClose} onBack=${null}
+      head=${html`<div class="info-title">View options</div><div class="muted">${title}</div>`}>
+      <div class="view-options-actions">${actions}</div>
+      <div class="info-body">${children}</div>
+    <//>`;
+}
+
 // ---------------------------------------------------------------- process view (one tab)
 // The tree that takes keyboard navigation: the one clicked last (several can be visible in split panes)
 let keyboardOwner = null;
@@ -6375,6 +6414,7 @@ const TAB_API = {};  // tab id -> { view, setView } of the tab: the comparison's
 const POPUP_OPENERS = {};  // tab id -> the function that opens the pop-up of the process of the tab at (x, y): the Processes panel
 const CATEGORY_OPENERS = {};  // tab id (process or flow tab) -> the function that opens the model pop-up of a method (the Methods panel)
 const ROOT_SETTERS = {};  // tab id -> the function that makes a process the process of the tab (the search in the top bar)
+const VIEW_OPTIONS_OPENERS = {};  // process tab id -> the function that opens the pop-up of the tab's view options at (x, y): the Processes panel, key v
 // ``initial``: { state } a saved view, { inherit, root? } settings taken from another tab,
 // or { defaultRoot: true } (first start: the model's default process)
 // ``embedded``: the left panel alone (header, list and bars, without the side panel), inside the Exchanges tab of a
@@ -6470,8 +6510,13 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
     [allData, view.hideOthers]);
   const [error, setError] = useState(null);
   const [tab, setTab] = useState("view");
+  // The pop-up of the view options (the Processes panel's button, key v): { x, y, rect, pinned }, or null
+  const [optionsPop, setOptionsPop] = useState(null);
+  const openViewOptions = (x, y) => setOptionsPop((p) => ({ x, y, rect: p?.rect ?? null, pinned: p?.pinned ?? false }));
   useEffect(() => {
-    const show = () => keyboardOwner === id && setTab("view");
+    if (embedded) return;
+    // key v: the tab in focus (``detail.id``), else the tree clicked last
+    const show = (e) => (e.detail?.id ?? keyboardOwner) === id && openViewOptions(...viewOptionsPlace(id));
     document.addEventListener("lca:custom-view", show);
     return () => document.removeEventListener("lca:custom-view", show);
   }, [id]);
@@ -6542,6 +6587,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
     ROOT_SETTERS[id] = (r) => { keyboardOwner = id; selectRoot(r); };
     POPUP_OPENERS[id] = (x, y) => root && openInfo({ index: root.index, row: null, x, y });
     CATEGORY_OPENERS[id] = (category, x, y) => openInfo({ category, x, y });
+    VIEW_OPTIONS_OPENERS[id] = openViewOptions;
     TAB_API[id] = { view, setView };
   }
   function selectRoot(r) {
@@ -7112,7 +7158,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
       onOpenFlowTab: embedded ? null : (f, place) => onOpenTab(id, f, place),
       process: { rowsById, rootImpact, root, amount, onUseAsRoot: selectRoot, onOpenTab: (r, place) => onOpenTab(id, r, place), onGoTo: (index) => goTo(index) } });
   }
-  // The options of the view: in the left panel (View), in the pop-up's explorer above its list
+  // The options of the view: in their pop-up (View)
   const cutoffBare = html`
     <label><${NumberInput} class="cutoff" value=${cutoff} min=${cutoffBasis === "top" ? 1 : 0} max=${cutoffBasis === "top" ? undefined : 100}
       step=${cutoffBasis === "top" ? 1 : 0.5} onValue=${(v) => changeCutoff(v)} aria-label="Cut-off"
@@ -7124,25 +7170,25 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
   const viewBar = html`<${ViewBar} view=${view} setView=${setDisplayView} fields=${info.group_by_fields}
     legend=${colorLegend(allData.rows, view)} onPick=${embedded ? undefined : lens.pickColor} onColours=${embedded ? undefined : lens.showColours}
     example=${(() => { const r = data.rows.find((x) => x.kind === "process" && x.depth > 0); return r ? rowNames(r, rowsById, view) : null; })()} />`;
+  // The options of the view, in a pop-up of their own (the button of the tab's row in the Processes panel, key v)
+  const viewOptionsActions = html`
+    <button class="icon-plain" disabled=${!root} onClick=${resetView} aria-label="Reset the view" title="Reset: the process alone, undoable"><${ResetIcon} /></button>
+    <${SaveMenu} icon disabled=${!root} onSave=${exportView} onLoad=${loadView} onCopy=${copyView} onDefaults=${loadDefaults} />`;
   const viewOptions = html`
-    <${Fold} id="viewoptions" title="Options" open=${false} actions=${html`<span style="flex:1"></span>
-      <button class="icon-plain" disabled=${!root} onClick=${resetView} aria-label="Reset the view" title="Reset: the process alone, undoable"><${ResetIcon} /></button>
-      <${SaveMenu} icon disabled=${!root} onSave=${exportView} onLoad=${loadView} onCopy=${copyView} onDefaults=${loadDefaults} />`}>
-      <div class="view-options">
-        <div class="view-group" role="group" aria-label="Display">
-          <span class="view-group-label">Display</span>
-          <span class="segmented">
-            ${[["list", "List", "Table"], ["graph", "Tree", "Boxes"], ["sankey", "Sankey", "Bands"]].map(([k, label, hint]) => html`
-              <button class=${display === k ? "primary" : ""} title=${hint} onClick=${() => setDisplay(k)}>${label}</button>`)}
-          </span>
-        </div>
-        <div class="view-group" role="group" aria-label="Cut-off">
-          <span class="view-group-label">Cut-off</span>
-          ${cutoffBare}
-        </div>
-        ${viewBar}
+    <div class="view-options">
+      <div class="view-group" role="group" aria-label="Display">
+        <span class="view-group-label">Display</span>
+        <span class="segmented">
+          ${[["list", "List", "Table"], ["graph", "Tree", "Boxes"], ["sankey", "Sankey", "Bands"]].map(([k, label, hint]) => html`
+            <button class=${display === k ? "primary" : ""} title=${hint} onClick=${() => setDisplay(k)}>${label}</button>`)}
+        </span>
       </div>
-    <//>`;
+      <div class="view-group" role="group" aria-label="Cut-off">
+        <span class="view-group-label">Cut-off</span>
+        ${cutoffBare}
+      </div>
+      ${viewBar}
+    </div>`;
   // The tree, the first panel of the process of the tab (its pop-up's panels are the others)
   const treeNode = html`
     <section class="tree-section" ref=${treeSection} onMouseDown=${() => { if (!embedded) keyboardOwner = id; }}>
@@ -7195,18 +7241,24 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
             }} />`
         : treeNode}
       ${popups.map(renderPopup)}
+      ${!embedded && optionsPop && html`<${PagePortal}>
+        <${ViewOptionsPopup} target=${optionsPop} title=${root ? `${root.name} (${root.location})` : "No process yet"}
+          win=${{ rect: optionsPop.rect, pinned: optionsPop.pinned,
+            onPin: () => setOptionsPop((p) => p && { ...p, pinned: !p.pinned }), onRect: (rect) => setOptionsPop((p) => p && { ...p, rect }) }}
+          actions=${viewOptionsActions} onClose=${() => setOptionsPop(null)}>${viewOptions}<//>
+      <//>`}
       ${!embedded && html`<${Portal} slot=${`side-${id}`}>
         <section class="side">
           <div class="tabs" role="tablist" onKeyDown=${tabKeys(["view", "chart", "flows", "missing", "global"], tab, setTab)}>
-            ${[["view", "Custom view"], ["chart", "Process contribution"], ["flows", "Flow contribution"], ["missing", "Uncharacterised"], ["global", "Rules contributions"]].map(([key, label]) => html`
+            ${[["view", "Explore view"], ["chart", "Process contribution"], ["flows", "Flow contribution"], ["missing", "Uncharacterised"], ["global", "Rules contributions"]].map(([key, label]) => html`
               <${TabButton} role="tab" class=${tab === key ? "active" : ""} onClick=${() => setTab(key)} tip=${PANEL_TIPS[key]}>${label}<//>`)}
             <span class="spacer"></span>
             <button class="collapse-side" onClick=${onCollapseSide} title="Hide the side panel (Ctrl/⌘ + →)" aria-label="Hide the side panel"><${SidePanelIcon} open /></button>
           </div>
           ${tab === "view" && (allData.rows.length > 0
             ? html`<${ChartPanel} key=${editing ? "edit" : "view"} data=${allData} info=${info} method=${method}
-                chartMethods=${chartMethods} onPickMethods=${() => lens.show("methods")} view=${view} header=${viewOptions} />`
-            : html`<div class="panel">${viewOptions}</div>`)}
+                chartMethods=${chartMethods} onPickMethods=${() => lens.show("methods")} view=${view} />`
+            : html`<div class="panel"><p class="muted">The chart of the tree's rows, once a process is shown.</p></div>`)}
           ${tab === "chart" && root && html`<${ProcessContributions} info=${info} root=${root} amount=${amount} method=${method}
               onInfo=${(index, x, y) => openInfo({ index, row: null, x, y })} />`}
           ${tab === "missing" && root && html`<${UncharacterisedPanel} info=${info} root=${root} amount=${amount} method=${method}
@@ -7636,6 +7688,12 @@ function ProcessesPanel({ tabs, flowTabs = [], compare, setCompare, windows }) {
     showTab(pane, t);
     setTimeout(() => POPUP_OPENERS[t.id]?.(x, y), 60);
   };
+  // The view options of the tab: the tab shown first, as a click on its name, then its pop-up beside the button
+  const openViewOptions = (e, pane, t) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    showTab(pane, t);
+    VIEW_OPTIONS_OPENERS[t.id]?.(r.right, r.top - 8);
+  };
   const lastPane = windows.panes[windows.panes.length - 1];
   const dragging = windows.dragging || processDrag;
   // Drop on a window (``before``: ahead of a tab of it): a tab moves there, a process opens there
@@ -7671,6 +7729,8 @@ function ProcessesPanel({ tabs, flowTabs = [], compare, setCompare, windows }) {
         <span class="name" title=${`${fullLabels[t.id]}. Click: show it. Right-click: its details. Drag: move it to another window.`} onClick=${() => showTab(pane, t)}>${labels[t.id]}</span>
         <input type="radio" name="baseline" checked=${t === baseline} disabled=${!on} onChange=${() => set({ baseline: t.id })} aria-label="Baseline"
           title="Baseline: the others are read against it" />
+        <button class="view-options-btn" data-view-options=${t.id} onClick=${(e) => openViewOptions(e, pane, t)} aria-label=${`View options of ${labels[t.id]}`}
+          title="View options: display, cut-off, names, organise, group, colours, rows (v for the tab in focus)"><${SlidersIcon} /></button>
         <button class="close-tab" onClick=${() => windows.close(t.id)} aria-label=${`Close ${labels[t.id]}`} title="Close it (w); Undo brings it back">×</button>
       </div>
     </div>`;
@@ -7981,7 +8041,7 @@ function LayoutView({ node, renderPane, onResize }) {
 const SHORTCUTS = [
   ["Anywhere", [
     ["Ctrl/⌘ + K", "Search a process in the top bar: Enter shows it in the tab, Ctrl/⌘ + Enter opens it in a new tab"],
-    ["v", "View mode; when already in View mode, the Custom view panel (view options)"],
+    ["v", "View mode; when already in View mode, the view options of the tab in focus (as its sliders button in the Processes panel)"],
     ["e", "Edit mode (a Brightway-built database); when already in Edit mode, open the form of the selected process, as below"],
     ["c", "Compare mode"],
     ["s", "Search a process in the top bar (as Ctrl/⌘ + K)"],
@@ -8072,7 +8132,7 @@ function SettingsDialog({ lens, onClose }) {
   return html`
     <${Modal} title="Settings" className="settings-dialog" onClose=${onClose}>
       <section>
-        <h3>Colours <${InfoTip} text="Rows, bars and groups take these colours with Color by in the Custom view: by rules, by type, or by location, activity type or compartment. The palette serves every mode; a colour picked (here, or on the swatches under Color by) wins over it; choosing a palette clears them." label="About the colours" /></h3>
+        <h3>Colours <${InfoTip} text="Rows, bars and groups take these colours with Color by in the view options: by rules, by type, or by location, activity type or compartment. The palette serves every mode; a colour picked (here, or on the swatches under Color by) wins over it; choosing a palette clears them." label="About the colours" /></h3>
         <${PaletteSwitch} palette=${lens.palette} setPalette=${lens.setPalette} palettes=${lens.palettes} addPalette=${lens.addPalette}
           customized=${Object.keys(picked).length > 0} />
         <h4>Rules</h4>
@@ -8194,18 +8254,19 @@ function App() {
   // Where the open database was built from (Brightway): the project that is edited
   const origin = databases?.find((d) => d.key === DATABASE)?.brightway || null;
   const editing = mode === "edit" && !!origin;
-  // v: View mode, or in View mode the Custom view panel; e: Edit mode (in Edit mode the tree's e opens the form of the
+  // v: View mode, or in View mode the view options of the tab in focus (their pop-up); e: Edit mode (in Edit mode the tree's e opens the form of the
   // process); c: Compare mode; s: the search of the top bar. Not while typing, in a pop-up or in a dialog.
   useEffect(() => {
     const onKey = (e) => {
       if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || e.defaultPrevented) return;
       if (e.target.closest?.("input, textarea, select, [contenteditable], .info-popup") || document.querySelector(".modal-backdrop")) return;
       if (e.key === "v") {
-        // the Custom view tab of the side panel (View mode)
+        // the pop-up of the view options of the tab in focus (View mode)
         if (mode !== "view") setMode("view");
         else {
-          setSideOpen(true);
-          document.dispatchEvent(new CustomEvent("lca:custom-view"));
+          const { layout: shown, focus: pane } = current.current;
+          const id = shown ? panesOf(shown).find((p) => p.id === pane)?.active : null;
+          document.dispatchEvent(new CustomEvent("lca:custom-view", { detail: { id } }));
         }
       } else if (e.key === "e") {
         if (editing || !origin) return;

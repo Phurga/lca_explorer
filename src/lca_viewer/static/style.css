@@ -919,6 +919,11 @@ textarea.editing { width: 100%; box-sizing: border-box; }
 .compare-tab .name { cursor: pointer; }
 .compare-tab .close-tab { border: none; background: none; padding: 0 5px; color: var(--muted); font-size: 15px; line-height: 1; }
 .compare-tab .close-tab:hover { color: var(--bar-negative); }
+.compare-tab .view-options-btn { border: none; background: none; padding: 0 3px; color: var(--muted); display: inline-flex; align-items: center; }
+.compare-tab .view-options-btn:hover { color: var(--accent); }
+/* The pop-up of a tab's view options: Reset and Save ▾ above the options */
+.view-options-actions { display: flex; justify-content: flex-end; align-items: center; gap: 6px; padding: 6px 14px 0; flex: none; }
+.view-options-popup .info-body { padding-top: 2px; }
 
 /* The ⋯ menu of a pop-up */
 .popup-menu { display: inline-flex; }

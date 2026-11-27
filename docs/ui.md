@@ -197,11 +197,15 @@ API in `src/lca_viewer/server.py`.
   focus, Ctrl/⌘ + Enter opens it in a new tab); the mode switch is at the right.
 - **Status bar** (bottom of the page): the active method and the rule set at the left, the **Settings** icon (the
   colours of every *Color by* mode) and the
-  **Shortcuts** icon at the right. The **view options** are the top of the first panel of the side
-  panel, *Custom view* (key v in View mode), with the options of **the tab in focus**, the one of
-  the window (split pane) used last, one line each and in this order: *Display* (List / Tree / Sankey), *Cut-off*, *Names*,
-  *Organise by*, *Group by*, *Color by*, then *Rows*; *Reset* and *Save* are icons at the top right
-  of the section (Save's arrow: Load, Copy, Default settings). *Group by*: *Rules*, a switch that
+  **Shortcuts** icon at the right. The **view options** belong to each process tab: the sliders icon of its row in the
+  left panel's *Processes* panel opens them in a pop-up (the tab is shown in its window first, as a click on its name),
+  and key v in View mode opens those of **the tab in focus**, the one of the window (split pane) used last. One line
+  each and in this order: *Display* (List / Tree / Sankey), *Cut-off*, *Names*, *Organise by*, *Group by*, *Color by*,
+  then *Rows*; *Reset* and *Save* are icons at the top right of the pop-up (Save's arrow: Load, Copy, Default
+  settings). The pop-up is drawn by the tab itself, on the page, so it stays open (pinned) while the tab is hidden;
+  flow tabs have no view options. Decision: the options were the top of the side panel's first panel, which showed
+  those of the tab in focus only; on each process of the *Processes* panel, which tab they change is plain, and the
+  side panel keeps its room for the chart. *Group by*: *Rules*, a switch that
   applies or not the rules of the Rules panel to the tree, which keep their place in the panel (adding a rule,
   or grouping rows, while it is off switches it on, since the group would not show); group by
   product, …: one grouping of the processes and one of the flows, since the first leaves nothing for the next), *Organise
@@ -212,19 +216,20 @@ API in `src/lca_viewer/server.py`.
   is both in *Group by* and in *Color by*, two switches: rows can be grouped by the rules, coloured by them, or both. Each tab has its own options, so in a
   split the windows can show the same process in a list and as a Sankey; the pane follows the
   window clicked. The options of the last tab changed are what a new tab starts with. The
-  panel is not shown in Compare mode. The tabs have no header any more: the options were above each tree, and now
+  view options are not shown in Compare mode. The tabs have no header any more: the options were above each tree, and now
   are in one place. *Shortcuts* (keyboard) lists the keys. At the left, the icon that shows
   or hides the left panel, and the active method and the rule set in use, which open it.
 - **First start** (nothing kept in the browser): the plain reading first, complexity when asked for. A tab is a list
   with *Amount*, *Impact* and *Share*, no cut-off, nothing grouped, the direct emissions organised by compartment, full names, no colours; the left
-  panel is closed, the side panel open on *Custom view* with *Options* folded. Widths follow the window until dragged
+  panel is closed, the side panel open on *Explore view* (the chart; the view options are in their pop-up, closed). Widths follow the window until dragged
   (side panel 42 % of it, leaving the tree 720 px). Constants `DEFAULT_VIEW`, `DEFAULT_CUTOFF` and `FIRST_PANELS` in
   `app.js`. Decision: a preference is written when the user changes it, not at the first render, so a default never
   chosen can still change in a later version; *Default settings* (save menu) restores all of it, panels included.
 - **Left panel: Processes, Methods and Rules** (hidden and shown with its icon, the
   status bar's, the edge of the page or Ctrl/⌘ + ←; the right panel with Ctrl/⌘ + →;
   resizable, in every mode). *Processes* lists the tabs open: the tick for the ones compared in
-  Compare mode, the round mark for the baseline and a × that closes the tab; what each
+  Compare mode, the round mark for the baseline, the sliders icon of its view options (a process tab; see *Status
+  bar*) and a × that closes the tab; what each
   does is in its tooltip, not in a text, and a right-click on a process opens its pop-up (the tab is
   shown in its window first). The amount of a process is 1: it is no longer set in the panel.
   A side pane that is opened takes the focus, on its panel's tab, where ← and → switch panel. The tabs are grouped
@@ -376,7 +381,7 @@ API in `src/lca_viewer/server.py`.
   themselves carry no key hints (what a tab of the side panel shows is in a popup on its
   name). Four keys work anywhere (not while typing, in a
   pop-up or in a dialog): **v** goes to View mode, and in View mode
-  shows the *Custom view* panel; **Ctrl/⌘ + ←** and **→** hide or show the left and the right panel; **e** goes to Edit mode (a Brightway-built database;
+  opens the view options of the tab in focus (their pop-up); **Ctrl/⌘ + ←** and **→** hide or show the left and the right panel; **e** goes to Edit mode (a Brightway-built database;
   once in Edit mode, **e** is the tree's, below); **c** goes to Compare mode; **s** goes to
   the search of the top bar (as Ctrl/⌘ + K). The key of the
   exchange pop-up is **i** (info), which was **c** before.
@@ -437,7 +442,7 @@ API in `src/lca_viewer/server.py`.
   Ctrl/⌘-click select, right-click opens the pop-up, drag pans, wheel zooms;
   row actions are in the selection bar and the pop-ups. Always a tree drawn
   left to right: the Cycles and orientation controls are hidden here.
-- **View bar** (the *Rows* of the *Custom view* panel): *Group by rules* (on by default), *Group by product*, *Split by flow type* (below each
+- **View bar** (the *Rows* of the view options): *Group by rules* (on by default), *Group by product*, *Split by flow type* (below each
   row, the rows in the sections of the form of a new process, as in the flow type colours, with a
   heading each: inputs from technosphere, inputs from nature, emissions, direct emissions, waste
   to treatment, avoided products (a negative input of a product, not a waste: the substitutions of consequential
@@ -639,7 +644,7 @@ API in `src/lca_viewer/server.py`.
   tab, opens the process in a new tab. Decision: one shell for both kinds of tabs (a tab's saved state holds `root` for a
   process, `flow` for a flow), so saving, closing, *Undo* and the open history work for both.
 - **Side panel — tabs** (what each shows is explained in a popup on its name, not in the panel):
-  - *Custom view*: the view options (above), then the chart of the tree's rows: **single indicator**, the
+  - *Explore view*: the chart of the tree's rows (the view options are in their pop-up, above): **single indicator**, the
     bars of the main method, or **multi indicator**, the methods ticked in the Methods panel as 100 % stacked
     bars; CSV export.
   - *Process contribution*: what each process contributes by its own emissions (direct contributions, wherever
@@ -776,7 +781,7 @@ so tabs and splits come back on reload; a view saved before tabs existed
 opens as the first tab. A tab moved to another pane is rebuilt from its
 saved state (selection and undo are not kept).
 
-**Save ▾** (in the *Custom view* panel) downloads the view as JSON; the arrow menu offers *Load view…*
+**Save ▾** (in the view options pop-up) downloads the view as JSON; the arrow menu offers *Load view…*
 and *Copy view as JSON*. Files are `version` 2: `cutoff` is a fraction, as in
 `/api/rows` (0.05 for the 5 % shown in the page); version 1 files stored the
 percentage and still load. The `labels` of a file (`p:<activity>`, `f:<flow>`,

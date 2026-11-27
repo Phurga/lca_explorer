@@ -9,6 +9,12 @@ version, `main` can be ahead of it with work in progress.
 
 Changes on `dev`, not released yet.
 
+- **View options on each process**: the sliders icon of a process in the left panel's *Processes* panel opens the
+  view options of that tab in a pop-up (*Display*, *Cut-off*, *Names*, *Organise by*, *Group by*, *Color by*, *Rows*,
+  with *Reset* and *Save ▾*); the tab is shown in its window first. Key **v** in View mode opens those of the tab in
+  focus. Flow tabs have none.
+- **Explore view**: the side panel's first panel, formerly *Custom view*, keeps only the chart of the tree's rows.
+
 ## 1.6.0 - 2026-11-27
 
 Large databases: one built with hundreds of thousands of processes opens, and every database is solved faster, with
