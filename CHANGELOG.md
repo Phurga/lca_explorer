@@ -17,12 +17,14 @@ Changes on `dev`, not released yet.
 - **Process cards: Explore and Exchanges.** The first panel of a process tab (the tree) and of a process pop-up (its
   explorer) is now called *Explore*. A new *Exchanges* panel, second, lists the exchanges as the dataset records them,
   in the sections of the process form (products, inputs from technosphere, inputs from nature, emissions, waste to
-  treatment, avoided products) with their location or compartment, amount, unit and a comment mark (the comment in
-  its tooltip). A row's name or right-click opens its process or flow pop-up, its (i) the exchange pop-up.
-- **Edit mode starts from a process card**: the *Edit* button of the *Exchanges* panel (a Brightway-built database)
-  enters Edit mode; there it reads *Done editing*, with *Edit process…* (the process form), and amounts change in
-  place (double-click, staged). The *Edit* button of the top bar is gone: View leaves Edit mode, and the `e` key and
-  the staged-changes warning still enter it.
+  treatment, avoided products) with their location or compartment, amount, unit and comment (a column of its own,
+  on one line, all of it in its tooltip). A row's name or right-click opens its process or flow pop-up, its (i) the
+  exchange pop-up.
+- **Exchanges panel: keys and columns.** The panel works with the keyboard as the other lists of the pop-ups, in a tab
+  and in a pop-up: ↓ from the panel tabs enters it, ↑/↓ move between the rows, Space opens a row's pop-up, `i` its
+  exchange, Enter makes a process the process of the tab and Ctrl/⌘ + Enter opens it in a new tab. Right-clicking
+  its column headers opens a columns menu (location / compartment, amount, unit, comment, uncertainty, pedigree,
+  formula), kept in the browser.
 - **Information panel**: a *Unit* row with what it measures ("kg · mass", "m2·a · land occupation") and the location
   with its name ("FR · France", "RER · Europe"). API: `/api/activity/{index}` gives `location_name`, and each input
   of `/api/activity/{index}/exchanges` whether it is `waste`.
