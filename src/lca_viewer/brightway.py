@@ -241,6 +241,58 @@ def _unlinked_factors(methods: list[tuple], flow_ids: np.ndarray) -> pd.DataFram
     return pd.DataFrame(out).astype({"method": "int32", "id": "int64", "cf": "float64"})
 
 
+def activity_frame(activity_ids: np.ndarray) -> tuple[pd.DataFrame, dict]:
+    """The table of the activities ``activity_ids`` (node ids, in the model's order), and their records by id."""
+    from bw2data.backends import ActivityDataset as AD
+
+    records = {
+        ds.id: ds.data
+        for chunk in _chunks(activity_ids.tolist())
+        for ds in AD.select(AD.id, AD.data).where(AD.id.in_(chunk))
+    }
+    activities = pd.DataFrame(
+        {
+            "id": activity_ids,
+            "database": [records[i].get("database") for i in activity_ids],
+            "code": [records[i].get("code") for i in activity_ids],
+            "name": [records[i].get("name") for i in activity_ids],
+            "reference_product": [records[i].get("reference product") for i in activity_ids],
+            "location": [records[i].get("location") for i in activity_ids],
+            "unit": [records[i].get("unit") for i in activity_ids],
+            "isic": [_classification(records[i].get("classifications"), "ISIC") for i in activity_ids],
+            "cpc": [_classification(records[i].get("classifications"), "CPC") for i in activity_ids],
+            # allocated from a multi-output process (a co-product), as multifunctional's allocation makes them
+            "multifunctional": [bool(records[i].get("mf_parent_key")) for i in activity_ids],
+        }
+    )
+    return activities, records
+
+
+def flow_frame(flow_ids: np.ndarray) -> pd.DataFrame:
+    """The table of the elementary flows ``flow_ids`` (node ids, the rows of ``B``)."""
+    from bw2data.backends import ActivityDataset as AD
+
+    flow_records = {
+        ds.id: ds.data
+        for chunk in _chunks(flow_ids.tolist())
+        for ds in AD.select(AD.id, AD.data).where(AD.id.in_(chunk))
+    }
+    return pd.DataFrame(
+        {
+            "id": flow_ids,
+            "name": [flow_records[i].get("name") for i in flow_ids],
+            "categories": [tuple(flow_records[i].get("categories") or ()) for i in flow_ids],
+            "unit": [flow_records[i].get("unit") for i in flow_ids],
+            # the metadata of a flow (its pop-up): what the biosphere record has, if anything
+            "location": [flow_records[i].get("location") for i in flow_ids],
+            "cas": [flow_records[i].get("CAS number") for i in flow_ids],
+            "formula": [flow_records[i].get("formula") or flow_records[i].get("chemical formula") for i in flow_ids],
+            "synonyms": [tuple(flow_records[i].get("synonyms") or ()) for i in flow_ids],
+            "comment": [flow_records[i].get("comment") for i in flow_ids],
+        }
+    )
+
+
 def from_brightway(project: str, database: str, methods: list[tuple], log=None) -> LCAModel:
     """Load the technosphere of ``database`` and of the databases it links to, with ``methods``.
 
@@ -250,7 +302,6 @@ def from_brightway(project: str, database: str, methods: list[tuple], log=None) 
     """
     import bw2calc as bc
     import bw2data as bd
-    from bw2data.backends import ActivityDataset as AD
 
     try:
         import multifunctional  # noqa: F401  (backend of databases with allocated multi-output processes)
@@ -277,49 +328,11 @@ def from_brightway(project: str, database: str, methods: list[tuple], log=None) 
     B = sp.csc_matrix(lca.biosphere_matrix)
 
     log(f"Reading {len(activity_ids)} activities")
-    records = {
-        ds.id: ds.data
-        for chunk in _chunks(activity_ids.tolist())
-        for ds in AD.select(AD.id, AD.data).where(AD.id.in_(chunk))
-    }
-    activities = pd.DataFrame(
-        {
-            "id": activity_ids,
-            "database": [records[i].get("database") for i in activity_ids],
-            "code": [records[i].get("code") for i in activity_ids],
-            "name": [records[i].get("name") for i in activity_ids],
-            "reference_product": [records[i].get("reference product") for i in activity_ids],
-            "location": [records[i].get("location") for i in activity_ids],
-            "unit": [records[i].get("unit") for i in activity_ids],
-            "isic": [_classification(records[i].get("classifications"), "ISIC") for i in activity_ids],
-            "cpc": [_classification(records[i].get("classifications"), "CPC") for i in activity_ids],
-            # allocated from a multi-output process (a co-product), as multifunctional's allocation makes them
-            "multifunctional": [bool(records[i].get("mf_parent_key")) for i in activity_ids],
-        }
-    )
-
+    activities, records = activity_frame(activity_ids)
     flow_ids = np.empty(len(lca.dicts.biosphere), dtype=np.int64)
     for node_id, row in lca.dicts.biosphere.items():
         flow_ids[row] = node_id
-    flow_records = {
-        ds.id: ds.data
-        for chunk in _chunks(flow_ids.tolist())
-        for ds in AD.select(AD.id, AD.data).where(AD.id.in_(chunk))
-    }
-    flows = pd.DataFrame(
-        {
-            "id": flow_ids,
-            "name": [flow_records[i].get("name") for i in flow_ids],
-            "categories": [tuple(flow_records[i].get("categories") or ()) for i in flow_ids],
-            "unit": [flow_records[i].get("unit") for i in flow_ids],
-            # the metadata of a flow (its pop-up): what the biosphere record has, if anything
-            "location": [flow_records[i].get("location") for i in flow_ids],
-            "cas": [flow_records[i].get("CAS number") for i in flow_ids],
-            "formula": [flow_records[i].get("formula") or flow_records[i].get("chemical formula") for i in flow_ids],
-            "synonyms": [tuple(flow_records[i].get("synonyms") or ()) for i in flow_ids],
-            "comment": [flow_records[i].get("comment") for i in flow_ids],
-        }
-    )
+    flows = flow_frame(flow_ids)
 
     log(f"Reading {len(methods)} impact methods")
     loaded = method_factors(methods, flow_ids)

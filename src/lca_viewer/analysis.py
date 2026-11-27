@@ -176,7 +176,7 @@ def _supply(model: LCAModel, product: int, assignment: np.ndarray, n_groups: int
 def _activity_values(model: LCAModel, s: np.ndarray, assignment: np.ndarray, n_groups: int, rule: str,
                      methods=slice(None)):
     """Impacts attributed to each activity (activities x methods) under ``rule``."""
-    U = model.U[methods]
+    U = model.direct_impacts(methods)
     if rule == "direct":
         return s[:, None] * U.T
     return np.where(
@@ -245,7 +245,7 @@ def _attribute(model: LCAModel, product: int, groups: dict[str, dict], rule: str
     own = s - sum(portions, np.zeros(model.size)) if rule == "direct" else s  # under first match the cut edges are not in ``s``
     matched = (assignment < n)[:, None]
     total = _activity_values(model, own, assignment, n, rule, methods)
-    U, G = model.U[methods], model.G[:, methods]
+    U, G = model.direct_impacts(methods), model.G[:, methods]
     edge_values = {name: (p[:, None] * U.T if rule == "direct" else (p * model.diagonal)[:, None] * G)
                    for name, p in zip(edge_groups, portions)}
     directs = _flow_directs(model, flow_groups, flow_owners or {}, methods)
@@ -346,7 +346,7 @@ def uncharacterised(model: LCAModel, s: np.ndarray, method: int, reference: int 
         "flows": flows,
         "amounts": inventory[flows],
         "emitters": np.asarray((B != 0).sum(axis=1)).ravel(),
-        "methods": np.count_nonzero(model.CF[:, flows], axis=0) if model.methods else np.zeros(len(flows), dtype=int),
+        "methods": model.CF[:, flows].getnnz(axis=0) if model.methods else np.zeros(len(flows), dtype=int),
         "inventory": int(np.count_nonzero(in_inventory)),
         "characterised": int(np.count_nonzero(in_inventory & (cfs != 0))),
     }
@@ -386,7 +386,7 @@ def method_coverage(model: LCAModel, method: int, reference: int | None = None) 
         "uncharacterised": {
             "flows": missing,
             "emitters": emitters[missing],
-            "methods": np.count_nonzero(model.CF[:, missing], axis=0),
+            "methods": model.CF[:, missing].getnnz(axis=0),
         },
         "unlinked": None,
     }

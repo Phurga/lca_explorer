@@ -1205,8 +1205,9 @@ function MethodPicker({ methods, chosen, setChosen }) {
     </div>`;
 }
 
-// The impact methods a database is built with: those of its previous build, else the family of the default method
-// (EF v3.1 when the project has it). The impacts of each method are computed with the build: the fewer, the lighter.
+// The impact methods a database is built with: one list per project (its cache), those of its previous builds, else the
+// family of the default method (EF v3.1 when the project has it). The impacts of each method are computed with the
+// build: the fewer, the lighter.
 function BuildForm({ form, folder, onJob, actions }) {
   const [listing, setListing] = useState(null);
   const [error, setError] = useState(null);
@@ -1227,13 +1228,13 @@ function BuildForm({ form, folder, onJob, actions }) {
   return html`
     <form class="project-form" onSubmit=${submit}>
       <h4>${verb} ${form.database}: impact methods <${InfoTip} label="About the impact methods"
-        text="The impacts of the methods ticked are computed with the build, for every process: the fewer, the faster and the lighter (a large database with hundreds of methods takes gigabytes). More can be added later, in the Methods panel of the open database: only their impacts are computed then." /></h4>
+        text="The impacts of the methods ticked are computed with the build, for every process: the fewer, the faster and the lighter (a large database with hundreds of methods takes gigabytes). The project has one list for all its databases: methods unticked are dropped from all of them (no computing), methods ticked are computed for all of them. More can be added later, in the Methods panel of the open database: only their impacts are computed then." /></h4>
       ${error && html`<div class="error">${error}</div>`}
       ${!listing ? !error && html`<${Waiting} text="Reading the impact methods of the project…" />` : html`
         <div class="row">
           <button type="button" onClick=${() => setChosen(new Set(listing.methods.map((m) => methodKey(m.name))))}>All ${listing.methods.length}</button>
           <button type="button" onClick=${() => setChosen(new Set())}>None</button>
-          <span class="muted small">${listing.selected ? "Ticked: those of the previous build" : "Ticked: the family of the default method"}</span>
+          <span class="muted small">${listing.selected ? "Ticked: those of the project's databases built so far" : "Ticked: the family of the default method"}</span>
         </div>
         <${MethodPicker} methods=${listing.methods} chosen=${chosen} setChosen=${setChosen} />`}
       ${actions(`${verb} and open with ${names.length} ${names.length === 1 ? "method" : "methods"}`,
@@ -1650,15 +1651,17 @@ function DatabaseGraph({ folder, project, onClose }) {
 // ---------------------------------------------------------------- storage
 const fmtBytes = (n) => (n >= 2 ** 30 ? `${(n / 2 ** 30).toFixed(1)} GB` : n >= 2 ** 20 ? `${Math.round(n / 2 ** 20)} MB` : n > 0 ? `${Math.max(1, Math.round(n / 2 ** 10))} kB` : "0");
 
-// What the app and Brightway take on disk (/api/storage), and what can be deleted: built models (or only their results,
-// G, solved again when the model is next opened), what failed builds and older versions left in data/cache, downloads.
-// Brightway projects are only measured: they are deleted with Delete project… in Projects.
+// What the app and Brightway take on disk (/api/storage), and what can be deleted: the project caches (a segment per
+// database, or per databases built together; its results, G, solved again at its next build), models made from files,
+// caches of an older layout, what failed builds left in data/cache, downloads. Brightway projects are only measured:
+// they are deleted with Delete project… in Projects.
 function StorageDialog({ onClose }) {
   const folder = loadPreference("brightwayFolder", "");
   const [listing, setListing] = useState(null);
   const [error, setError] = useState(null);
   const [asking, setAsking] = useState(null);  // { kind, path, text }: a deletion waiting for its confirmation
   const [busy, setBusy] = useState(false);
+  const [running, setRunning] = useState(null);  // what a rebuild under way says
   const read = () => serverRequest(`/api/storage${folder ? `?folder=${encodeURIComponent(folder)}` : ""}`).then(setListing).catch((e) => setError(e.message));
   useEffect(() => { read(); }, []);
   const remove = async ({ kind, path }) => {
@@ -1666,53 +1669,113 @@ function StorageDialog({ onClose }) {
     try { await serverRequest("/api/storage/delete", { kind, path }); await read(); } catch (e) { setError(e.message); }
     setAsking(null); setBusy(false);
   };
+  // A segment read again from its project (built only, not opened); the segments above it are solved again
+  const rebuild = async (s) => {
+    setBusy(true); setError(null); setRunning(`Building ${s.title} again`);
+    try {
+      let job = await serverRequest("/api/load", { brightway: s.folder, project: s.project, database: s.databases[0], rebuild: true, open: false });
+      while (job.status === "running") {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        job = await serverRequest(`/api/jobs/${job.id}`);
+        setRunning(job.message);
+      }
+      if (job.status === "failed") throw new Error(job.error);
+      await read();
+    } catch (e) { setError(e.message); }
+    setRunning(null); setBusy(false);
+  };
   const ask = (kind, path, text) => setAsking({ kind, path, text });
   const confirmRow = (kind, path) => asking && asking.kind === kind && asking.path === path && html`
     <div class="storage-confirm">${asking.text} <button class="danger" disabled=${busy} onClick=${() => remove(asking)}>Delete</button>
       <button disabled=${busy} onClick=${() => setAsking(null)}>Cancel</button></div>`;
   const items = listing?.items || [];
-  const models = items.filter((i) => i.kind === "model"), leftovers = items.filter((i) => i.kind === "leftover");
-  const downloads = items.filter((i) => i.kind === "download");
+  const of = (kind) => items.filter((i) => i.kind === kind);
+  const projects = of("project"), models = of("model"), obsolete = of("obsolete"), leftovers = of("leftover"), downloads = of("download");
+  const segments = Object.fromEntries(of("segment").map((s) => [s.path, s]));
   const sum = (list) => list.reduce((a, i) => a + i.size, 0);
+  const anyOpen = [...projects, ...models, ...obsolete].some((i) => i.open);
   return html`
     <${Modal} title="Storage" className="storage-dialog" onClose=${onClose}>
       ${error && html`<div class="error">${error}</div>`}
+      ${running && html`<${Waiting} text=${running} />`}
       ${!listing ? (!error && html`<${Waiting} text="Measuring the folders…" />`) : html`
         <p class="muted small">LCA Explorer: <b>${fmtBytes(listing.total)}</b> in <code>${listing.data}</code> and the download caches ·
           Brightway: <b>${fmtBytes(listing.brightway_total)}</b> in <code>${listing.brightway}</code>
-          <${InfoTip} label="About storage" text="A built model holds its database and every database it uses, so a background database (ecoinvent) is stored again in each model built on it. Results (G) are what opening a model the first time computes: dropped, they are computed again at the next open. A model deleted is built again when its database is next opened. Open databases must be closed first." /></p>
-        <h3 class="load-head">Built models <span class="muted small">${fmtBytes(sum(models))}</span></h3>
+          <${InfoTip} label="About storage" text="Each Brightway project has one cache, made of segments: one per database (databases that use each other are built together). A background database (ecoinvent) is stored once, and opening a database puts its segment and those it uses together. Results (G) are the cumulative impacts: dropped, they are solved again at the next build. A segment rebuilt is read again from its project, and the results of the segments that use it are solved again. Open databases must be closed first." /></p>
+        <h3 class="load-head">Project caches <span class="muted small">${fmtBytes(sum(projects))}</span></h3>
         <table class="load-table storage-table">
-          <tr><th>Model</th><th>Project</th><th class="num">Size</th><th class="num">Results</th><th></th></tr>
-          ${models.map((m) => html`
-            <tr key=${m.path} class=${m.orphan ? "muted" : ""}>
-              <td title=${m.path}>${m.database || m.title}${m.open ? html` <span class="loc-chip">open</span>` : ""}
-                ${m.orphan && html` <span class="small" title="It cannot be built again from its project">· ${m.orphan}</span>`}</td>
-              <td>${m.project || ""}</td><td class="num">${fmtBytes(m.size)}</td><td class="num">${m.results ? fmtBytes(m.results) : "–"}</td>
+          <tr><th>Database</th><th class="num">Size</th><th class="num">Results</th><th></th></tr>
+          ${projects.map((p) => html`
+            <tr key=${p.path} class=${"storage-project" + (p.orphan ? " muted" : "")}>
+              <td title=${p.path}><b>${p.title}</b> <span class="muted small">· ${p.methods} impact methods · project files ${fmtBytes(p.files)}</span>
+                ${p.orphan && html` <span class="small">· ${p.orphan}</span>`}</td>
+              <td class="num">${fmtBytes(p.size)}</td><td></td>
               <td class="actions">
-                <button class="link" disabled=${busy || m.open || !m.results} title=${m.open ? "Close it first" : "Delete its results (G): computed again when it is next opened"}
-                  onClick=${() => ask("results", m.path, `Drop the results of ${m.database || m.title} (${fmtBytes(m.results)})?`)}>Drop results</button>
-                <button class="link danger" disabled=${busy || m.open} title=${m.open ? "Close it first" : "Delete the model: built again when its database is next opened"}
-                  onClick=${() => ask("model", m.path, `Delete the model of ${m.database || m.title} (${fmtBytes(m.size)})?${m.orphan ? " It cannot be built again." : ""}`)}>Delete</button>
-                ${confirmRow("results", m.path)}${confirmRow("model", m.path)}
+                <button class="link danger" disabled=${busy || p.open} title=${p.open ? "Close its databases first" : "Delete the cache of the project: its databases are built again when next opened"}
+                  onClick=${() => ask("project", p.path, `Delete the cache of ${p.title} (${fmtBytes(p.size)})?`)}>Delete</button>
+                ${confirmRow("project", p.path)}
               </td>
-            </tr>`)}
+            </tr>
+            ${p.segments.map((path) => segments[path]).filter(Boolean).map((s) => html`
+              <tr key=${s.path} class=${"storage-segment" + (s.orphan ? " muted" : "")}>
+                <td title=${s.path}>${s.title}${s.databases.length > 1 ? html` <span class="muted small" title="These databases use each other's products">· built together</span>` : ""}
+                  ${s.open ? html` <span class="loc-chip">open</span>` : ""}
+                  ${s.orphan && html` <span class="small" title="It cannot be built again from its project">· ${s.orphan}</span>`}</td>
+                <td class="num">${fmtBytes(s.size)}</td><td class="num">${s.results ? fmtBytes(s.results) : "–"}</td>
+                <td class="actions">
+                  <button class="link" disabled=${busy || s.open || !!s.orphan} title=${s.open ? "Close it first" : "Read it again from its project; the results of the databases that use it are solved again"}
+                    onClick=${() => rebuild(s)}>Rebuild</button>
+                  <button class="link" disabled=${busy || !s.results} title="Delete its results (G): solved again at its next build"
+                    onClick=${() => ask("results", s.path, `Drop the results of ${s.title} (${fmtBytes(s.results)})?`)}>Drop results</button>
+                  <button class="link danger" disabled=${busy || s.open} title=${s.open ? "Close it first" : "Delete it: built again when a database that needs it is next opened"}
+                    onClick=${() => ask("segment", s.path, `Delete ${s.title} (${fmtBytes(s.size)})?${s.users.length ? ` The databases that use it are deleted too: ${s.users.join("; ")}.` : ""}`)}>Delete</button>
+                  ${confirmRow("results", s.path)}${confirmRow("segment", s.path)}
+                </td>
+              </tr>`)}`)}
         </table>
-        ${models.length > 0 && html`<div class="storage-bulk">
-          <button class="link danger" disabled=${busy || models.some((m) => m.open)} title=${models.some((m) => m.open) ? "Close the open databases first" : "Delete every built model and left-over: each database is built again when next opened"}
-            onClick=${() => ask("all", null, `Delete all ${models.length} built models and what unfinished builds left (${fmtBytes(sum(models) + sum(leftovers.filter((l) => l.bulk)))})?`)}>Delete all built models…</button>
-          ${confirmRow("all", null)}</div>`}
+        ${models.length > 0 && html`
+          <h3 class="load-head">Models made from files <span class="muted small">${fmtBytes(sum(models))}</span></h3>
+          <table class="load-table storage-table">
+            <tr><th>Model</th><th class="num">Size</th><th class="num">Results</th><th></th></tr>
+            ${models.map((m) => html`
+              <tr key=${m.path} class=${m.orphan ? "muted" : ""}>
+                <td title=${m.path}>${m.title}${m.open ? html` <span class="loc-chip">open</span>` : ""}${m.orphan && html` <span class="small">· ${m.orphan}</span>`}</td>
+                <td class="num">${fmtBytes(m.size)}</td><td class="num">${m.results ? fmtBytes(m.results) : "–"}</td>
+                <td class="actions">
+                  <button class="link" disabled=${busy || m.open || !m.results} title=${m.open ? "Close it first" : "Delete its results (G): computed again when it is next opened"}
+                    onClick=${() => ask("results", m.path, `Drop the results of ${m.title} (${fmtBytes(m.results)})?`)}>Drop results</button>
+                  <button class="link danger" disabled=${busy || m.open} title=${m.open ? "Close it first" : "Delete the model: it is made again from its files only"}
+                    onClick=${() => ask("model", m.path, `Delete the model ${m.title} (${fmtBytes(m.size)})?`)}>Delete</button>
+                  ${confirmRow("results", m.path)}${confirmRow("model", m.path)}
+                </td>
+              </tr>`)}
+          </table>`}
+        ${obsolete.length > 0 && html`
+          <h3 class="load-head">Obsolete caches <span class="muted small">${fmtBytes(sum(obsolete))}</span>
+            <${InfoTip} label="About obsolete caches" text="Models of one database and all it uses, built before the project cache, and caches of another version of LCA Explorer. They are not opened any more: their databases are built again in the project cache." /></h3>
+          <table class="load-table storage-table">
+            ${obsolete.map((o) => html`<tr key=${o.path}><td title=${o.path}>${o.title}${o.open ? html` <span class="loc-chip">open</span>` : ""}</td>
+              <td class="muted small">${o.reason}</td><td class="num">${fmtBytes(o.size)}</td></tr>`)}
+          </table>
+          <div class="storage-bulk"><button class="link danger" disabled=${busy || obsolete.some((o) => o.open)}
+            onClick=${() => ask("obsolete", null, `Delete the ${obsolete.length} obsolete caches (${fmtBytes(sum(obsolete))})?`)}>Delete all</button>
+            ${confirmRow("obsolete", null)}</div>`}
         ${leftovers.length > 0 && html`
           <h3 class="load-head">Left-overs <span class="muted small">${fmtBytes(sum(leftovers))}</span></h3>
           <table class="load-table storage-table">
-            ${leftovers.map((l) => html`<tr key=${l.path}><td title=${l.path}>${l.title}</td><td class="muted">${l.reason}</td>
+            ${leftovers.map((l) => html`<tr key=${l.path}><td title=${l.path}>${l.title}${l.open ? html` <span class="loc-chip">open</span>` : ""}</td><td class="muted">${l.reason}</td>
               <td class="num">${fmtBytes(l.size)}</td>
-              <td class="actions"><button class="link danger" disabled=${busy} onClick=${() => ask("leftover", l.path, `Delete ${l.title} (${fmtBytes(l.size)})?`)}>Delete</button>
+              <td class="actions"><button class="link danger" disabled=${busy || l.open} title=${l.open ? "An open database still reads it" : ""}
+                onClick=${() => ask("leftover", l.path, `Delete ${l.title} (${fmtBytes(l.size)})?`)}>Delete</button>
                 ${confirmRow("leftover", l.path)}</td></tr>`)}
           </table>
           ${leftovers.some((l) => l.bulk) && html`<div class="storage-bulk"><button class="link danger" disabled=${busy}
-            onClick=${() => ask("leftovers", null, `Delete what unfinished builds left (${fmtBytes(sum(leftovers.filter((l) => l.bulk)))})?`)}>Delete what unfinished builds left</button>
+            onClick=${() => ask("leftovers", null, `Delete what unfinished builds and rebuilds left (${fmtBytes(sum(leftovers.filter((l) => l.bulk)))})?`)}>Delete what builds left</button>
             ${confirmRow("leftovers", null)}</div>`}`}
+        ${(projects.length > 0 || models.length > 0 || obsolete.length > 0) && html`<div class="storage-bulk">
+          <button class="link danger" disabled=${busy || anyOpen} title=${anyOpen ? "Close the open databases first" : "Delete every cache and model: each database is built again when next opened"}
+            onClick=${() => ask("all", null, `Delete all the caches and models (${fmtBytes(sum([...projects, ...models, ...obsolete, ...leftovers.filter((l) => l.bulk)]))})?`)}>Clear all app caches…</button>
+          ${confirmRow("all", null)}</div>`}
         ${downloads.length > 0 && html`
           <h3 class="load-head">Downloads</h3>
           <table class="load-table storage-table">
@@ -1736,9 +1799,9 @@ function StorageDialog({ onClose }) {
 const projectsCache = { sources: null, folders: {} };
 const elapsed = (s) => (s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${String(s % 60).padStart(2, "0")} s`);
 
-// Projects: the models already built (data/models.json) open
-// in seconds; a database of a Brightway project is first built into a model (once, kept in
-// data/cache). Loads run on the server, the dialog follows them and opens the database when ready.
+// Projects: the databases already built open in seconds; a database of a Brightway project is first built
+// into its project's cache (data/cache/project-<hash>: once, the databases it uses with it, each kept for the
+// other databases that use them). Loads run on the server, the dialog follows them and opens the database when ready.
 // The Brightway projects can also be changed here (new, deleted, restored, databases imported).
 function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
   const [sources, setSources] = useState(projectsCache.sources);
@@ -6207,7 +6270,7 @@ function AddMethods({ info, origin, onAdded }) {
       title=${`Methods of ${origin.project} that this database was not built with`}>Add impact methods…</button></p>`;
   return html`
     <h3 class="fold-head">Add impact methods
-      <${InfoTip} label="About adding methods" text=${`The methods of the project ${origin.project} that this database was not built with. Only their impacts are computed (the model is not built again): seconds, plus a few for each method on a large database. They are kept with the model.`} />
+      <${InfoTip} label="About adding methods" text=${`The methods of the project ${origin.project} that this database was not built with. Only their impacts are computed (the model is not built again): seconds, plus a few for each method on a large database. They are added for all the databases of the project.`} />
       <button class="link" onClick=${() => setOpen(false)} aria-label="Close">×</button></h3>
     ${error && html`<div class="error">${error}</div>`}
     ${!listing ? !error && html`<${Waiting} text="Reading the impact methods of the project…" />`

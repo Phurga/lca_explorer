@@ -1056,4 +1056,6 @@ textarea.editing { width: 100%; box-sizing: border-box; }
 .storage-table td.actions .storage-confirm { white-space: normal; text-align: left; }
 .storage-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 4px; font-size: 12px; }
 .storage-bulk { margin: 4px 0 12px; }
+.storage-table tr.storage-project td { border-top: 1px solid var(--border); padding-top: 8px; }
+.storage-table tr.storage-segment td:first-child { padding-left: 18px; }
 .graph-form .chart { border: 1px solid var(--border); border-radius: 4px; }

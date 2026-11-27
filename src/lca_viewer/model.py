@@ -9,7 +9,9 @@ Conventions (same as Brightway):
   waste treatment); inputs are negative.
 - ``B`` is the biosphere matrix, elementary flows x activities.
 - ``U`` holds direct impacts per unit of activity operation, one row per
-  impact method: ``U[k, j] = sum_f CF[k, f] * B[f, j]``.
+  impact method: ``U[k, j] = sum_f CF[k, f] * B[f, j]``. It is as large as ``G``,
+  so it is not kept: ``direct(j)`` gives a column, ``direct_impacts(methods)`` the rows
+  an analysis uses.
 
 The key quantity is ``G = (A^T)^-1 U^T`` (products x methods): ``G[p, k]`` is
 the cumulative impact of supplying one unit of product ``p``, supply chain
@@ -38,6 +40,9 @@ def _factorized_solver(matrix: sp.csc_matrix):
     with _SOLVER_LOCK:
         return Solver(matrix).solve
 
+
+# Elements of G solved at once (100 MB): G is solved by chunks of methods, so the peak is G and one chunk
+G_CHUNK = 12_500_000
 
 # The files of the model that ``G`` is made from: if one changes (the model was built again), the cached ``G`` is not used
 G_SOURCES = ("A.npz", "B.npz", "methods.pkl")
@@ -165,28 +170,48 @@ class LCAModel:
         self._directory = None  # where the model was loaded from: G is kept there too
         self._solver = None  # one factorisation for A and A^T, made on first use
         self._solver_lock = threading.Lock()
-        self._U = None
         self._CF = None
-        self._details_path = None
+        self._details_paths = []  # details.pkl files, one per segment of a project cache, read on first use
         self._exchanges_path = None
+        # A model put together from a project cache: (first activity, exchanges.sqlite) of each segment, whose rows
+        # are node ids, and the node ids of the model's products and flows (sorted) with their rows
+        self._exchange_parts = None
+        self._node_rows = None
 
     @property
     def size(self) -> int:
         return self.A.shape[0]
 
     @property
-    def CF(self) -> np.ndarray:
-        """Characterisation factors (methods x elementary flows)."""
+    def CF(self) -> sp.csr_matrix:
+        """Characterisation factors (methods x elementary flows), sparse: a method characterises a few flows."""
         if self._CF is None:
-            self._CF = np.vstack([m.cfs for m in self.methods])
+            self._CF = sp.csr_matrix(np.vstack([m.cfs for m in self.methods]) if self.methods
+                                     else np.zeros((0, self.B.shape[0])))
         return self._CF
+
+    def direct(self, j: int) -> np.ndarray:
+        """Direct impacts of one unit of operation of activity ``j``, one per method (a column of ``U``)."""
+        return np.asarray(self.CF @ self.B[:, [j]].toarray()).ravel()
+
+    def direct_impacts(self, methods=slice(None)) -> np.ndarray:
+        """Direct impacts per unit of activity operation (``methods`` x activities): the rows of ``U`` an analysis uses."""
+        return np.asarray((self.CF[methods] @ self.B).todense())
 
     @property
     def U(self) -> np.ndarray:
-        """Direct impacts per unit of activity operation (methods x activities)."""
-        if self._U is None:
-            self._U = np.asarray((sp.csr_matrix(self.CF) @ self.B).todense())
-        return self._U
+        """Direct impacts per unit of activity operation (methods x activities), computed at each call, not kept: as
+        large as ``G``. The app uses :meth:`direct` and :meth:`direct_impacts`."""
+        return self.direct_impacts()
+
+    def _solve_G(self, CF: sp.csr_matrix) -> np.ndarray:
+        """``(A^T)^-1 (CF B)^T``: the columns of ``G`` of the methods ``CF``, solved by chunks of methods."""
+        out = np.empty((self.size, CF.shape[0]))
+        step = max(1, G_CHUNK // max(self.size, 1))
+        for a in range(0, CF.shape[0], step):
+            U = np.asarray((CF[a:a + step] @ self.B).todense())
+            out[:, a:a + step] = self.solver.solve_transposed(U.T).reshape(self.size, -1)
+        return out
 
     @property
     def G(self) -> np.ndarray:
@@ -198,7 +223,7 @@ class LCAModel:
                 if self._G is None:
                     G = self._read_cached_G()
                     if G is None:
-                        G = self.solver.solve_transposed(self.U.T).reshape(self.size, -1)
+                        G = self._solve_G(self.CF)
                         self._write_cached_G(G)
                     self._G = G
         return self._G
@@ -265,13 +290,15 @@ class LCAModel:
         out = self.solver.solve_transposed(np.asarray(direct, dtype=float).T)
         return out.reshape(self.size, -1)
 
-    def add_methods(self, methods: list[Method], unlinked: pd.DataFrame | None = None) -> int:
+    def add_methods(self, methods: list[Method], unlinked: pd.DataFrame | None = None,
+                    columns: np.ndarray | None = None) -> int:
         """Add impact methods to the model (those it has already are passed over), after the others, so the
         positions of these do not move. Only their columns of ``G`` are computed (one solve), and the model's
         files are written again with them when it was loaded from a folder. ``unlinked``: their factors on flows
         outside the model, as :attr:`unlinked` (``method``: position in ``methods``), added to the model's when it
-        has them recorded (a model built without them keeps none: a part would read as the whole). Returns how
-        many were added."""
+        has them recorded (a model built without them keeps none: a part would read as the whole). ``columns``:
+        their columns of ``G`` when solved already (a project cache solves them in the build process), one per
+        method of ``methods``. Returns how many were added."""
         import pickle
 
         have = {tuple(m.name) for m in self.methods}
@@ -280,11 +307,14 @@ class LCAModel:
             return 0
         G = self.G  # read or computed first: its columns for the methods already there
         with self._g_lock:
-            CF = np.vstack([self.CF, *[m.cfs for m in new]])
-            U_new = np.asarray((sp.csr_matrix(np.vstack([m.cfs for m in new])) @ self.B).todense())
-            G_new = self.solver.solve_transposed(U_new.T).reshape(self.size, -1)
+            CF_new = sp.csr_matrix(np.vstack([m.cfs for m in new]))
+            if columns is None:
+                G_new = self._solve_G(CF_new)
+            else:
+                taken = {id(m) for m in new}
+                G_new = columns[:, [k for k, m in enumerate(methods) if id(m) in taken]]
             # The arrays first, then the list of methods: a request in another thread sees no method without them
-            self._CF, self._U, self._G = CF, np.vstack([self.U, U_new]), np.hstack([G, G_new])
+            self._CF, self._G = sp.vstack([self.CF, CF_new]).tocsr(), np.hstack([G, G_new])
             self.methods = [*self.methods, *new]
             if self._directory is not None:
                 tmp = self._directory / "methods.tmp.pkl"
@@ -326,17 +356,6 @@ class LCAModel:
         else:
             (directory / "unlinked.pkl").unlink(missing_ok=True)
 
-    @staticmethod
-    def method_names(directory) -> list[list[str]]:
-        """The names of the impact methods of the model saved in ``directory`` ([] when there is none)."""
-        import pickle
-
-        try:
-            with open(Path(directory) / "methods.pkl", "rb") as f:
-                return [list(m.name) for m in pickle.load(f)]
-        except (OSError, pickle.UnpicklingError, EOFError):
-            return []
-
     @classmethod
     def load(cls, directory) -> "LCAModel":
         from pathlib import Path
@@ -354,7 +373,7 @@ class LCAModel:
             unlinked=pd.read_pickle(directory / "unlinked.pkl") if (directory / "unlinked.pkl").exists() else None,
         )
         if (directory / "details.pkl").exists():
-            model._details_path = directory / "details.pkl"
+            model._details_paths = [directory / "details.pkl"]
         if (directory / "exchanges.sqlite").exists():
             model._exchanges_path = directory / "exchanges.sqlite"
         model._directory = directory
@@ -362,20 +381,36 @@ class LCAModel:
 
     @property
     def has_exchanges(self) -> bool:
-        return self.exchanges is not None or self._exchanges_path is not None
+        return self.exchanges is not None or self._exchanges_path is not None or bool(self._exchange_parts)
 
     def exchange_details(self, index: int) -> list[dict]:
         """Exchanges of activity ``index`` in dataset order, as ``{"type", "row", **data}``
         ([] when the model has no exchange metadata)."""
         if self.exchanges is not None:
             return [{"type": t, "row": r, **d} for a, t, r, d in self.exchanges if a == index]
+        if self._exchange_parts:
+            import bisect
+
+            k = bisect.bisect_right([start for start, _ in self._exchange_parts], index) - 1
+            start, path = self._exchange_parts[k]
+            products, product_rows, flows, flow_rows = self._node_rows
+            out = []
+            for e in _read_exchanges(path, index - start):  # rows are node ids: those of the model's rows
+                ids, rows = (flows, flow_rows) if e["type"] == "biosphere" else (products, product_rows)
+                at = np.searchsorted(ids, e["row"])
+                if at < len(ids) and ids[at] == e["row"]:
+                    out.append({**e, "row": int(rows[at])})
+            return out
         return [] if self._exchanges_path is None else _read_exchanges(self._exchanges_path, index)
 
     def activity_details(self, index: int) -> dict:
         """Descriptive metadata of one activity ({} when the model has none)."""
-        if self.details is None and self._details_path is not None:
+        if self.details is None and self._details_paths:
             import pickle
 
-            with open(self._details_path, "rb") as f:
-                self.details = pickle.load(f)
+            details = []
+            for path in self._details_paths:
+                with open(path, "rb") as f:
+                    details += pickle.load(f)
+            self.details = details
         return self.details[index] if self.details is not None else {}

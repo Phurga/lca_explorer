@@ -1,5 +1,8 @@
 """Test fixtures for LCA model testing."""
 
+import pickle
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -293,3 +296,56 @@ def grouping_model():
     ]
 
     return LCAModel(A=A, B=B, activities=activities, flows=flows, methods=methods)
+
+
+def write_project_cache(data, folder, project: str, model, segments, modified="2026-01-01T00:00:00", methods_stamp=None):
+    """A project cache as ``lca-viewer build --cache`` writes it, made from ``model`` (no Brightway needed):
+    ``segments`` lists ``(databases, columns of model)``, those used first. Node ids: 1000 + column, 5000 + flow."""
+    import json
+
+    import scipy.sparse as sp
+
+    from lca_viewer import project_cache, sources
+
+    cache = sources.project_cache_dir(data, folder, project)
+    (cache / "segments").mkdir(parents=True)
+    products, flow_ids = 1000 + np.arange(model.size), 5000 + np.arange(model.B.shape[0])
+    tokens = [f"m{k}" for k in range(len(model.methods))]
+    flows = model.flows.assign(id=flow_ids, categories=[()] * len(flow_ids))
+    flows.to_pickle(cache / "flows.pkl")
+    with open(cache / "methods.pkl", "wb") as f:
+        pickle.dump(model.methods, f)
+    pd.DataFrame({"method": [], "id": [], "name": [], "categories": [], "unit": [], "cf": []}).astype(
+        {"method": "int32", "id": "int64", "cf": "float64"}).to_pickle(cache / "unlinked.pkl")
+    segment_of = {c: k for k, (_, cols) in enumerate(segments) for c in cols}
+    records = []
+    for k, (databases, cols) in enumerate(segments):
+        cols = list(cols)
+        name = f"{databases[0]}-v{k}"
+        path = cache / "segments" / name
+        path.mkdir()
+        A = model.A.tocsc()[:, cols].tocoo()
+        local = {c: i for i, c in enumerate(cols)}
+        mine = np.array([r in local for r in A.row], bool)
+        own = sp.csc_matrix((A.data[mine], ([local[r] for r in A.row[mine]], A.col[mine])), shape=(len(cols), len(cols)))
+        np.savez_compressed(path / "A.npz", n=len(cols), indptr=own.indptr, indices=own.indices, data=own.data,
+                            products=products[cols], link_node=products[A.row[~mine]], link_col=A.col[~mine].astype(np.int32),
+                            link_value=A.data[~mine])
+        B = model.B.tocsc()[:, cols].tocoo()
+        np.savez_compressed(path / "B.npz", flow=flow_ids[B.row], col=B.col.astype(np.int32), value=B.data)
+        np.save(path / "G.npy", model.G[cols])
+        activities = model.activities.iloc[cols].reset_index(drop=True)
+        activities.assign(id=products[cols], database=databases[0]).to_pickle(path / "activities.pkl")
+        uses = sorted({records[segment_of[r]]["id"] for r in A.row[~mine]})
+        record = {"id": project_cache.segment_id(databases), "databases": list(databases), "uses": uses,
+                  "state": {d: modified for d in databases}, "version": f"v{k}", "folder": name, "basis": f"b{k}",
+                  "g_version": f"v{k}"}
+        record["g_uses"] = {u: next(r["basis"] for r in records if r["id"] == u) for u in uses}
+        (path / "G.json").write_text(json.dumps({"basis": record["basis"], "methods": tokens}))
+        records.append(record)
+    (cache / "project.json").write_text(json.dumps({
+        "format": project_cache.FORMAT, "brightway": str(Path(folder).resolve()), "project": project,
+        "methods_stamp": methods_stamp, "methods": [{"name": list(m.name), "unit": m.unit, "token": t}
+                                                    for m, t in zip(model.methods, tokens)],
+        "segments": records, "retired": []}))
+    return cache

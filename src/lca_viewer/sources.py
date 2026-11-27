@@ -118,13 +118,20 @@ def slug(text: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "-", text).strip("-") or "model"
 
 
-def cache_dir(data, folder, project: str, database: str) -> Path:
-    """Where the model built from a Brightway database is kept: one folder per Brightway data
-    folder, project and database (the same names in two data folders, or names that differ
-    only in punctuation, are different models)."""
-    origin = "\n".join([str(Path(folder).expanduser().resolve()), project, database])
-    digest = hashlib.sha1(origin.encode("utf-8")).hexdigest()[:10]
-    return Path(data) / "cache" / f"bw-{digest}" / f"{slug(project)}-{slug(database)}"
+def project_cache_dir(data, folder, project: str) -> Path:
+    """Where the cache of a Brightway project is kept (see project_cache): one folder per Brightway data folder and
+    project."""
+    origin = "\n".join([str(Path(folder).expanduser().resolve()), project])
+    return Path(data) / "cache" / f"project-{hashlib.sha1(origin.encode('utf-8')).hexdigest()[:10]}"
+
+
+def cached_database(cache, project: str, database: str) -> Path:
+    """The name of a database in a project cache, as the catalog and the open databases know it (not a folder): its
+    key in the page is that name, "<project>-<database>"; a hash tells apart names that differ in punctuation only."""
+    name = f"{slug(project)}-{slug(database)}"
+    if slug(database) != database:
+        name += "-" + hashlib.sha1(database.encode("utf-8")).hexdigest()[:6]
+    return Path(cache) / "databases" / name
 
 
 # ---------------------------------------------------------------- Brightway
@@ -317,22 +324,6 @@ def project_methods(base, project: str) -> list[dict]:
             for name, meta in pairs]
 
 
-def database_state(project: dict, database: str) -> dict:
-    """What a model built from ``database`` of ``project`` (as :func:`brightway_projects` lists
-    it) depends on: when the database and the databases it links to (theirs too) were last
-    written, and the impact methods. Recorded with the build, to tell when it is out of date."""
-    by_name = {d["name"]: d for d in project["databases"]}
-    depends, todo = {}, list(by_name[database]["depends"])
-    while todo:
-        name = todo.pop()
-        if name == database or name in depends:
-            continue
-        linked = by_name.get(name)
-        depends[name] = linked and linked["modified"]
-        todo.extend(linked["depends"] if linked else [])
-    return {"modified": by_name[database]["modified"], "depends": depends, "methods": project.get("methods_stamp")}
-
-
 def affected_databases(project: dict, names) -> list[str]:
     """``names`` and the databases of the project that use them, directly or through others: those
     whose results change when something in ``names`` is edited, and whose models must be built again."""
@@ -345,22 +336,6 @@ def affected_databases(project: dict, names) -> list[str]:
                 out.add(d["name"])
                 grew = True
     return sorted(out)
-
-
-def changes(source: dict, state: dict) -> str | None:
-    """What changed in the project since a model was built (``source``: as registered with the
-    build; ``state``: :func:`database_state` now), or None. Builds registered before the linked
-    databases and the methods were recorded are compared on their database alone."""
-    if source.get("modified") != state["modified"]:
-        return "changed since the model was built"
-    if "depends" in source:
-        before, now = source["depends"], state["depends"]
-        changed = sorted((n for n in set(before) | set(now) if before.get(n) != now.get(n)), key=str.lower)
-        if changed:
-            return f"{', '.join(changed)} (linked) changed since the model was built"
-    if source.get("methods") and source["methods"] != state["methods"]:
-        return "impact methods changed since the model was built"
-    return None
 
 
 def project_dir(base, project: str) -> Path:

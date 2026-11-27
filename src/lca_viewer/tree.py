@@ -84,7 +84,7 @@ class Tree:
             for i, a, imp in zip(rows, amounts, impacts)
         ]
         if include_direct:
-            nodes.append(Node(node.path + (DIRECT,), 0.0, operation * m.U[:, j]))
+            nodes.append(Node(node.path + (DIRECT,), 0.0, operation * m.direct(j)))
         return nodes
 
     def flows(self, node: Node, sources: list[tuple[int, float]]) -> list[Node]:
@@ -101,7 +101,7 @@ class Tree:
             return []
         flows, inverse = np.unique(np.concatenate(flows), return_inverse=True)
         amounts = np.bincount(inverse, weights=np.concatenate(amounts), minlength=len(flows))
-        impacts = amounts[:, None] * m.CF[:, flows].T
+        impacts = amounts[:, None] * m.CF[:, flows].T.toarray()
         keep = np.any(impacts != 0, axis=1)
         return [
             Node(node.path + (f"f{f}",), float(a), imp)

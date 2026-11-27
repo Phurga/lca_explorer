@@ -20,8 +20,18 @@ def build(args) -> None:
     elif args.methods:
         methods = [m for m in bd.methods if m[0] in args.methods]
     else:
-        methods = list(bd.methods)
+        methods = None if args.cache else list(bd.methods)
     t = time.perf_counter()
+    if args.cache:  # the project cache: the segments the database needs
+        from . import project_cache
+
+        info = project_cache.build(args.project, args.database, methods, args.cache, rebuild=args.rebuild,
+                                   log=lambda message: print(message, flush=True))
+        print(f"{len(info['segments'])} segments, {len(info['methods'])} methods -> {args.cache} "
+              f"({time.perf_counter() - t:.1f}s)")
+        return
+    if not args.output:
+        raise SystemExit("Give --cache (a project cache) or --output (a model folder)")
     model = from_brightway(args.project, args.database, methods, log=lambda message: print(message, flush=True))
     model.save(args.output)
     print(f"{model.size} activities, {len(model.methods)} methods -> {args.output} ({time.perf_counter() - t:.1f}s)")
@@ -52,6 +62,12 @@ def add_methods(args) -> None:
 
     bd.projects.set_current(args.project)
     methods = _chosen_methods(bd, args.methods_file)
+    if args.cache:  # read, and their columns of G solved, in the project cache
+        from . import project_cache
+
+        project_cache.add_methods(args.project, args.database, args.cache, [list(m) for m in methods],
+                                  log=lambda message: print(message, flush=True))
+        return
     print(f"Reading {len(methods)} impact methods", flush=True)
     flow_ids = pd.read_pickle(Path(args.model) / "flows.pkl")["id"].to_numpy()
     loaded = method_factors(methods, flow_ids)
@@ -373,14 +389,18 @@ def main(argv=None) -> None:
     p.add_argument("--database", required=True)
     p.add_argument("--methods", nargs="*", help="Method families to include (first element of the method tuple); default: all")
     p.add_argument("--methods-file", help="JSON file listing the impact methods to include (each name a list of strings)")
-    p.add_argument("--output", required=True)
+    p.add_argument("--cache", help="Project cache (data/cache/project-<hash>): build the segments the database needs")
+    p.add_argument("--rebuild", action="store_true", help="With --cache: read the database's segment again")
+    p.add_argument("--output", help="Or a folder for a model of its own (the database and all it uses)")
     p.set_defaults(func=build)
 
     p = sub.add_parser("add-methods", help="Read the factors of more impact methods for a model built from Brightway")
     p.add_argument("--project", required=True)
-    p.add_argument("--model", required=True, help="Folder of the built model")
+    p.add_argument("--model", help="Folder of the built model")
+    p.add_argument("--cache", help="Or a project cache, with --database: the methods are added to it")
+    p.add_argument("--database", help="With --cache: the database built")
     p.add_argument("--methods-file", required=True, help="JSON file listing the impact methods (each name a list of strings)")
-    p.add_argument("--output", required=True, help="Pickle file the methods are written to")
+    p.add_argument("--output", help="Pickle file the methods are written to (with --model)")
     p.set_defaults(func=add_methods)
 
     p = sub.add_parser("import", help="Import a database into a Brightway project (before build)")
