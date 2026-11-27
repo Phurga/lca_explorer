@@ -148,6 +148,10 @@ Decided while building it:
   basis: the next build solves the same numbers, and the segments above it are left as they are.
 - **Methods: one list per project.** Choosing other methods at a build changes it for every database of the project
   (columns dropped without a solve, new ones solved for every segment).
+- **Methods of the app's library** (`docs/methods-library.md`) are in that list too, named `["library", …]`: the
+  server gives their factors on the project's node ids to the build process (`--library-file`), and `project.json`
+  records each one's digest (`library`), so that an edit of the library marks the databases built with it as to
+  rebuild. They are read again at every build; a method whose factors are the same keeps its token and its columns.
 
 ## Building
 

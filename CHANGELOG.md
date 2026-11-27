@@ -9,6 +9,16 @@ version, `main` can be ahead of it with work in progress.
 
 Changes on `dev`, not released yet.
 
+- **Methods library** (in *Projects*): impact methods of your own, kept by the app (`data/methods`) rather than by a
+  Brightway project. Copy a method of a project to edit it, make an empty one, or import a CSV file of factors (flow
+  name, compartment, subcompartment, unit, factor) matched to the elementary flows of a project, with the rows of no
+  flow listed. The method editor changes, removes and adds factors (searching the project's flows), renames,
+  duplicates, deletes and exports a method as CSV. Building a database (and *Add impact methods*) offers the
+  library's methods next to the project's, under the source *library*; a database built with a method edited since
+  is shown as to rebuild. API under `/api/library/methods…`; see `docs/methods-library.md`.
+- The flow and process search of the dataset form (`NodePicker`) searches the words typed again, not only the
+  filters.
+
 ## 1.6.0 - 2026-11-27
 
 Large databases: one built with hundreds of thousands of processes opens, and every database is solved faster, with

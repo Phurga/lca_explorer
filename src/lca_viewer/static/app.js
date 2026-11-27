@@ -87,10 +87,11 @@ function fmtAxis(v) {
 const pct = (x) => `${(x * 100).toFixed(1)}%`;
 // The parts of a method's name. Brightway names a method (family, category, indicator…); the methods that come with an
 // ecoinvent release (bw2io 0.9) have the release first, their source: ("ecoinvent-3.10.1", family, category, indicator).
-// A first part "<name>-<version>" in a name of four parts or more is that source.
+// A first part "<name>-<version>" in a name of four parts or more is that source. The methods of the app's library
+// (Projects) have "library" first in a model: ("library", family, category, indicator).
 const METHOD_SOURCE = /^[a-z][\w]*-\d+(\.\d+)+$/i;
 function methodPath(m) {
-  const source = m.name.length >= 4 && METHOD_SOURCE.test(m.name[0]) ? m.name[0] : "";
+  const source = (m.name.length >= 4 && METHOD_SOURCE.test(m.name[0])) || (m.name.length >= 2 && m.name[0] === "library") ? m.name[0] : "";
   const rest = source ? m.name.slice(1) : m.name;
   return { source, family: rest[0] ?? "", category: rest[1] ?? "", indicator: rest.slice(2).join(" | "), rest };
 }
@@ -1213,7 +1214,7 @@ function MethodPicker({ methods, chosen, setChosen }) {
               <div class="method-row" key=${methodKey(m.name)}>
                 <input type="checkbox" checked=${chosen.has(methodKey(m.name))} onChange=${(e) => tick([m], e.target.checked)}
                   aria-label=${m.name.join(" | ")} />
-                <span class="name" title=${`${m.name.join(" | ")}${m.unit ? ` (${m.unit})` : ""}`} onClick=${() => tick([m], !chosen.has(methodKey(m.name)))}>${methodParts(m).main}${methodParts(m).qual && html` <span class="muted">${methodParts(m).qual}</span>`}</span>
+                <span class="name" title=${`${m.name.join(" | ")}${m.unit ? ` (${m.unit})` : ""}${m.library ? `\nMethods library: ${m.matched} of ${m.factors} factors on flows of the project` : ""}`} onClick=${() => tick([m], !chosen.has(methodKey(m.name)))}>${methodParts(m).main}${methodParts(m).qual && html` <span class="muted">${methodParts(m).qual}</span>`}</span>
               </div>`)}
           </div>`;
       })}
@@ -1230,7 +1231,7 @@ function BuildForm({ form, folder, onJob, actions }) {
   useEffect(() => {
     const q = new URLSearchParams({ folder, project: form.project, database: form.database });
     serverRequest(`/api/brightway/methods?${q}`).then((r) => {
-      setListing(r);
+      setListing({ ...r, methods: [...r.methods, ...(r.library || [])] });  // the methods library's after the project's
       setChosen(new Set((r.selected || r.default).map(methodKey)));
     }).catch((e) => setError(e.message));
   }, []);
@@ -1243,7 +1244,7 @@ function BuildForm({ form, folder, onJob, actions }) {
   return html`
     <form class="project-form" onSubmit=${submit}>
       <h4>${verb} ${form.database}: impact methods <${InfoTip} label="About the impact methods"
-        text="The impacts of the methods ticked are computed with the build, for every process: the fewer, the faster and the lighter (a large database with hundreds of methods takes gigabytes). The project has one list for all its databases: methods unticked are dropped from all of them (no computing), methods ticked are computed for all of them. More can be added later, in the Methods panel of the open database: only their impacts are computed then." /></h4>
+        text="The impacts of the methods ticked are computed with the build, for every process: the fewer, the faster and the lighter (a large database with hundreds of methods takes gigabytes). The project has one list for all its databases: methods unticked are dropped from all of them (no computing), methods ticked are computed for all of them. More can be added later, in the Methods panel of the open database: only their impacts are computed then. The methods of the Methods library (below the projects) follow the project's, under the source 'library'." /></h4>
       ${error && html`<div class="error">${error}</div>`}
       ${!listing ? !error && html`<${Waiting} text="Reading the impact methods of the project…" />` : html`
         <div class="row">
@@ -2059,6 +2060,7 @@ function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
           </table>
           ${!projects.projects.length && html`<p class="muted">No project in this folder yet: create one with <b>+</b> above.</p>`}`}
       </section>
+      ${folder && html`<${MethodsLibrary} folder=${projects?.folder || folder} projects=${projects} />`}
       ${otherModels.length > 0 && html`
         <section>
           <h3>Other models <${InfoTip} text="Built from files, or from a database no longer listed." label="About other models" /></h3>
@@ -2086,6 +2088,331 @@ function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
           <button onClick=${onClose} aria-label="Close">×</button>
         </div>
         <div class="load-body">${content}</div>
+      </div>
+    </div>`;
+}
+
+// ---------------------------------------------------------------- methods library
+// Impact methods kept by the app (data/methods), not by a Brightway project: copied from a project, made empty or
+// imported from a CSV file, edited here, and offered at build next to the project's methods (their source: "library").
+// Their factors are keyed by flow (database, code) and found in the project of a build by key, by code, else by name
+// and compartments (lca_viewer.methods_library).
+const LIBRARY_API = "/api/library/methods";
+const PART_LABELS = ["Family", "Category", "Indicator"];
+const libraryRest = (m) => m.name.slice(1).join(" | ") || m.name[0];
+const flowProjects = (projects) => (projects?.projects || []).filter((p) => p.twofive && p.databases.some((d) => !d.processes));
+const csvUrl = (id) => `${LIBRARY_API}/${id}/csv`;
+const saveCsv = (id) => { const a = document.createElement("a"); a.href = csvUrl(id); a.download = ""; a.click(); };
+
+// The parts of a method's name: family, category, indicator… (empty parts are dropped)
+function NameParts({ parts, setParts }) {
+  const set = (k, v) => setParts(parts.map((p, i) => (i === k ? v : p)));
+  return html`
+    <fieldset class="name-parts">
+      <legend>Name <${InfoTip} label="About the name" text="A method is named by parts, as in Brightway: its family (e.g. EF v3.1), its category (climate change), its indicator. The method lists group by family; in a model the source 'library' comes first." /></legend>
+      ${parts.map((p, k) => html`
+        <label key=${k}>${PART_LABELS[k] || `Part ${k + 1}`}
+          <span class="name-part"><input value=${p} onInput=${(e) => set(k, e.target.value)} autofocus=${k === 0} aria-label=${PART_LABELS[k] || `Part ${k + 1}`} />
+            ${k > 0 && k === parts.length - 1 && html`<button type="button" class="link" aria-label="Remove this part" onClick=${() => setParts(parts.slice(0, -1))}>×</button>`}</span>
+        </label>`)}
+      <button type="button" class="link" onClick=${() => setParts([...parts, ""])}>+ part</button>
+    </fieldset>`;
+}
+const cleanParts = (parts) => parts.map((p) => p.trim().replace(/\s+/g, " ")).filter(Boolean);
+
+// The project whose elementary flows a method's factors are matched to, and the search of a flow looks through
+function ProjectSelect({ projects, value, onChange, label = "Project" }) {
+  const listed = flowProjects(projects);
+  return html`
+    <label>${label}
+      <select value=${value} onChange=${(e) => onChange(e.target.value)}>
+        ${!listed.some((p) => p.name === value) && html`<option value=${value}>${value || "Choose a project"}</option>`}
+        ${listed.map((p) => html`<option value=${p.name}>${p.name}</option>`)}
+      </select></label>`;
+}
+
+function MethodsLibrary({ folder, projects }) {
+  const [open, setOpen] = useState(() => loadPreference("methodsLibraryOpen", "0") === "1");
+  const [methods, setMethods] = useState(null);
+  const [error, setError] = useState(null);
+  const [form, setForm] = useState(null);  // { kind: "new" | "copy" | "import" | "duplicate" | "delete", method }
+  const [editing, setEditing] = useState(null);  // the id of the method open in the editor
+  const [text, setText] = useState("");
+  const list = () => serverRequest(LIBRARY_API).then(setMethods).catch((e) => setError(e.message));
+  useEffect(() => { list(); }, []);
+  const unfold = (on) => { setOpen(on); savePreference("methodsLibraryOpen", on ? "1" : "0"); };
+  const toggle = () => unfold(!open);
+  const show = (kind, method) => { unfold(true); setForm({ kind, method }); };
+  const done = (made) => { if (form?.kind === "delete") setEditing(null); setForm(null); list(); if (made?.id) setEditing(made.id); };
+  const words = text.toLowerCase().split(/\s+/).filter(Boolean);
+  const shown = (methods || []).filter((m) => words.every((w) => `${m.name.join(" ")} ${m.unit}`.toLowerCase().includes(w)));
+  const families = [...new Set(shown.map((m) => m.name[0]))];
+  const props = { folder, projects, onCancel: () => setForm(null), onDone: done, onListed: list };
+  const menu = (m) => [
+    { label: "Edit…", run: () => setEditing(m.id) },
+    { label: "Duplicate…", title: "A copy of this method under another name", run: () => show("duplicate", m) },
+    { label: "Export CSV", title: "Its factors as a CSV file: name, compartment, subcompartment, unit, factor, database, code", run: () => saveCsv(m.id) },
+    { label: "Delete…", danger: true, run: () => show("delete", m) },
+  ];
+  return html`
+    <section class="methods-library">
+      <h3 class="load-head">
+        <button class="fold-caret" aria-expanded=${open} aria-label=${open ? "Fold the methods library" : "Show the methods library"} onClick=${toggle}>${open ? "▾" : "▸"}</button>
+        <span class="library-title" onClick=${toggle}>Methods library</span>
+        <span class="muted">${methods ? `${count(methods.length)} ${methods.length === 1 ? "method" : "methods"}` : ""}</span>
+        <${InfoTip} label="About the methods library" text="Impact methods of your own, kept by the app (in data/methods), not by a project: copy a method of a project to edit its factors, make one, or import a CSV file of factors. Building a database (Build and open, Rebuild and open) offers them next to the project's methods, as the family 'library', and Add impact methods in the Methods panel too. Their factors are found in the project of the build by flow (database and code), else by code, else by name and compartments." />
+        <span class="load-head-tools">
+          <${PopupMenu} label=${html`<${PlusIcon} />`} className="icon-plain" title="Add a method to the library" items=${[
+            { label: "Copy a method of a project…", title: "An editable copy of a method of a Brightway project", run: () => show("copy") },
+            { label: "New empty method…", title: "A method with no factors yet: add them from the flows of a project", run: () => show("new") },
+            { label: "Import a CSV file…", title: "Factors by flow name, compartment, subcompartment, unit, matched to the flows of a project", run: () => show("import") }]} />
+        </span>
+      </h3>
+      ${open && html`
+        ${error && html`<div class="error">${error}</div>`}
+        ${form && !["duplicate", "delete"].includes(form.kind) && html`<${LibraryForm} key=${form.kind} form=${form} ...${props} />`}
+        ${!methods ? !error && html`<${Waiting} text="Reading the methods library…" />` : !methods.length ? !form && html`
+          <p class="muted">No method yet: <button class="link" onClick=${() => show("copy")}>copy one of a project</button>,
+            <button class="link" onClick=${() => show("new")}>make one</button> or <button class="link" onClick=${() => show("import")}>import a CSV file</button>.</p>` : html`
+          ${methods.length > 8 && html`<input class="method-filter" placeholder="Filter the methods" value=${text} onInput=${(e) => setText(e.target.value)} aria-label="Filter the library" />`}
+          <table class="load-table library-table">
+            ${families.map((family) => html`
+              <tr class="project" key=${`f:${family}`}><td colspan="3"><b>${family}</b> <span class="muted">· library</span></td></tr>
+              ${shown.filter((m) => m.name[0] === family).map((m) => html`
+                <tr class="database" key=${m.id}>
+                  <td class="indent"><span class="library-name" title=${m.name.join(" | ")}>${libraryRest(m)}</span>
+                    ${m.unit && html` <span class="muted small">${unit(m.unit)}</span>`}
+                    ${m.origin?.project && html`<div class="muted small">${m.origin.method ? `Copied from ${m.origin.method.join(" | ")} (${m.origin.project})` : `Imported, matched to ${m.origin.project}`}</div>`}</td>
+                  <td class="num muted">${count(m.factors)} ${m.factors === 1 ? "factor" : "factors"}</td>
+                  <td class="actions"><button onClick=${() => setEditing(editing === m.id ? null : m.id)} aria-expanded=${editing === m.id}>${editing === m.id ? "Close" : "Edit"}</button>
+                    <${PopupMenu} label=${html`<${GearIcon} />`} className="gear-btn" title="Options of this method" items=${menu(m)} /></td>
+                </tr>
+                ${form?.method?.id === m.id && html`<tr class="form-row" key=${`form:${m.id}`}><td colspan="3"><${LibraryForm} key=${form.kind} form=${form} ...${props} /></td></tr>`}
+                ${editing === m.id && html`<tr class="form-row" key=${`edit:${m.id}`}><td colspan="3">
+                  <${MethodEditor} id=${m.id} folder=${folder} projects=${projects} onClose=${() => setEditing(null)} onChanged=${list}
+                    onForm=${(kind) => show(kind, m)} /></td></tr>`}`)}`)}
+          </table>`}`}
+    </section>`;
+}
+
+// The forms of the library: a new method, a copy of a project's, a CSV file, a duplicate, a deletion
+function LibraryForm({ form, folder, projects, onCancel, onDone, onListed }) {
+  const listed = flowProjects(projects);
+  const method = form.method;
+  const [parts, setParts] = useState(() => (form.kind === "duplicate" ? [...method.name.slice(0, -1), `${method.name.at(-1)} (copy)`] : ["", "", ""]));
+  const [unitText, setUnit] = useState("");
+  const [description, setDescription] = useState("");
+  const [project, setProject] = useState(listed[0]?.name || "");
+  const [path, setPath] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const [report, setReport] = useState(null);  // of a CSV import: { method, matched, unmatched }
+  // A copy: the methods of the project, the one chosen
+  const [source, setSource] = useState(null);
+  const [picked, setPicked] = useState(null);
+  const [filter, setFilter] = useState("");
+  useEffect(() => {
+    if (form.kind !== "copy" || !project) return;
+    setSource(null); setPicked(null);
+    serverRequest(`/api/brightway/methods?${new URLSearchParams({ folder, project })}`).then((r) => setSource(r.methods)).catch((e) => setError(e.message));
+  }, [project]);
+  const pick = (m) => {
+    setPicked(m);
+    const p = methodPath(m);
+    setParts([`${p.family} (copy)`, ...p.rest.slice(1)]);
+  };
+  const send = (url, body) => {
+    setBusy(true); setError(null);
+    return serverRequest(url, body).finally(() => setBusy(false));
+  };
+  const name = cleanParts(parts);
+  const submit = (e) => {
+    e.preventDefault();
+    if (form.kind === "new") send(LIBRARY_API, { name, unit: unitText, description }).then(onDone).catch((err) => setError(err.message));
+    else if (form.kind === "copy") send(`${LIBRARY_API}/copy`, { folder, project, method: picked.name, name }).then(onDone).catch((err) => setError(err.message));
+    else if (form.kind === "import") send(`${LIBRARY_API}/import`, { folder, project, path, name, unit: unitText, description }).then((r) => { setReport(r); onListed(); }).catch((err) => setError(err.message));
+    else if (form.kind === "duplicate") send(`${LIBRARY_API}/${method.id}/duplicate`, { name }).then(onDone).catch((err) => setError(err.message));
+    else if (form.kind === "delete") send(`${LIBRARY_API}/${method.id}/delete`, {}).then(() => onDone()).catch((err) => setError(err.message));
+  };
+  const actions = (label, disabled, danger) => html`
+    <div class="form-actions">
+      <button type="submit" class=${danger ? "danger" : "primary"} disabled=${!!disabled || busy}>${busy ? "…" : label}</button>
+      <button type="button" onClick=${onCancel}>Cancel</button>
+      ${typeof disabled === "string" && html`<span class="muted small">${disabled}</span>`}
+    </div>`;
+  const noName = !name.length && "Give the method a name";
+  if (report) return html`
+    <div class="project-form">
+      <h4>${report.method.name.join(" | ")}: ${count(report.matched)} ${report.matched === 1 ? "factor" : "factors"} imported</h4>
+      ${report.unmatched.length ? html`
+        <p>${count(report.unmatched.length)} ${report.unmatched.length === 1 ? "row matches" : "rows match"} no flow of ${project} and ${report.unmatched.length === 1 ? "was" : "were"} left out:</p>
+        <${UnmatchedRows} rows=${report.unmatched} />` : html`<p class="muted small">Every row matched a flow of ${project}.</p>`}
+      <div class="form-actions"><button class="primary" onClick=${() => onDone(report.method)}>Edit the method</button>
+        <button onClick=${() => onDone()}>Close</button></div>
+    </div>`;
+  if (form.kind === "delete") return html`
+    <form class="project-form danger" onSubmit=${submit}>
+      <h4>Delete ${method.name.join(" | ")}</h4>
+      <p>The method and its ${count(method.factors)} factors are deleted from the library. It cannot be undone (export it as CSV first to keep
+        a copy). Databases built with it keep it until they are built again.</p>
+      ${error && html`<div class="error">${error}</div>`}
+      ${actions("Delete method", false, true)}
+    </form>`;
+  const head = { new: "New method", copy: "Copy a method of a project", import: "Import a CSV file of factors", duplicate: `Duplicate ${method?.name.join(" | ")}` }[form.kind];
+  const words = filter.toLowerCase().split(/\s+/).filter(Boolean);
+  const offered = (source || []).filter((m) => words.every((w) => m.name.join(" ").toLowerCase().includes(w)));
+  return html`
+    <form class="project-form" onSubmit=${submit}>
+      <h4>${head}${form.kind === "import" && html` <${InfoTip} label="About the CSV file" text="One factor per row: flow name, compartment, subcompartment, unit, factor (a header row with these names may give them in another order, and database and code columns, as the export writes them, find the flows by key). Comma, semicolon or tab separated; a decimal comma is read. Each row is matched to an elementary flow of the project: by database and code, else by name and compartments (an 'unspecified' subcompartment is none), its unit checked. Rows of no flow are listed and left out." />`}</h4>
+      ${(form.kind === "copy" || form.kind === "import") && html`<${ProjectSelect} projects=${projects} value=${project} onChange=${setProject}
+        label=${form.kind === "copy" ? "From the project" : "Match the flows of the project"} />`}
+      ${form.kind === "copy" && html`
+        <label>Method
+          <input class="method-filter" placeholder="Filter the methods of the project" value=${filter} onInput=${(e) => setFilter(e.target.value)} /></label>
+        <div class="method-tree library-pick" role="listbox" aria-label="Methods of the project">
+          ${!source ? !error && html`<${Waiting} text="Reading the impact methods of the project…" />`
+            : offered.slice(0, 300).map((m) => html`
+              <div key=${methodKey(m.name)} role="option" aria-selected=${picked === m} class=${`method-row${picked === m ? " main" : ""}`} onClick=${() => pick(m)}>
+                <span class="name" title=${m.name.join(" | ")}>${familyKey(m)} | ${methodPath(m).rest.slice(1).join(" | ")}</span>
+                <span class="muted small">${unit(m.unit)}</span></div>`)}
+          ${source && offered.length > 300 && html`<div class="muted small">${count(offered.length - 300)} more: filter them</div>`}
+        </div>`}
+      ${form.kind === "import" && html`<label>CSV file <${PathInput} value=${path} onChange=${setPath} accept=".csv,.CSV,.txt" placeholder="Path of the CSV file" /></label>`}
+      ${(form.kind !== "copy" || picked) && html`<${NameParts} parts=${parts} setParts=${setParts} />`}
+      ${(form.kind === "new" || form.kind === "import") && html`
+        <label>Unit <input value=${unitText} onInput=${(e) => setUnit(e.target.value)} placeholder="e.g. kg CO2-eq" /></label>
+        <label>Description <textarea rows="2" value=${description} onInput=${(e) => setDescription(e.target.value)} /></label>`}
+      ${error && html`<div class="error">${error}</div>`}
+      ${actions({ new: "Create method", copy: "Copy method", import: "Import", duplicate: "Duplicate" }[form.kind],
+        form.kind === "copy" && !picked ? "Choose a method" : form.kind === "import" && !path ? "Give the CSV file" : (form.kind !== "copy" || picked) && noName)}
+    </form>`;
+}
+
+function UnmatchedRows({ rows }) {
+  return html`
+    <div class="unlinked-list"><table class="load-table">
+      <tr><th>Line</th><th>Flow</th><th>Compartment</th><th>Unit</th><th class="num">Factor</th><th>Why</th></tr>
+      ${rows.slice(0, 200).map((r) => html`<tr key=${r.line}><td class="num">${r.line}</td><td>${r.name || r.code}</td>
+        <td>${[r.compartment, r.subcompartment].filter(Boolean).join(", ")}</td><td>${r.unit}</td><td class="num">${r.factor}</td>
+        <td class="muted small">${r.reason}</td></tr>`)}
+    </table>${rows.length > 200 && html`<p class="muted small">and ${count(rows.length - 200)} more</p>`}</div>`;
+}
+
+// A factor's value, written when it is left (Enter or a click away)
+function FactorInput({ value, onCommit, label }) {
+  const [text, setText] = useState(String(value));
+  useEffect(() => setText(String(value)), [value]);
+  const commit = () => {
+    const x = Number(text.trim().replace(",", "."));
+    if (text.trim() === "" || !Number.isFinite(x)) { setText(String(value)); return; }
+    if (x !== value) onCommit(x);
+  };
+  return html`<input class="factor-input" value=${text} aria-label=${label} onInput=${(e) => setText(e.target.value)} onBlur=${commit}
+    onKeyDown=${(e) => { if (e.key === "Enter") { e.preventDefault(); e.target.blur(); } else if (e.key === "Escape") setText(String(value)); }} />`;
+}
+
+const FACTOR_LIMIT = 300;  // rows drawn before "Show all"
+
+// The editor of a method of the library: its name, unit and description, its factors (changed, removed, added from
+// the flows of a project), a CSV file imported into it, and the other actions
+function MethodEditor({ id, folder, projects, onClose, onChanged, onForm }) {
+  const [method, setMethod] = useState(null);
+  const [error, setError] = useState(null);
+  const [parts, setParts] = useState(null);
+  const [unitText, setUnit] = useState("");
+  const [description, setDescription] = useState("");
+  const [project, setProject] = useState(null);
+  const [kind, setKind] = useState("emission");
+  const [value, setValue] = useState("1");
+  const [filter, setFilter] = useState("");
+  const [all, setAll] = useState(false);
+  const [csv, setCsv] = useState(null);  // the path of a CSV file to import into the method (null: closed)
+  const [report, setReport] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const read = (p = project) => serverRequest(`${LIBRARY_API}/${id}${p ? `?${new URLSearchParams({ folder, project: p })}` : ""}`)
+    .then((m) => {
+      setMethod(m); setError(null);
+      if (parts === null) { setParts([...m.name]); setUnit(m.unit); setDescription(m.description || ""); }
+      if (p === null) {  // the project the method came from, else the first with elementary flows
+        const listed = flowProjects(projects);
+        const first = listed.find((q) => q.name === m.origin?.project)?.name || listed[0]?.name;
+        if (first) { setProject(first); read(first); }
+      }
+    }).catch((e) => setError(e.message));
+  useEffect(() => { read(null); }, [id]);
+  const change = (body) => serverRequest(`${LIBRARY_API}/${id}/factors`, body).then(() => { read(); onChanged(); }).catch((e) => setError(e.message));
+  const save = (e) => {
+    e.preventDefault();
+    setSaving(true);
+    serverRequest(`${LIBRARY_API}/${id}`, { name: cleanParts(parts), unit: unitText, description })
+      .then((m) => { setParts([...m.name]); read(); onChanged(); }).catch((err) => setError(err.message)).finally(() => setSaving(false));
+  };
+  const importCsv = () => serverRequest(`${LIBRARY_API}/import`, { folder, project, path: csv, id })
+    .then((r) => { setReport(r); setCsv(null); read(); onChanged(); }).catch((e) => setError(e.message));
+  if (!method) return error ? html`<div class="error">${error}</div>` : html`<${Waiting} text="Reading the method…" />`;
+  const edited = parts && (cleanParts(parts).join("\u001f") !== method.name.join("\u001f") || unitText !== method.unit || description !== (method.description || ""));
+  const words = filter.toLowerCase().split(/\s+/).filter(Boolean);
+  const rows = method.factors.filter((f) => words.every((w) => `${f.name} ${f.categories.join(" ")} ${f.database} ${f.unit}`.toLowerCase().includes(w)));
+  const shownRows = all ? rows : rows.slice(0, FACTOR_LIMIT);
+  const coverage = method.coverage;
+  const added = (n) => change({ set: [{ database: n.database, code: n.code, name: n.name, categories: n.categories, unit: n.unit, cf: Number(value.replace(",", ".")) }] });
+  return html`
+    <div class="project-form method-editor">
+      <h4>${method.name.join(" | ")} <span class="muted small">· library</span>
+        <button class="link close" onClick=${onClose} aria-label="Close the editor">×</button></h4>
+      <form class="source-form" onSubmit=${save}>
+        <${NameParts} parts=${parts} setParts=${setParts} />
+        <label>Unit <input value=${unitText} onInput=${(e) => setUnit(e.target.value)} placeholder="e.g. kg CO2-eq" /></label>
+        <label>Description <textarea rows="2" value=${description} onInput=${(e) => setDescription(e.target.value)} /></label>
+        ${edited && html`<div class="form-actions"><button type="submit" class="primary" disabled=${saving || !cleanParts(parts).length}>Save</button>
+          <button type="button" onClick=${() => { setParts([...method.name]); setUnit(method.unit); setDescription(method.description || ""); }}>Undo</button>
+          <span class="muted small">Databases built with the method: rebuild them to take the change</span></div>`}
+      </form>
+      ${error && html`<div class="error">${error}</div>`}
+      <fieldset>
+        <legend>Factors <${InfoTip} label="About the factors" text="One factor per elementary flow, kept with its database and code and shown with the flow's name, compartments and unit. A change is saved at once. In the project chosen here, a factor whose flow the project does not have (by key, code, or name and compartments) is greyed out: a build of that project leaves it out. Databases built with the method take the changes when they are built again (Projects shows them as to rebuild)." /></legend>
+        <div class="row library-tools">
+          <${ProjectSelect} projects=${projects} value=${project || ""} onChange=${(p) => { setProject(p); read(p); }} label="Flows of the project" />
+          ${coverage && html`<span class="muted small">${count(coverage.matched)} of ${count(coverage.total)} factors on flows of ${coverage.project}</span>`}
+        </div>
+        ${project && html`
+          <div class="row library-add">
+            <select value=${kind} onChange=${(e) => setKind(e.target.value)} aria-label="Kind of flow">
+              <option value="emission">Emission</option><option value="resource">Resource</option></select>
+            <input class="factor-input" value=${value} onInput=${(e) => setValue(e.target.value)} aria-label="Factor of the flow to add" title="The factor of the flow picked" />
+            <${NodePicker} key=${`${project}:${kind}`} folder=${folder} project=${project} kind=${kind}
+              placeholder=${`Add a factor: search the ${kind === "resource" ? "resources" : "emissions"} of ${project}`} onPick=${added} />
+          </div>`}
+        ${method.factors.length > 10 && html`<input class="method-filter" placeholder="Filter the factors" value=${filter} onInput=${(e) => setFilter(e.target.value)} aria-label="Filter the factors" />`}
+        ${!method.factors.length ? html`<p class="muted small">No factor yet: search a flow above to add one, or import a CSV file.</p>` : html`
+          <div class="factor-list"><table class="load-table factor-table">
+            <tr><th>Flow</th><th>Compartment</th><th>Unit</th><th>Database</th><th class="num">Factor</th><th></th></tr>
+            ${shownRows.map((f) => html`
+              <tr key=${`${f.database}/${f.code}`} class=${f.reason ? "muted" : ""} title=${f.reason ? `Not in ${project}: ${f.reason}` : ""}>
+                <td>${f.name || f.code}</td><td>${f.categories.join(", ")}</td><td>${unit(f.unit)}</td><td class="muted small">${f.database}</td>
+                <td class="num"><${FactorInput} value=${f.cf} label=${`Factor of ${f.name}`} onCommit=${(cf) => change({ set: [{ database: f.database, code: f.code, cf }] })} /></td>
+                <td><button class="link" aria-label=${`Remove the factor of ${f.name}`} title="Remove this factor" onClick=${() => change({ remove: [[f.database, f.code]] })}>×</button></td>
+              </tr>`)}
+          </table>
+          ${!all && rows.length > FACTOR_LIMIT && html`<button class="link" onClick=${() => setAll(true)}>Show all ${count(rows.length)}</button>`}</div>`}
+      </fieldset>
+      ${csv !== null && html`
+        <div class="library-csv">
+          <label>CSV file, matched to the flows of ${project}: its factors are set in this method
+            <${PathInput} value=${csv} onChange=${setCsv} accept=".csv,.CSV,.txt" placeholder="Path of the CSV file" /></label>
+          <div class="form-actions"><button class="primary" disabled=${!csv || !project} onClick=${importCsv}>Import</button>
+            <button onClick=${() => setCsv(null)}>Cancel</button></div>
+        </div>`}
+      ${report && html`<div class="library-csv">
+        <p>${count(report.matched)} ${report.matched === 1 ? "factor" : "factors"} set${report.unmatched.length ? `; ${count(report.unmatched.length)} rows left out:` : "."}
+          <button class="link" onClick=${() => setReport(null)}>Dismiss</button></p>
+        ${report.unmatched.length > 0 && html`<${UnmatchedRows} rows=${report.unmatched} />`}</div>`}
+      <div class="form-actions">
+        <button onClick=${() => { setCsv(""); setReport(null); }} disabled=${!project}>Import CSV…</button>
+        <button onClick=${() => saveCsv(id)}>Export CSV</button>
+        <button onClick=${() => onForm("duplicate")}>Duplicate…</button>
+        <span class="spacer"></span>
+        <button class="danger" onClick=${() => onForm("delete")}>Delete…</button>
       </div>
     </div>`;
 }
@@ -2134,7 +2461,7 @@ function NodePicker({ folder, project, kind, placeholder, onPick }) {
   const box = useRef(null);
   const predicate = useMemo(() => toPredicate(filters), [filters]);
   const activeFilters = filters.conditions.filter((c) => c.value.trim()).length;
-  const searching = Boolean(predicate);
+  const searching = Boolean(text.trim() || predicate);  // the words alone search too
   const source = useMemo(() => ({
     options: (field, q, limit) => serverRequest(`/api/brightway/options?folder=${encodeURIComponent(folder)}&project=${encodeURIComponent(project)}`
       + `&kind=${kind}&field=${field}&q=${encodeURIComponent(q)}&limit=${limit}`),
@@ -6268,7 +6595,7 @@ function AddMethods({ info, origin, onAdded }) {
   useEffect(() => {
     if (!open) return;
     const q = new URLSearchParams({ folder: origin.folder, project: origin.project });
-    serverRequest(`/api/brightway/methods?${q}`).then((r) => setListing(r.methods.filter((m) => methodNamed(info, m.name) < 0)))
+    serverRequest(`/api/brightway/methods?${q}`).then((r) => setListing([...r.methods, ...(r.library || [])].filter((m) => methodNamed(info, m.name) < 0)))
       .catch((e) => setError(e.message));
   }, [open, info]);
   useEffect(() => {
@@ -6287,14 +6614,14 @@ function AddMethods({ info, origin, onAdded }) {
   };
   if (!open) return html`
     <p class="note"><button class="link" onClick=${() => setOpen(true)}
-      title=${`Methods of ${origin.project} that this database was not built with`}>Add impact methods…</button></p>`;
+      title=${`Methods of ${origin.project} and of the methods library that this database was not built with`}>Add impact methods…</button></p>`;
   return html`
     <h3 class="fold-head">Add impact methods
-      <${InfoTip} label="About adding methods" text=${`The methods of the project ${origin.project} that this database was not built with. Only their impacts are computed (the model is not built again): seconds, plus a few for each method on a large database. They are added for all the databases of the project.`} />
+      <${InfoTip} label="About adding methods" text=${`The methods of the project ${origin.project} and of the Methods library (Projects) that this database was not built with. Only their impacts are computed (the model is not built again): seconds, plus a few for each method on a large database. They are added for all the databases of the project.`} />
       <button class="link" onClick=${() => setOpen(false)} aria-label="Close">×</button></h3>
     ${error && html`<div class="error">${error}</div>`}
     ${!listing ? !error && html`<${Waiting} text="Reading the impact methods of the project…" />`
-      : !listing.length ? html`<p class="muted small">The database has all the impact methods of ${origin.project}.</p>` : html`
+      : !listing.length ? html`<p class="muted small">The database has all the impact methods of ${origin.project} and of the methods library.</p>` : html`
         <${MethodPicker} methods=${listing} chosen=${chosen} setChosen=${setChosen} />
         <div class="row">
           <button class="primary" disabled=${!names.length || running} onClick=${add}>

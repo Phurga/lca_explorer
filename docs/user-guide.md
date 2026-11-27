@@ -85,8 +85,9 @@ their memory. Things to know:
 - Loading a database only reads its project. Projects made with Brightway 2
   (bw2data 3) are listed but can't be opened: upgrade them in Activity
   Browser 3 or Brightway 2.5 first.
-- The impact methods are those of the project. Foreground databases work as
-  they are: their model includes the background databases they use.
+- The impact methods are those of the project, and those of your methods
+  library (see below). Foreground databases work as they are: their model
+  includes the background databases they use.
 
 ### Managing Brightway projects from the app
 
@@ -138,6 +139,41 @@ Files can be given as a path on the computer running the app, or with
 *Choose file…*, which copies the file into `data/uploads` for the import (handy
 on the shared server). Each of these runs in the background like a build,
 with its progress in the dialog.
+
+### Your own impact methods: the methods library
+
+The **Methods library** section of *Projects* (below the projects; unfold it
+with its arrow) keeps impact methods of your own, in the app's `data/methods`
+folder rather than in a Brightway project, so one method serves the databases
+of all your projects. Its **+** adds one:
+
+- **Copy a method of a project**: pick the project and the method; the copy is
+  named after it with *(copy)* after the family (change the name if you like),
+  and its factors can then be edited.
+- **New empty method**: give its name (family, category, indicator: as many
+  parts as you need) and unit, then add factors in the editor.
+- **Import a CSV file** of factors, one per row: flow name, compartment,
+  subcompartment, unit, factor (a header row with these names may give them in
+  another order; comma, semicolon or tab separated). The rows are matched to the
+  elementary flows of the project you choose; those that match no flow (another
+  name, compartment or unit) are listed and left out.
+
+**Edit** opens a method: rename it, change its unit or description (*Save*),
+filter its factors, change a factor (it is saved when you leave the field),
+remove one with ×, or add one by searching the emissions or resources of a
+project, with the factor typed next to the search. Factors on flows the chosen
+project does not have are greyed out. *Import CSV…* sets factors from a file,
+*Export CSV* saves them (with each flow's database and code, which an import
+reads back), *Duplicate…* and *Delete…* do what they say.
+
+When you **build** a database (*Build and open*, *Rebuild and open*), the list
+of methods shows the library's after the project's, under the family name
+followed by *· library*; *Add impact methods* in the Methods panel of an open
+database lists them too. In the database the method is named with *library* as
+its source. A factor applies to the flow of the same database and code in the
+project, else of the same code (ecoinvent's flows keep their codes from one
+version to the next), else of the same name and compartments. After you edit a
+method, the databases built with it are shown as to rebuild in *Projects*.
 
 ## Creating a dataset
 

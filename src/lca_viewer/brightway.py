@@ -160,12 +160,15 @@ def method_factors(names: list[tuple], flow_ids) -> list[Method]:
     by location), flows outside ``flow_ids`` left out."""
     import bw2data as bd
 
+    from .methods_library import registered
+
     row_of = {int(i): r for r, i in enumerate(flow_ids)}
     out = []
     for name in names:
-        method = bd.Method(tuple(name))
+        library = registered(name)  # a method of the app's library, its factors given by the server
+        method = None if library else bd.Method(tuple(name))
         cfs = np.zeros(len(row_of))
-        for cf in method.load():
+        for cf in (library["data"] if library else method.load()):
             flow, value = cf[0], cf[1]
             if isinstance(flow, (tuple, list)):  # a key, in data written before node ids
                 flow = bd.get_id(tuple(flow))
@@ -174,7 +177,7 @@ def method_factors(names: list[tuple], flow_ids) -> list[Method]:
             r = row_of.get(int(flow))
             if r is not None:
                 cfs[r] += float(np.float32(value))
-        out.append(Method(tuple(name), method.metadata.get("unit", ""), cfs))
+        out.append(Method(tuple(name), library["unit"] if library else method.metadata.get("unit", ""), cfs))
     return out
 
 
@@ -196,11 +199,14 @@ def _unlinked_factors(methods: list[tuple], flow_ids: np.ndarray) -> pd.DataFram
     import bw2data as bd
     from bw2data.backends import ActivityDataset as AD
 
+    from .methods_library import registered
+
     linked = set(int(i) for i in flow_ids)
     found: list[tuple[int, object, float]] = []  # (method, flow reference, cf)
     for k, name in enumerate(methods):
         try:
-            data = bd.Method(name).load()
+            library = registered(name)
+            data = library["data"] if library else bd.Method(name).load()
         except Exception:  # noqa: BLE001  (a method without data: nothing to say about it)
             continue
         for row in data:

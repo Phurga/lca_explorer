@@ -15,6 +15,7 @@ def build(args) -> None:
     from .brightway import from_brightway
 
     bd.projects.set_current(args.project)
+    _library(args)
     if args.methods_file:
         methods = _chosen_methods(bd, args.methods_file)
     elif args.methods:
@@ -37,13 +38,24 @@ def build(args) -> None:
     print(f"{model.size} activities, {len(model.methods)} methods -> {args.output} ({time.perf_counter() - t:.1f}s)")
 
 
+def _library(args) -> None:
+    """The methods of the app's library that the build takes (``--library-file``, written by the server)."""
+    if getattr(args, "library_file", None):
+        from .methods_library import register_file
+
+        register_file(args.library_file)
+
+
 def _chosen_methods(bd, path) -> list[tuple]:
     """The methods named in the JSON file ``path`` (a list of names, each a list of strings) that the
-    project has, in the project's order."""
+    project has, in the project's order, then those of the library (``--library-file``) in their order."""
     import json
 
-    chosen = {tuple(name) for name in json.loads(Path(path).read_text(encoding="utf-8"))}
-    methods = [m for m in bd.methods if tuple(m) in chosen]
+    from .methods_library import registered
+
+    names = [tuple(name) for name in json.loads(Path(path).read_text(encoding="utf-8"))]
+    chosen = set(names)
+    methods = [m for m in bd.methods if tuple(m) in chosen] + [n for n in names if registered(n) and n not in bd.methods]
     if not methods:
         raise SystemExit("None of the chosen impact methods is in the project")
     return methods
@@ -61,6 +73,7 @@ def add_methods(args) -> None:
     from .brightway import _unlinked_factors, method_factors
 
     bd.projects.set_current(args.project)
+    _library(args)
     methods = _chosen_methods(bd, args.methods_file)
     if args.cache:  # read, and their columns of G solved, in the project cache
         from . import project_cache
@@ -391,6 +404,8 @@ def main(argv=None) -> None:
     p.add_argument("--methods-file", help="JSON file listing the impact methods to include (each name a list of strings)")
     p.add_argument("--cache", help="Project cache (data/cache/project-<hash>): build the segments the database needs")
     p.add_argument("--rebuild", action="store_true", help="With --cache: read the database's segment again")
+    p.add_argument("--library-file", help="JSON file of methods of the app's library: their names, units and factors "
+                                          "on node ids (written by the server)")
     p.add_argument("--output", help="Or a folder for a model of its own (the database and all it uses)")
     p.set_defaults(func=build)
 
@@ -401,6 +416,7 @@ def main(argv=None) -> None:
     p.add_argument("--database", help="With --cache: the database built")
     p.add_argument("--methods-file", required=True, help="JSON file listing the impact methods (each name a list of strings)")
     p.add_argument("--output", help="Pickle file the methods are written to (with --model)")
+    p.add_argument("--library-file", help="JSON file of methods of the app's library (written by the server)")
     p.set_defaults(func=add_methods)
 
     p = sub.add_parser("import", help="Import a database into a Brightway project (before build)")
