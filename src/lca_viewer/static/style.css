@@ -575,6 +575,11 @@ table.results tr.selected td { background: var(--selected); }
 .list-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 2px 0 6px; }
 .list-filter { width: 240px; max-width: 100%; }
 .list-summary { margin: 2px 0 6px; }
+/* The Exchanges panel of a process card: Edit (Done editing, Edit process…) beside the filter, a comment as a mark */
+.exchange-tools { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
+.exchange-tools button { font-size: 12px; padding: 2px 10px; }
+.info-body table.plist td .comment-mark { color: var(--muted); font-size: 12px; cursor: help; }
+.exchange-list table.plist td.num .editable { cursor: text; }
 .list-empty, .list-note { margin: 6px 0; color: var(--muted); font-size: 12px; }
 .info-body table.plist { table-layout: fixed; width: 100%; border-collapse: collapse; }
 .info-body table.plist td { height: 24px; padding: 0 6px; vertical-align: middle; }

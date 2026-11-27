@@ -25,6 +25,7 @@ from pydantic import BaseModel
 from .analysis import (OTHER, flow_contribution, flow_contributors, group_contributors, main_path, matched,
                        method_coverage, supply_chain_contribution, uncharacterised)
 from .analysis import compare_methods, direct_emitters, unlinked_factors
+from .codes import location_name
 from .model import LCAModel
 from .query import (EXCHANGE_FIELDS, EXCHANGE_TYPES, FLOW_EXCHANGE_TYPES, derived_activities, derived_flows, evaluate,
                     field_options, search, suggest_values, without_exchange)
@@ -551,8 +552,11 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
         column = model.B[:, index].toarray().ravel() * model.methods[k].cfs * per_unit
         top = np.argsort(-np.abs(column))[:flows]
         categories = model.flows["categories"] if "categories" in model.flows else None
+        info = meta(index)
         return {
-            **meta(index),
+            **info,
+            # what the location code stands for (FR: France, RER: Europe), "" when it reads as it is
+            "location_name": location_name(info["location"]) if info.get("location") else "",
             "details": model.activity_details(index),
             "method": k,
             "cumulative_per_unit": float(model.G[index, k]),
@@ -591,7 +595,8 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
                 production.append(e)
             else:
                 impact = (-1 if positive else 1) * amount * float(model.G[row, k]) * per_unit
-                inputs.append({**meta(row), "type": kind, **e, "impact": impact})
+                # waste: the supplier is a waste treatment (its production is negative in A)
+                inputs.append({**meta(row), "type": kind, **e, "impact": impact, "waste": bool(model.diagonal[row] < 0)})
         inputs.sort(key=lambda x: -abs(x["impact"]))
         emissions.sort(key=lambda x: -abs(x["impact"]))
         return {

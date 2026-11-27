@@ -79,3 +79,20 @@ def test_rows_carry_the_comments_of_flow_exchanges(model):
     co2 = next(r for r in rows.values() if r["kind"] == "flow" and r["flow"]["index"] == 0)
     assert co2["comment"] == "literature" and co2["exchanges"] == [{"formula": "a * 2"}]
     assert all("comment" not in r for r in rows.values() if r["kind"] == "flow" and r is not co2)  # none recorded
+
+
+def test_inputs_say_whether_they_are_waste(model):
+    # an input of a waste treatment (negative production in A) is waste to treatment: the Exchanges panel's section
+    client = TestClient(create_app(model))
+    [flour] = client.get("/api/activity/2/exchanges").json()["inputs"]
+    assert flour["waste"] is False
+    model.diagonal[1] = -model.diagonal[1]
+    [flour] = TestClient(create_app(model)).get("/api/activity/2/exchanges").json()["inputs"]
+    assert flour["waste"] is True
+
+
+def test_activity_names_its_location(grouping_model):
+    # the Information panel reads "FR · France": the name of the location code, from codes.py
+    client = TestClient(create_app(grouping_model))
+    names = [client.get(f"/api/activity/{i}").json()["location_name"] for i in (0, 1, 4)]
+    assert names == ["Global", "France", "Europe"]
