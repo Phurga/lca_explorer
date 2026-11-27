@@ -4040,7 +4040,7 @@ function FlowPanels({ info, shown, method, methods, scope, scoped, onActivity, o
             onOpen=${onCategory ? (f, e) => onCategory(f.method, e) : null}
             columns=${[
               { key: "method", label: "Model", title: "The impact categories of the methods of this database that characterise the flow: open one for all its flows",
-                value: (f) => f.label, tip: (f) => `${methods[f.method].name.join(" | ")} [${methods[f.method].unit}]: its model pop-up` },
+                value: (f) => f.label, tip: (f) => `${methods[f.method].name.join(" | ")} [${methods[f.method].unit}]: its model card` },
               { key: "cf", label: "Factor", kind: "num", value: (f) => f.cf },
               { key: "unit", label: "Unit", kind: "unit", width: 150, value: (f) => f.unit },
               { key: "rank", label: "Rank", kind: "num", title: "Rank of this flow by |factor| among the flows of the model the method characterises",
@@ -4226,21 +4226,24 @@ function UnlinkedFactors({ unlinked, both, a, b, open, setOpen, words }) {
     </div>`;
 }
 
-// The **model pop-up**: a model (an impact category of an LCIA method, e.g. the climate change of EF v3.1) seen from its
-// elementary flows, in the whole database (the Methods panel: the list icon of a method; a model of the flow pop-up's
-// *Characterisation*): the flows of the model that it characterises, their factor, the factor relative to the largest
-// one of the same unit and how many processes emit them directly. *Organize by* arranges them in sections (substance,
-// compartment, location). *Compare with* lines it up with another method (the factors of both, their ratio, the flows
-// only one of them characterises). A flow's name, right-click or double-click: its pop-up. ``target.category``: the method.
-// Not in the supply chain of the process of the tab, for now: a pinned pop-up would follow the focus of the tab.
-function CategoryPopup({ target, win, info, onClose, onBack, onFlow }) {
-  const method = target.category;
+// The **model card**: a model (an impact category of an LCIA method, e.g. the climate change of EF v3.1) seen from its
+// elementary flows, in the whole database: the flows of the model that it characterises, their factor, the factor
+// relative to the largest one of the same unit and how many processes emit them directly. *Organize by* arranges them in
+// sections (substance, compartment, location). *Compare with* lines it up with another method (the factors of both,
+// their ratio, the flows only one of them characterises). A flow's name, right-click or double-click: its pop-up
+// (``onFlow(target, event)``). Shown as a pop-up (``CategoryPopup``) or as a tab (``ModelTab``): ``frame({ head, menu,
+// body, state, children })`` draws the chrome around it (``body``: the ref of the scrolling list, for the keys; ``state``:
+// { method, compare, organize }, what a tab keeps). ``initial``: { compare, organize } it starts with; ``onState``: they
+// changed. Not in the supply chain of the process of the tab, for now: a pinned pop-up would follow the focus of the tab.
+function CategoryView({ info, method, initial = {}, onState, onFlow, frame }) {
   const methods = info.methods;
-  const [compare, setCompare] = useState(target.compare ?? null);
-  const [organize, setOrganize] = useState("");
+  const [compare, setCompare] = useState(initial.compare ?? null);
+  const [organize, setOrganize] = useState(initial.organize || "");
   const [filter, setFilter] = useState("");
   const [outside, setOutside] = useState(false);  // the factors on flows not in the model, unfolded
-  useEffect(() => { setCompare(target.compare ?? null); }, [method]);
+  const opened = useRef(method);
+  useEffect(() => { if (opened.current !== method) { opened.current = method; setCompare(initial.compare ?? null); } }, [method]);
+  useEffect(() => { onState?.({ compare, organize }); }, [compare, organize]);
   const { data, error } = useRequest("/api/category", { method, ...(compare !== null ? { compare } : {}) });
   const body = useRef(null);
   const both = !!data && data.compare !== null && data.compare !== undefined;
@@ -4295,14 +4298,13 @@ function CategoryPopup({ target, win, info, onClose, onBack, onFlow }) {
   const sectionCells = (s) => (by !== "name" ? null : both
     ? html`<td class="num">${range(s.items, "a")}</td><td class="num">${range(s.items, "b")}</td><td></td><td class="unit">/ ${unit(s.unit)}</td><td></td>`
     : html`<td class="num">${range(s.items, "a")}</td><td class="unit">${a.unit} / ${unit(s.unit)}</td><td></td><td></td>`);
-  return html`
-    <${PopupWindow} target=${target} win=${win} label="Model" className="category-popup" width=${780} onClose=${onClose} onBack=${onBack}
-      menu=${[{ label: "Export CSV", run: csv, title: "The rows of the table (all of them, filtered)" }]}
-      onKeyDown=${popupKeys({ tabs: [], shown: null, setTab: () => {}, body, onClose })}
-      head=${html`
-        <div class="info-title"><span class="kind-mark category" title="Model: an impact category of a method, seen from its elementary flows"><${CategoryIcon} /></span>
-          ${methodLabel(a)}${picked && html` <span class="role-tag ref" title="The reference: the method of this pop-up">ref.</span>`}</div>
-        <div class="muted">Model · ${familyKey(a)} · ${a.unit}</div>`}>
+  const head = html`
+    <div class="info-title"><span class="kind-mark category" title="Model card: an impact category of a method, seen from its elementary flows"><${CategoryIcon} /></span>
+      ${methodLabel(a)}${picked && html` <span class="role-tag ref" title="The reference: the method of this model card">ref.</span>`}</div>
+    <div class="muted">Model · ${familyKey(a)} · ${a.unit}</div>`;
+  return frame({ head, body, state: { method, compare, organize },
+    menu: [{ label: "Export CSV", run: csv, title: "The rows of the table (all of them, filtered)" }],
+    children: html`
       <div class="category-controls">
         <div class="view-group" role="group" aria-label="Organize by">
           <span class="view-group-label">Organize by</span>
@@ -4325,7 +4327,7 @@ function CategoryPopup({ target, win, info, onClose, onBack, onFlow }) {
           ${picked && html`<span class=${`category-unit ${otherUnit ? "differs" : ""}`}
             title=${otherUnit ? `Not the unit of the reference (${a.unit}): comp. / ref. mixes units` : "Its unit, the same as the reference's"}>${picked.unit}</span>`}
         </label>
-        <${InfoTip} label="About this table" text=${`The flows of this model that the method characterises, in the whole database. Relative: the factor over the largest of the method among the flows of the same unit. Emitters: the processes emitting (or taking) the flow directly. ${both ? "ref.: the method of this pop-up; comp.: the one it is compared with; comp. / ref.: the ratio of their factors (in their units). " : ""}Factors of the method on flows that are not in the model are under the table${data && !data.unlinked ? " once the model is rebuilt (it did not record them)" : ""}. A flow's name, or a right-click on its row, opens its pop-up.`} />
+        <${InfoTip} label="About this table" text=${`The flows of this model that the method characterises, in the whole database. Relative: the factor over the largest of the method among the flows of the same unit. Emitters: the processes emitting (or taking) the flow directly. ${both ? "ref.: the method of this model card; comp.: the one it is compared with; comp. / ref.: the ratio of their factors (in their units). " : ""}Factors of the method on flows that are not in the model are under the table${data && !data.unlinked ? " once the model is rebuilt (it did not record them)" : ""}. A flow's name, or a right-click on its row, opens its pop-up.`} />
       </div>
       ${error && html`<div class="error">${error}</div>`}
       <div class="info-body" ref=${body}>
@@ -4335,10 +4337,31 @@ function CategoryPopup({ target, win, info, onClose, onBack, onFlow }) {
             rowKey=${(it) => it.flows[0]} rowClass=${(it) => `${by ? "in-section" : ""} ${it.only ? `only-${it.only}` : ""}`}
             match=${(it) => `${it.name} ${it.compartment} ${it.location || ""}`} query=${filter} setQuery=${setFilter}
             sections=${by ? (rows) => organizeFlows(rows, by).map((s) => ({ ...s, cells: sectionCells(s) })) : null}
-            empty="No flow of the model has a factor in this method." onOpen=${(it) => onFlow(flowTarget(it))} />
+            empty="No flow of the model has a factor in this method." onOpen=${(it, e) => onFlow(flowTarget(it), e)} />
           ${data.unlinked && html`<${UnlinkedFactors} unlinked=${data.unlinked} both=${both} a=${a} b=${b} open=${outside} setOpen=${setOutside} words=${words} />`}`}
-      </div>
-    <//>`;
+      </div>` });
+}
+
+// The **model pop-up**: the model card in a pop-up window (the Methods panel: the list icon of a method; a model of the
+// flow pop-up's *Characterisation*). ``target.category``: the method (``compare``, ``organize``: how it starts).
+// ``onOpenTab(root, place)``: it becomes a model tab (*Open in new tab*, Ctrl/⌘+Enter, or dragged by its header to a
+// tab list or the edge of a pane), ``root``: { model: { method, compare, organize } }.
+function CategoryPopup({ target, win, info, onClose, onBack, onFlow, onOpenTab }) {
+  return html`<${CategoryView} info=${info} method=${target.category} initial=${{ compare: target.compare, organize: target.organize }}
+    onFlow=${(next) => onFlow(next)}
+    frame=${({ head, menu, body, state, children }) => {
+      const asTab = onOpenTab ? (place) => { onOpenTab({ model: state }, place); onClose(); } : null;
+      const keys = popupKeys({ tabs: [], shown: null, setTab: () => {}, body, onClose });
+      return html`
+        <${PopupWindow} target=${target} win=${win} label="Model card" className="category-popup" width=${780} onClose=${onClose} onBack=${onBack}
+          onDock=${asTab}
+          menu=${[...(asTab ? [{ label: "Open in new tab", title: "Open the model card in a new tab (or drag the pop-up by its header to a tab list or the edge of a pane)", run: () => asTab() }] : []), ...menu]}
+          onKeyDown=${(e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && asTab) { e.preventDefault(); e.stopPropagation(); asTab(); return; }
+            keys(e);
+          }}
+          head=${head}>${children}<//>`;
+    }} />`;
 }
 
 // i on a flow: its exchange in the dataset of the process emitting it (amount, comment, uncertainty, pedigree,
@@ -4411,11 +4434,12 @@ function usePopupStack() {
 // process. The same in a process tab (``FUView``) and a flow tab (``FlowTab``), so that the links inside a pop-up cycle
 // process → flow → model → flow → process in one history (← comes back). ``follow(next)``: a link followed inside it;
 // ``scope``: the process of the tab, for the flow pop-up's *Emitted by*; ``onOpenFlowTab``: a flow pop-up made a tab;
+// ``onOpenModelTab``: a model pop-up made a tab ({ model: { method, compare, organize } }, place);
 // ``process``: what the process pop-up needs of the tab ({ rowsById, rootImpact, root, amount, onUseAsRoot, onOpenTab, onGoTo })
-function objectPopup(p, { stack, model, method, chartMethods, follow, scope, onOpenFlowTab, process }) {
+function objectPopup(p, { stack, model, method, chartMethods, follow, scope, onOpenFlowTab, onOpenModelTab, process }) {
   const t = p.target;
   const common = { key: p.key, target: t, win: stack.win(p), onClose: () => stack.close(p.key), onBack: stack.back(p) };
-  if (t.category !== undefined) return html`<${CategoryPopup} ...${common} info=${model} onFlow=${follow} />`;
+  if (t.category !== undefined) return html`<${CategoryPopup} ...${common} info=${model} onFlow=${follow} onOpenTab=${onOpenModelTab} />`;
   if (t.flow !== undefined && t.exchange) return html`<${FlowExchangePopup} ...${common} method=${method} methods=${model.methods}
       onOpen=${(index) => follow({ index, row: null })} onFlow=${follow} />`;
   if (t.flow !== undefined) return html`<${FlowInfoPopup} ...${common} method=${t.method ?? method} methods=${model.methods} chartMethods=${chartMethods}
@@ -4469,7 +4493,49 @@ function FlowTab({ id, info: model, initial, visible, onSave, onTitle, onOpenTab
           onCategory=${(category, e) => stack.open({ category, ...at(e) })} />`}
       ${stack.popups.map((p) => objectPopup(p, { stack, model, method: lens.method, chartMethods: lens.chartMethods, scope,
         follow: (next) => stack.follow(p.key, next), process,
-        onOpenFlowTab: (f, place) => onOpenTab(id, f, place) }))}
+        onOpenFlowTab: (f, place) => onOpenTab(id, f, place), onOpenModelTab: (m, place) => onOpenTab(id, m, place) }))}
+    </div>`;
+}
+
+// The title of a model tab: { name, model } (a method no longer in the database: "Model")
+const modelTitle = (info, method) => ({ name: info.methods[method] ? methodTitle(info.methods[method]) : "Model", model: method });
+
+// A model as a tab: the model card in the pane, without the window chrome. Its state: { model: { method, compare,
+// organize } } (``method``: an index of ``info.methods``). It has pop-ups of its own, as a flow tab: a flow opened from
+// its rows opens its pop-up there, then the flow's processes, models… in one history (and the model pop-up of the
+// Methods panel while it has the focus). Its title: { name, model: method } (the status bar shows "Model · ‹title›").
+function ModelTab({ id, info: model, initial, visible, onSave, onTitle, onOpenTab }) {
+  const lens = useContext(LensContext);
+  const start = initial?.state?.model || initial?.model;
+  const method = start.method;
+  const m = model.methods[method];
+  const kept = useRef({ compare: start.compare ?? null, organize: start.organize || "" });
+  const stack = usePopupStack();
+  const save = () => onSave(id, { model: { method, ...kept.current } });
+  useEffect(() => { if (m) onTitle(id, modelTitle(model, method)); }, [m, lens.nameFormat]);
+  CATEGORY_OPENERS[id] = (category, x, y) => stack.open({ category, x, y });
+  const at = (e) => ({ x: e?.clientX ?? window.innerWidth / 3, y: e?.clientY ?? 120 });
+  const process = {
+    rowsById: new Map(), rootImpact: 0, root: null, amount: 1, onUseAsRoot: null, onGoTo: () => {},
+    onOpenTab: (r, place) => onOpenTab(id, r, place),
+  };
+  return html`
+    <div class="flow-tab model-tab category-popup" style=${{ display: visible ? "" : "none" }}>
+      ${!m ? html`<div class="empty">This model is not in this database.</div>` : html`
+        <${CategoryView} info=${model} method=${method} initial=${kept.current}
+          onState=${(state) => { kept.current = state; save(); }}
+          onFlow=${(target, e) => stack.open({ ...target, ...at(e) })}
+          frame=${({ head, menu, body, children }) => html`
+            <div class="model-tab-card" tabindex="-1" onKeyDown=${popupKeys({ tabs: [], shown: null, setTab: () => {}, body, onClose: () => {} })}>
+              <div class="flow-tab-head model-tab-head">
+                <div class="model-tab-title">${head}</div>
+                <${PopupMenu} items=${menu} title="Actions of this model card" />
+              </div>
+              ${children}
+            </div>`} />`}
+      ${stack.popups.map((p) => objectPopup(p, { stack, model, method: lens.method, chartMethods: lens.chartMethods, scope: null,
+        follow: (next) => stack.follow(p.key, next), process,
+        onOpenFlowTab: (f, place) => onOpenTab(id, f, place), onOpenModelTab: (mt, place) => onOpenTab(id, mt, place) }))}
     </div>`;
 }
 
@@ -4822,8 +4888,8 @@ function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsByI
                   rowClass=${(t) => (t.method === method ? "current" : "")}
                   onOpen=${(t, e) => follow({ category: t.method }, e)}
                   columns=${[
-                    { key: "method", label: "Method", title: "The main method and the methods shown together: open one for its model pop-up",
-                      value: (t) => methodTitle(model.methods[t.method]), tip: (t) => `${model.methods[t.method].name.join(" | ")} [${model.methods[t.method].unit}]: its model pop-up`,
+                    { key: "method", label: "Method", title: "The main method and the methods shown together: open one for its model card",
+                      value: (t) => methodTitle(model.methods[t.method]), tip: (t) => `${model.methods[t.method].name.join(" | ")} [${model.methods[t.method].unit}]: its model card`,
                       chip: (t) => (t.method === method ? html`<span class="muted">main</span>` : "") },
                     { key: "cumulative", label: "Total", kind: "num", title: "With its supply chain (cumulative)", value: (t) => t.cumulative },
                     { key: "direct", label: "Direct", kind: "num", title: "Its own exchanges with nature", value: (t) => t.direct },
@@ -6506,7 +6572,7 @@ function ViewOptionsPopup({ target, win, title, actions, onClose, children }) {
 let keyboardOwner = null;
 const TAB_API = {};  // tab id -> { view, setView } of the tab: the comparison's group rules take their colours from a view
 const POPUP_OPENERS = {};  // tab id -> the function that opens the pop-up of the process of the tab at (x, y): the Processes panel
-const CATEGORY_OPENERS = {};  // tab id (process or flow tab) -> the function that opens the model pop-up of a method (the Methods panel)
+const CATEGORY_OPENERS = {};  // tab id (process, flow or model tab) -> the function that opens the model pop-up of a method (the Methods panel)
 const ROOT_SETTERS = {};  // tab id -> the function that makes a process the process of the tab (the search in the top bar)
 const VIEW_OPTIONS_OPENERS = {};  // process tab id -> the function that opens the pop-up of the tab's view options at (x, y): the Processes panel, key v
 // ``initial``: { state } a saved view, { inherit, root? } settings taken from another tab,
@@ -7250,6 +7316,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
     return objectPopup(p, { stack, model: info, method, chartMethods, follow,
       scope: root && !embedded ? { index: root.index, name: root.name, location: root.location, amount } : t.scope || null,
       onOpenFlowTab: embedded ? null : (f, place) => onOpenTab(id, f, place),
+      onOpenModelTab: embedded ? null : (m, place) => onOpenTab(id, m, place),
       process: { rowsById, rootImpact, root, amount, onUseAsRoot: selectRoot, onOpenTab: (r, place) => onOpenTab(id, r, place), onGoTo: (index) => goTo(index) } });
   }
   // The options of the view: in their pop-up (View)
@@ -7701,7 +7768,7 @@ function MethodTree({ info, main, setMain, selected, setSelected, onCategory }) 
                 <span class="name" title=${`${methodLabel(info.methods[i])}
 ${markTitle(i)}`} onClick=${() => step(i)}>${methodParts(info.methods[i]).main}${methodParts(info.methods[i]).qual && html` <span class="muted">${methodParts(info.methods[i]).qual}</span>`}</span>
                 ${onCategory && html`<button class="icon-plain category-open" onClick=${(e) => onCategory(i, e.clientX, e.clientY)}
-                  aria-label=${`The model pop-up of ${methodLabel(info.methods[i])}`} title="Its model pop-up: its elementary flows, their factors and emitters; compare with another method"><${CategoryIcon} /></button>`}
+                  aria-label=${`The model card of ${methodLabel(info.methods[i])}`} title="Its model card: its elementary flows, their factors and emitters; compare with another method"><${CategoryIcon} /></button>`}
               </div>`)}
           </div>`;
       })}
@@ -7840,6 +7907,19 @@ function ProcessesPanel({ tabs, flowTabs = [], compare, setCompare, windows }) {
         <button class="close-tab" onClick=${() => windows.close(t.id)} aria-label=${`Close ${t.flow.name}`} title="Close it (w); Undo brings it back">×</button>
       </div>
     </div>`;
+  // A model tab: the model icon and its name, as a flow tab (``flowTabs`` has the model tabs too: ``t.model``)
+  const modelRow = (t, pane) => {
+    const name = t.title?.name || "Model";
+    return html`<div key=${t.id} class="process-row flow-row model-row ${pane.active === t.id ? "shown" : ""} ${over?.pane === pane.id && over.before === t.id ? "drop-before" : ""}"
+      draggable="true" onDragStart=${(e) => { e.dataTransfer.setData("text/plain", t.id); e.dataTransfer.effectAllowed = "move"; windows.drag(t.id); }}
+      onDragEnd=${() => { windows.drag(null); setOver(null); }} ...${target(pane, t.id)}>
+      <div class="compare-tab">
+        <span class="model-mark"><${CategoryIcon} /></span>
+        <span class="name" title=${`Model card: ${name}. Click: show it. Drag: move it to another window.`} onClick=${() => showTab(pane, t)}>${name}</span>
+        <button class="close-tab" onClick=${() => windows.close(t.id)} aria-label=${`Close ${name}`} title="Close it (w); Undo brings it back">×</button>
+      </div>
+    </div>`;
+  };
   const groups = windows.panes.map((pane) => ({ pane, items: pane.tabs.map((id) => tabs.find((t) => t.id === id) || flowTabs.find((t) => t.id === id)).filter(Boolean) })).filter((g) => g.items.length);
   return html`
     <div class="lens-menu" ...${target(windows.panes.find((q) => q.id === windows.current) || lastPane)}>
@@ -7858,7 +7938,7 @@ function ProcessesPanel({ tabs, flowTabs = [], compare, setCompare, windows }) {
               <span title="A window of the workspace: a split pane">Window ${n + 1}</span>
               <button class="close-tab" onClick=${() => windows.closePane(pane.id)} aria-label=${`Close window ${n + 1}`} title="Close this window and its tabs; Undo brings them back">×</button>
             </div>
-            ${items.map((t) => (t.flow ? flowRow(t, pane) : row(t, pane)))}
+            ${items.map((t) => (t.flow ? flowRow(t, pane) : t.model ? modelRow(t, pane) : row(t, pane)))}
           </div>`)}
         ${dragging && html`<div class="window-new ${over?.fresh ? "drop-here" : ""}" ...${fresh}>Drop here: a new window</div>`}
       </div>
@@ -8069,17 +8149,18 @@ function PaneView({ pane, focused, multiple, titles, dragging, drop, setDrop, ac
       <div class="pane-tabs" role="tablist" data-pane=${pane.id} onDragOver=${over("center")} onDrop=${dropHere}>
         ${pane.tabs.map((id) => html`
           <div key=${id} role="tab" aria-selected=${id === pane.active} draggable="true"
-               class="pane-tab ${id === pane.active ? "active" : ""} ${titles[id]?.flow !== undefined ? "flow" : ""} ${drop?.pane === pane.id && drop.before === id ? "drop-before" : ""}"
+               class="pane-tab ${id === pane.active ? "active" : ""} ${titles[id]?.flow !== undefined ? "flow" : ""} ${titles[id]?.model !== undefined ? "model" : ""} ${drop?.pane === pane.id && drop.before === id ? "drop-before" : ""}"
                style=${titles[id]?.flow !== undefined ? { "--flow-color": FLOW_TYPES[titles[id].resource ? "resource" : "emission"].color } : null}
-               title=${titles[id] ? `${titles[id].name} (${titles[id].location})` : "New tab: choose a process"}
+               title=${titles[id]?.model !== undefined ? `Model card: ${titles[id].name}` : titles[id] ? `${titles[id].name} (${titles[id].location})` : "New tab: choose a process"}
                onClick=${() => actions.select(pane.id, id)}
                onAuxClick=${(e) => e.button === 1 && actions.close(id)}
                onDragStart=${(e) => { e.dataTransfer.setData("text/plain", id); e.dataTransfer.effectAllowed = "move"; actions.drag(id); }}
                onDragEnd=${() => actions.drag(null)}
                onDragOver=${over("center", id)}>
             ${titles[id]?.flow !== undefined && html`<${FlowIcon} resource=${titles[id].resource} />`}
+            ${titles[id]?.model !== undefined && html`<span class="model-mark"><${CategoryIcon} /></span>`}
             <span class="pane-tab-title">${title(id)}</span>
-            ${titles[id] && html`<span class="loc">${titles[id].location}</span>`}
+            ${titles[id]?.location && html`<span class="loc">${titles[id].location}</span>`}
             <button class="close" aria-label="Close tab" title="Close (w, or middle-click)"
               onClick=${(e) => { e.stopPropagation(); actions.close(id); }}>×</button>
           </div>`)}
@@ -8451,7 +8532,8 @@ function App() {
         const first = panesOf(saved.layout)[0];
         seed = states.current[first.active] || states.current[first.tabs[0]] || null;
         setTitles(Object.fromEntries(Object.entries(states.current).map(([id, s]) => [id, s?.root ? { name: s.root.name, location: s.root.location, index: s.root.index }
-          : s?.flow ? { name: s.flow.name, location: s.flow.place, flow: s.flow.flow, resource: s.flow.resource } : null])));
+          : s?.flow ? { name: s.flow.name, location: s.flow.place, flow: s.flow.flow, resource: s.flow.resource }
+          : s?.model ? modelTitle(i, s.model.method) : null])));
         setLayout(saved.layout);
         setFocus(panesOf(saved.layout).some((p) => p.id === saved.focus) ? saved.focus : panesOf(saved.layout)[0].id);
       } else {
@@ -8473,12 +8555,18 @@ function App() {
   // The comparison, and the list of tabs of the left panel, read the states of the tabs: they are drawn again when one changes
   const onSave = (id, state) => { states.current[id] = state; persist(); if (watchStates.current) setTick((t) => t + 1); };
   const onTitle = (id, root) => setTitles((t) => ({ ...t, [id]: root ? (root.flow !== undefined ? { name: root.name, location: root.location, flow: root.flow, resource: root.resource }
+    : root.model !== undefined ? { name: root.name, model: root.model }
     : { name: root.name, location: root.location, index: root.index }) : null }));
   // A flow tab (its panels, no tree): its state, or how it starts, has ``flow``
   const flowOf = (id) => states.current[id]?.flow || starts.current[id]?.state?.flow || starts.current[id]?.flow || null;
-  // What a new tab opened from tab ``from`` starts with: a flow, or a process with the settings of ``from``
+  // A model tab (the model card): its state, or how it starts, has ``model`` ({ method, compare, organize })
+  const modelOf = (id) => states.current[id]?.model || starts.current[id]?.state?.model || starts.current[id]?.model || null;
+  // Tabs with no tree, whose settings a new process tab does not take
+  const treeless = (id) => !!(flowOf(id) || modelOf(id));
+  // What a new tab opened from tab ``from`` starts with: a flow, a model, or a process with the settings of ``from``
   const startFrom = (from, root) => (root?.flow !== undefined ? { flow: root }
-    : { inherit: flowOf(from) ? null : states.current[from], root });
+    : root?.model?.method !== undefined ? { model: root.model }
+    : { inherit: treeless(from) ? null : states.current[from], root });
   function openTab(paneId, start, zone = "center") {
     const id = newId("t");
     starts.current[id] = start;
@@ -8529,7 +8617,7 @@ function App() {
   const actions = {
     focus: (paneId) => paneId !== focus && setFocus(paneId),
     select: (paneId, id) => setLayout((l) => mapPanes(l, (p) => (p.id === paneId ? { ...p, active: id } : p))),
-    add: (paneId) => openTab(paneId, { inherit: flowOf(activeTabOf(paneId)) ? null : states.current[activeTabOf(paneId)] }),
+    add: (paneId) => openTab(paneId, { inherit: treeless(activeTabOf(paneId)) ? null : states.current[activeTabOf(paneId)] }),
     // Split = a copy of the active tab in a new pane (same process, to compare settings)
     split: (paneId, zone) => {
       const source = activeTabOf(paneId);
@@ -8676,8 +8764,8 @@ function App() {
   const focusedTab = activeTabOf(focus);
   const compareTabs = allTabs.filter((id) => states.current[id]?.root).map((id) => ({ id, state: states.current[id], title: titles[id] }));
   const sideShown = sideWidthFor(sideWidth), leftShown = leftWidthFor(leftWidth);
-  // The Processes panel lists the flow tabs too (with their icon; they are not compared)
-  const flowTabs = allTabs.filter((id) => flowOf(id)).map((id) => ({ id, flow: flowOf(id), title: titles[id] }));
+  // The Processes panel lists the flow and model tabs too (with their icon; they are not compared)
+  const flowTabs = allTabs.filter(treeless).map((id) => ({ id, flow: flowOf(id), model: modelOf(id), title: titles[id] }));
   function startSideResize(e) {
     e.preventDefault();
     const start = e.clientX, width = sideShown;
@@ -8696,7 +8784,7 @@ function App() {
   }
   // The search of the top bar: the process becomes the process of the tab in focus, or opens in a new tab
   const pickRoot = (r, inTab) => {
-    if (inTab || !ROOT_SETTERS[focusedTab] || flowOf(focusedTab)) openTab(focus, startFrom(focusedTab, r));
+    if (inTab || !ROOT_SETTERS[focusedTab] || treeless(focusedTab)) openTab(focus, startFrom(focusedTab, r));
     else ROOT_SETTERS[focusedTab](r);
   };
   const renderPane = (pane) => html`
@@ -8704,6 +8792,8 @@ function App() {
       titles=${titles} dragging=${dragging} drop=${drop} setDrop=${setDrop} actions=${actions}>
       ${pane.tabs.map((id) => flowOf(id) ? html`
         <${FlowTab} key=${id} id=${id} info=${info} initial=${initialOf(id)} visible=${id === pane.active} onSave=${onSave} onTitle=${onTitle}
+          onOpenTab=${(from, root, place) => openTab(place?.pane ?? paneOfTab(layout, from).id, startFrom(from, root), place?.zone)} />` : modelOf(id) ? html`
+        <${ModelTab} key=${id} id=${id} info=${info} initial=${initialOf(id)} visible=${id === pane.active} onSave=${onSave} onTitle=${onTitle}
           onOpenTab=${(from, root, place) => openTab(place?.pane ?? paneOfTab(layout, from).id, startFrom(from, root), place?.zone)} />` : html`
         <${FUView} key=${id} id=${id} info=${info} initial=${initialOf(id)} visible=${id === pane.active}
           onSave=${onSave} onTitle=${onTitle} onCollapseSide=${() => setSideOpen(false)}
@@ -8714,7 +8804,7 @@ function App() {
     <${EditorContext.Provider} value=${editor}>
     <${LensContext.Provider} value=${lensApi}>
     <div class=${`app ${stale ? "stale" : ""} ${editing ? "editing" : ""} ${comparing ? "comparing" : ""} ${showStaged ? "has-staged" : ""}`}>
-      ${topBar(comparing ? null : html`<${FunctionalUnit} root=${focusedRoot?.flow !== undefined ? null : focusedRoot} fields=${info.query_fields} onSelect=${pickRoot} />`)}
+      ${topBar(comparing ? null : html`<${FunctionalUnit} root=${focusedRoot?.index === undefined ? null : focusedRoot} fields=${info.query_fields} onSelect=${pickRoot} />`)}
       ${showStaged && html`
         <div class="staged-warning" role="status">
           <span>⚠ ${pending.length} staged change${pending.length === 1 ? "" : "s"} not applied to the project yet.</span>
@@ -8730,7 +8820,8 @@ function App() {
             windows=${{ panes: panesOf(layout), current: focus, select: actions.select, focus: actions.focus, close: actions.close, drag: actions.drag, move: actions.move,
               closePane: actions.closePane, openProcess: actions.openProcess, reopen: actions.reopen, dragging,
               history: closedStack.current.map((list, at) => {
-                const roots = list.map((snap) => snap.state?.root || (snap.state?.flow && { name: snap.state.flow.name, location: snap.state.flow.place })).filter(Boolean);
+                const roots = list.map((snap) => snap.state?.root || (snap.state?.flow && { name: snap.state.flow.name, location: snap.state.flow.place })
+                  || (snap.state?.model && { name: modelTitle(info, snap.state.model.method).name, location: "model" })).filter(Boolean);
                 return { at, label: list.length > 1 ? `${list.length} tabs: ${roots.map((r) => r.name).join(", ")}` : roots[0] ? `${roots[0].name} (${roots[0].location})` : "An empty tab" };
               }).reverse() }} />
         </aside>

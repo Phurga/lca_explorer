@@ -33,6 +33,11 @@ Changes on `dev`, not released yet.
 - **Storage** moved from the top bar into the Projects dialog, as an icon next to *+ New project*.
 - **No Shut down button**: closing the app's last tab stops it, as before (the browser asks first). The
   `/api/shutdown` route is gone.
+- **Model tabs**: a model card (the model pop-up: a model's elementary flows, their factors and emitters) opens as a
+  tab with *Open in new tab* in its ⋯ menu, Ctrl/⌘+Enter, or by dragging it by its header to a tab list or the edge
+  of a pane, from a process tab, a flow tab or the *Methods* panel. The tab keeps its *Organize by* and *Compare with*
+  across reloads, has pop-ups of its own (a flow of its rows, then the flow's processes…), and is listed in the
+  *Processes* panel with the model icon; it is not compared. The UI calls these cards *model cards*.
 
 ## 1.6.0 - 2026-11-27
 
