@@ -31,10 +31,57 @@ def test_flow_popup_opens_the_model_popup_of_its_characterisation():
 
 
 def test_the_lists_of_the_popups_are_one_component():
-    for name in ["FlowPanels", "CategoryPopup", "InfoPopup", "UnlinkedFactors"]:
+    for name in ["FlowPanels", "CategoryView", "InfoPopup", "UnlinkedFactors"]:
         assert "<${PopupList}" in body(name), name
         assert 'class="flows' not in body(name), name  # the tables each panel drew itself
     assert "SortableTable" not in APP
+
+
+def test_the_model_card_is_one_component_for_the_popup_and_the_tab():
+    # The pop-up and the tab draw the same card; each gives its own chrome (a window, a pane)
+    assert "<${CategoryView}" in body("CategoryPopup")
+    assert "<${CategoryView}" in body("ModelTab")
+    assert "<${PopupWindow}" not in body("ModelTab")
+    assert "<${PopupWindow}" not in body("CategoryView")
+
+
+def test_a_model_popup_docks_as_a_tab():
+    popup = body("CategoryPopup")
+    assert "onDock=${asTab}" in popup
+    assert '"Open in new tab"' in popup
+    assert "{ model: state }" in popup
+    # every place a model pop-up opens from (process tabs, flow tabs, model tabs) can make it a tab
+    assert "onOpenTab=${onOpenModelTab}" in body("objectPopup")
+    for name in ["FUView", "FlowTab", "ModelTab"]:
+        assert "onOpenModelTab:" in body(name), name
+
+
+def test_a_model_tab_has_its_own_popups_and_answers_the_methods_panel():
+    tab = body("ModelTab")
+    assert "usePopupStack()" in tab
+    assert "objectPopup(p," in tab
+    assert "CATEGORY_OPENERS[id] =" in tab
+
+
+def test_the_app_tells_model_tabs_apart():
+    app = body("App")
+    assert "const modelOf = (id)" in app
+    assert "<${ModelTab}" in app
+    assert "root?.model?.method !== undefined ? { model: root.model }" in app  # startFrom
+    assert "s?.model ? modelTitle(i, s.model.method)" in app  # the titles of a saved workspace
+    assert "snap.state?.model" in app  # the open history
+    assert "treeless(focusedTab)" in app  # the search of the top bar opens a process in a new tab
+    # titles of model tabs: { name, model } (the status bar shows "Model · ‹title›")
+    assert "name: info.methods[method] ? methodTitle(info.methods[method]) : \"Model\", model: method" in APP
+    # model tabs are not compared: only tabs with a process (``root``)
+    assert "allTabs.filter((id) => states.current[id]?.root)" in app
+
+
+def test_model_cards_are_called_model_cards_in_the_ui():
+    assert "Its model pop-up" not in APP
+    assert "its model pop-up`" not in APP
+    assert "method card" not in APP.lower()
+    assert 'label="Model card"' in body("CategoryPopup")
 
 
 def test_right_click_on_a_tree_flow_row_opens_its_popup_not_a_menu():

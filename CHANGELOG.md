@@ -9,6 +9,12 @@ version, `main` can be ahead of it with work in progress.
 
 Changes on `dev`, not released yet.
 
+- **Model tabs**: a model card (the model pop-up: a model's elementary flows, their factors and emitters) opens as a
+  tab with *Open in new tab* in its ⋯ menu, Ctrl/⌘+Enter, or by dragging it by its header to a tab list or the edge
+  of a pane, from a process tab, a flow tab or the *Methods* panel. The tab keeps its *Organize by* and *Compare with*
+  across reloads, has pop-ups of its own (a flow of its rows, then the flow's processes…), and is listed in the
+  *Processes* panel with the model icon; it is not compared. The UI calls these cards *model cards*.
+
 ## 1.6.0 - 2026-11-27
 
 Large databases: one built with hundreds of thousands of processes opens, and every database is solved faster, with

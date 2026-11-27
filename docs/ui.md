@@ -578,6 +578,19 @@ API in `src/lca_viewer/server.py`.
   model have a location, then each item has its `location` or null; `analysis.compare_methods`, `category_flows`,
   `unlinked_factors`). Bug fixed: the model pop-up did not open from the *Methods* panel while a flow tab had the
   focus (only process tabs registered the opener; a flow tab now has a pop-up stack of its own, `usePopupStack`).
+- **Model tabs**: a model pop-up becomes a tab with *Open in new tab* (⋯), **Ctrl/⌘+Enter**, or by dragging it to a tab
+  list or the edge of a pane, as a flow pop-up does, wherever it was opened (a process tab, a flow tab, another model
+  tab). Words: the UI calls what the pop-up and the tab show the **model card** (tooltips, menus), not a method card.
+  A model tab (`ModelTab`) shows the model card in the pane, without the window chrome, and keeps its *Organize by* and
+  *Compare with* (its saved state: `{ model: { method, compare, organize } }`; its title `{ name, model }`, the status
+  bar's "Model · ‹title›"). Decision: one component, `CategoryView`, draws the card for the pop-up and the tab, each
+  giving its own frame (a window, a pane), rather than two copies. A model tab has pop-ups of its own, as a flow tab: a
+  flow opened from its rows opens its pop-up there, then the flow's process, model… in one history, and the model pop-up
+  of the *Methods* panel opens there while it has the focus. The *Processes* panel lists model tabs with the model icon,
+  without the tick and baseline of Compare mode (models are not compared); the search of the top bar, Enter on a model
+  tab, opens the process in a new tab; a new tab (+) from a model tab starts with the default settings. A tab shows the
+  icon and an amber top border. A method no longer in the database (another database opened with the same workspace)
+  leaves the tab with a note.
 - **Lists of the pop-ups** (`PopupList`): every list of a pop-up or a flow tab — the process's *Characterisation*,
   *Used by* and *Alternatives*, the flow's *Characterisation*, *Emitted by* and *Same substance*, the model's flows and
   its factors on flows not in the model — is one component, so that they look and work alike: a filter box above the
