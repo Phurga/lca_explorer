@@ -272,7 +272,7 @@ _METHOD_SOURCE = re.compile(r"^[a-z]\w*-\d+(\.\d+)+$", re.IGNORECASE)
 def _method_family(name) -> tuple[str, str]:
     """The family of a method (its source, its family): Brightway names a method (family, category, indicator...); those
     that come with an ecoinvent release have the release first ("ecoinvent-3.10.1", family, category, indicator), as
-    ``methodPath`` of the app reads them. The methods of the app's library have "library" first."""
+    ``methodPath`` of the app reads them. The methods of the app's library have "library" (or "library/<source>") first."""
     from .methods_library import is_library
 
     name = [str(part) for part in name]
@@ -1952,7 +1952,7 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
                 cover = methods_library.coverage(m, folder, project)
             except (FileNotFoundError, ValueError):
                 cover = {"matched": 0, "total": len(m["factors"])}
-            offered.append({"name": methods_library.model_name(m["name"]), "unit": m["unit"], "library": m["id"],
+            offered.append({"name": methods_library.model_name_of(m), "unit": m["unit"], "library": m["id"],
                             "matched": cover["matched"], "factors": cover["total"]})
         if selected and any(methods_library.is_library(n) for n in selected):
             selected = methods_library.build_entries(library, selected, folder, project)[0]

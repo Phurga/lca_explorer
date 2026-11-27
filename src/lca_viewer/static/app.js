@@ -88,10 +88,11 @@ const pct = (x) => `${(x * 100).toFixed(1)}%`;
 // The parts of a method's name. Brightway names a method (family, category, indicator…); the methods that come with an
 // ecoinvent release (bw2io 0.9) have the release first, their source: ("ecoinvent-3.10.1", family, category, indicator).
 // A first part "<name>-<version>" in a name of four parts or more is that source. The methods of the app's library
-// (Projects) have "library" first in a model: ("library", family, category, indicator).
+// (Projects) have "library" first in a model: ("library", family, category, indicator), or "library/<source>" when
+// they have a source of their own ("library/ecoinvent-3.10.1").
 const METHOD_SOURCE = /^[a-z][\w]*-\d+(\.\d+)+$/i;
 function methodPath(m) {
-  const source = (m.name.length >= 4 && METHOD_SOURCE.test(m.name[0])) || (m.name.length >= 2 && m.name[0] === "library") ? m.name[0] : "";
+  const source = (m.name.length >= 4 && METHOD_SOURCE.test(m.name[0])) || (m.name.length >= 2 && /^library(\/|$)/.test(m.name[0])) ? m.name[0] : "";
   const rest = source ? m.name.slice(1) : m.name;
   return { source, family: rest[0] ?? "", category: rest[1] ?? "", indicator: rest.slice(2).join(" | "), rest };
 }
@@ -2111,23 +2112,31 @@ function ProjectSelect({ projects, value, onChange, label = "Project" }) {
       </select></label>`;
 }
 
+// The name of a library method in a model: "library" first, or "library/<source>" when it has a source of its own
+const libraryModelName = (name, source) => [source ? `library/${source}` : "library", ...name];
+// A library method's family as the method lists group it ("EF v3.1 · library/ecoinvent-3.10.1")
+const libraryFamily = (m) => familyKey({ name: m.model_name || libraryModelName(m.name, m.source) });
+const plural = (n, one, many = `${one}s`) => `${count(n)} ${n === 1 ? one : many}`;
+
 function MethodsLibrary({ folder, projects }) {
   const [open, setOpen] = useState(() => loadPreference("methodsLibraryOpen", "0") === "1");
   const [methods, setMethods] = useState(null);
   const [error, setError] = useState(null);
   const [form, setForm] = useState(null);  // { kind: "new" | "copy" | "import" | "duplicate" | "delete", method }
   const [editing, setEditing] = useState(null);  // the id of the method open in the editor
+  const [curating, setCurating] = useState(false);  // the Curate names view in place of the list
   const [text, setText] = useState("");
   const list = () => serverRequest(LIBRARY_API).then(setMethods).catch((e) => setError(e.message));
   useEffect(() => { list(); }, []);
   const unfold = (on) => { setOpen(on); savePreference("methodsLibraryOpen", on ? "1" : "0"); };
   const toggle = () => unfold(!open);
-  const show = (kind, method) => { unfold(true); setForm({ kind, method }); };
+  const show = (kind, method) => { unfold(true); setCurating(false); setForm({ kind, method }); };
   const done = (made) => { if (form?.kind === "delete") setEditing(null); setForm(null); list(); if (made?.id) setEditing(made.id); };
+  const curate = () => { unfold(true); setForm(null); setEditing(null); setCurating(true); };
   const words = text.toLowerCase().split(/\s+/).filter(Boolean);
-  const shown = (methods || []).filter((m) => words.every((w) => `${m.name.join(" ")} ${m.unit}`.toLowerCase().includes(w)));
-  const families = [...new Set(shown.map((m) => m.name[0]))];
-  const props = { folder, projects, onCancel: () => setForm(null), onDone: done, onListed: list };
+  const shown = (methods || []).filter((m) => words.every((w) => `${m.source} ${m.name.join(" ")} ${m.unit}`.toLowerCase().includes(w)));
+  const families = [...new Set(shown.map(libraryFamily))];
+  const props = { folder, projects, onCancel: () => setForm(null), onDone: done, onListed: list, onCurate: curate };
   const menu = (m) => [
     { label: "Edit…", run: () => setEditing(m.id) },
     { label: "Duplicate…", title: "A copy of this method under another name", run: () => show("duplicate", m) },
@@ -2139,80 +2148,146 @@ function MethodsLibrary({ folder, projects }) {
       <h3 class="load-head">
         <button class="fold-caret" aria-expanded=${open} aria-label=${open ? "Fold the methods library" : "Show the methods library"} onClick=${toggle}>${open ? "▾" : "▸"}</button>
         <span class="library-title" onClick=${toggle}>Methods library</span>
-        <span class="muted">${methods ? `${count(methods.length)} ${methods.length === 1 ? "method" : "methods"}` : ""}</span>
-        <${InfoTip} label="About the methods library" text="Impact methods of your own, kept by the app (in data/methods), not by a project: copy a method of a project to edit its factors, make one, or import a CSV file of factors. Building a database (Build and open, Rebuild and open) offers them next to the project's methods, as the family 'library', and Add impact methods in the Methods panel too. Their factors are found in the project of the build by flow (database and code), else by code, else by name and compartments." />
+        <span class="muted">${methods ? plural(methods.length, "method") : ""}</span>
+        <${InfoTip} label="About the methods library" text="Impact methods of your own, kept by the app (in data/methods), not by a project: copy methods of a project to edit their factors, make one, or import CSV files of factors. Building a database (Build and open, Rebuild and open) offers them next to the project's methods, under the source 'library' (or 'library/<source>'), and Add impact methods in the Methods panel too. Their factors are found in the project of the build by flow (database and code), else by code, else by name and compartments. Curate names sets their source, family, category and indicator, several at once." />
         <span class="load-head-tools">
-          <${PopupMenu} label=${html`<${PlusIcon} />`} className="icon-plain" title="Add a method to the library" items=${[
-            { label: "Copy a method of a project…", title: "An editable copy of a method of a Brightway project", run: () => show("copy") },
+          ${methods?.length > 0 && html`<button class=${curating ? "selected" : ""} aria-pressed=${curating} onClick=${() => (curating ? setCurating(false) : curate())}
+            title="The names of all the library's methods as a table of their parts: edit them, several at once, and see how the method lists will read them">Curate names</button>`}
+          <${PopupMenu} label=${html`<${PlusIcon} />`} className="icon-plain" title="Add methods to the library" items=${[
+            { label: "Copy methods of a project…", title: "Editable copies of methods of a Brightway project, several at once", run: () => show("copy") },
             { label: "New empty method…", title: "A method with no factors yet: add them from the flows of a project", run: () => show("new") },
-            { label: "Import a CSV file…", title: "Factors by flow name, compartment, subcompartment, unit, matched to the flows of a project", run: () => show("import") }]} />
+            { label: "Import CSV files…", title: "Factors by flow name, compartment, subcompartment, unit, matched to the flows of a project; one method per file, or several in a file with a method column", run: () => show("import") }]} />
         </span>
       </h3>
       ${open && html`
         ${error && html`<div class="error">${error}</div>`}
         ${form && !["duplicate", "delete"].includes(form.kind) && html`<${LibraryForm} key=${form.kind} form=${form} ...${props} />`}
-        ${!methods ? !error && html`<${Waiting} text="Reading the methods library…" />` : !methods.length ? !form && html`
-          <p class="muted">No method yet: <button class="link" onClick=${() => show("copy")}>copy one of a project</button>,
-            <button class="link" onClick=${() => show("new")}>make one</button> or <button class="link" onClick=${() => show("import")}>import a CSV file</button>.</p>` : html`
+        ${!methods ? !error && html`<${Waiting} text="Reading the methods library…" />` : curating ? html`
+          <${CurateNames} methods=${methods} onClose=${() => setCurating(false)} onApplied=${setMethods} />` : !methods.length ? !form && html`
+          <p class="muted">No method yet: <button class="link" onClick=${() => show("copy")}>copy methods of a project</button>,
+            <button class="link" onClick=${() => show("new")}>make one</button> or <button class="link" onClick=${() => show("import")}>import CSV files</button>.</p>` : html`
           ${methods.length > 8 && html`<input class="method-filter" placeholder="Filter the methods" value=${text} onInput=${(e) => setText(e.target.value)} aria-label="Filter the library" />`}
           <table class="load-table library-table">
-            ${families.map((family) => html`
-              <tr class="project" key=${`f:${family}`}><td colspan="3"><b>${family}</b> <span class="muted">· library</span></td></tr>
-              ${shown.filter((m) => m.name[0] === family).map((m) => html`
+            ${families.map((family) => {
+              const members = shown.filter((m) => libraryFamily(m) === family);
+              const p = methodPath({ name: members[0].model_name });
+              return html`
+              <tr class="project" key=${`f:${family}`}><td colspan="3"><b>${p.family}</b> <span class="muted">· ${p.source}</span></td></tr>
+              ${members.map((m) => html`
                 <tr class="database" key=${m.id}>
-                  <td class="indent"><span class="library-name" title=${m.name.join(" | ")}>${libraryRest(m)}</span>
+                  <td class="indent"><span class="library-name" title=${m.model_name.join(" | ")}>${libraryRest(m)}</span>
                     ${m.unit && html` <span class="muted small">${unit(m.unit)}</span>`}
                     ${m.origin?.project && html`<div class="muted small">${m.origin.method ? `Copied from ${m.origin.method.join(" | ")} (${m.origin.project})` : `Imported, matched to ${m.origin.project}`}</div>`}</td>
-                  <td class="num muted">${count(m.factors)} ${m.factors === 1 ? "factor" : "factors"}</td>
+                  <td class="num muted">${plural(m.factors, "factor")}</td>
                   <td class="actions"><button onClick=${() => setEditing(editing === m.id ? null : m.id)} aria-expanded=${editing === m.id}>${editing === m.id ? "Close" : "Edit"}</button>
                     <${PopupMenu} label=${html`<${GearIcon} />`} className="gear-btn" title="Options of this method" items=${menu(m)} /></td>
                 </tr>
                 ${form?.method?.id === m.id && html`<tr class="form-row" key=${`form:${m.id}`}><td colspan="3"><${LibraryForm} key=${form.kind} form=${form} ...${props} /></td></tr>`}
                 ${editing === m.id && html`<tr class="form-row" key=${`edit:${m.id}`}><td colspan="3">
                   <${MethodEditor} id=${m.id} folder=${folder} projects=${projects} onClose=${() => setEditing(null)} onChanged=${list}
-                    onForm=${(kind) => show(kind, m)} /></td></tr>`}`)}`)}
+                    onForm=${(kind) => show(kind, m)} /></td></tr>`}`)}`;
+            })}
           </table>`}`}
     </section>`;
 }
 
-// The forms of the library: a new method, a copy of a project's, a CSV file, a duplicate, a deletion
-function LibraryForm({ form, folder, projects, onCancel, onDone, onListed }) {
+// CSV files, each typed or pasted (a path on the server's computer), or chosen here (several at once) and uploaded.
+// ``files``: [{ path, name }], ``name`` the file's name as chosen (an uploaded file is renamed).
+function PathsInput({ files, setFiles, accept }) {
+  const [typed, setTyped] = useState("");
+  const [progress, setProgress] = useState(null);
+  const [error, setError] = useState(null);
+  const input = useRef(null);
+  const add = (more) => setFiles((now) => [...now, ...more.filter((f) => !now.some((g) => g.path === f.path))]);
+  async function choose(e) {
+    const chosen = [...e.target.files];
+    e.target.value = "";
+    if (!chosen.length) return;
+    setError(null);
+    const done = [];
+    try {
+      for (const [k, file] of chosen.entries()) {
+        setProgress(`${k + 1}/${chosen.length}`);
+        done.push({ path: await uploadFile(file, () => {}), name: file.name });
+      }
+    } catch (err) { setError(err.message); }
+    setProgress(null);
+    add(done);
+  }
+  const addTyped = () => {
+    const path = typed.trim().replace(/^["']|["']$/g, "");
+    if (path) add([{ path, name: "" }]);
+    setTyped("");
+  };
+  return html`
+    <div class="paths-input">
+      ${files.map((f) => html`<div class="path-chip" key=${f.path}><span title=${f.path}>${f.name || f.path.split(/[\\/]/).pop()}</span>
+        <button type="button" class="link" aria-label=${`Leave out ${f.name || f.path}`} onClick=${() => setFiles(files.filter((g) => g !== f))}>×</button></div>`)}
+      <div class="path-input">
+        <input value=${typed} placeholder=${files.length ? "Another file: its path" : "Path of a CSV file"} onInput=${(e) => setTyped(e.target.value)}
+          onKeyDown=${(e) => { if (e.key === "Enter") { e.preventDefault(); addTyped(); } }} aria-label="Path of a CSV file" />
+        ${typed.trim() && html`<button type="button" onClick=${addTyped}>Add</button>`}
+        <input type="file" multiple ref=${input} accept=${accept} style="display:none" onChange=${choose} />
+        <button type="button" disabled=${progress !== null} onClick=${() => input.current.click()}
+          title="Choose the files here (several at once): they are copied to the app's data folder for the import, then deleted">
+          ${progress !== null ? `Uploading ${progress}` : "Choose files…"}</button>
+      </div>
+      ${error && html`<div class="error">${error}</div>`}
+    </div>`;
+}
+
+// The forms of the library: a new method, copies of a project's, CSV files, a duplicate, a deletion
+function LibraryForm({ form, folder, projects, onCancel, onDone, onListed, onCurate }) {
   const listed = flowProjects(projects);
   const method = form.method;
   const [parts, setParts] = useState(() => (form.kind === "duplicate" ? [...method.name.slice(0, -1), `${method.name.at(-1)} (copy)`] : ["", "", ""]));
   const [unitText, setUnit] = useState("");
   const [description, setDescription] = useState("");
   const [project, setProject] = useState(listed[0]?.name || "");
-  const [path, setPath] = useState("");
+  const [files, setFiles] = useState([]);  // the CSV files of an import: [{ path, name }]
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
-  const [report, setReport] = useState(null);  // of a CSV import: { method, matched, unmatched }
-  // A copy: the methods of the project, the one chosen
+  const [report, setReport] = useState(null);  // of a copy or an import: what was added, skipped, left out
+  // A copy: the methods of the project, those ticked
   const [source, setSource] = useState(null);
-  const [picked, setPicked] = useState(null);
-  const [filter, setFilter] = useState("");
+  const [chosen, setChosen] = useState(() => new Set());
+  useEffect(() => { if (!project && listed[0]) setProject(listed[0].name); }, [listed.length]);  // the projects read after the form opened
   useEffect(() => {
     if (form.kind !== "copy" || !project) return;
-    setSource(null); setPicked(null);
+    setSource(null); setChosen(new Set());
     serverRequest(`/api/brightway/methods?${new URLSearchParams({ folder, project })}`).then((r) => setSource(r.methods)).catch((e) => setError(e.message));
   }, [project]);
-  const pick = (m) => {
-    setPicked(m);
-    const p = methodPath(m);
-    setParts([`${p.family} (copy)`, ...p.rest.slice(1)]);
-  };
   const send = (url, body) => {
     setBusy(true); setError(null);
     return serverRequest(url, body).finally(() => setBusy(false));
   };
   const name = cleanParts(parts);
+  const picked = (source || []).filter((m) => chosen.has(methodKey(m.name))).map((m) => m.name);
+  const copyBody = { folder, project };
+  const importBody = { folder, project, paths: files.map((f) => f.path), names: files.map((f) => f.name), unit: unitText };
+  const reported = (kind, body) => (r) => {
+    setReport({ kind, body, project, added: kind === "copy" ? r.added : r.methods, skipped: r.skipped, unmatched: r.unmatched || [] });
+    onListed();
+  };
   const submit = (e) => {
     e.preventDefault();
-    if (form.kind === "new") send(LIBRARY_API, { name, unit: unitText, description }).then(onDone).catch((err) => setError(err.message));
-    else if (form.kind === "copy") send(`${LIBRARY_API}/copy`, { folder, project, method: picked.name, name }).then(onDone).catch((err) => setError(err.message));
-    else if (form.kind === "import") send(`${LIBRARY_API}/import`, { folder, project, path, name, unit: unitText, description }).then((r) => { setReport(r); onListed(); }).catch((err) => setError(err.message));
-    else if (form.kind === "duplicate") send(`${LIBRARY_API}/${method.id}/duplicate`, { name }).then(onDone).catch((err) => setError(err.message));
-    else if (form.kind === "delete") send(`${LIBRARY_API}/${method.id}/delete`, {}).then(() => onDone()).catch((err) => setError(err.message));
+    const failed = (err) => setError(err.message);
+    if (form.kind === "new") send(LIBRARY_API, { name, unit: unitText, description }).then(onDone).catch(failed);
+    else if (form.kind === "copy") send(`${LIBRARY_API}/copy`, { ...copyBody, methods: picked }).then(reported("copy", copyBody)).catch(failed);
+    else if (form.kind === "import") send(`${LIBRARY_API}/import`, importBody).then(reported("import", importBody)).catch(failed);
+    else if (form.kind === "duplicate") send(`${LIBRARY_API}/${method.id}/duplicate`, { name }).then(onDone).catch(failed);
+    else if (form.kind === "delete") send(`${LIBRARY_API}/${method.id}/delete`, {}).then(() => onDone()).catch(failed);
+  };
+  // The methods skipped because the library has their names, added again with a suffix to their last part
+  const rename = (suffix) => {
+    const taken = report.skipped.filter((s) => s.taken);
+    const body = report.kind === "copy" ? { ...report.body, methods: taken.map((s) => s.method), on_conflict: "rename", suffix }
+      : { ...report.body, on_conflict: "rename", suffix, only: taken.map((s) => libraryModelName(s.name, s.source)) };
+    return send(`${LIBRARY_API}/${report.kind}`, body).then((r) => {
+      setReport({ ...report, added: [...report.added, ...(report.kind === "copy" ? r.added : r.methods)],
+        skipped: [...report.skipped.filter((s) => !s.taken), ...r.skipped], renamed: true });
+      onListed();
+    }).catch((err) => setError(err.message));
   };
   const actions = (label, disabled, danger) => html`
     <div class="form-actions">
@@ -2221,15 +2296,8 @@ function LibraryForm({ form, folder, projects, onCancel, onDone, onListed }) {
       ${typeof disabled === "string" && html`<span class="muted small">${disabled}</span>`}
     </div>`;
   const noName = !name.length && "Give the method a name";
-  if (report) return html`
-    <div class="project-form">
-      <h4>${report.method.name.join(" | ")}: ${count(report.matched)} ${report.matched === 1 ? "factor" : "factors"} imported</h4>
-      ${report.unmatched.length ? html`
-        <p>${count(report.unmatched.length)} ${report.unmatched.length === 1 ? "row matches" : "rows match"} no flow of ${project} and ${report.unmatched.length === 1 ? "was" : "were"} left out:</p>
-        <${UnmatchedRows} rows=${report.unmatched} />` : html`<p class="muted small">Every row matched a flow of ${project}.</p>`}
-      <div class="form-actions"><button class="primary" onClick=${() => onDone(report.method)}>Edit the method</button>
-        <button onClick=${() => onDone()}>Close</button></div>
-    </div>`;
+  if (report) return html`<${AddReport} report=${report} busy=${busy} error=${error} onRename=${rename}
+    onEdit=${(m) => onDone(m)} onCurate=${onCurate} onClose=${() => onDone()} />`;
   if (form.kind === "delete") return html`
     <form class="project-form danger" onSubmit=${submit}>
       <h4>Delete ${method.name.join(" | ")}</h4>
@@ -2238,44 +2306,246 @@ function LibraryForm({ form, folder, projects, onCancel, onDone, onListed }) {
       ${error && html`<div class="error">${error}</div>`}
       ${actions("Delete method", false, true)}
     </form>`;
-  const head = { new: "New method", copy: "Copy a method of a project", import: "Import a CSV file of factors", duplicate: `Duplicate ${method?.name.join(" | ")}` }[form.kind];
-  const words = filter.toLowerCase().split(/\s+/).filter(Boolean);
-  const offered = (source || []).filter((m) => words.every((w) => m.name.join(" ").toLowerCase().includes(w)));
+  const head = { new: "New method", copy: "Copy methods of a project", import: "Import CSV files of factors", duplicate: `Duplicate ${method?.name.join(" | ")}` }[form.kind];
   return html`
     <form class="project-form" onSubmit=${submit}>
-      <h4>${head}${form.kind === "import" && html` <${InfoTip} label="About the CSV file" text="One factor per row: flow name, compartment, subcompartment, unit, factor (a header row with these names may give them in another order, and database and code columns, as the export writes them, find the flows by key). Comma, semicolon or tab separated; a decimal comma is read. Each row is matched to an elementary flow of the project: by database and code, else by name and compartments (an 'unspecified' subcompartment is none), its unit checked. Rows of no flow are listed and left out." />`}</h4>
+      <h4>${head}${form.kind === "import" ? html` <${InfoTip} label="About the CSV files" text="One factor per row: flow name, compartment, subcompartment, unit, factor (a header row with these names may give them in another order, and database and code columns, as the export writes them, find the flows by key). Comma, semicolon or tab separated; a decimal comma is read. A file of several methods names the method of each row: a 'method' column (its parts separated by '|', e.g. EF v3.1 | climate change | GWP100), or 'source', 'family', 'impact category' and 'indicator' columns, and a 'method unit' column its unit. Else a file is one method, named after the file. Each row is matched to an elementary flow of the project: by database and code, else by name and compartments (an 'unspecified' subcompartment is none), its unit checked. Rows of no flow are listed and left out. Curate names sets the names' parts afterwards." />`
+        : form.kind === "copy" && html` <${InfoTip} label="About the copies" text="Each copy keeps the name of its method; an ecoinvent release first in the name (ecoinvent-3.10.1) becomes its source, so in the method lists a copy reads 'EF v3.1 · library/ecoinvent-3.10.1', apart from the project's. Curate names sets the names' parts afterwards, several at once. A method whose name the library has already is skipped, and can then be added with a suffix." />`}</h4>
       ${(form.kind === "copy" || form.kind === "import") && html`<${ProjectSelect} projects=${projects} value=${project} onChange=${setProject}
         label=${form.kind === "copy" ? "From the project" : "Match the flows of the project"} />`}
-      ${form.kind === "copy" && html`
-        <label>Method
-          <input class="method-filter" placeholder="Filter the methods of the project" value=${filter} onInput=${(e) => setFilter(e.target.value)} /></label>
-        <div class="method-tree library-pick" role="listbox" aria-label="Methods of the project">
-          ${!source ? !error && html`<${Waiting} text="Reading the impact methods of the project…" />`
-            : offered.slice(0, 300).map((m) => html`
-              <div key=${methodKey(m.name)} role="option" aria-selected=${picked === m} class=${`method-row${picked === m ? " main" : ""}`} onClick=${() => pick(m)}>
-                <span class="name" title=${m.name.join(" | ")}>${familyKey(m)} | ${methodPath(m).rest.slice(1).join(" | ")}</span>
-                <span class="muted small">${unit(m.unit)}</span></div>`)}
-          ${source && offered.length > 300 && html`<div class="muted small">${count(offered.length - 300)} more: filter them</div>`}
-        </div>`}
-      ${form.kind === "import" && html`<label>CSV file <${PathInput} value=${path} onChange=${setPath} accept=".csv,.CSV,.txt" placeholder="Path of the CSV file" /></label>`}
-      ${(form.kind !== "copy" || picked) && html`<${NameParts} parts=${parts} setParts=${setParts} />`}
-      ${(form.kind === "new" || form.kind === "import") && html`
+      ${form.kind === "copy" && (!project ? html`<p class="muted small">Choose a project (its list is still being read)</p>`
+        : !source ? !error && html`<${Waiting} text="Reading the impact methods of the project…" />` : html`
+        <div class="row">
+          <button type="button" onClick=${() => setChosen(new Set(source.map((m) => methodKey(m.name))))}>All ${count(source.length)}</button>
+          <button type="button" onClick=${() => setChosen(new Set())}>None</button>
+          <span class="muted small">Tick a family to take all its methods</span>
+        </div>
+        <${MethodPicker} methods=${source} chosen=${chosen} setChosen=${setChosen} />`)}
+      ${form.kind === "import" && html`<label>CSV files <${PathsInput} files=${files} setFiles=${setFiles} accept=".csv,.CSV,.txt" /></label>
+        <label>Unit <input value=${unitText} onInput=${(e) => setUnit(e.target.value)} placeholder="Of the methods the files give no unit for (method unit column), e.g. kg CO2-eq" /></label>`}
+      ${(form.kind === "new" || form.kind === "duplicate") && html`<${NameParts} parts=${parts} setParts=${setParts} />`}
+      ${form.kind === "new" && html`
         <label>Unit <input value=${unitText} onInput=${(e) => setUnit(e.target.value)} placeholder="e.g. kg CO2-eq" /></label>
         <label>Description <textarea rows="2" value=${description} onInput=${(e) => setDescription(e.target.value)} /></label>`}
       ${error && html`<div class="error">${error}</div>`}
-      ${actions({ new: "Create method", copy: "Copy method", import: "Import", duplicate: "Duplicate" }[form.kind],
-        form.kind === "copy" && !picked ? "Choose a method" : form.kind === "import" && !path ? "Give the CSV file" : (form.kind !== "copy" || picked) && noName)}
+      ${actions(form.kind === "copy" ? `Copy ${plural(picked.length, "method")}` : { new: "Create method", import: files.length > 1 ? `Import ${count(files.length)} files` : "Import", duplicate: "Duplicate" }[form.kind],
+        form.kind === "copy" ? !picked.length && "Tick the methods to copy" : form.kind === "import" ? !files.length && "Give the CSV files" : noName)}
     </form>`;
 }
 
+// What a copy or an import added: the methods added (renamed ones with the name they wanted), those skipped (a name
+// the library has: added with a suffix, or left), the rows of no flow of the project
+function AddReport({ report, busy, error, onRename, onEdit, onCurate, onClose }) {
+  const [suffix, setSuffix] = useState(" (copy)");
+  const taken = report.skipped.filter((s) => s.taken);
+  const other = report.skipped.filter((s) => !s.taken);
+  const named = (s) => [s.source, ...s.name].filter(Boolean).join(" | ");
+  return html`
+    <div class="project-form add-report">
+      <h4>${report.added.length ? `${plural(report.added.length, "method")} added to the library` : "No method added"}
+        ${report.kind === "import" && report.added.length > 0 && html` <span class="muted small">(factors matched to ${report.project})</span>`}</h4>
+      ${report.added.length > 0 && html`<ul class="report-list">${report.added.map((m) => html`
+        <li key=${m.id}>${[m.source, ...m.name].filter(Boolean).join(" | ")} <span class="muted small">${plural(m.factors, "factor")}${m.unit ? ` · ${unit(m.unit)}` : ""}${m.origin?.left_out ? ` · ${plural(m.origin.left_out, "factor")} on flows the project lacks, left out` : ""}</span>
+          ${m.wanted && html` <span class="muted small">(renamed: the library has ${[m.source, ...m.wanted].filter(Boolean).join(" | ")})</span>`}</li>`)}</ul>`}
+      ${taken.length > 0 && html`
+        <div class="report-taken">
+          <p>${plural(taken.length, "method")} skipped: the library has ${taken.length === 1 ? "a method of this name" : "methods of these names"} already.</p>
+          <ul class="report-list">${taken.map((s) => html`<li key=${named(s)}>${named(s)}${s.file ? html` <span class="muted small">${s.file}</span>` : ""}</li>`)}</ul>
+          <div class="form-actions">
+            <label class="inline">Suffix after the last part <input class="suffix-input" value=${suffix} onInput=${(e) => setSuffix(e.target.value)} /></label>
+            <button class="primary" disabled=${busy} onClick=${() => onRename(suffix)}
+              title="Add them under their names with the suffix after the last part (numbered if that one is taken too)">${busy ? "…" : `Add ${taken.length === 1 ? "it" : "them"} renamed`}</button>
+            <span class="muted small">or leave ${taken.length === 1 ? "it" : "them"} out (Close)</span>
+          </div>
+        </div>`}
+      ${other.length > 0 && html`
+        <p>${plural(other.length, "method")} not added:</p>
+        <ul class="report-list">${other.map((s) => html`<li key=${named(s)}>${named(s)} <span class="muted small">${s.reason}${s.file ? ` · ${s.file}` : ""}</span></li>`)}</ul>`}
+      ${report.unmatched.length > 0 && html`
+        <p>${plural(report.unmatched.length, "row")} of the ${report.body.paths?.length > 1 ? "files" : "file"} left out (no flow of ${report.project}, or unreadable):</p>
+        <${UnmatchedRows} rows=${report.unmatched} />`}
+      ${report.kind === "import" && !report.unmatched.length && report.added.length > 0 && html`<p class="muted small">Every row matched a flow of ${report.project}.</p>`}
+      ${error && html`<div class="error">${error}</div>`}
+      <div class="form-actions">
+        ${report.added.length === 1 && html`<button onClick=${() => onEdit(report.added[0])}>Edit the method</button>`}
+        ${report.added.length > 0 && html`<button onClick=${onCurate} title="Set the source, family, category and indicator of the library's methods, several at once">Curate names…</button>`}
+        <button class=${report.added.length ? "" : "primary"} onClick=${onClose}>Close</button>
+      </div>
+    </div>`;
+}
+
 function UnmatchedRows({ rows }) {
+  const files = new Set(rows.map((r) => r.file).filter(Boolean)).size > 1;
+  const methods = rows.some((r) => r.method);
   return html`
     <div class="unlinked-list"><table class="load-table">
-      <tr><th>Line</th><th>Flow</th><th>Compartment</th><th>Unit</th><th class="num">Factor</th><th>Why</th></tr>
-      ${rows.slice(0, 200).map((r) => html`<tr key=${r.line}><td class="num">${r.line}</td><td>${r.name || r.code}</td>
+      <tr>${files && html`<th>File</th>`}<th>Line</th>${methods && html`<th>Method</th>`}<th>Flow</th><th>Compartment</th><th>Unit</th><th class="num">Factor</th><th>Why</th></tr>
+      ${rows.slice(0, 200).map((r) => html`<tr key=${`${r.file}:${r.line}`}>${files && html`<td class="muted small">${r.file}</td>`}<td class="num">${r.line}</td>
+        ${methods && html`<td class="small">${r.method}</td>`}<td>${r.name || r.code}</td>
         <td>${[r.compartment, r.subcompartment].filter(Boolean).join(", ")}</td><td>${r.unit}</td><td class="num">${r.factor}</td>
         <td class="muted small">${r.reason}</td></tr>`)}
     </table>${rows.length > 200 && html`<p class="muted small">and ${count(rows.length - 200)} more</p>`}</div>`;
+}
+
+// ---- Curate names: every method of the library as a table of its name's parts, edited in place or several at once
+// (set a part, find and replace, split a part in two, merge two parts), previewed as the method lists group them, then
+// applied in one request (/api/library/methods/names). A method renamed keeps its former name: a database built with
+// it finds it again and is shown as to rebuild.
+const CURATE_LIMIT = 300;  // rows drawn before "Show all"
+const draftOf = (m) => ({ id: m.id, source: m.source || "", parts: [...m.name], unit: m.unit || "" });
+const tidy = (s) => (s || "").trim().replace(/\s+/g, " ");
+const draftName = (d) => ({ source: tidy(d.source).replace(/^library(\/|$)/, "").trim(), name: d.parts.map(tidy).filter(Boolean), unit: tidy(d.unit) });
+const draftKey = (d) => { const n = draftName(d); return libraryModelName(n.name, n.source).join("\u001f"); };
+// A part of the name, as the bulk tools choose it: 0 the source, 1 the family, 2 the category…
+const partLabel = (k) => ["Source", "Family", "Category", "Indicator"][k] || `Part ${k}`;
+const partsOf = (d) => [d.source, ...d.parts];
+const withParts = (d, all) => { const full = Array.from(all, (p) => p ?? ""); return { ...d, source: full[0] ?? "", parts: full.slice(1) }; };
+
+function CurateNames({ methods, onClose, onApplied }) {
+  const [drafts, setDrafts] = useState(() => methods.map(draftOf));
+  const [selected, setSelected] = useState(() => new Set());
+  const [text, setText] = useState("");
+  const [all, setAll] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const [message, setMessage] = useState(null);
+  // The bulk tools: the part they act on, their values
+  const [setPart, setSetPart] = useState(1);
+  const [setValue, setSetValue] = useState("");
+  const [findPart, setFindPart] = useState(-1);  // -1: every part
+  const [find, setFind] = useState("");
+  const [replace, setReplace] = useState("");
+  const [splitPart, setSplitPart] = useState(1);
+  const [splitOn, setSplitOn] = useState("_");
+  const [mergePart, setMergePart] = useState(1);
+  const [mergeWith, setMergeWith] = useState(" ");
+  const original = useMemo(() => new Map(methods.map((m) => [m.id, m])), [methods]);
+  const changed = (d) => {
+    const m = original.get(d.id), n = draftName(d);
+    return n.source !== (m.source || "") || n.name.join("\u001f") !== m.name.join("\u001f") || n.unit !== (m.unit || "");
+  };
+  const width = Math.max(3, ...drafts.map((d) => d.parts.length));  // the name parts drawn: family, category, indicator, more
+  const words = text.toLowerCase().split(/\s+/).filter(Boolean);
+  const shown = drafts.filter((d) => words.every((w) => `${d.source} ${d.parts.join(" ")} ${d.unit}`.toLowerCase().includes(w)));
+  const drawn = all ? shown : shown.slice(0, CURATE_LIMIT);
+  const edits = drafts.filter(changed);
+  // What is wrong with the names as they will be: a method with no name, a name starting with "library", two of a name
+  const problems = useMemo(() => {
+    const out = new Map(), seen = new Map();
+    drafts.forEach((d) => {
+      const n = draftName(d);
+      if (!n.name.length) out.set(d.id, "No name: give it a family at least");
+      else if (/^library(\/|$)/.test(n.name[0])) out.set(d.id, "A name cannot start with 'library'");
+      const key = draftKey(d);
+      if (seen.has(key)) { out.set(d.id, "Two methods of this name"); out.set(seen.get(key), "Two methods of this name"); }
+      seen.set(key, d.id);
+    });
+    return out;
+  }, [drafts]);
+  const update = (fn, ids = selected) => { setDrafts((now) => now.map((d) => (ids.has(d.id) ? fn(d) : d))); setMessage(null); };
+  const setCell = (id, k, value) => update((d) => (k === "unit" ? { ...d, unit: value } : withParts(d, Object.assign([...partsOf(d)], { [k]: value }))), new Set([id]));
+  const toggle = (id, on) => setSelected((s) => { const next = new Set(s); on ? next.add(id) : next.delete(id); return next; });
+  const allShown = shown.length > 0 && shown.every((d) => selected.has(d.id));
+  const tick = (on) => setSelected((s) => { const next = new Set(s); shown.forEach((d) => (on ? next.add(d.id) : next.delete(d.id))); return next; });
+  // The bulk changes, on the rows ticked
+  const bulkSet = () => update((d) => withParts(d, Object.assign([...partsOf(d)], { [setPart]: setValue })));
+  const bulkReplace = () => find && update((d) => withParts(d, partsOf(d).map((p, k) => (findPart < 0 || k === findPart ? (p || "").split(find).join(replace) : p))));
+  const bulkSplit = () => splitOn && update((d) => {
+    const parts = partsOf(d), value = parts[splitPart] || "", at = value.indexOf(splitOn);
+    if (at < 0) return d;
+    return withParts(d, [...parts.slice(0, splitPart), value.slice(0, at), value.slice(at + splitOn.length), ...parts.slice(splitPart + 1)]);
+  });
+  const bulkMerge = () => update((d) => {
+    const parts = partsOf(d);
+    if (mergePart + 1 >= parts.length) return d;
+    const joined = [parts[mergePart], parts[mergePart + 1]].map((p) => p || "").filter((p) => p.trim()).join(mergeWith);
+    return withParts(d, [...parts.slice(0, mergePart), joined, ...parts.slice(mergePart + 2)]);
+  });
+  const apply = () => {
+    setBusy(true); setError(null);
+    serverRequest(`${LIBRARY_API}/names`, { changes: edits.map((d) => ({ id: d.id, ...draftName(d) })) })
+      .then((r) => {
+        onApplied(r.methods);
+        setDrafts(r.methods.map(draftOf));
+        setMessage(`${plural(r.changed.length, "method")} renamed. Databases built with ${r.changed.length === 1 ? "it" : "them"} find ${r.changed.length === 1 ? "it" : "them"} under the former names and are shown as to rebuild, to take the new names.`);
+      })
+      .catch((e) => setError(e.message)).finally(() => setBusy(false));
+  };
+  const partOptions = (from = 0, last = width) => Array.from({ length: last + 1 - from }, (_, k) => html`<option value=${k + from}>${partLabel(k + from)}</option>`);
+  const none = !selected.size && "Tick the methods to change first";
+  // The preview: the methods as the lists will group and name them, families sorted as the library lists them
+  const preview = useMemo(() => {
+    const groups = new Map();
+    [...drafts].sort((a, b) => draftKey(a).toLowerCase().localeCompare(draftKey(b).toLowerCase())).forEach((d) => {
+      const n = draftName(d);
+      if (!n.name.length) return;
+      const m = { name: libraryModelName(n.name, n.source), unit: n.unit };
+      const key = familyKey(m);
+      groups.set(key, [...(groups.get(key) || []), { d, m }]);
+    });
+    return [...groups];
+  }, [drafts]);
+  return html`
+    <div class="project-form curate-names">
+      <h4>Curate names <${InfoTip} label="About the names" text="A method is named by parts: its source (the release it came from, or none), its family (e.g. EF v3.1), its category (climate change), its indicator (GWP100), and more parts if need be. In a model and in the method lists, a library method's source is 'library', or 'library/<source>': the lists group the methods by family and source ('EF v3.1 · library/ecoinvent-3.10.1'). Edit a part in place, or tick rows and change them together; the preview shows the names as the lists will read them. Nothing is written until Apply. A method renamed keeps its former name: databases built with it find it and are shown as to rebuild." />
+        <button class="link close" onClick=${onClose} aria-label="Close Curate names">×</button></h4>
+      <div class="curate-tools">
+        <div class="curate-tool"><span>Set</span><select value=${setPart} onChange=${(e) => setSetPart(Number(e.target.value))} aria-label="Part to set">${partOptions(0, 3)}</select>
+          <span>to</span><input value=${setValue} onInput=${(e) => setSetValue(e.target.value)} aria-label="Value of the part" placeholder="(empty: none)" />
+          <button disabled=${!!none} title=${none || "Set this part of the methods ticked"} onClick=${bulkSet}>Set</button></div>
+        <div class="curate-tool"><span>Replace</span><input value=${find} onInput=${(e) => setFind(e.target.value)} aria-label="Text to find" placeholder="text" />
+          <span>with</span><input value=${replace} onInput=${(e) => setReplace(e.target.value)} aria-label="Replacement" placeholder="(nothing)" />
+          <span>in</span><select value=${findPart} onChange=${(e) => setFindPart(Number(e.target.value))} aria-label="Part to search"><option value="-1">every part</option>${partOptions()}</select>
+          <button disabled=${!!none || !find} title=${none || "Replace the text in the methods ticked"} onClick=${bulkReplace}>Replace</button></div>
+        <div class="curate-tool"><span>Split</span><select value=${splitPart} onChange=${(e) => setSplitPart(Number(e.target.value))} aria-label="Part to split">${partOptions()}</select>
+          <span>in two at the first</span><input class="sep-input" value=${splitOn} onInput=${(e) => setSplitOn(e.target.value)} aria-label="Separator to split on" />
+          <button disabled=${!!none || !splitOn} title=${none || "The text after the separator becomes the next part; the parts after move right"} onClick=${bulkSplit}>Split</button></div>
+        <div class="curate-tool"><span>Merge</span><select value=${mergePart} onChange=${(e) => setMergePart(Number(e.target.value))} aria-label="Part to merge">${partOptions(0, width - 1)}</select>
+          <span>with the next part, joined by</span><input class="sep-input" value=${mergeWith} onInput=${(e) => setMergeWith(e.target.value)} aria-label="Text joining the two parts" />
+          <button disabled=${!!none} title=${none || "The two parts become one; the parts after move left"} onClick=${bulkMerge}>Merge</button></div>
+      </div>
+      <div class="row">
+        <input class="method-filter" placeholder="Filter the methods" value=${text} onInput=${(e) => setText(e.target.value)} aria-label="Filter the methods to curate" />
+        <span class="muted small">${selected.size ? `${count(selected.size)} ticked` : "Tick rows to change them together"}</span>
+      </div>
+      <div class="curate-list"><table class="load-table curate-table">
+        <tr><th><input type="checkbox" checked=${allShown} ref=${(el) => el && (el.indeterminate = !allShown && shown.some((d) => selected.has(d.id)))}
+            onChange=${(e) => tick(e.target.checked)} aria-label="Tick all the methods shown" /></th>
+          ${Array.from({ length: width + 1 }, (_, k) => html`<th key=${k}>${partLabel(k)}</th>`)}<th>Unit</th><th></th></tr>
+        ${drawn.map((d) => {
+          const parts = partsOf(d), problem = problems.get(d.id), edited = changed(d);
+          return html`<tr key=${d.id} class=${`${edited ? "edited" : ""}${problem ? " problem" : ""}`} title=${problem || ""}>
+            <td><input type="checkbox" checked=${selected.has(d.id)} onChange=${(e) => toggle(d.id, e.target.checked)} aria-label=${`Tick ${d.parts.join(" | ")}`} /></td>
+            ${Array.from({ length: width + 1 }, (_, k) => html`<td key=${k}><input value=${parts[k] || ""} onInput=${(e) => setCell(d.id, k, e.target.value)}
+              aria-label=${`${partLabel(k)} of ${d.parts.join(" | ")}`} placeholder=${k === 0 ? "none" : ""} /></td>`)}
+            <td><input class="unit-input" value=${d.unit} onInput=${(e) => setCell(d.id, "unit", e.target.value)} aria-label=${`Unit of ${d.parts.join(" | ")}`} /></td>
+            <td>${edited && html`<button class="link" title="Undo the changes of this method" aria-label="Undo" onClick=${() => update(() => draftOf(original.get(d.id)), new Set([d.id]))}>↺</button>`}</td>
+          </tr>`;
+        })}
+      </table>
+      ${!all && shown.length > CURATE_LIMIT && html`<button class="link" onClick=${() => setAll(true)}>Show all ${count(shown.length)}</button>`}</div>
+      <details class="curate-preview" open>
+        <summary>Preview: the names as the method lists will read them <span class="muted small">(grouped by family and source)</span></summary>
+        <div class="method-tree">
+          ${preview.map(([family, list]) => html`
+            <div class="method-family" key=${family}>
+              <div class="method-head"><span class="name">${family}</span><span class="muted count">${list.length}</span></div>
+              ${list.map(({ d, m }) => html`<div class=${`method-row${changed(d) ? " edited" : ""}`} key=${d.id}>
+                <span class="name" title=${m.name.join(" | ")}>${methodParts(m).main}${methodParts(m).qual && html` <span class="muted">${methodParts(m).qual}</span>`}${m.unit && html` <span class="muted small">${unit(m.unit)}</span>`}</span></div>`)}
+            </div>`)}
+        </div>
+      </details>
+      ${error && html`<div class="error">${error}</div>`}
+      ${message && html`<p class="muted small">${message}</p>`}
+      <div class="form-actions">
+        <button class="primary" disabled=${busy || !edits.length || problems.size > 0} onClick=${apply}>${busy ? "…" : edits.length ? `Apply ${plural(edits.length, "change")}` : "Apply"}</button>
+        <button disabled=${!edits.length} onClick=${() => { setDrafts(methods.map(draftOf)); setMessage(null); }}>Discard</button>
+        ${problems.size > 0 && html`<span class="error small">${plural(problems.size, "name")} to fix first (red rows)</span>`}
+        ${edits.length > 0 && !problems.size && html`<span class="muted small">Databases built with the methods renamed will be shown as to rebuild</span>`}
+        <span class="spacer"></span>
+        <button onClick=${onClose}>Close</button>
+      </div>
+    </div>`;
 }
 
 // A factor's value, written when it is left (Enter or a click away)

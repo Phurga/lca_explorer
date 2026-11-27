@@ -72,22 +72,39 @@ API in `src/lca_viewer/server.py`.
   in a separate manager.
 - **Methods library** (a section of *Projects*, below the projects, folded and unfolded with its arrow; see
   `docs/methods-library.md`): impact methods of the user's own, kept by the app in `data/methods/` (one JSON file
-  each), not by a project. Its **+** adds one: *Copy a method of a project…* (an editable copy, its family marked
-  *(copy)*), *New empty method…* (name parts and unit) or *Import a CSV file…* (flow name, compartment,
-  subcompartment, unit, factor, matched to the elementary flows of a project chosen in the form; the rows of no flow
-  are listed with the reason). The methods are listed by family, with their unit, origin and number of factors; *Edit*
+  each), not by a project. Its **+** adds methods, several at once: *Copy methods of a project…* (the project's
+  methods in `MethodPicker`, with its filter, folding families and family ticks; each copy keeps its method's name),
+  *New empty method…* (name parts and unit) or *Import CSV files…* (`PathsInput`: paths typed, or several files chosen
+  at once and uploaded; flow name, compartment, subcompartment, unit, factor, matched to the elementary flows of a
+  project chosen in the form; one method per file, or per method named in a `method` column or in `source`/`family`/
+  `impact category`/`indicator` columns). Neither asks for names: their structure is set afterwards in *Curate
+  names*. A report (`AddReport`) lists what was added, what was skipped (a name the library has: *Add them renamed*
+  with a suffix after the last part, default " (copy)", or left out; other reasons listed) and the rows of no flow,
+  by file and method. The methods are listed by family and source, with their unit, origin and number of factors; *Edit*
   opens the **method editor** under the row (`MethodEditor`, in the style of `ProjectForm`): name parts, unit and
   description (*Save*), the factors with a filter, a value saved when its field is left, × to remove one, and a
   factor added by searching the emissions or resources of a project (`NodePicker`) with the value typed beside it;
   the factors whose flow the project chosen does not have are greyed out. Then *Import CSV…*, *Export CSV*,
   *Duplicate…* and *Delete…* (confirmed), also in the row's ⚙ menu. Building a database offers the library's methods
-  after the project's, as the source *library* ("EF v3.1 (copy) · library"), and so does *Add impact methods* of the
+  after the project's, under the source *library* ("EF v3.1 · library/ecoinvent-3.12"), and so does *Add impact methods* of the
   Methods panel. Decision: the app's own files rather than methods written into each Brightway project (through a
   subprocess, and marking all the project's databases as to rebuild at every write): a library method is not tied to
   one project, and is matched to the flows of each build's project (by key, by code, else by name and compartments).
   Decision: a section of the Projects dialog, with its forms inline, as the project forms are, rather than a dialog of
   its own: one place for what a build is made of. Decision: a factor changed is written at once; a database built
   with a method edited since is shown as to rebuild (*methods of the library changed since the model was built*).
+  **Curate names** (a button of the section's head, `CurateNames`) replaces the list with a table of every library
+  method's name parts: source, family, category, indicator, the parts after (*Part 4*…) and unit, each edited in
+  place. Tick rows (a box ticks all those the filter shows) to change them together: *Set* a part (the source, the
+  family…) to a value, *Replace* a text with another in a part or every part, *Split* a part in two at the first
+  separator (the parts after move right), *Merge* a part with the next, joined by a text (the parts after move
+  left). Changed rows are outlined; rows with no name, a name starting with `library` or two of a name are red, and
+  block *Apply*. The **preview** below groups the methods as the method lists will (family and source: "My EF ·
+  library/mine-1.0", category and indicator per row). *Apply N changes* writes them in one request, all or none;
+  *Discard* and a row's ↺ undo. Decision: names curated apart from adding methods, in one table for the whole
+  library: an import or a copy of many methods should not ask for each name, and the same fix (a family, a
+  separator) is usually needed on many methods at once. Decision: a renamed method keeps its former names; a
+  database built with it finds it under them and is shown as to rebuild, as for an edit of its factors.
 - **Process form** (opened from the edit panel): a wide dialog to enter
   a process as in SimaPro: target (folder, project, database or new one),
   process and documentation, products (co-products with allocation %, their
@@ -302,8 +319,8 @@ API in `src/lca_viewer/server.py`.
   custom format with the tokens `{source}`, `{family}`, `{category}`, `{indicator}` and `{unit}`. A method name is
   read as (family, category, indicator…), except the methods that come with an ecoinvent release, which have it first:
   ("ecoinvent-3.10.1", family, category, indicator). A first part `<name>-<version>` of a name of four parts or more is
-  that **source** (`methodPath` in the app, `_method_family` on the server), as is `library` for the methods of the
-  methods library (*Projects*); the *Source* box shows only when a method has one, off by default. The method lists group by family and source ("EF v3.1 · ecoinvent-3.11"), and the methods
+  that **source** (`methodPath` in the app, `_method_family` on the server), as is `library` (or `library/<source>`,
+  for one given a source of its own) for the methods of the methods library (*Projects*); the *Source* box shows only when a method has one, off by default. The method lists group by family and source ("EF v3.1 · ecoinvent-3.11"), and the methods
   shown together at first, like those a build offers, are the family of the default method (not the whole release).
   Kept per database in `localStorage` (by method name, so a rebuilt model finds them);
   a workspace saved before takes the method and rules of its first tab; rules that other
