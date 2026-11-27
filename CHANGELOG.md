@@ -59,6 +59,24 @@ Large databases: one built with hundreds of thousands of processes opens, and ev
   Under the table, the factors of the methods on flows that are not in the model (recorded at build), with what
   the model has under that name.
   API: `POST /api/category`.
+- **Model pop-up**: the impact category pop-up is now called the pop-up of a *model* (an impact category of a method,
+  e.g. the climate change of EF v3.1). Open a model from the *Characterisation* panel of a flow pop-up, and from it
+  a flow, then the processes emitting it: process → flow → model → flow → process in one pop-up, ← going back.
+- **Organize by location** in the model pop-up: the flows by their location (regionalised flows), those without one
+  under *no location*. A model built before the flows kept their location says *rebuild to see locations*.
+- **Characterisation panel** in the process pop-up (and tab), after *Exchanges*: the process's own exchanges with
+  nature per unit of its product, by elementary flow in the active method (amount, factor, impact, share), with its
+  direct and cumulative scores. API: `GET /api/activity/{index}/characterisation`.
+- **One list for every pop-up**: *Used by*, *Alternatives*, *Characterisation*, *Emitted by*, *Same substance* and the
+  model's flows look and work alike: filter box above, a header that sorts (right-click: filter by column), rows of one
+  height whose name opens their pop-up, numbers with their unit in a column of its own, shares as bars.
+- **Right-click opens the pop-up of the row's process or flow**, everywhere (the tree's flow rows offered a menu, and
+  the emitters of a flow opened their exchange): the exchange (comment, uncertainty, pedigree) is the row's (i).
+- **Flow tabs** have pop-ups of their own: a process, an exchange or a model opened from a flow tab opens its pop-up
+  there (a process clicked in a flow tab used to open a new tab).
+- **Fixed**: the model pop-up did not open from the *Methods* panel while a flow tab had the focus.
+- **Fixed**: the *Comment* column (and the other exchange columns) stayed empty on the flows of the direct emissions:
+  a flow row now shows the comment of its exchange in the dataset of the process emitting it.
 
 ## 1.5.1 - 2026-11-24
 

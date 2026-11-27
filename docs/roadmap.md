@@ -27,7 +27,7 @@
    1. ~~Coverage of a method~~: first version done. Does a method characterise my model well, which important
       flows does it miss? *Uncharacterised* flows of a process's inventory with a reference method's factors,
       and the coverage of a method over the whole model, with its factors on flows outside the model
-      (recorded at build; API only, to show in the method pop-up). See [ui.md](ui.md).
+      (recorded at build; API only, to show in the model pop-up). See [ui.md](ui.md).
    2. ~~Flow pop-up and flow tab~~: first version done. *Flow* (the biosphere node), *exchange* (a flow in one
       dataset) and *inventory flow* (a flow in a supply chain) told apart; Space opens the flow, i its exchange;
       panels *Characterisation* (sortable, filterable, with the rank in each method), *Emitted by* (in the

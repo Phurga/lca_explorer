@@ -568,23 +568,50 @@ table.results tr.selected td { background: var(--selected); }
 .graph .node.focus > rect:first-of-type { stroke: var(--accent); stroke-width: 3; }
 
 /* Info pop-up: "Used by" */
-.info-body table.users { table-layout: fixed; }
-.info-body table.users th:nth-child(2), .info-body table.users td:nth-child(2) { width: 120px; }
-.info-body table.users th:nth-child(3), .info-body table.users td:nth-child(3) { width: 96px; }
-.info-body table.users th:nth-child(4), .info-body table.users td:nth-child(4) { width: 52px; }
-.info-body table.users th:nth-child(5), .info-body table.users td:nth-child(5) { width: 52px; text-align: right; }
-/* The panels of processes (exchanges, used by, alternatives): rows like the main list's */
-.info-body table.plist { table-layout: fixed; }
-.info-body table.plist .user-cell { display: flex; gap: 4px; align-items: center; min-width: 0; }
-.info-body table.plist .name-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.info-body table.plist .user-cell .loc-chip, .info-body table.plist .user-cell .info-btn { flex: none; }
-.info-body table.plist td.user { overflow: hidden; }
+/* The lists of the pop-ups (PopupList, and the ProcessRow rows that expand): one look for every panel, of a process, a
+   flow or a model: the filter box above at the left, a header that sorts, rows of one height, numbers at the right with
+   their unit in a column of its own, shares as bars, the empty state and notes below */
+.popup-list { margin-top: 4px; }
+.list-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 2px 0 6px; }
+.list-filter { width: 240px; max-width: 100%; }
+.list-summary { margin: 2px 0 6px; }
+.list-empty, .list-note { margin: 6px 0; color: var(--muted); font-size: 12px; }
+.info-body table.plist { table-layout: fixed; width: 100%; border-collapse: collapse; }
+.info-body table.plist td { height: 24px; padding: 0 6px; vertical-align: middle; }
+.info-body table.plist thead th { padding: 2px 6px 3px; vertical-align: bottom; color: var(--muted); font-weight: 400; border-bottom: 1px solid var(--border);
+  cursor: pointer; user-select: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.info-body table.plist thead th.sorted { color: var(--text); }
+.info-body table.plist th.num, .info-body table.plist th.share { text-align: right; }
+.info-body table.plist td.name, .info-body table.plist td.text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.info-body table.plist td.unit { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.info-body table.plist tbody tr:hover { background: var(--hover); }
+.info-body table.plist tr.current td { font-weight: 600; }
+.info-body table.plist tr.current td.name { color: var(--accent); }
+.info-body table.plist .filter-row th { padding: 2px 4px; cursor: default; border-bottom: 1px solid var(--border); }
+.info-body table.plist .filter-row input { width: 100%; box-sizing: border-box; font-size: 12px; padding: 2px 4px; }
+.info-body table.plist .chip { font-size: 11px; padding: 0 6px; border-radius: 9px; }
+.name-cell { display: flex; gap: 4px; align-items: center; min-width: 0; }
+.name-cell .loc-chip, .name-cell .info-btn, .name-cell .toggle { flex: none; }
+.name-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.name-text a { color: inherit; text-decoration: none; }
+.name-text a:hover, .name-text a:focus-visible { color: var(--accent); text-decoration: underline; }
+.share-cell { display: flex; align-items: center; gap: 6px; }
+.share-bar { flex: 1; min-width: 24px; height: 7px; border-radius: 3px; background: var(--hover); overflow: hidden; }
+.share-bar i { display: block; height: 100%; border-radius: 3px; background: var(--accent); }
+.share-bar i.negative { background: var(--bar-negative); }
+.share-pct { flex: none; width: 44px; text-align: right; font-family: var(--mono); font-size: 12px; }
+.info-body table.plist tr.list-section { cursor: pointer; background: var(--bg); }
+.info-body table.plist tr.list-section td { font-weight: 600; }
+.info-body table.plist tr.list-section td .muted { font-weight: 400; }
+.info-body table.plist tr.list-section .caret { display: inline-block; width: 12px; color: var(--muted); }
+.info-body table.plist tr.in-section td.name { padding-left: 22px; }
+.category-popup table.plist tr.list-section { background: var(--category-soft); }
+.category-popup table.plist tr.list-section .caret { color: var(--category); }
+.category-popup .share-bar i { background: var(--category); }
+.category-controls .hint-rebuild { font-size: 12px; margin-left: 6px; }
 .info-body table.plist .toggle { flex: none; width: 14px; padding: 0; border: 0; background: none; color: var(--muted); cursor: pointer; }
 .info-body table.plist .toggle.muted { cursor: default; }
 .info-body table.plist tr.more td { font-size: 12px; }
-.info-body table.alternatives th:nth-child(2) { width: 120px; }
-.info-body table.alternatives th:nth-child(3) { width: 84px; }
-.info-body table.users .chip { font-size: 11px; padding: 0 6px; border-radius: 9px; }
 /* Merged / group panel: members with their amounts and impacts */
 .bundle-details .details-list td:first-child, .bundle-details .details-list th:first-child { width: auto; }
 .bundle-details .details-list th { padding: 3px 6px; color: var(--muted); font-weight: 400; text-align: left; border-bottom: 1px solid var(--border); }
@@ -620,11 +647,6 @@ table.results tr.muted td { color: var(--muted); }
 .flow-compartments { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
 .flow-compartments .chip { font-size: 11px; padding: 0 8px; border-radius: 10px; }
 .flow-compartments .chip.active { background: var(--accent); border-color: var(--accent); color: var(--panel); }
-.info-body input.factor-filter { width: 100%; margin: 2px 0 6px; }
-.info-body table.factors { table-layout: fixed; }
-.info-body table.factors td:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.info-body table.factors th:nth-child(2) { width: 180px; }
-.info-body table.factors tr.current td { font-weight: 600; color: var(--accent); }
 /* (i): details of an item, shown on hover (tree rows, exchanges) */
 .info-btn {
   width: 16px; height: 16px; padding: 0; border-radius: 50%; flex: none;
@@ -996,7 +1018,7 @@ textarea.editing { width: 100%; box-sizing: border-box; }
 .rule-colours li { display: flex; align-items: center; gap: 8px; }
 .rule-colours li span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* Impact category pop-up (EF roadmap, phase 4): its own colour, apart from processes (accent) and groups */
+/* Model pop-up (an impact category of a method; EF roadmap, phase 4): its own colour, apart from processes (accent) and groups */
 .info-popup.category-popup { border-top: 3px solid var(--category); }
 .info-popup.category-popup.pinned { border-color: var(--category); }
 .kind-mark.category { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; margin-right: 6px;
@@ -1005,18 +1027,6 @@ textarea.editing { width: 100%; box-sizing: border-box; }
 .method-row:hover .category-open, .method-row .category-open:focus-visible { opacity: 1; color: var(--category); }
 .category-controls { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; padding: 8px 14px; border-bottom: 1px solid var(--border); }
 .category-controls .compare-with select { max-width: 260px; }
-.category-controls .category-filter { flex: 1; min-width: 140px; }
-.category-table { width: 100%; border-collapse: collapse; }
-.category-table td, .category-table th { padding: 2px 6px; }
-.category-table td:first-child { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.category-table th.rel, .category-table td.rel { width: 90px; }
-.category-table .rel-bar { display: block; height: 7px; border-radius: 3px; background: var(--category); }
-.category-table tbody tr:hover { background: var(--hover); }
-.category-table tr.category-section { cursor: pointer; background: var(--category-soft); }
-.category-table tr.category-section td { font-weight: 600; padding-top: 4px; padding-bottom: 4px; }
-.category-table tr.category-section td .muted { font-weight: 400; }
-.category-table tr.category-section .caret { display: inline-block; width: 12px; color: var(--category); }
-.category-table tr.in-section td:first-child { padding-left: 22px; }
 /* ref. (the method of the pop-up) and comp. (the one it is compared with): tags beside their names, units under the
    factor columns; a unit that differs from the reference's is flagged */
 .role-tag { display: inline-block; padding: 0 5px; border-radius: 4px; font-size: 11px; font-weight: 500; vertical-align: 2px;
@@ -1024,8 +1034,8 @@ textarea.editing { width: 100%; box-sizing: border-box; }
 .role-tag.comp { border-color: var(--muted); color: var(--muted); vertical-align: 0; }
 .category-unit { font-size: 12px; color: var(--muted); white-space: nowrap; }
 .category-unit.differs, .col-unit.differs { color: var(--bar-negative); font-weight: 600; }
-.category-table th .col-unit { display: block; font-size: 10.5px; font-weight: 400; color: var(--muted); white-space: nowrap; }
-.category-table .chip.only { font-size: 11px; padding: 0 6px; border-radius: 9px; border: 1px solid var(--category); color: var(--category); background: none; }
+.plist th .col-unit { display: block; font-size: 10.5px; font-weight: 400; color: var(--muted); white-space: nowrap; }
+.plist .chip.only { font-size: 11px; padding: 0 6px; border-radius: 9px; border: 1px solid var(--category); color: var(--category); background: none; }
 .category-unlinked { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 6px; }
 
 /* Flows (the abstract elementary flow): an icon in the colour of its type (resource / emission) on tabs, rows and headers */
@@ -1038,10 +1048,5 @@ textarea.editing { width: 100%; box-sizing: border-box; }
 .flow-tab { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--panel); }
 .flow-tab-head { padding: 10px 12px 4px; }
 .flow-tab .info-body { flex: 1; overflow: auto; max-height: none; }
-table.same-substance td { white-space: nowrap; }
 .flow-title a { color: var(--accent); }
 .flow-title .flow-compartment { color: var(--muted); font-weight: normal; }
-table.sortable th { cursor: pointer; user-select: none; }
-table.sortable th.sorted { color: var(--text); }
-table.sortable .filter-row th { padding: 2px 4px; cursor: default; }
-table.sortable .filter-row input { width: 100%; box-sizing: border-box; font-size: 12px; padding: 2px 4px; }

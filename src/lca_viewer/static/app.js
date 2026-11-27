@@ -243,13 +243,13 @@ const FLOW_TYPES = {
   emission: { label: "Emission", hint: "Output to nature (biosphere)", color: "hsl(2 65% 52%)" },
   direct: { label: "Direct", hint: "Direct emissions row: the exchanges with nature of the process above", color: "hsl(178 50% 38%)" },
 };
-// Columns of the list after the process (right-click the headers to choose); ``exchange``: what the exchange supplying
-// a process says, in the dataset of the process above it
+// Columns of the list after the process (right-click the headers to choose); ``exchange``: what the exchange of the row
+// says: supplying a process, in the dataset of the process above it; emitting a flow, in the dataset of its emitter
 const COLUMNS = [
   { id: "amount", label: "Amount", width: 130 },
   { id: "impact", label: "Impact", width: 90 },
   { id: "share", label: "Share", width: 150 },
-  { id: "comment", label: "Comment", width: 260, exchange: true, hint: "Comment on the exchange supplying the process, in the dataset of the process above it (c: all of it)" },
+  { id: "comment", label: "Comment", width: 260, exchange: true, hint: "Comment on the exchange of the row: supplying a process (in the dataset of the process above it) or emitting a flow (in the dataset of the process emitting it); i: all of it" },
   { id: "uncertainty", label: "Uncertainty", width: 230, exchange: true, hint: "Uncertainty distribution recorded on the exchange (c: with the pedigree and the rest)",
     text: (r) => (r.exchanges || []).map(uncertaintyText).filter(Boolean).join("; ") },
   { id: "pedigree", label: "Pedigree", width: 110, exchange: true, hint: "Pedigree scores of the exchange: reliability, completeness, time, geography, technology",
@@ -3212,14 +3212,15 @@ function ExchangeMeta({ e }) {
     </div>`;
 }
 
-// A process in a panel of a pop-up (exchanges, used by, alternatives): a row like those of the main list.
-// ↑/↓ move between the rows (``popupKeys``), → expands it (or goes to its first child), ← collapses it (or goes to
-// the row above it), Space opens its pop-up, c the exchange it stands for, Enter makes it the process.
+// A process in a list of a pop-up (used by, alternatives: ``PopupList``'s ``renderRow``): a row like those of the main
+// list, which expands. ↑/↓ move between the rows (``popupKeys``), → expands it (or goes to its first child), ← collapses
+// it (or goes to the row above it), Space, a right-click or its name opens its pop-up, i or its (i) the exchange it
+// stands for, Enter makes it the process.
 // ``item``: { index, name, reference_product, location, … }; ``above``: the item it hangs from (the pop-up's process
 // for a top row); ``ancestors``: indexes above it (a process already there is a loop: shown, not expanded).
-// ``panel``: { span: columns, label(item), cells(item, above, depth): the <td>s after the name, load(item, above):
-// Promise of { items, more } (its children, none: it does not expand), onOpen(item), onExchange(item, above): the exchange it
-// stands for (none: no c), onUse(item) }
+// ``panel``: { columns: the list's (the cells after the name: ``listCell(column, item, above, depth)``), label(item),
+// chip?(item, depth), rowClass?(item, depth), load(item, above): Promise of { items, more } (its children, none: it does
+// not expand), onOpen(item), onExchange(item, above): the exchange it stands for (none: no (i)), onUse(item), empty }
 function ProcessRow({ item, above, depth, ancestors, panel }) {
   const [open, setOpen] = useState(false);
   const [kids, setKids] = useState(null);
@@ -3254,28 +3255,26 @@ function ProcessRow({ item, above, depth, ancestors, panel }) {
       }
     }
   };
+  const span = panel.columns.length;
   return html`<${Fragment}>
-    <tr class="exchange" data-nav data-depth=${depth} tabindex="-1" ...${dragProcess(item.index)} onKeyDown=${keys} onDblClick=${() => expandable && setOpen(!open)}
-        onContextMenu=${(e) => { e.preventDefault(); e.stopPropagation(); panel.onOpen(item); }}>
-      <td class="user" title=${`${item.reference_product ?? ""} | ${item.name} | ${item.location}`}>
-        <span class="user-cell" style=${{ paddingLeft: `${depth * 16}px` }}>
-          ${loop
-            ? html`<span class="toggle muted" title="Already above this process: a loop">↺</span>`
-            : expandable
-              ? html`<button class="toggle" aria-label=${open ? "Collapse" : "Expand"} onClick=${() => setOpen(!open)}>${open ? "▾" : "▸"}</button>`
-              : html`<span class="toggle"></span>`}
-          ${exchange && html`<button class="info-btn" title="Comment and uncertainty of the exchange" aria-label="Comment and uncertainty"
-            onClick=${(e) => { e.stopPropagation(); panel.onExchange(item, above); }}>i</button>`}
-          <span class="name-text">${panel.label(item)}</span>
-          <span class="loc-chip">${item.location}</span></span></td>
-      ${panel.cells(item, above, depth)}
+    <tr class=${`exchange ${panel.rowClass?.(item, depth) || ""}`} data-nav data-depth=${depth} tabindex="-1" ...${dragProcess(item.index)} onKeyDown=${keys}
+        onDblClick=${() => expandable && setOpen(!open)} onContextMenu=${(e) => { e.preventDefault(); e.stopPropagation(); panel.onOpen(item, e); }}>
+      <${NameCell} depth=${depth} title=${`${item.reference_product ?? ""} | ${item.name} | ${item.location}`} content=${panel.label(item)}
+        chip=${html`<span class="loc-chip">${item.location}</span>${panel.chip?.(item, depth) || ""}`}
+        toggle=${loop
+          ? html`<span class="toggle muted" title="Already above this process: a loop">↺</span>`
+          : expandable
+            ? html`<button class="toggle" aria-label=${open ? "Collapse" : "Expand"} onClick=${(e) => { e.stopPropagation(); setOpen(!open); }}>${open ? "▾" : "▸"}</button>`
+            : html`<span class="toggle"></span>`}
+        onOpen=${(e) => panel.onOpen(item, e)} onInfo=${exchange ? (e) => panel.onExchange(item, above, e) : null} />
+      ${panel.columns.slice(1).map((c) => listCell(c, item, above, depth))}
     </tr>
-    ${open && !kids && html`<tr><td colspan=${panel.span} class="muted">…</td></tr>`}
-    ${open && kids && kids.items.length === 0 && html`<tr><td colspan=${panel.span} class="muted">${panel.empty || "Nothing below it."}</td></tr>`}
+    ${open && !kids && html`<tr><td colspan=${span} class="muted">…</td></tr>`}
+    ${open && kids && kids.items.length === 0 && html`<tr><td colspan=${span} class="muted">${panel.empty || "Nothing below it."}</td></tr>`}
     ${open && kids && kids.items.map((c, i) => html`
       <${ProcessRow} key=${`${c.index}-${i}`} item=${c} above=${item} depth=${depth + 1} ancestors=${[...ancestors, item.index]} panel=${panel} />`)}
     ${open && kids && kids.more > 0 && html`
-      <tr class="more"><td colspan=${panel.span} class="muted">+ ${kids.more} more</td></tr>`}
+      <tr class="more"><td colspan=${span} class="muted">+ ${kids.more} more</td></tr>`}
   <//>`;
 }
 
@@ -3549,56 +3548,165 @@ function FlowHead({ info, kind = "Flow" }) {
     <div class="muted">${kind} · ${info.resource ? "resource" : "emission"} · ${unit(info.unit)}</div>`;
 }
 
-// A table whose columns sort (click a header; again: the other way) and filter (right-click a header: a row of filter
-// boxes under the headers; a number column takes "> 10", "< 0.1" or a value it contains). ``columns``: { key, label,
-// num?, title?, value(row), cell(row) }; ``rowClass(row)``.
-function SortableTable({ columns, rows, initial, className = "", rowClass, rowKey }) {
+// ---------------------------------------------------------------- the lists of the pop-ups
+// One list for every panel of the pop-ups (the process's Used by, Alternatives and Characterisation; the flow's
+// Characterisation, Emitted by and Same substance; the model's flows), so that they look and work alike: the filter box
+// above the table, at its left; a header that sorts (click; again: the other way) and filters by column (right-click: a
+// row of boxes under the headers, "> 10" or "< 0.1" on numbers); rows of one height whose name links to the pop-up of
+// what they are; numbers right-aligned with their unit in a column of its own; shares as bars; the empty state, how
+// many rows are shown and *Show all* under it. A row's right-click (or double-click, or Space) opens the pop-up of what
+// it is (``onOpen``); its (i) (or i) the exchange it stands for (``onInfo``), and only that; Enter: ``onUse``.
+// ``columns``: { key, label, title?, kind?: "num" | "unit" | "share" | "text" (the first column is the name: its link, its
+//   (i), ``chip(row)`` after it), value(row, …), cell?(row, …): its content, format?: of a number, tip?(row): its title,
+//   width?: px, sort?: false }. ``rows``, ``rowKey(row)``, ``rowClass?(row)``, ``pinned?(row)``: rows kept on top whatever
+//   the order and filter (the current process of *Alternatives*), ``match?(row)``: the text the filter box searches (by
+//   default the text columns), ``query`` / ``setQuery``: the filter box's text, when its owner needs it too. ``filter``:
+//   show the filter box (default: more than 8 rows); ``empty``: the text of an empty list; ``limit``: rows drawn before
+//   *Show all*; ``more``: a line under the list (e.g. *Show all n*: rows the server did not send); ``sections?(rows)``:
+//   [{ key, label, items, cells? }]: headers that fold, ``noun``: what a section counts; ``renderRow?(row)``: a row of its
+//   own (``ProcessRow``: rows that expand); ``tools``: beside the filter box; ``drag?(row)``: what a row drags.
+const LIST_WIDTHS = { num: 84, unit: 84, share: 104 };
+function ShareBar({ value }) {
+  const v = Math.max(-1, Math.min(1, value || 0));
+  return html`<span class="share-cell"><span class="share-bar"><i class=${v < 0 ? "negative" : ""} style=${{ width: `${Math.abs(v) * 100}%` }}></i></span>
+    <span class="share-pct">${pct(value || 0)}</span></span>`;
+}
+// A cell after the name, by the kind of its column (shared with ``ProcessRow``)
+function listCell(c, r, ...context) {
+  const v = c.value(r, ...context);
+  const content = c.cell ? c.cell(r, ...context)
+    : c.kind === "num" ? (v == null || Number.isNaN(v) ? html`<span class="muted">–</span>` : (c.format || fmt)(v))
+    : c.kind === "share" ? (v == null ? "" : html`<${ShareBar} value=${v} />`)
+    : v ?? "";
+  const tip = c.tip ? c.tip(r, ...context) : !c.kind || c.kind === "unit" || c.kind === "text" ? (typeof v === "string" ? v : undefined) : undefined;
+  return html`<td key=${c.key} class=${c.kind || "text"} title=${tip}>${content}</td>`;
+}
+// The name of a row: its (i) (the exchange it stands for), the name as a link to its pop-up, a chip after it
+function NameCell({ content, chip, title, depth = 0, toggle, onOpen, onInfo, infoTitle = "The exchange: amount, comment, uncertainty, pedigree (i)" }) {
+  return html`
+    <td class="name" title=${title}>
+      <span class="name-cell" style=${depth ? { paddingLeft: `${depth * 16}px` } : null}>
+        ${toggle}
+        ${onInfo && html`<button class="info-btn" title=${infoTitle} aria-label="The exchange"
+          onClick=${(e) => { e.stopPropagation(); onInfo(e); }}>i</button>`}
+        <span class="name-text">${onOpen ? html`<a href="#" onClick=${(e) => { e.preventDefault(); e.stopPropagation(); onOpen(e); }}>${content}</a>` : content}</span>
+        ${chip}
+      </span></td>`;
+}
+const passesFilter = (c, r, text) => {
+  if (!text) return true;
+  const v = c.value(r);
+  const m = c.kind === "num" && text.match(/^([<>]=?)\s*(-?[\d.eE+-]+)$/);
+  if (m) {
+    const x = Number(m[2]);
+    return { "<": v < x, "<=": v <= x, ">": v > x, ">=": v >= x }[m[1]];
+  }
+  return text.split(/\s+/).every((w) => String(v ?? "").toLowerCase().includes(w));
+};
+function PopupList({ columns, rows, rowKey, rowClass, pinned, match, query, setQuery, filter, empty = "Nothing to list.", limit = null,
+  more, sections, noun = "row", renderRow, onOpen, onInfo, hasInfo = () => true, onUse, tools, drag, initial, className = "" }) {
   const [sort, setSort] = useState(initial || { key: null, desc: false });
-  const [filters, setFilters] = useState(null);  // null: no filter row; else { key: text }
-  const passes = (c, r) => {
-    const text = (filters?.[c.key] || "").trim().toLowerCase();
-    if (!text) return true;
-    const v = c.value(r);
-    const m = c.num && text.match(/^([<>]=?)\s*(-?[\d.eE+-]+)$/);
-    if (m) {
-      const x = Number(m[2]);
-      return { "<": v < x, "<=": v <= x, ">": v > x, ">=": v >= x }[m[1]];
-    }
-    return text.split(/\s+/).every((w) => String(v ?? "").toLowerCase().includes(w));
-  };
-  let shown = rows.filter((r) => columns.every((c) => passes(c, r)));
+  const [own, setOwn] = useState("");
+  const [filters, setFilters] = useState(null);  // null: no row of filter boxes; else { key: text }
+  const [all, setAll] = useState(false);
+  const [folded, setFolded] = useState(new Set());
+  const typed = query ?? own;
+  const setText = setQuery ?? setOwn;
+  const words = typed.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const textOf = match || ((r) => columns.filter((c) => !c.kind || c.kind === "text").map((c) => String(c.value(r) ?? "")).join(" "));
+  const top = pinned ? rows.filter(pinned) : [];
+  let shown = (pinned ? rows.filter((r) => !pinned(r)) : rows)
+    .filter((r) => words.every((w) => textOf(r).toLowerCase().includes(w)))
+    .filter((r) => columns.every((c) => passesFilter(c, r, (filters?.[c.key] || "").trim().toLowerCase())));
   const by = columns.find((c) => c.key === sort.key);
   if (by) {
     const cmp = (a, b) => {
       const x = by.value(a), y = by.value(b);
-      return by.num ? x - y : String(x ?? "").localeCompare(String(y ?? ""));
+      return by.kind === "num" || by.kind === "share" ? (x ?? -Infinity) - (y ?? -Infinity) : String(x ?? "").localeCompare(String(y ?? ""));
     };
     shown = [...shown].sort((a, b) => (sort.desc ? -cmp(a, b) : cmp(a, b)));
   }
-  const click = (c) => setSort((s) => (s.key === c.key ? { key: c.key, desc: !s.desc } : { key: c.key, desc: !!c.num }));
+  const filtered = shown.length < rows.length - top.length;
+  // the rows drawn: section headers and the rows of the unfolded sections, up to ``limit`` rows (*Show all*)
+  const groups = sections ? sections(shown) : null;
+  const drawn = [];
+  let count = 0;
+  const full = () => !all && limit !== null && count >= limit;
+  for (const section of groups || [{ key: "", items: shown }]) {
+    if (full()) break;
+    if (groups) drawn.push({ section });
+    if (groups && folded.has(section.key)) continue;
+    for (const r of section.items) {
+      if (full()) break;
+      drawn.push({ r });
+      count++;
+    }
+  }
+  const hidden = full() && shown.length > count;
+  const fold = (k) => { const next = new Set(folded); next.has(k) ? next.delete(k) : next.add(k); setFolded(next); };
+  const click = (c) => c.sort !== false && setSort((s) => (s.key === c.key ? { key: c.key, desc: !s.desc } : { key: c.key, desc: c.kind === "num" || c.kind === "share" }));
+  const [first, ...rest] = columns;
+  const keys = (r) => (e) => {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const used = () => { e.preventDefault(); e.stopPropagation(); };
+    if (e.key === " " && onOpen) { used(); onOpen(r, e); }
+    else if (e.key === "i" && onInfo && hasInfo(r)) { used(); onInfo(r, e); }
+    else if (e.key === "Enter" && onUse) { used(); onUse(r); }
+  };
+  const plainRow = (r) => html`
+    <tr key=${rowKey(r)} data-nav tabindex="-1" class=${`exchange ${rowClass?.(r) || ""}`} ...${drag?.(r) || {}} onKeyDown=${keys(r)}
+      onContextMenu=${onOpen ? (e) => { e.preventDefault(); e.stopPropagation(); onOpen(r, e); } : undefined}
+      onDblClick=${onOpen ? (e) => onOpen(r, e) : undefined}>
+      <${NameCell} content=${first.cell ? first.cell(r) : first.value(r)} chip=${first.chip?.(r)} title=${first.tip?.(r)}
+        onOpen=${onOpen && first.link !== false ? (e) => onOpen(r, e) : null} onInfo=${onInfo && hasInfo(r) ? (e) => onInfo(r, e) : null} />
+      ${rest.map((c) => listCell(c, r))}
+    </tr>`;
+  const row = (r) => (renderRow ? renderRow(r) : plainRow(r));
+  const showFilter = filter ?? rows.length > 8;
+  const clear = () => { setText(""); setFilters(null); };
   return html`
-    <table class=${`flows sortable ${className}`}>
-      <thead>
-        <tr>${columns.map((c) => html`
-          <th class=${`${c.num ? "num" : ""} ${sort.key === c.key ? "sorted" : ""}`} title=${`${c.title ? `${c.title}. ` : ""}Click: sort. Right-click: filter.`}
-            onClick=${() => click(c)} onContextMenu=${(e) => { e.preventDefault(); setFilters((f) => (f ? null : {})); }}>
-            ${c.label}${sort.key === c.key ? (sort.desc ? " ↓" : " ↑") : ""}</th>`)}</tr>
-        ${filters && html`<tr class="filter-row">${columns.map((c, i) => html`
-          <th><input value=${filters[c.key] || ""} placeholder=${c.num ? "> 0, < 10…" : "contains…"} aria-label=${`Filter ${c.label}`}
-            ref=${i === 0 ? (el) => el && !el.dataset.done && (el.dataset.done = "1", el.focus()) : undefined}
-            onInput=${(e) => setFilters((f) => ({ ...f, [c.key]: e.target.value }))}
-            onKeyDown=${(e) => { if (e.key === "Escape") { e.stopPropagation(); setFilters(null); } }} /></th>`)}</tr>`}
-      </thead>
-      <tbody>${shown.map((r) => html`
-        <tr key=${rowKey(r)} class=${rowClass?.(r) || ""}>${columns.map((c) => html`<td class=${c.num ? "num" : ""}>${c.cell ? c.cell(r) : c.value(r)}</td>`)}</tr>`)}
-      </tbody>
-    </table>
-    ${shown.length < rows.length && html`<p class="muted">${shown.length} of ${rows.length} shown · <button class="link" onClick=${() => setFilters(null)}>clear the filters</button></p>`}`;
+    <div class=${`popup-list ${className}`}>
+      ${(showFilter || tools) && html`<div class="list-tools">
+        ${showFilter && html`<input class="list-filter" type="search" placeholder="Filter…" value=${typed} aria-label="Filter the list"
+          onInput=${(e) => setText(e.target.value)} onKeyDown=${(e) => { if (e.key === "Escape" && typed) { e.stopPropagation(); setText(""); } }} />`}
+        ${tools}</div>`}
+      ${rows.length === 0 ? html`<p class="list-empty">${empty}</p>` : html`
+        <table class="plist" style=${{ minWidth: `${rest.reduce((n, c) => n + (c.width ?? LIST_WIDTHS[c.kind] ?? 110), 0) + 180}px` }}>
+          <colgroup><col />${rest.map((c) => html`<col key=${c.key} style=${{ width: `${c.width ?? LIST_WIDTHS[c.kind] ?? 110}px` }} />`)}</colgroup>
+          <thead>
+            <tr>${columns.map((c) => html`
+              <th key=${c.key} class=${`${c === first ? "name" : c.kind || "text"} ${sort.key === c.key ? "sorted" : ""}`}
+                title=${`${c.title ? `${c.title}. ` : ""}${c.sort === false ? "" : "Click: sort. "}Right-click: filter by column.`}
+                onClick=${() => click(c)} onContextMenu=${(e) => { e.preventDefault(); setFilters((f) => (f ? null : {})); }}>
+                ${c.label}${sort.key === c.key ? (sort.desc ? " ↓" : " ↑") : ""}</th>`)}</tr>
+            ${filters && html`<tr class="filter-row">${columns.map((c, i) => html`
+              <th key=${c.key}><input value=${filters[c.key] || ""} placeholder=${c.kind === "num" ? "> 0, < 10…" : "contains…"} aria-label=${`Filter by ${typeof c.label === "string" ? c.label : c.key}`}
+                ref=${i === 0 ? (el) => el && !el.dataset.done && (el.dataset.done = "1", el.focus()) : undefined}
+                onInput=${(e) => setFilters((f) => ({ ...f, [c.key]: e.target.value }))}
+                onKeyDown=${(e) => { if (e.key === "Escape") { e.stopPropagation(); setFilters(null); } }} /></th>`)}</tr>`}
+          </thead>
+          <tbody>
+            ${top.map(row)}
+            ${drawn.map(({ section, r }) => (section ? html`
+              <tr key=${`s:${section.key}`} class="list-section" onClick=${() => fold(section.key)} aria-expanded=${!folded.has(section.key)}>
+                <td colspan=${section.cells ? 1 : columns.length}><span class="caret">${folded.has(section.key) ? "▸" : "▾"}</span> ${section.label}
+                  <span class="muted"> · ${section.items.length} ${noun}${section.items.length === 1 ? "" : "s"}</span></td>
+                ${section.cells}
+              </tr>` : row(r)))}
+          </tbody>
+        </table>
+        ${shown.length === 0 && html`<p class="list-empty">No ${noun} matching the filter · <button class="link" onClick=${clear}>clear it</button></p>`}
+        ${shown.length > 0 && filtered && html`<p class="list-note">${shown.length} of ${rows.length - top.length} shown · <button class="link" onClick=${clear}>clear the filter</button></p>`}
+        ${hidden && html`<p class="list-note"><button class="link" onClick=${() => setAll(true)}>Show all ${shown.length}</button></p>`}`}
+      ${more && html`<p class="list-note">${more}</p>`}
+    </div>`;
 }
 
-// The panels of a flow (pop-up and tab): ``shown`` is the panel; ``onActivity(index)``: a process clicked,
-// ``onExchange(flow, activity)``: its exchange of this flow; ``onFlow(index)``: another flow of the same substance
-function FlowPanels({ info, shown, method, methods, scope, scoped, onActivity, onExchange, onFlow, body }) {
+// The panels of a flow (pop-up and tab): ``shown`` is the panel; ``onActivity(index, e)``: a process opened (its pop-up),
+// ``onExchange(flow, activity)``: its exchange of this flow (the (i) of an emitter); ``onFlow(index)``: another flow of
+// the same substance; ``onCategory(method, e)``: the model pop-up of a method that characterises it (the cycle process →
+// flow → model → flow…)
+function FlowPanels({ info, shown, method, methods, scope, scoped, onActivity, onExchange, onFlow, onCategory, body }) {
   const [all, setAll] = useState(false);
   const root = scoped && scope ? `&root=${scope.index}&amount=${scope.amount ?? 1}` : "";
   const index = info.index;
@@ -3606,65 +3714,63 @@ function FlowPanels({ info, shown, method, methods, scope, scoped, onActivity, o
   const same = useGet(`/api/flow/${index}/same-substance?method=${method}`, shown === "same");
   useEffect(() => setAll(false), [index]);
   const u = unit(info.unit);
-  const processCell = (p) => html`<td class="user" title=${`${p.reference_product} | ${p.name} | ${p.location}`}>
-    <a href="#" onClick=${(e) => { e.preventDefault(); onActivity(p.index); }}>${p.name}</a> <span class="loc-chip">${p.location}</span></td>`;
   const error = emitters.error || same.error;
   const d = info.description || {};
   const parts = info.name_parts || { substance: info.name, qualifiers: [] };
+  const inChain = scoped && scope;
   return html`
     <div class="info-body" ref=${body}>
       ${error && html`<div class="error">${error}</div>`}
       ${shown === "factors" && html`
         <section>
-          ${info.factors.length === 0 ? html`<p class="text muted">No method of this model characterises this flow.</p>` : html`
-            <${SortableTable} className="factors" rowKey=${(f) => f.method} rowClass=${(f) => (f.method === method ? "current" : "")}
-              rows=${info.factors.map((f) => ({ ...f, label: methodLabel(methods[f.method]), unit: `${methods[f.method].unit} / ${u}` }))}
-              columns=${[
-                { key: "method", label: "Method", value: (f) => f.label, cell: (f) => html`<span title=${f.label}>${f.label}</span>` },
-                { key: "cf", label: "Factor", num: true, value: (f) => f.cf, cell: (f) => fmt(f.cf) },
-                { key: "unit", label: "Unit", value: (f) => f.unit },
-                { key: "rank", label: "Rank", num: true, title: "Rank of this flow by |factor| among the flows of the model the method characterises",
-                  value: (f) => f.rank, cell: (f) => html`<span class="muted">${ordinal(f.rank)} of ${f.of}</span>` },
-              ]} />`}
+          <${PopupList} key=${`factors-${index}`} noun="model" empty="No method of this model characterises this flow."
+            rows=${info.factors.map((f) => ({ ...f, label: methodLabel(methods[f.method]), unit: `${methods[f.method].unit} / ${u}` }))}
+            rowKey=${(f) => f.method} rowClass=${(f) => (f.method === method ? "current" : "")}
+            onOpen=${onCategory ? (f, e) => onCategory(f.method, e) : null}
+            columns=${[
+              { key: "method", label: "Model", title: "The impact categories of the methods of this database that characterise the flow: open one for all its flows",
+                value: (f) => f.label, tip: (f) => `${methodTitle(methods[f.method])}: its model pop-up` },
+              { key: "cf", label: "Factor", kind: "num", value: (f) => f.cf },
+              { key: "unit", label: "Unit", kind: "unit", width: 150, value: (f) => f.unit },
+              { key: "rank", label: "Rank", kind: "num", title: "Rank of this flow by |factor| among the flows of the model the method characterises",
+                value: (f) => f.rank, cell: (f) => html`<span class="muted">${ordinal(f.rank)} of ${f.of}</span>` },
+            ]} />
         </section>`}
       ${shown === "emitters" && html`
         <section>
-          ${!emitters.data ? html`<${Waiting} text="Reading the exchanges…" />` : emitters.data.count === 0 ? html`<p class="text muted">No process of the database has an exchange of this flow.</p>` : html`
-            <table class="flows users plist emitters">
-              <thead><tr><th>Process</th>
-                <th class="num" title=${`Amount per unit of the process's product, as in its dataset`}>Per unit</th><th>Unit</th>
-                ${scoped && scope && html`<th class="num" title=${`In the supply chain of ${scope.name} (B·s)`}>In chain</th><th>Unit</th>
-                  <th class="pct" title="Share of the amount in the supply chain">Share</th>`}</tr></thead>
-              <tbody>${emitters.data.emitters.map((p) => html`
-                <tr key=${p.index} ...${dragProcess(p.index)} title="Right-click: its exchange of this flow"
-                  onContextMenu=${(e) => { e.preventDefault(); onExchange?.(index, p, e); }}>
-                  ${processCell(p)}
-                  <td class="num">${fmtAmount(p.per_unit)}</td><td class="muted">${u}/${unit(p.unit)}</td>
-                  ${scoped && scope && html`<td class="num">${p.amount ? fmtAmount(p.amount) : "–"}</td><td class="muted">${p.amount ? u : ""}</td>
-                    <td class="pct">${p.share ? pct(p.share) : ""}</td>`}
-                </tr>`)}
-              </tbody>
-            </table>
-            ${emitters.data.count > emitters.data.emitters.length && !all && html`
-              <button class="link" onClick=${() => setAll(true)}>Show all ${emitters.data.count}</button>`}`}
+          ${!emitters.data ? html`<${Waiting} text="Reading the exchanges…" />` : html`
+            <${PopupList} key=${`emitters-${index}`} noun="process" empty="No process of the database has an exchange of this flow."
+              rows=${emitters.data.emitters} rowKey=${(p) => p.index} drag=${(p) => dragProcess(p.index)}
+              onOpen=${(p, e) => onActivity(p.index, e)} onInfo=${onExchange ? (p, e) => onExchange(index, p, e) : null}
+              columns=${[
+                { key: "name", label: "Process", value: (p) => p.name, chip: (p) => html`<span class="loc-chip">${p.location}</span>`,
+                  tip: (p) => `${p.reference_product} | ${p.name} | ${p.location}` },
+                { key: "per_unit", label: "Per unit", kind: "num", format: fmtAmount, title: "Amount per unit of the process's product, as in its dataset", value: (p) => p.per_unit },
+                { key: "unit", label: "Unit", kind: "unit", value: (p) => `${u}/${unit(p.unit)}` },
+                ...(inChain ? [
+                  { key: "amount", label: "In chain", kind: "num", format: fmtAmount, title: `In the supply chain of ${scope.name} (B·s)`, value: (p) => p.amount || null },
+                  { key: "chain_unit", label: "Unit", kind: "unit", value: (p) => (p.amount ? u : "") },
+                  { key: "share", label: "Share", kind: "share", title: "Share of the amount in the supply chain", value: (p) => p.share || null },
+                ] : []),
+              ]}
+              more=${emitters.data.count > emitters.data.emitters.length && !all
+                && html`<button class="link" onClick=${() => setAll(true)}>Show all ${emitters.data.count}</button>`} />`}
         </section>`}
       ${shown === "same" && html`
         <section>
           ${!same.data ? html`<${Waiting} text="…" />` : html`
             <p class="muted">${info.name} in each compartment of the model, with its factor in ${methodLabel(methods[method])}: a factor in one
-              and none in another often means a method that does not cover a compartment. Click one to open it.</p>
-            <table class="flows same-substance">
-              <thead><tr><th>Compartment</th><th class="num" title="Processes with an exchange of it">processes</th>
-                <th class="num">factor</th><th>unit</th></tr></thead>
-              <tbody>${same.data.flows.map((f) => html`
-                <tr key=${f.flow} class=${f.current ? "current" : ""}>
-                  <td>${f.current ? f.compartment || "–" : html`<a href="#" onClick=${(e) => { e.preventDefault(); onFlow(f.flow); }}>${f.compartment || "–"}</a>`}</td>
-                  <td class="num">${f.emitters}</td>
-                  <td class=${`num ${f.cfs[0] === 0 ? "muted" : ""}`}>${f.cfs[0] === 0 ? "none" : fmt(f.cfs[0])}</td>
-                  <td class="muted">${f.cfs[0] === 0 ? "" : `${methods[method].unit} / ${u}`}</td>
-                </tr>`)}
-              </tbody>
-            </table>`}
+              and none in another often means a method that does not cover a compartment.</p>
+            <${PopupList} key=${`same-${index}`} noun="flow" rows=${same.data.flows} rowKey=${(f) => f.flow} rowClass=${(f) => (f.current ? "current" : "")}
+              onOpen=${(f) => !f.current && onFlow(f.flow)}
+              columns=${[
+                { key: "compartment", label: "Compartment", value: (f) => f.compartment || "–",
+                  chip: (f) => (f.current ? html`<span class="muted">this flow</span>` : "") },
+                { key: "emitters", label: "Processes", kind: "num", format: String, title: "Processes with an exchange of it", value: (f) => f.emitters },
+                { key: "cf", label: "Factor", kind: "num", value: (f) => (f.cfs[0] === 0 ? null : f.cfs[0]),
+                  cell: (f) => (f.cfs[0] === 0 ? html`<span class="muted">none</span>` : fmt(f.cfs[0])) },
+                { key: "unit", label: "Unit", kind: "unit", width: 150, value: (f) => (f.cfs[0] === 0 ? "" : `${methods[method].unit} / ${u}`) },
+              ]} />`}
         </section>`}
       ${shown === "metadata" && html`
         <section>
@@ -3699,7 +3805,7 @@ function FlowTabsBar({ tabs, shown, setTab }) {
 
 // Space on a flow: the flow pop-up (no exchange data: that is i). ``target.flows``: several flows of one substance
 // (compartment chips). Drag it to a tab list (or *Open in new tab*) to make it a tab.
-function FlowInfoPopup({ target, win, method, methods, chartMethods, scope, onClose, onOpen, onExchange, onOpenTab, onBack }) {
+function FlowInfoPopup({ target, win, method, methods, chartMethods, scope, onClose, onOpen, onExchange, onCategory, onOpenTab, onBack }) {
   const [current, setCurrent] = useState(target.flow);
   const [tab, setTab] = useState(target.tab || null);
   const scoped = !!scope;  // opened from a process tab: its panels are in that supply chain
@@ -3727,13 +3833,15 @@ function FlowInfoPopup({ target, win, method, methods, chartMethods, scope, onCl
       ${info && html`
         <${FlowTabsBar} tabs=${tabs} shown=${shown} setTab=${setTab} />
         <${FlowPanels} info=${info} shown=${shown} method=${method} methods=${methods} chartMethods=${chartMethods} scope=${scope} scoped=${scoped}
-          onActivity=${onOpen} onFlow=${setCurrent} body=${body}
+          onActivity=${onOpen} onFlow=${setCurrent} onCategory=${onCategory} body=${body}
           onExchange=${(f, p) => onExchange({ flow: f, activities: [p.index], exchange: true })} />`}
     <//>`;
 }
 
-// ---------------------------------------------------------------- impact category (EF roadmap, phase 4)
-// The icon of an impact category seen from its flows (a ranked list): its pop-up, and the button that opens it
+// ---------------------------------------------------------------- model pop-up (EF roadmap, phase 4)
+// Words: an LCIA **method** (EF v3.1) groups **models**, its impact categories (climate change…); in the code a model is
+// a ``method`` (an index of ``info.methods``) and its pop-up ``CategoryPopup``.
+// The icon of a model seen from its flows (a ranked list): its pop-up, and the button that opens it
 function CategoryIcon() {
   return html`<svg class="category-icon" width="13" height="13" viewBox="0 0 16 16" aria-hidden="true" fill="currentColor">
     <rect x="1" y="2" width="14" height="2.4" rx="1" /><rect x="1" y="6.8" width="10" height="2.4" rx="1" /><rect x="1" y="11.6" width="5.5" height="2.4" rx="1" /></svg>`;
@@ -3752,28 +3860,32 @@ function compareChoices(methods, method) {
   return { same, families: [...families] };
 }
 
-// How the rows of the category pop-up can be arranged: each flow keeps its row; sections gather the flows of a substance
-// or of a compartment under a header, in the order of their first (largest) flow
+// How the rows of the model pop-up can be arranged: each flow keeps its row; sections gather the flows of a substance,
+// a compartment or a location under a header, in the order of their first (largest) flow; *no location* last
 const CATEGORY_ORGANIZE = [
   ["", "Factor", "One list, the largest relative factor first"],
   ["name", "Substance", "A section per substance: its flows in each compartment"],
   ["top", "Compartment", "A section per compartment (air, water, soil, natural resource…)"],
   ["sub", "Subcompartment", "A section per compartment and subcompartment"],
+  ["location", "Location", "A section per location of the flows (regionalised flows, as LC-IMPACT or IMPACT World+ make); the flows without one under \"no location\", last"],
 ];
 function organizeFlows(items, by) {
   if (!by) return null;
-  const key = (it) => (by === "name" ? `${it.name}\u0000${it.unit}` : by === "top" ? it.top || "" : `${it.top || ""}\u0000${it.sub || ""}`);
-  const label = (it) => (by === "name" ? it.name : by === "top" ? it.top || "(unspecified)" : [it.top, it.sub || "unspecified"].filter(Boolean).join(" · "));
+  const key = (it) => (by === "name" ? `${it.name}\u0000${it.unit}` : by === "top" ? it.top || "" : by === "location" ? it.location || ""
+    : `${it.top || ""}\u0000${it.sub || ""}`);
+  const label = (it) => (by === "name" ? it.name : by === "top" ? it.top || "(unspecified)" : by === "location" ? it.location || "no location"
+    : [it.top, it.sub || "unspecified"].filter(Boolean).join(" · "));
   const sections = new Map();
   for (const it of items) {
     const k = key(it);
     if (!sections.has(k)) sections.set(k, { key: k, label: label(it), unit: it.unit, items: [] });
     sections.get(k).items.push(it);
   }
-  return [...sections.values()];
+  const list = [...sections.values()];
+  return by === "location" ? [...list.filter((s) => s.key), ...list.filter((s) => !s.key)] : list;
 }
 
-// The factors of the method(s) of the category pop-up on flows that are not in the model (dropped by the calculation,
+// The factors of the method(s) of the model pop-up on flows that are not in the model (dropped by the calculation,
 // recorded when the model is built): folded under the table, each with what the model has under that name
 function UnlinkedFactors({ unlinked, both, a, b, open, setOpen, words }) {
   const sides = [["a", a], ...(both && unlinked.b ? [["b", b]] : [])];
@@ -3790,73 +3902,55 @@ function UnlinkedFactors({ unlinked, both, a, b, open, setOpen, words }) {
         title="Factors of the method on flows that no process of the model has: the calculation drops them">
         <span class="caret">${open ? "▾" : "▸"}</span> Factors on flows not in the model <span class="muted">· ${summary}</span></button>
       ${open && html`
-        <table class="flows category-table">
-          <thead><tr>${both && html`<th></th>`}<th>Flow</th><th class="num">factor</th><th title="What the model has under that name">in the model</th></tr></thead>
-          <tbody>${rows.map((it, n) => html`
-            <tr key=${n}>
-              ${both && html`<td><span class=${`role-tag ${it.side === "a" ? "ref" : "comp"}`}>${it.side === "a" ? "ref." : "comp."}</span></td>`}
-              <td>${it.name} <span class="muted">${it.compartment}</span></td>
-              <td class="num" title=${`${it.m.unit} / ${unit(it.unit)}`}>${fmt(it.cf)} <span class="muted">/ ${unit(it.unit)}</span></td>
-              <td>${match(it)}</td>
-            </tr>`)}
-          </tbody>
-        </table>
+        <${PopupList} noun="factor" filter=${false} rows=${rows} rowKey=${(it) => `${it.side}:${it.name}:${it.compartment}`}
+          empty="No factor on a flow outside the model."
+          columns=${[
+            { key: "name", label: "Flow", value: (it) => `${it.name} ${it.compartment}`,
+              cell: (it) => html`${both && html`<span class=${`role-tag ${it.side === "a" ? "ref" : "comp"}`}>${it.side === "a" ? "ref." : "comp."}</span> `}${it.name} <span class="muted">${it.compartment}</span>` },
+            { key: "cf", label: "Factor", kind: "num", value: (it) => it.cf },
+            { key: "unit", label: "Unit", kind: "unit", width: 150, value: (it) => `${it.m.unit} / ${unit(it.unit)}` },
+            { key: "match", label: "In the model", width: 170, title: "What the model has under that name", value: (it) => it.match_kind || "", cell: match },
+          ]} />
         ${sides.some(([k]) => count(k) > unlinked[k].items.length) && html`<p class="note">The largest ${unlinked.a.items.length} of each method.</p>`}`}
     </div>`;
 }
 
-// An impact category seen from its elementary flows (the Methods panel: the list icon of a method), in the whole
-// database: the flows of the model that it characterises, their factor, the factor relative to the largest one of the
-// same unit and how many processes emit them directly. *Organize by* arranges them in sections (substance,
-// compartment). *Compare with* lines it up with another method (the factors of both, their ratio, the flows only one
-// of them characterises). Right-click (or double-click) a flow: its pop-up. ``target.category``: the method.
+// The **model pop-up**: a model (an impact category of an LCIA method, e.g. the climate change of EF v3.1) seen from its
+// elementary flows, in the whole database (the Methods panel: the list icon of a method; a model of the flow pop-up's
+// *Characterisation*): the flows of the model that it characterises, their factor, the factor relative to the largest
+// one of the same unit and how many processes emit them directly. *Organize by* arranges them in sections (substance,
+// compartment, location). *Compare with* lines it up with another method (the factors of both, their ratio, the flows
+// only one of them characterises). A flow's name, right-click or double-click: its pop-up. ``target.category``: the method.
 // Not in the supply chain of the process of the tab, for now: a pinned pop-up would follow the focus of the tab.
 function CategoryPopup({ target, win, info, onClose, onBack, onFlow }) {
   const method = target.category;
   const methods = info.methods;
   const [compare, setCompare] = useState(target.compare ?? null);
   const [organize, setOrganize] = useState("");
-  const [folded, setFolded] = useState(new Set());
   const [filter, setFilter] = useState("");
-  const [all, setAll] = useState(false);
   const [outside, setOutside] = useState(false);  // the factors on flows not in the model, unfolded
-  useEffect(() => { setCompare(target.compare ?? null); setAll(false); }, [method]);
-  useEffect(() => setFolded(new Set()), [organize]);
+  useEffect(() => { setCompare(target.compare ?? null); }, [method]);
   const { data, error } = useRequest("/api/category", { method, ...(compare !== null ? { compare } : {}) });
   const body = useRef(null);
   const both = !!data && data.compare !== null && data.compare !== undefined;
   const a = methods[method], b = both ? methods[data.compare] : null;
   const words = filter.toLowerCase().split(/\s+/).filter(Boolean);
-  const items = data ? data.items.filter((it) => words.every((w) => `${it.name} ${it.compartment}`.toLowerCase().includes(w))) : [];
-  const sections = useMemo(() => organizeFlows(items, organize), [data, filter, organize]);
-  // the rows drawn: section headers and the flows of the unfolded sections, up to CATEGORY_LIMIT flows
-  const rows = [];
-  let count = 0;
-  for (const section of sections || [{ key: "", items }]) {
-    if (!all && count >= CATEGORY_LIMIT) break;
-    if (sections) rows.push({ section });
-    if (sections && folded.has(section.key)) continue;
-    for (const it of section.items) {
-      if (!all && count >= CATEGORY_LIMIT) break;
-      rows.push({ it });
-      count++;
-    }
-  }
-  const hidden = !all && count >= CATEGORY_LIMIT && items.length > count;
-  const fold = (k) => { const next = new Set(folded); next.has(k) ? next.delete(k) : next.add(k); setFolded(next); };
-  // its pop-up shows its factor in this category, not in the method of the tab
+  const items = data ? data.items : [];
+  // Organize by location: models built before the flows kept their location cannot (the option is hidden)
+  const located = !!data?.locations;
+  const by = organize === "location" && !located ? "" : organize;
+  // its pop-up shows its factor in this model, not in the method of the tab
   const flowTarget = (it) => ({ flow: it.flows[0], flows: it.flows, labels: it.compartments, method });
   const choices = useMemo(() => compareChoices(methods, method), [methods, method]);
-  const csv = () => downloadCsv(`category-${methodLabel(a).replace(/[^\w-]+/g, "_")}.csv`,
-    ["name", "compartment", "unit", both ? "factor_ref" : "factor", ...(both ? ["factor_comp", "ratio_comp_ref"] : ["relative"]), "emitters"],
-    items.map((it) => [it.name, it.compartment, it.unit, it.a.max, ...(both ? [it.b.max, it.ratio ?? ""] : [it.a.rel]), it.emitters]),
+  const shownItems = items.filter((it) => words.every((w) => `${it.name} ${it.compartment} ${it.location || ""}`.toLowerCase().includes(w)));
+  const csv = () => downloadCsv(`model-${methodLabel(a).replace(/[^\w-]+/g, "_")}.csv`,
+    ["name", "compartment", ...(located ? ["location"] : []), "unit", both ? "factor_ref" : "factor", ...(both ? ["factor_comp", "ratio_comp_ref"] : ["relative"]), "emitters"],
+    shownItems.map((it) => [it.name, it.compartment, ...(located ? [it.location ?? ""] : []), it.unit, it.a.max, ...(both ? [it.b.max, it.ratio ?? ""] : [it.a.rel]), it.emitters]),
     [`# ${both ? `ref.: ${methodTitle(a)} (${a.unit}); comp.: ${methodTitle(b)} (${b.unit})` : `${methodTitle(a)} (${a.unit})`}`, "# whole database"]);
-  const factorUnit = (m, it) => `${m.unit} / ${unit(it.unit)}`;
-  const columns = both ? 5 : 4;
   // in a section, the row says what the header does not
-  const flowLabel = (it) => (organize === "name" ? html`${it.compartment}`
-    : organize === "top" ? html`${it.name} <span class="muted">${it.sub || ""}</span>`
-    : organize === "sub" ? html`${it.name}`
+  const flowLabel = (it) => (by === "name" ? html`${it.compartment}`
+    : by === "top" ? html`${it.name} <span class="muted">${it.sub || ""}</span>`
+    : by === "sub" ? html`${it.name}`
     : html`${it.name} <span class="muted">${it.compartment}</span>`);
   const range = (list, k) => {
     const v = list.map((it) => it[k].max).filter((x) => x);
@@ -3868,22 +3962,44 @@ function CategoryPopup({ target, win, info, onClose, onBack, onFlow }) {
   // was chosen; their units show beside them and under the factor columns, flagged when they differ
   const picked = compare !== null ? methods[compare] : null;
   const otherUnit = !!picked && picked.unit !== a.unit;
-  const unitHead = (m) => html`<span class="col-unit">${m.unit}</span>`;
+  const unitHead = (m, differs = false) => html`<span class=${`col-unit ${differs ? "differs" : ""}`}>${m.unit}</span>`;
+  const columns = [
+    { key: "flow", label: by === "name" ? "Substance / compartment" : by ? "Section / flow" : "Flow", value: (it) => `${it.name} ${it.compartment}`,
+      cell: flowLabel, chip: (it) => (it.location && by !== "location" ? html`<span class="loc-chip" title="Location of the flow">${it.location}</span>` : "") },
+    ...(both ? [
+      { key: "ref", label: html`ref.${unitHead(a)}`, kind: "num", title: `${methodTitle(a)} (${a.unit})`, value: (it) => (it.only === "b" ? null : it.a.max) },
+      { key: "comp", label: html`comp.${unitHead(b, b.unit !== a.unit)}`, kind: "num", title: `${methodTitle(b)} (${b.unit})`, value: (it) => (it.only === "a" ? null : it.b.max) },
+      { key: "ratio", label: html`comp. / ref.${b.unit !== a.unit && html`<span class="col-unit differs">${b.unit} / ${a.unit}</span>`}`, kind: "num",
+        title: "The factor of comp. over that of ref.", value: (it) => (it.only ? null : it.ratio),
+        cell: (it) => (it.only ? html`<span class=${`chip only only-${it.only}`}>only ${it.only === "a" ? "ref." : "comp."}</span>` : it.ratio !== null ? fmt(it.ratio) : "") },
+      { key: "unit", label: "Per", kind: "unit", width: 80, title: "The factors are per unit of the flow", value: (it) => `/ ${unit(it.unit)}` },
+    ] : [
+      { key: "factor", label: "Factor", kind: "num", title: `${methodTitle(a)} (${a.unit})`, value: (it) => it.a.max },
+      { key: "unit", label: "Unit", kind: "unit", width: 150, value: (it) => `${a.unit} / ${unit(it.unit)}` },
+      { key: "rel", label: "Relative", kind: "share", title: "Relative to the largest factor of the same unit", value: (it) => it.a.rel },
+    ]),
+    { key: "emitters", label: "Emitters", kind: "num", format: String, width: 76, title: "Processes emitting it directly, in the whole database", value: (it) => it.emitters },
+  ];
+  // a substance's header: the range of its factors under the factor columns
+  const sectionCells = (s) => (by !== "name" ? null : both
+    ? html`<td class="num">${range(s.items, "a")}</td><td class="num">${range(s.items, "b")}</td><td></td><td class="unit">/ ${unit(s.unit)}</td><td></td>`
+    : html`<td class="num">${range(s.items, "a")}</td><td class="unit">${a.unit} / ${unit(s.unit)}</td><td></td><td></td>`);
   return html`
-    <${PopupWindow} target=${target} win=${win} label="Impact category" className="category-popup" width=${760} onClose=${onClose} onBack=${onBack}
+    <${PopupWindow} target=${target} win=${win} label="Model" className="category-popup" width=${780} onClose=${onClose} onBack=${onBack}
       menu=${[{ label: "Export CSV", run: csv, title: "The rows of the table (all of them, filtered)" }]}
       onKeyDown=${popupKeys({ tabs: [], shown: null, setTab: () => {}, body, onClose })}
       head=${html`
-        <div class="info-title"><span class="kind-mark category" title="Impact category: its elementary flows"><${CategoryIcon} /></span>
+        <div class="info-title"><span class="kind-mark category" title="Model: an impact category of a method, seen from its elementary flows"><${CategoryIcon} /></span>
           ${methodLabel(a)}${picked && html` <span class="role-tag ref" title="The reference: the method of this pop-up">ref.</span>`}</div>
-        <div class="muted">${a.unit}</div>`}>
+        <div class="muted">Model · ${a.name[0]} · ${a.unit}</div>`}>
       <div class="category-controls">
         <div class="view-group" role="group" aria-label="Organize by">
           <span class="view-group-label">Organize by</span>
           <span class="segmented">
-            ${CATEGORY_ORGANIZE.map(([k, label, hint]) => html`
-              <button class=${organize === k ? "primary" : ""} aria-pressed=${organize === k} title=${hint} onClick=${() => setOrganize(k)}>${label}</button>`)}
+            ${CATEGORY_ORGANIZE.filter(([k]) => k !== "location" || located).map(([k, label, hint]) => html`
+              <button class=${by === k ? "primary" : ""} aria-pressed=${by === k} title=${hint} onClick=${() => setOrganize(k)}>${label}</button>`)}
           </span>
+          ${data && !located && html`<span class="muted hint-rebuild" title="This model was built before the flows kept their location: build it again for Organize by location">Location: rebuild to see locations</span>`}
         </div>
         <label class="view-group compare-with">
           ${picked && html`<span class="role-tag comp" title="The method compared with the reference">comp.</span>`}
@@ -3898,46 +4014,17 @@ function CategoryPopup({ target, win, info, onClose, onBack, onFlow }) {
           ${picked && html`<span class=${`category-unit ${otherUnit ? "differs" : ""}`}
             title=${otherUnit ? `Not the unit of the reference (${a.unit}): comp. / ref. mixes units` : "Its unit, the same as the reference's"}>${picked.unit}</span>`}
         </label>
-        <input class="category-filter" placeholder="Filter flows" value=${filter} onInput=${(e) => setFilter(e.target.value)} aria-label="Filter flows" />
-        <${InfoTip} label="About this table" text=${`The flows of this model that the method characterises, in the whole database. Relative: the factor over the largest of the method among the flows of the same unit. Emitters: the processes emitting (or taking) the flow directly. ${both ? "ref.: the method of this pop-up; comp.: the one it is compared with; comp. / ref.: the ratio of their factors (in their units). " : ""}Factors of the method on flows that are not in the model are under the table${data && !data.unlinked ? " once the model is rebuilt (it did not record them)" : ""}. Right-click a flow for its details.`} />
+        <${InfoTip} label="About this table" text=${`The flows of this model that the method characterises, in the whole database. Relative: the factor over the largest of the method among the flows of the same unit. Emitters: the processes emitting (or taking) the flow directly. ${both ? "ref.: the method of this pop-up; comp.: the one it is compared with; comp. / ref.: the ratio of their factors (in their units). " : ""}Factors of the method on flows that are not in the model are under the table${data && !data.unlinked ? " once the model is rebuilt (it did not record them)" : ""}. A flow's name, or a right-click on its row, opens its pop-up.`} />
       </div>
       ${error && html`<div class="error">${error}</div>`}
       <div class="info-body" ref=${body}>
         ${!data && !error && html`<${Waiting} text="Reading the factors…" />`}
         ${data && html`
-          <table class="flows category-table">
-            <thead><tr>
-              <th>${organize === "name" ? "Substance / compartment" : organize ? "Compartment / flow" : "Flow"}</th>
-              ${both ? html`<th class="num" title=${`${methodTitle(a)} (${a.unit})`}>ref.${unitHead(a)}</th>
-                  <th class="num" title=${`${methodTitle(b)} (${b.unit})`}>comp.${unitHead(b)}</th>
-                  <th class="num" title="The factor of comp. over that of ref.">comp. / ref.${b.unit !== a.unit && html`<span class="col-unit differs">${b.unit} / ${a.unit}</span>`}</th>`
-                : html`<th class="num">factor</th><th class="rel" title="Relative to the largest factor of the same unit">relative</th>`}
-              <th class="num" title="Processes emitting it directly, in the whole database">emitters</th>
-            </tr></thead>
-            <tbody>${rows.map(({ section, it }) => (section ? html`
-              <tr key=${`s:${section.key}`} class="category-section" onClick=${() => fold(section.key)} aria-expanded=${!folded.has(section.key)}>
-                <td colspan=${organize === "name" ? 1 : columns}><span class="caret">${folded.has(section.key) ? "▸" : "▾"}</span> ${section.label}
-                  <span class="muted"> · ${section.items.length} flow${section.items.length === 1 ? "" : "s"}</span></td>
-                ${organize === "name" && (both ? html`<td class="num">${range(section.items, "a")}</td><td class="num">${range(section.items, "b")}</td><td></td><td></td>`
-                  : html`<td class="num">${range(section.items, "a")} <span class="muted">/ ${unit(section.unit)}</span></td><td></td><td></td>`)}
-              </tr>` : html`
-              <tr key=${it.flows[0]} class=${`${sections ? "in-section" : ""} ${it.only ? `only-${it.only}` : ""}`}
-                  title="Right-click or double-click: its details" onContextMenu=${(e) => { e.preventDefault(); onFlow(flowTarget(it)); }}
-                  onDblClick=${() => onFlow(flowTarget(it))}>
-                <td>${flowLabel(it)}</td>
-                ${both ? html`
-                  <td class="num" title=${factorUnit(a, it)}>${it.only === "b" ? html`<span class="muted">–</span>` : fmt(it.a.max)}</td>
-                  <td class="num" title=${factorUnit(b, it)}>${it.only === "a" ? html`<span class="muted">–</span>` : fmt(it.b.max)}</td>
-                  <td class="num">${it.only ? html`<span class=${`chip only only-${it.only}`}>only ${it.only === "a" ? "ref." : "comp."}</span>` : it.ratio !== null ? fmt(it.ratio) : ""}</td>`
-                : html`
-                  <td class="num" title=${factorUnit(a, it)}>${fmt(it.a.max)} <span class="muted">/ ${unit(it.unit)}</span></td>
-                  <td class="rel"><span class="rel-bar" style=${{ width: `${Math.max(1, it.a.rel * 100)}%` }}></span></td>`}
-                <td class="num">${it.emitters}</td>
-              </tr>`))}
-            </tbody>
-          </table>
-          ${hidden && html`<p class="note"><button class="link" onClick=${() => setAll(true)}>Show all ${items.length} flows</button></p>`}
-          ${!items.length && html`<p class="note">No flow${words.length ? " matching" : ""}.</p>`}
+          <${PopupList} key=${`${method}-${both ? data.compare : ""}-${by}`} noun="flow" filter rows=${items} columns=${columns} limit=${CATEGORY_LIMIT}
+            rowKey=${(it) => it.flows[0]} rowClass=${(it) => `${by ? "in-section" : ""} ${it.only ? `only-${it.only}` : ""}`}
+            match=${(it) => `${it.name} ${it.compartment} ${it.location || ""}`} query=${filter} setQuery=${setFilter}
+            sections=${by ? (rows) => organizeFlows(rows, by).map((s) => ({ ...s, cells: sectionCells(s) })) : null}
+            empty="No flow of the model has a factor in this method." onOpen=${(it) => onFlow(flowTarget(it))} />
           ${data.unlinked && html`<${UnlinkedFactors} unlinked=${data.unlinked} both=${both} a=${a} b=${b} open=${outside} setOpen=${setOutside} words=${words} />`}`}
       </div>
     <//>`;
@@ -3988,7 +4075,50 @@ function FlowExchangePopup({ target, win, method, methods, onClose, onOpen, onFl
     <//>`;
 }
 
-// A flow as a tab: the flow's panels in the pane, no tree. Its state: { flow: { flow, name, place, unit, resource, scope } }
+// The pop-ups of a tab (process or flow): { key, target, history, pinned, rect }. At most one is not pinned: opening a
+// pop-up from outside replaces it, and a click outside or Esc closes it. Pinned ones stay open. ``history``: the targets
+// visited by following links inside the pop-up (back button / Backspace); opening a pop-up from outside, or closing it,
+// starts over. ``rect``: where it was dragged or resized to (null: at the click).
+function usePopupStack() {
+  const [popups, setPopups] = useState([]);
+  const update = (key, change) => setPopups((ps) => ps.map((p) => (p.key === key ? { ...p, ...change(p) } : p)));
+  const open = (target) => setPopups((ps) => [...ps.filter((p) => p.pinned), { key: newId("i"), target, history: [], pinned: false, rect: null }]);
+  // Without a key: the pop-up that is not pinned
+  const close = (key) => setPopups((ps) => ps.filter((p) => (key ? p.key !== key : p.pinned)));
+  const pin = (key) => setPopups((ps) => (ps.find((p) => p.key === key)?.pinned
+    ? ps.filter((p) => p.pinned || p.key === key).map((p) => (p.key === key ? { ...p, pinned: false } : p))
+    : ps.map((p) => (p.key === key ? { ...p, pinned: true } : p))));
+  const follow = (key, next) => update(key, (p) => ({ history: [...p.history, p.target], target: { ...next, x: p.target.x, y: p.target.y } }));
+  const back = (p) => (p.history.length ? () => update(p.key, (q) => ({ target: q.history[q.history.length - 1], history: q.history.slice(0, -1) })) : null);
+  const win = (p) => ({ rect: p.rect, pinned: p.pinned, onPin: () => pin(p.key), onRect: (rect) => update(p.key, () => ({ rect })) });
+  // Only the pop-ups ``live(p)`` (the others are closed)
+  const keep = (live) => setPopups((ps) => (ps.every(live) ? ps : ps.filter(live)));
+  return { popups, update, open, close, pin, follow, back, win, keep };
+}
+
+// The pop-up of an object of a tab's pop-up stack: a model (``target.category``), an exchange of a flow, a flow, or a
+// process. The same in a process tab (``FUView``) and a flow tab (``FlowTab``), so that the links inside a pop-up cycle
+// process → flow → model → flow → process in one history (← comes back). ``follow(next)``: a link followed inside it;
+// ``scope``: the process of the tab, for the flow pop-up's *Emitted by*; ``onOpenFlowTab``: a flow pop-up made a tab;
+// ``process``: what the process pop-up needs of the tab ({ rowsById, rootImpact, root, amount, onUseAsRoot, onOpenTab, onGoTo })
+function objectPopup(p, { stack, model, method, chartMethods, follow, scope, onOpenFlowTab, process }) {
+  const t = p.target;
+  const common = { key: p.key, target: t, win: stack.win(p), onClose: () => stack.close(p.key), onBack: stack.back(p) };
+  if (t.category !== undefined) return html`<${CategoryPopup} ...${common} info=${model} onFlow=${follow} />`;
+  if (t.flow !== undefined && t.exchange) return html`<${FlowExchangePopup} ...${common} method=${method} methods=${model.methods}
+      onOpen=${(index) => follow({ index, row: null })} onFlow=${follow} />`;
+  if (t.flow !== undefined) return html`<${FlowInfoPopup} ...${common} method=${t.method ?? method} methods=${model.methods} chartMethods=${chartMethods}
+      scope=${scope} onOpen=${(index) => follow({ index, row: null })} onExchange=${follow} onCategory=${(m) => follow({ category: m })}
+      onOpenTab=${onOpenFlowTab} />`;
+  if (t.index === undefined) return null;
+  return html`<${InfoPopup} ...${common} model=${model} method=${method} methodInfo=${model.methods[method]} rootImpact=${process.rootImpact}
+      rowsById=${process.rowsById} onUseAsRoot=${process.onUseAsRoot} onOpenTab=${process.onOpenTab} root=${process.root} amount=${process.amount}
+      onFollow=${follow} onGoTo=${process.onGoTo} />`;
+}
+
+// A flow as a tab: the flow's panels in the pane, no tree. Its state: { flow: { flow, name, place, unit, resource, scope } }.
+// It has pop-ups of its own, as a process tab: a process, an exchange or a model opened from its panels (and the model
+// pop-up of the Methods panel while it has the focus), followed from one to the next in one history.
 function FlowTab({ id, info: model, initial, visible, onSave, onTitle, onOpenTab }) {
   const lens = useContext(LensContext);
   const start = initial?.state?.flow || initial?.flow;
@@ -3997,15 +4127,24 @@ function FlowTab({ id, info: model, initial, visible, onSave, onTitle, onOpenTab
   const scoped = !!start.scope;
   const [tab, setTab] = useState(start.tab || null);
   const { info, error } = useFlowInfo(current, lens.method);
+  const stack = usePopupStack();
   useEffect(() => {
     if (!info) return;
     const flow = { flow: current, name: info.name, place: info.place, unit: info.unit, resource: info.resource, scope: scoped ? scope : null, tab };
     onSave(id, { flow });
     onTitle(id, { name: info.name, location: info.place, flow: current, resource: info.resource });
   }, [info, scoped, tab]);
+  // The Methods panel opens the model pop-up of the tab in focus, the Processes panel the pop-up of the tab's object:
+  // a flow tab answers both (the model pop-up could not open while a flow tab had the focus)
+  CATEGORY_OPENERS[id] = (category, x, y) => stack.open({ category, x, y });
+  POPUP_OPENERS[id] = (x, y) => stack.open({ flow: current, x, y });
   const tabs = flowTabsOf(info);
   const shown = tabs.some((t) => t.id === tab) ? tab : tabs[0]?.id;
-  const openActivity = (index) => request(`/api/activity/${index}?method=${lens.method}`).then((a) => onOpenTab(id, a)).catch(() => {});
+  const at = (e) => ({ x: e?.clientX ?? window.innerWidth / 3, y: e?.clientY ?? 120 });
+  const process = {
+    rowsById: new Map(), rootImpact: 0, root: null, amount: 1, onUseAsRoot: null, onGoTo: () => {},
+    onOpenTab: (r, place) => onOpenTab(id, r, place),
+  };
   return html`
     <div class="flow-tab" style=${{ display: visible ? "" : "none" }}>
       <div class="flow-tab-head"><${FlowHead} info=${info} /></div>
@@ -4013,7 +4152,13 @@ function FlowTab({ id, info: model, initial, visible, onSave, onTitle, onOpenTab
       ${info && html`
         <${FlowTabsBar} tabs=${tabs} shown=${shown} setTab=${setTab} />
         <${FlowPanels} info=${info} shown=${shown} method=${lens.method} methods=${model.methods} chartMethods=${lens.chartMethods}
-          scope=${scope} scoped=${scoped} onActivity=${openActivity} onFlow=${setCurrent} />`}
+          scope=${scope} scoped=${scoped} onFlow=${setCurrent}
+          onActivity=${(index, e) => stack.open({ index, row: null, ...at(e) })}
+          onExchange=${(flow, p, e) => stack.open({ flow, activities: [p.index], exchange: true, ...at(e) })}
+          onCategory=${(category, e) => stack.open({ category, ...at(e) })} />`}
+      ${stack.popups.map((p) => objectPopup(p, { stack, model, method: lens.method, chartMethods: lens.chartMethods, scope,
+        follow: (next) => stack.follow(p.key, next), process,
+        onOpenFlowTab: (f, place) => onOpenTab(id, f, place) }))}
     </div>`;
 }
 
@@ -4125,13 +4270,17 @@ function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsByI
   const production = exchanges?.production;
   const asMeta = (a) => ({ index: a.index, name: a.name, location: a.location });
   // Following a row replaces the panel, and the row that had the focus: the pop-up takes it, to keep the keys
-  const follow = (next) => { body.current?.closest(".info-popup")?.focus({ preventScroll: true }); onFollow(next); };
-  const openActivity = (index) => follow({ index, row: null });
+  // (``e``: the click, where a docked panel opens the pop-up; a pop-up keeps its place)
+  const follow = (next, e) => {
+    body.current?.closest(".info-popup")?.focus({ preventScroll: true });
+    onFollow(e?.clientX !== undefined ? { ...next, x: e.clientX, y: e.clientY } : next);
+  };
+  const openActivity = (index, e) => follow({ index, row: null }, e);
   // The exchange of ``index``'s product in the dataset of ``user``
-  const openExchange = (index, user) => follow({ index, row: null, parents: [asMeta(user)], exchange: true });
+  const openExchange = (index, user, e) => follow({ index, row: null, parents: [asMeta(user)], exchange: true }, e);
   // Enter on a process: it becomes the process of the tab (Ctrl/⌘+Enter: of a new tab)
   const useAsRoot = (item, inTab) => request(`/api/activity/${item.index}?method=${method}`)
-    .then((found) => { if (inTab) onOpenTab(found); else onUseAsRoot(found); onClose(); })
+    .then((found) => { if (inTab || !onUseAsRoot) onOpenTab(found); else onUseAsRoot(found); onClose(); })
     .catch((e) => setError(e.message));
   // The panels of processes (exchanges, used by, alternatives) are lists like the main one: see ProcessRow
   const base = info && { index: target.index, name: info.name, location: info.location, unit: info.unit, database: info.database, code: info.code };
@@ -4148,10 +4297,23 @@ function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsByI
       const items = found.users.filter((c) => !root || Math.abs(c.flow) > 1e-12);
       return { items, more: root ? (found.users.length >= 15 ? Math.max(0, found.in_supply_chain - items.length) : 0) : found.count - found.users.length };
     });
+  // The lists of processes (used by, alternatives) are PopupLists whose rows expand (ProcessRow), with the same columns
+  // (the process of the tab itself has no users in its own supply chain, but for loops and solver noise)
+  const inChain = !!root && root.index !== target.index;
   const usersPanel = {
-    span: 2, load: usersOf, empty: "No activity uses it.", label: (u) => u.name,
-    onOpen: (u) => openActivity(u.index), onExchange: (u, above) => openExchange(above.index, u), onUse: useAsRoot,
-    cells: (u, above) => html`<td class="num">${fmtAmount(Math.abs(u.per_unit))} ${unit(above.unit)}/${unit(u.unit)}</td>`,
+    load: usersOf, empty: "No activity uses it.", label: (u) => u.name,
+    onOpen: (u, e) => openActivity(u.index, e), onExchange: (u, above, e) => openExchange(above.index, u, e), onUse: useAsRoot,
+    columns: [
+      { key: "name", label: "Process", value: (u) => `${u.name} ${u.location}` },
+      { key: "per_unit", label: "Per unit", kind: "num", format: fmtAmount, title: `${unit(info?.unit)} ${users?.waste ? "of waste " : ""}per unit of the activity's product`,
+        value: (u) => Math.abs(u.per_unit) },
+      { key: "unit", label: "Unit", kind: "unit", value: (u, above = base) => `${unit(above?.unit)}/${unit(u.unit)}` },
+      ...(inChain ? [
+        { key: "flow", label: "In chain", kind: "num", format: fmtAmount, title: `Amount it takes in the supply chain of ${root.name}`, value: (u) => (Math.abs(u.flow) > 1e-12 ? Math.abs(u.flow) : null) },
+        { key: "chain_unit", label: "Unit", kind: "unit", width: 56, value: (u, above = base) => (Math.abs(u.flow) > 1e-12 ? unit(above?.unit) : "") },
+        { key: "share", label: "Share", kind: "share", title: "Share of what the supply chain makes of it", value: (u) => u.share || null },
+      ] : []),
+    ],
   };
   // Edit mode, on the pop-up of an input of a process: "use instead" links that exchange, in the dataset(s) of the
   // process(es) above, to an alternative (same amount): staged like any other change
@@ -4172,16 +4334,26 @@ function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsByI
     } catch (err) { setError(err.message); }
   }
   const alternativesPanel = {
-    span: replaceable ? 4 : 3, load: inputsOf, empty: "No input from the technosphere.", label: (a) => a.name,
-    onOpen: (a) => openActivity(a.index), onExchange: (a, above) => openExchange(a.index, above), onUse: useAsRoot,
-    cells: (a, above, depth) => (depth === 0 ? html`
-      <td class="num">${fmt(a.per_unit)}</td>
-      <td class="num">${a.relative === null ? "" : `${a.relative > 0 ? "+" : ""}${pct(a.relative)}`}</td>
-      ${replaceable && html`<td><button class="chip" title="Link this input to that activity instead (same amount): staged, applied with the other changes"
-        onClick=${(e) => { e.stopPropagation(); useInstead(a); }}>use instead</button></td>`}` : html`
-      <td class="num impact">${a.impact ? fmt(a.impact) : "–"}</td>
-      <td class="num impact">${a.impact && a.of ? pct(a.impact / a.of) : ""}</td>`),
+    load: inputsOf, empty: "No input from the technosphere.", label: (a) => a.name,
+    chip: (a, depth) => (a.current && depth === 0 ? html` <span class="muted">current</span>` : ""), rowClass: (a, depth) => (a.current && depth === 0 ? "current" : ""),
+    onOpen: (a, e) => openActivity(a.index, e), onExchange: (a, above, e) => openExchange(a.index, above, e), onUse: useAsRoot,
+    columns: [
+      { key: "name", label: "Process", value: (a) => `${a.name} ${a.location}` },
+      { key: "per_unit", label: "Impact", kind: "num", title: `Cumulative impact per unit of ${alternatives?.product ?? "the product"} (below an expanded one: of each input)`,
+        value: (a, above, depth) => (depth ? a.impact || null : a.per_unit) },
+      { key: "unit", label: "Unit", kind: "unit", width: 130, value: (a, above, depth) => `${methodInfo.unit} / ${unit(depth ? above?.unit : a.unit ?? alternatives?.unit)}` },
+      { key: "relative", label: "vs. current", kind: "num", title: "Its impact over the current supplier's (below an expanded one: the share of each input in it)",
+        value: (a, above, depth) => (depth ? (a.impact && a.of ? a.impact / a.of : null) : a.relative),
+        cell: (a, above, depth) => (depth ? html`<span class="muted">${a.impact && a.of ? `${pct(a.impact / a.of)} of it` : ""}</span>`
+          : a.relative === null || a.relative === undefined ? "" : `${a.relative > 0 ? "+" : ""}${pct(a.relative)}`) },
+      ...(replaceable ? [{ key: "use", label: "", width: 96, sort: false, value: () => "",
+        cell: (a, above, depth) => (depth === 0 && !a.current ? html`<button class="chip" title="Link this input to that activity instead (same amount): staged, applied with the other changes"
+          onClick=${(e) => { e.stopPropagation(); useInstead(a); }}>use instead</button>` : "") }] : []),
+    ],
   };
+  // Characterisation: the process's own exchanges with nature per unit of its product, by elementary flow in the method
+  // of the tab (one column of B: nothing solved), with its direct and cumulative scores (U, G)
+  const [characterisation, setCharacterisation] = useState(null);
   // The exchange pop-up is its one panel; the activity's: exchanges first (a direct emissions row
   // opens on its emissions), then users, alternatives, description, metadata
   const hasDescription = ctx.editing || DETAIL_SECTIONS.some(([k]) => d[k])
@@ -4189,6 +4361,7 @@ function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsByI
   const tabs = (info || docked) && !exchange ? [
     docked ? { id: "exchanges", label: "Process" }
       : exchanges?.available && { id: "exchanges", label: `Exchanges · ${(production ? 1 : 0) + exchanges.inputs.length + exchanges.flows.length}` },
+    info && { id: "characterisation", label: `Characterisation${characterisation?.index === target.index && characterisation.method === method ? ` · ${characterisation.count}` : ""}` },
     info && { id: "users", label: `${users?.waste ? "Treats" : "Used by"}${users ? ` · ${users.count}` : ""}` },
     alternatives && !target.direct && { id: "alternatives", label: `Alternatives · ${alternatives.count}` },
     info && hasDescription && { id: "description", label: "Description" },
@@ -4196,11 +4369,19 @@ function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsByI
   ].filter(Boolean) : [];
   const shown = exchange ? "tree" : tabs.some((t) => t.id === tab) ? tab : tabs[0]?.id;
   useEffect(() => { body.current?.scrollTo(0, 0); }, [shown]);
+  useEffect(() => {
+    if (shown !== "characterisation" || idle) return;
+    let live = true;
+    request(`/api/activity/${target.index}/characterisation?method=${method}`)
+      .then((c) => live && setCharacterisation({ ...c, index: target.index })).catch((e) => live && setError(e.message));
+    return () => { live = false; };
+  }, [shown, target.index, method, idle]);
+  const characterised = characterisation?.index === target.index && characterisation.method === method ? characterisation : null;
   return html`
     <${docked ? DockedShell : PopupWindow} target=${target} win=${win} label=${exchange ? "Exchange information" : "Activity information"} onClose=${onClose} onBack=${onBack}
       onDock=${info && !exchange ? (place) => { onOpenTab(info, place); onClose(); } : null}
       menu=${info && !exchange ? [
-        { label: "Use in this tab", title: "Show this process in the tab in focus", run: () => { onUseAsRoot(info); onClose(); } },
+        ...(onUseAsRoot ? [{ label: "Use in this tab", title: "Show this process in the tab in focus", run: () => { onUseAsRoot(info); onClose(); } }] : []),
         { label: "Open in new tab", title: "Open it in a new tab (or drag the pop-up by its header to a tab list or the edge of a pane)", run: () => { onOpenTab(info); onClose(); } },
         ...(ctx.editing && ctx.origin ? [{ label: "Edit…", disabled: locked,
           title: locked ? "Its database is locked: unlock it in the Projects dialog" : "Open the form of this process: the change is staged, then applied with the others",
@@ -4250,43 +4431,40 @@ function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsByI
             <${FUView} key=${target.index} id=${`exchanges-${target.index}`} info=${model} visible=${shown === "exchanges"}
               initial=${{ root: base, inherit: { method, chartMethods: [], cutoff: 500, cutoffBasis: "top", rules: [] } }}
               embedded=${{ method, onInfo: follow, onUse: useAsRoot, keys: explorerKeys }} onSave=${() => {}} onTitle=${() => {}} />`}
+          ${shown === "characterisation" && info && html`
+            <section>
+              ${!characterised ? html`<${Waiting} text="Reading its exchanges with nature…" />` : html`
+                <p class="muted list-summary">Per ${unit(info.unit)} of ${info.reference_product}: <b>${fmt(characterised.direct)}</b> ${methodInfo.unit} directly
+                  (its own exchanges with nature, below) of <b>${fmt(characterised.cumulative)}</b> with its supply chain${characterised.cumulative
+                  ? ` (${pct(characterised.direct / characterised.cumulative)} direct)` : ""}.${characterised.uncharacterised
+                  ? ` ${characterised.uncharacterised} of its exchanges with nature have no factor in this method.` : ""}</p>
+                <${PopupList} key=${`characterisation-${target.index}-${method}`} noun="flow" rows=${characterised.flows} rowKey=${(f) => f.flow}
+                  empty="No exchange of this process with nature has a factor in this method: its impact is all in its supply chain."
+                  onOpen=${(f, e) => follow({ flow: f.flow }, e)} onInfo=${(f, e) => follow({ flow: f.flow, activities: [target.index], exchange: true }, e)}
+                  columns=${[
+                    { key: "name", label: "Flow", value: (f) => `${f.name} ${f.compartment}`,
+                      cell: (f) => html`<${FlowIcon} resource=${f.resource} /> ${f.name} <span class="muted">${f.compartment}</span>` },
+                    { key: "amount", label: "Amount", kind: "num", format: fmtAmount, title: `Per unit of ${info.reference_product}`, value: (f) => f.amount },
+                    { key: "unit", label: "Unit", kind: "unit", value: (f) => `${unit(f.unit)}/${unit(info.unit)}` },
+                    { key: "cf", label: "Factor", kind: "num", title: `${methodInfo.unit} per unit of the flow`, value: (f) => f.cf },
+                    { key: "impact", label: "Impact", kind: "num", title: `${methodInfo.unit} per ${unit(info.unit)} of ${info.reference_product}`, value: (f) => f.impact },
+                    { key: "share", label: "Share", kind: "share", title: "Share of its direct impact", value: (f) => (characterised.direct ? f.impact / characterised.direct : null) },
+                  ]} />`}
+            </section>`}
           ${shown === "users" && users && info && html`
             <section>
-              ${users.count === 0 ? html`<p class="text muted">No activity in the database uses this product.</p>` : html`
-                <table class="flows users plist">
-                  <thead><tr>
-                    <th>Activity</th>
-                    <th class="num" title=${`${unit(info.unit)} ${users.waste ? "of waste" : ""} per unit of the activity's product`}>per unit</th>
-                  </tr></thead>
-                  <tbody>${users.users.map((u) => html`
-                    <${ProcessRow} key=${u.index} item=${u} above=${base} depth=${0} ancestors=${[target.index]} panel=${usersPanel} />`)}
-                  </tbody>
-                </table>
-                ${users.count > users.users.length && html`
-                  <button class="link" onClick=${() => setAllUsers(true)}>Show all ${users.count}</button>`}`}
+              <${PopupList} key=${`users-${target.index}`} noun="process" rows=${users.users} rowKey=${(u) => u.index} columns=${usersPanel.columns}
+                empty=${users.waste ? "No activity in the database generates this waste." : "No activity in the database uses this product."}
+                renderRow=${(u) => html`<${ProcessRow} key=${u.index} item=${u} above=${base} depth=${0} ancestors=${[target.index]} panel=${usersPanel} />`}
+                more=${users.count > users.users.length && html`<button class="link" onClick=${() => setAllUsers(true)}>Show all ${users.count}</button>`} />
             </section>`}
           ${shown === "alternatives" && alternatives && html`
-          <section>
-            <table class="flows alternatives plist">
-              <thead><tr>
-                <th>Activity</th>
-                <th class="num" title=${`${methodInfo.unit} per ${unit(alternatives.unit)} of ${alternatives.product}`}>${methodInfo.unit} per ${unit(alternatives.unit)}</th>
-                <th class="num">vs. current</th>
-                ${replaceable && html`<th></th>`}
-              </tr></thead>
-              <tbody>
-                <tr class="current">
-                  <td class="user">${alternatives.current.name} <span class="loc-chip">${alternatives.current.location}</span> <span class="muted">current</span></td>
-                  <td class="num">${fmt(alternatives.current.per_unit)}</td><td class="num"></td>
-                  ${replaceable && html`<td></td>`}
-                </tr>
-                ${alternatives.alternatives.map((a) => html`
-                  <${ProcessRow} key=${a.index} item=${a} above=${null} depth=${0} ancestors=${[target.index]} panel=${alternativesPanel} />`)}
-              </tbody>
-            </table>
-            ${alternatives.count > alternatives.alternatives.length && html`
-              <p class="muted">+ ${alternatives.count - alternatives.alternatives.length} more, not listed</p>`}
-          </section>`}
+            <section>
+              <${PopupList} key=${`alternatives-${target.index}`} noun="process" columns=${alternativesPanel.columns}
+                rows=${[{ ...alternatives.current, current: true, relative: null }, ...alternatives.alternatives]} rowKey=${(a) => a.index} pinned=${(a) => a.current}
+                renderRow=${(a) => html`<${ProcessRow} key=${a.index} item=${a} above=${null} depth=${0} ancestors=${a.current ? [] : [target.index]} panel=${alternativesPanel} />`}
+                more=${alternatives.count > alternatives.alternatives.length && `+ ${alternatives.count - alternatives.alternatives.length} more, not listed`} />
+            </section>`}
           ${shown === "description" && html`
           ${ctx.editing && html`<section><h4>Description</h4><p class="text"><${Editable} multiline value=${d.comment || ""} display=${d.comment ? String(d.comment).trim() : "(none: double-click to add one)"}
             edit=${ds ? ds.process.comment : d.comment || ""} disabled=${locked} title="Double-click to change the description (Ctrl+Enter to stage it)"
@@ -5888,7 +6066,7 @@ function LensPanel({ info, lens, tab, setTab, tabs, focusedTab, comparing, view,
 let keyboardOwner = null;
 const TAB_API = {};  // tab id -> { view, setView } of the tab: the comparison's group rules take their colours from a view
 const POPUP_OPENERS = {};  // tab id -> the function that opens the pop-up of the process of the tab at (x, y): the Processes panel
-const CATEGORY_OPENERS = {};  // tab id -> the function that opens the pop-up of an impact category (the Methods panel)
+const CATEGORY_OPENERS = {};  // tab id (process or flow tab) -> the function that opens the model pop-up of a method (the Methods panel)
 const ROOT_SETTERS = {};  // tab id -> the function that makes a process the process of the tab (the search in the top bar)
 // ``initial``: { state } a saved view, { inherit, root? } settings taken from another tab,
 // or { defaultRoot: true } (first start: the model's default process)
@@ -5945,30 +6123,19 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
     if (!embedded) saveViewPreferences({ view, display, orientation, cycles });
   }, [view, display, orientation, cycles]);
   const [undo, setUndo] = useState(null);
-  // Pop-ups: { key, target, history, pinned, rect }. At most one is not pinned: opening a pop-up
-  // from outside replaces it, and a click outside or Esc closes it. Pinned ones stay open.
-  // ``history``: the targets visited by following links inside the pop-up (back button /
-  // Backspace); opening a pop-up from outside, or closing it, starts over. ``rect``: where it was
-  // dragged or resized to (null: at the click).
-  const [popups, setPopups] = useState([]);
+  // Pop-ups: see usePopupStack (the same in a flow tab)
+  const stack = usePopupStack();
+  const popups = stack.popups;
   const infoTarget = popups.find((p) => !p.pinned)?.target;
-  const updatePopup = (key, change) => setPopups((ps) => ps.map((p) => (p.key === key ? { ...p, ...change(p) } : p)));
   // An embedded explorer hands processes and flows to the pop-up it is in; only bundles (others, merged, group) open here
-  const openInfo = (target) => (embedded && !target.bundle ? handOver(target)
-    : setPopups((ps) => [...ps.filter((p) => p.pinned), { key: newId("i"), target, history: [], pinned: false, rect: null }]));
+  const openInfo = (target) => (embedded && !target.bundle ? handOver(target) : stack.open(target));
   // The pop-up of a row of this tree has no row of its own in the pop-up's view: what it needs of it (the process
   // it is an input of) goes along
   function handOver(target) {
     const { row, x, y, ...rest } = target;
     embedded.onInfo({ ...rest, row: null, ...(row?.kind === "process" ? { parents: suppliedTo(row, rowsById) } : {}) });
   }
-  // Without a key: the pop-up that is not pinned
-  const closeInfo = (key) => setPopups((ps) => ps.filter((p) => (key ? p.key !== key : p.pinned)));
-  const pinInfo = (key) => setPopups((ps) => (ps.find((p) => p.key === key)?.pinned
-    ? ps.filter((p) => p.pinned || p.key === key).map((p) => (p.key === key ? { ...p, pinned: false } : p))
-    : ps.map((p) => (p.key === key ? { ...p, pinned: true } : p))));
-  const followInfo = (key, next) => updatePopup(key, (p) => ({ history: [...p.history, p.target], target: { ...next, x: p.target.x, y: p.target.y } }));
-  const backInfo = (p) => p.history.length ? () => updatePopup(p.key, (q) => ({ target: q.history[q.history.length - 1], history: q.history.slice(0, -1) })) : null;
+  const closeInfo = stack.close;
   const [focus, setFocus] = useState(null);
   const focusTimer = useRef(null);
   const [expanded, setExpanded] = useState(new Set());
@@ -6274,7 +6441,6 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
   // The pop-up of a row: a process (or direct emissions: its emitter), a flow, or the
   // members of a bundle (others, merged, group); null when there is nothing to show
   // ``exchange``: a process's exchange (comment, uncertainty) rather than its activity
-  const flowMenu = useContextMenu();
   function infoTargetOf(row, exchange = false) {
     if (row.kind === "rest" || row.kind === "merged" || row.kind === "group") return { bundle: row.id };
     if (row.kind === "flow") return { flow: row.flow.index, activities: (row.emitters || []).map((m) => m.index), exchange };
@@ -6282,13 +6448,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
   }
   function showInfo(row, e, exchange = false) {
     e.preventDefault();
-    if (row.kind === "flow" && e.type === "contextmenu") {
-      flowMenu.open(e, [
-        { label: "Flow…", title: "The flow: its factors, who emits it, its intensity (Space)", run: (m) => openInfo({ ...infoTargetOf(row), x: m.x, y: m.y }) },
-        { label: "Exchange…", title: "Its exchange in the dataset of the process: amount, comment, uncertainty (i)", run: (m) => openInfo({ ...infoTargetOf(row, true), x: m.x, y: m.y }) },
-      ]);
-      return;
-    }
+    // A right-click opens the pop-up of the row's process or flow, as everywhere; its exchange is its (i) (or i)
     const target = infoTargetOf(row, exchange);
     if (target) openInfo({ ...target, x: e.clientX, y: e.clientY });
   }
@@ -6354,7 +6514,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
   // A bundle that disappeared (all its members shown, unmerged, ungrouped) closes its pop-up
   useEffect(() => {
     const live = (p) => !p.target.bundle || findRow(p.target.bundle);
-    setPopups((ps) => (ps.every(live) ? ps : ps.filter(live)));
+    stack.keep(live);
   }, [popups, data]);
   const manualRuleFor = (groupRow) => rules.findIndex((r) => r.predicate && !r.disabled && r.scope === ownerOf(groupRow) && `${ownerOf(groupRow)}/g:${r.name}` === groupRow.id);
   // A group that can be ungrouped: one of a rule, or one of "group by product"
@@ -6622,9 +6782,8 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
   function renderPopup(p) {
     const t = p.target;
     const bundle = t.bundle ? findRow(t.bundle) : null;
-    const win = { rect: p.rect, pinned: p.pinned, onPin: () => pinInfo(p.key), onRect: (rect) => updatePopup(p.key, () => ({ rect })) };
-    const follow = (next) => (embedded ? handOver(next) : followInfo(p.key, next));
-    const common = { key: p.key, target: t, win, onClose: () => closeInfo(p.key), onBack: backInfo(p) };
+    const follow = (next) => (embedded ? handOver(next) : stack.follow(p.key, next));
+    const common = { key: p.key, target: t, win: stack.win(p), onClose: () => closeInfo(p.key), onBack: stack.back(p) };
     if (bundle?.kind === "rest") return html`<${OthersPopup} ...${common} rest=${bundle} rows=${data.rows} rootImpact=${rootImpact}
         cutoff=${cutoff} cutoffBasis=${cutoffBasis} pinned=${pinned} setPinned=${setPinned} others=${others} setOthers=${setOthers} view=${view}
         onMember=${(r) => { const next = infoTargetOf(r); if (next) follow(next); }} />`;
@@ -6638,18 +6797,11 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
         onPart=${(part) => follow(part.flow !== undefined
           ? { flow: part.flow, activities: (bundle.emitters || []).map((m) => m.index) }
           : { index: part.index, row: null, parents: suppliedTo(bundle, rowsById) })} />`;
-    if (t.category !== undefined) return html`<${CategoryPopup} ...${common} info=${info}
-        onFlow=${(next) => follow(next)} />`;
-    if (t.flow !== undefined && t.exchange) return html`<${FlowExchangePopup} ...${common} method=${method} methods=${info.methods}
-        onOpen=${(index) => follow({ index, row: null })} onFlow=${(next) => follow(next)} />`;
-    if (t.flow !== undefined) return html`<${FlowInfoPopup} ...${common} method=${t.method ?? method} methods=${info.methods} chartMethods=${chartMethods}
-        scope=${root && !embedded ? { index: root.index, name: root.name, location: root.location, amount } : t.scope || null}
-        onOpen=${(index) => follow({ index, row: null })} onExchange=${(next) => follow(next)}
-        onOpenTab=${embedded ? null : (f, place) => onOpenTab(id, f, place)} />`;
     if (t.bundle) return null;
-    return html`<${InfoPopup} ...${common} model=${info} method=${method} methodInfo=${methodInfo} rootImpact=${rootImpact} rowsById=${rowsById}
-        onUseAsRoot=${selectRoot} onOpenTab=${(r, place) => onOpenTab(id, r, place)} root=${root} amount=${amount}
-        onFollow=${follow} onGoTo=${(index) => goTo(index)} />`;
+    return objectPopup(p, { stack, model: info, method, chartMethods, follow,
+      scope: root && !embedded ? { index: root.index, name: root.name, location: root.location, amount } : t.scope || null,
+      onOpenFlowTab: embedded ? null : (f, place) => onOpenTab(id, f, place),
+      process: { rowsById, rootImpact, root, amount, onUseAsRoot: selectRoot, onOpenTab: (r, place) => onOpenTab(id, r, place), onGoTo: (index) => goTo(index) } });
   }
   // The options of the view: in the left panel (View), in the pop-up's explorer above its list
   const cutoffBare = html`
@@ -6699,8 +6851,6 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
             : html`<${TreeGraph} rows=${data.rows} rootImpact=${rootImpact} shareBasis=${shareBasisOf(cutoffBasis)} selection=${selection} onToggle=${toggle} onSelect=${select}
                 onUngroup=${ungroup} onRegroup=${regroup} ungroupable=${ungroupable} groupLocked=${groupLocked} onMergeGroup=${(r) => mergeRows([r])} onUnpin=${unpin} onPin=${pinSelected} onMoveToOthers=${moveSelectedToOthers} onInfo=${showInfo} onUnmerge=${unmerge} view=${view}
                 orientation=${orientation} setOrientation=${setOrientation} cycles=${cycles} setCycles=${setCycles} sankey=${display === "sankey"} focus=${focus} />`}
-          ${popups.map(renderPopup)}
-          ${flowMenu.element}
           ${selection.size > 1 && html`
             <div class="selection-bar">
               <span>${selection.size} selected · o or × moves them to others</span>
@@ -6735,6 +6885,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
               if (top) { cursor.current = { id: top.id, index: 0 }; anchor.current = top.id; setSelection(new Set([top.id])); }
             }} />`
         : treeNode}
+      ${popups.map(renderPopup)}
       ${!embedded && html`<${Portal} slot=${`side-${id}`}>
         <section class="side">
           <div class="tabs" role="tablist" onKeyDown=${tabKeys(["view", "chart", "flows", "missing", "global"], tab, setTab)}>
@@ -7095,7 +7246,7 @@ function MethodTree({ info, main, setMain, selected, setSelected, onCategory }) 
                 <span class="name" title=${`${methodLabel(info.methods[i])}
 ${markTitle(i)}`} onClick=${() => step(i)}>${methodParts(info.methods[i]).main}${methodParts(info.methods[i]).qual && html` <span class="muted">${methodParts(info.methods[i]).qual}</span>`}</span>
                 ${onCategory && html`<button class="icon-plain category-open" onClick=${(e) => onCategory(i, e.clientX, e.clientY)}
-                  aria-label=${`The flows of ${methodLabel(info.methods[i])}`} title="Its elementary flows: factors, emitters; compare with another method"><${CategoryIcon} /></button>`}
+                  aria-label=${`The model pop-up of ${methodLabel(info.methods[i])}`} title="Its model pop-up: its elementary flows, their factors and emitters; compare with another method"><${CategoryIcon} /></button>`}
               </div>`)}
           </div>`;
       })}

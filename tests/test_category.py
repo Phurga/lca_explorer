@@ -149,3 +149,30 @@ def test_api_category_lists_the_factors_on_flows_outside_the_model(category_mode
     assert a["items"][1]["match_kind"] == "" and a["items"][1]["match"] is None
     assert b["count"] == 1 and b["items"][0]["cf"] == 23500.0
     assert set(client.post("/api/category", json={"method": 0}).json()["unlinked"]) == {"a"}
+
+
+def test_api_category_items_carry_the_location_of_regionalised_flows(category_model):
+    """*Organize by location* in the model pop-up: each item has its flow's location (None: no location); a model
+    whose flows table has no location column (built before) says so, for the pop-up to ask for a rebuild."""
+    data = TestClient(create_app(category_model)).post("/api/category", json={"method": 0}).json()
+    assert data["locations"] is False and all("location" not in it for it in data["items"])
+    category_model.flows["location"] = ["FR", None, "", "GLO", None]
+    category_model._derived_flows = None  # the flows table the server reads, made once per model
+    data = TestClient(create_app(category_model)).post("/api/category", json={"method": 0}).json()
+    by_flow = {it["flows"][0]: it["location"] for it in data["items"]}
+    assert data["locations"] is True and by_flow == {0: "FR", 1: None, 2: None, 3: "GLO"}
+
+
+def test_api_process_characterisation_splits_its_own_emissions_per_unit(client):
+    """The *Characterisation* panel of the process pop-up: the process's exchanges with nature per unit of its
+    product, by elementary flow in the method, largest impact first; direct and cumulative scores per unit."""
+    data = client.get("/api/activity/2/characterisation?method=0").json()
+    assert [f["flow"] for f in data["flows"]] == [2, 0]  # N2O 0.02 x 273, CO2 0.5 x 1; radon has no factor in A
+    n2o = data["flows"][0]
+    assert n2o["amount"] == pytest.approx(0.02) and n2o["cf"] == 273.0 and n2o["impact"] == pytest.approx(5.46)
+    assert data["count"] == 2 and data["uncharacterised"] == 1
+    assert data["direct"] == pytest.approx(0.5 + 5.46) == sum(f["impact"] for f in data["flows"])
+    market = client.get("/api/activity/0/characterisation?method=0").json()
+    assert market["flows"] == [] and market["direct"] == 0
+    assert market["cumulative"] == pytest.approx(0.6 * (1 + 2 + 2.73) + 0.4 * 5.96)
+    assert client.get("/api/activity/9/characterisation").status_code == 404
