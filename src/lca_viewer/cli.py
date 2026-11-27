@@ -188,12 +188,11 @@ def serve(args) -> None:
     server = uvicorn.Server(uvicorn.Config(app, host=args.host, port=args.port, log_level="warning",
                                            timeout_graceful_shutdown=5))
     lifetime = None
-    if args.open:  # on your own computer: the server stops with its last tab, or the page's Shut down
+    if args.open:  # on your own computer: the server stops with its last tab
         from .lifetime import Lifetime
 
         def stop():
-            why = ("Shut down from the page" if lifetime.asked else "Its browser tabs are closed" if lifetime.seen
-                   else f"No browser tab opened it in {lifetime.first:.0f} s")
+            why = "Its browser tabs are closed" if lifetime.seen else f"No browser tab opened it in {lifetime.first:.0f} s"
             print(f"{why}: LCA Explorer stops", flush=True)
             server.should_exit = True
 

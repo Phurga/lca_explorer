@@ -111,10 +111,6 @@ select.database { max-width: 220px; font-weight: 600; }
 .top-bar .spacer { flex: 1; }
 .top-left, .top-right { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; min-width: 0; }
 .top-right { justify-content: flex-end; }
-.source-link { color: var(--muted); font-size: 12px; text-decoration: none; }
-.stopped { max-width: 420px; margin: 15vh auto; padding: 0 16px; text-align: center; }
-.stopped .hint { color: var(--muted); }
-.source-link:hover { color: var(--accent); text-decoration: underline; }
 /* The search of a process, in the middle of the bar like a command palette, with the switch of the view options */
 .top-centre { display: flex; gap: 6px; align-items: center; min-width: 0; }
 .top-centre .fu { flex: 1; min-width: 0; position: relative; }
@@ -535,10 +531,12 @@ header { gap: 10px; }
 /* The status bar: the panel and its summary at the left, the options of the views and the shortcuts at the right */
 .status-bar { display: flex; align-items: center; gap: 2px; min-width: 0; padding: 1px 8px; border-top: 1px solid var(--border); background: var(--panel); font-size: 12px; }
 .status-bar .spacer { flex: 1; }
-.status-bar button { border: none; background: none; color: var(--muted); border-radius: 4px; padding: 3px 6px; display: inline-flex; align-items: center; }
-.status-bar button:hover { color: var(--text); background: var(--hover); }
+.status-bar button, .status-bar a.status-button { border: none; background: none; color: var(--muted); border-radius: 4px; padding: 3px 6px; display: inline-flex; align-items: center; }
+.status-bar button:hover, .status-bar a.status-button:hover { color: var(--text); background: var(--hover); }
 .status-bar button.on { color: var(--accent); }
 .status-bar .status-text { max-width: 40vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+/* The focused card (the object of the tab in focus), first: a long name ends in an ellipsis */
+.status-bar .status-text.focused-card { max-width: 32vw; color: var(--text); }
 .lens-menu .method-tree { max-height: 50vh; }
 .rule-sets { list-style: none; margin: 0 0 6px; padding: 0; max-height: 30vh; overflow: auto; }
 .rule-sets label { display: flex; align-items: center; gap: 6px; padding: 3px 4px; border-radius: 4px; cursor: pointer; }

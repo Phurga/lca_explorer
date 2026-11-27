@@ -5,8 +5,8 @@
 Each tab of the page says it is open (``/api/tab/alive``, every 10 s, from a worker so that a
 dialog or a long calculation on the page does not hold it back) and that it closes
 (``/api/tab/bye``, as it goes). Once no tab is left for :attr:`Lifetime.grace` seconds (a
-reload is back before), or when the page's Shut down button asks, the server stops, after
-the jobs under way (an import, a build) finish.
+reload is back before), the server stops, after the jobs under way (an import, a build)
+finish. Closing the last tab is how the app is shut down: the page has no button for it.
 
 The goodbye is not always heard: a browser that quits, crashes or is killed, or closes a tab
 without unloading it, says nothing. So a tab not heard of for a while counts as closed:
@@ -38,7 +38,6 @@ class Lifetime:
         self.tabs: dict[str, float] = {}  # tab -> when it was last heard of (time.monotonic)
         self.hidden: set[str] = set()  # the tabs that said they are hidden
         self.seen = False  # a tab opened once: until then (the browser starting) nothing stops
-        self.asked = False  # the page asked to shut down
         self.stopped = False
         self._lock = threading.Lock()
 
@@ -53,11 +52,6 @@ class Lifetime:
             self.tabs.pop(tab, None)
             self.hidden.discard(tab)
 
-    def shut_down(self) -> list[str]:
-        """Stop as soon as no job runs; the titles of those it waits for."""
-        self.asked = True
-        return self.busy()
-
     def check(self, now: float, empty_since: float | None) -> float | None:
         """One look: stops the server when it is time; when the tabs were all gone (None: some open)."""
         with self._lock:
@@ -71,7 +65,7 @@ class Lifetime:
         elif not empty:
             empty_since = None
         never_opened = not self.seen and now - self.started >= self.first
-        due = self.asked or never_opened or (empty_since is not None and now - empty_since >= self.grace)
+        due = never_opened or (empty_since is not None and now - empty_since >= self.grace)
         if due and not self.busy():
             self.stopped = True
             self.stop()
@@ -118,8 +112,3 @@ def add_routes(app, lifetime: Lifetime | None) -> None:
     async def tab_bye(tab: str):
         lifetime.bye(tab)
         return {}
-
-    @app.post("/api/shutdown")
-    async def shutdown():
-        waiting = lifetime.shut_down()
-        return {"waiting": waiting}

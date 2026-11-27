@@ -44,6 +44,9 @@ API in `src/lca_viewer/server.py`.
   next to the title, rather than databases mixed in one workspace: tabs,
   saved views and node ids are per model. An address of a database that is
   not loaded (after a restart) shows the start page with a note.
+  Next to *+ New project* (and *Refresh*), an icon (a database cylinder) opens **Storage**: what the project
+  caches and Brightway projects take on disk, and what can be deleted. Decision: it was a button of the top bar;
+  disk use is a matter of projects, so it sits with them, and the top bar keeps the search and the mode switch.
   The dialog also changes projects: *+ New project* (empty, or
   from a backup: files.brightway.dev, e.g. BAFU, or a `.tar.gz`), *Delete project…* (typing the name to
   confirm), and on a database *Remove…* (after a confirmation; refused while another
@@ -194,10 +197,16 @@ API in `src/lca_viewer/server.py`.
   a tab keeps its panel state (current tab, chart choices) when hidden.
 - **Top bar**: in the middle, the **search** of a process, like a command palette
   (Ctrl/⌘ + K focuses it; Enter makes the result the process of the tab in
-  focus, Ctrl/⌘ + Enter opens it in a new tab); the mode switch is at the right.
-- **Status bar** (bottom of the page): the active method and the rule set at the left, the **Settings** icon (the
-  colours of every *Color by* mode) and the
-  **Shortcuts** icon at the right. The **view options** are the top of the first panel of the side
+  focus, Ctrl/⌘ + Enter opens it in a new tab); the mode switch is at the right. At the left, the title, the
+  database and *Projects* (Storage is in the Projects dialog). No *Shut down* button: the app started on your own
+  computer stops when its last tab closes (`lifetime.py`; the browser asks first), which is how it is shut down.
+  Decision: one way to stop it, the one every browser user knows; a button did the same as closing the tab.
+- **Status bar** (bottom of the page): at the left the **focused card**, the object of the active tab of the
+  window in focus (*Process · name (location)*, *Flow · name (compartment)*, *Model · method*; read from the
+  tab's title, `focusedCardLabel`; a long name ends in an ellipsis), whose click opens its pop-up
+  (`POPUP_OPENERS`; in Compare mode View mode first, the tab being hidden), then the active method and the rule
+  set; at the right the **Settings** icon (the colours of every *Color by* mode), the **Shortcuts** icon and the
+  **Source** icon (`</>`, the source code: `SOURCE_URL`, as the AGPL asks; it was a link of the top bar). The **view options** are the top of the first panel of the side
   panel, *Custom view* (key v in View mode), with the options of **the tab in focus**, the one of
   the window (split pane) used last, one line each and in this order: *Display* (List / Tree / Sankey), *Cut-off*, *Names*,
   *Organise by*, *Group by*, *Color by*, then *Rows*; *Reset* and *Save* are icons at the top right
@@ -213,8 +222,8 @@ API in `src/lca_viewer/server.py`.
   split the windows can show the same process in a list and as a Sankey; the pane follows the
   window clicked. The options of the last tab changed are what a new tab starts with. The
   panel is not shown in Compare mode. The tabs have no header any more: the options were above each tree, and now
-  are in one place. *Shortcuts* (keyboard) lists the keys. At the left, the icon that shows
-  or hides the left panel, and the active method and the rule set in use, which open it.
+  are in one place. *Shortcuts* (keyboard) lists the keys. The active method and the rule set in use open the
+  left panel; the status bar has no icon of its own for it any more (the edge of the page and Ctrl/⌘ + ← do it).
 - **First start** (nothing kept in the browser): the plain reading first, complexity when asked for. A tab is a list
   with *Amount*, *Impact* and *Share*, no cut-off, nothing grouped, the direct emissions organised by compartment, full names, no colours; the left
   panel is closed, the side panel open on *Custom view* with *Options* folded. Widths follow the window until dragged
@@ -222,7 +231,7 @@ API in `src/lca_viewer/server.py`.
   `app.js`. Decision: a preference is written when the user changes it, not at the first render, so a default never
   chosen can still change in a later version; *Default settings* (save menu) restores all of it, panels included.
 - **Left panel: Processes, Methods and Rules** (hidden and shown with its icon, the
-  status bar's, the edge of the page or Ctrl/⌘ + ←; the right panel with Ctrl/⌘ + →;
+  edge of the page or Ctrl/⌘ + ←; the right panel with Ctrl/⌘ + →;
   resizable, in every mode). *Processes* lists the tabs open: the tick for the ones compared in
   Compare mode, the round mark for the baseline and a × that closes the tab; what each
   does is in its tooltip, not in a text, and a right-click on a process opens its pop-up (the tab is

@@ -944,9 +944,9 @@ function FunctionalUnit({ root, onSelect, fields }) {
 // is open every 10 s, and whether it is hidden (the server then waits longer for the next time: browsers slow the
 // timers of hidden tabs), and closing one asks first. The pings come from a worker: a dialog (confirm) or a long
 // calculation holds up the page's own timers, not the worker's. ``leaving``: the page goes to another of its own pages
-// (no question then); ``stopped``: the server was shut down, ``unreachable``: the last ping failed (no question either;
-// the next ping tries again: one that fails, on waking up for instance, does not silence the tab).
-let leaving = false, stopped = false, unreachable = false;
+// (no question then); ``unreachable``: the last ping failed (no question either; the next ping tries again: one that
+// fails, on waking up for instance, does not silence the tab).
+let leaving = false, unreachable = false;
 const goTo = (url) => { leaving = true; location.href = url; };
 const LIFETIME = fetch("/api/app").then((r) => (r.ok ? r.json() : {})).catch(() => ({}));
 const TAB = crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -965,7 +965,6 @@ LIFETIME.then(({ stops_with_browser }) => {
   } catch { /* no worker: the page pings itself */ }
   // ``now``: ping at once (a tab going hidden does not: a tab that closes says nothing more than its goodbye)
   const alive = (now = true) => {
-    if (stopped) return;
     if (worker) worker.postMessage({ url, hidden: document.hidden, now });
     else if (now) fetch(url + (document.hidden ? "&hidden=1" : ""), { method: "POST" })
       .then((r) => { unreachable = !r.ok; }, () => { unreachable = true; });
@@ -974,40 +973,10 @@ LIFETIME.then(({ stops_with_browser }) => {
   if (!worker) setInterval(alive, 10000);
   addEventListener("visibilitychange", () => alive(!document.hidden));
   addEventListener("pageshow", (e) => { if (e.persisted) { leaving = false; alive(); } });  // back from the history
-  addEventListener("pagehide", () => { if (!stopped) navigator.sendBeacon(`/api/tab/bye?tab=${TAB}`); });
+  addEventListener("pagehide", () => navigator.sendBeacon(`/api/tab/bye?tab=${TAB}`));
   // The browser's own question (its words: a page cannot choose them)
-  addEventListener("beforeunload", (e) => { if (!leaving && !stopped && !unreachable) { e.preventDefault(); e.returnValue = ""; } });
+  addEventListener("beforeunload", (e) => { if (!leaving && !unreachable) { e.preventDefault(); e.returnValue = ""; } });
 });
-
-function Stopped({ waiting }) {
-  // Until the server is gone (it may finish a job first)
-  const [gone, setGone] = useState(false);
-  useEffect(() => {
-    const timer = setInterval(() => fetch("/api/app").catch(() => { setGone(true); clearInterval(timer); }), 1000);
-    return () => clearInterval(timer);
-  }, []);
-  return html`
-    <div class="stopped">
-      <h1>LCA Explorer</h1>
-      ${gone ? html`<p>The app has stopped. You can close this tab.</p><p class="hint">Start it again with lca_explorer.</p>`
-        : html`<p>Stopping${waiting.length ? ` once ${waiting.join(", ")} finishes` : ""}…</p>`}
-    </div>`;
-}
-
-async function shutDown() {
-  if (!confirm("Shut down LCA Explorer? The server stops and every tab of the app with it.")) return;
-  let waiting = [];
-  try { ({ waiting = [] } = await fetch("/api/shutdown", { method: "POST" }).then((r) => r.json())); } catch { /* already gone */ }
-  stopped = true;
-  render(html`<${Stopped} waiting=${waiting} />`, document.getElementById("app"));
-}
-
-function ShutDownButton() {
-  const [shown, setShown] = useState(false);
-  useEffect(() => { LIFETIME.then((a) => setShown(!!a.stops_with_browser)); }, []);
-  return shown && html`<button class="shut-down" onClick=${shutDown}
-    title="Stop LCA Explorer and close its terminal (closing its last tab does too)">Shut down</button>`;
-}
 
 const openDatabase = (key) => goTo(`/db/${encodeURIComponent(key)}/`);
 const count = (n) => n.toLocaleString("en-US");
@@ -1818,6 +1787,12 @@ const elapsed = (s) => (s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${String(
 // into its project's cache (data/cache/project-<hash>: once, the databases it uses with it, each kept for the
 // other databases that use them). Loads run on the server, the dialog follows them and opens the database when ready.
 // The Brightway projects can also be changed here (new, deleted, restored, databases imported).
+// The Storage dialog's button, next to + New project in the Projects dialog
+function StorageButton({ onClick }) {
+  return html`<button class="icon-plain" onClick=${onClick} aria-label="Storage"
+    title="Storage: what the project caches and Brightway projects take on disk, and what can be deleted"><${StorageIcon} /></button>`;
+}
+
 function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
   const [sources, setSources] = useState(projectsCache.sources);
   const [error, setError] = useState(null);
@@ -1830,6 +1805,7 @@ function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
   const asked = useRef(folder);  // the folder whose projects were asked for last
   const [showLog, setShowLog] = useState(false);
   const [form, setForm] = useState(null);  // { kind, project }: a ProjectForm open
+  const [storageOpen, setStorageOpen] = useState(false);  // the Storage dialog, over this one
   const [jobAt, setJobAt] = useState(null);  // the project a job was started from: its progress shows there
   // The projects a database was opened from, the last one first; the ones whose databases are shown (all folded at first)
   const [recent, setRecent] = useState(() => { try { return JSON.parse(loadPreference("recentProjects", "[]")); } catch { return []; } });
@@ -1857,12 +1833,12 @@ function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
   }).catch((e) => setError(e.message));
   useEffect(() => { refresh(); }, []);
   useEffect(() => {
-    if (onClose) {
+    if (onClose && !storageOpen) {  // Escape closes the Storage dialog first
       const onKey = (e) => e.key === "Escape" && onClose();
       document.addEventListener("keydown", onKey);
       return () => document.removeEventListener("keydown", onKey);
     }
-  }, [onClose]);
+  }, [onClose, storageOpen]);
 
   // The projects of a folder: those listed before are shown while they are read again. ``again``:
   // the server reads them again too (changes made outside the app), else it answers from what it keeps.
@@ -2012,15 +1988,17 @@ function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
       </div>
       <section>
         <h3 class="load-head">Projects <${InfoTip} text="Brightway 2.5 projects and their databases. Import into a project first (+, then Add database in the project's ⋯ menu), then open a database. Your own datasets: Edit mode." label="About projects" />
-          ${folder && html`
-            <span class="load-head-tools">
+          <span class="load-head-tools">
+            ${folder && html`
               <button class="icon-plain" onClick=${() => setForm({ kind: "new" })} aria-label="New project"
-                title="New project: an empty one, to add databases to, or one from a Brightway backup (BAFU, …)"><${PlusIcon} /></button>
+                title="New project: an empty one, to add databases to, or one from a Brightway backup (BAFU, …)"><${PlusIcon} /></button>`}
+            <${StorageButton} onClick=${() => setStorageOpen(true)} />
+            ${folder && html`
               <button class="icon-plain" disabled=${reading} onClick=${() => { refresh(); listProjects(folder, true); }}
                 aria-label=${reading ? "Reading the projects" : "Refresh"}
                 title=${reading ? "Reading the projects…" : "Refresh: read the projects and databases again, for changes made outside the app (Activity Browser, a script…). Only the projects written since are counted again."}>
-                ${reading ? html`<span class="spinner" aria-hidden="true"></span>` : html`<${RefreshIcon} />`}</button>
-            </span>`}</h3>
+                ${reading ? html`<span class="spinner" aria-hidden="true"></span>` : html`<${RefreshIcon} />`}</button>`}
+          </span></h3>
         ${!listed(form?.project) && projectForm}
         ${projectsError && html`<div class="error">${projectsError}</div>`}
         ${folder && !projects && !projectsError && html`<${Waiting} text="Reading the projects…" />`}
@@ -2077,7 +2055,8 @@ function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
           </table>
         </section>`}`}`;
 
-  if (!onClose) return html`<div class="load-page"><h2>Projects</h2>${content}</div>`;
+  const storage = storageOpen && html`<${StorageDialog} onClose=${() => setStorageOpen(false)} />`;
+  if (!onClose) return html`<div class="load-page"><h2>Projects</h2>${content}</div>${storage}`;
   return html`
     <div class="modal-backdrop" onMouseDown=${(e) => e.target === e.currentTarget && onClose()}>
       <div class="load-dialog" ref=${box} role="dialog" aria-label="Projects">
@@ -2087,7 +2066,8 @@ function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
         </div>
         <div class="load-body">${content}</div>
       </div>
-    </div>`;
+    </div>
+    ${storage}`;
 }
 
 // ---------------------------------------------------------------- create dataset
@@ -2538,6 +2518,41 @@ function KeyboardIcon() {
     <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round">
       <rect x="1.65" y="3.65" width="12.7" height="8.7" rx="1.6" /><path d="M4.5 6.5h.01M7 6.5h.01M9.5 6.5h.01M12 6.5h.01M4.5 9.5h7" />
     </svg>`;
+}
+
+// The source code of the app (status bar): a code glyph
+function SourceIcon() {
+  return html`
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M5.2 4.4 1.8 8l3.4 3.6M10.8 4.4 14.2 8l-3.4 3.6M9.2 2.8 6.8 13.2" />
+    </svg>`;
+}
+// The project caches and Brightway projects on disk (Projects dialog): a database cylinder
+function StorageIcon() {
+  return html`
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round">
+      <ellipse cx="8" cy="3.6" rx="5.4" ry="1.9" /><path d="M2.6 3.6v8.8c0 1 2.4 1.9 5.4 1.9s5.4-.9 5.4-1.9V3.6M2.6 8c0 1 2.4 1.9 5.4 1.9s5.4-.9 5.4-1.9" />
+    </svg>`;
+}
+
+// What the status bar says of the focused card, the object of the active tab of the focused window, from its title:
+// a process (``index``), a flow (``flow``) or a model (``model``, the index of its method)
+function focusedCardLabel(info, title) {
+  if (!title) return null;
+  if (title.model !== undefined) {
+    const method = info.methods[title.model];
+    return method ? `Model · ${methodTitle(method)}` : null;
+  }
+  const place = title.location ? ` (${title.location})` : "";
+  return `${title.flow !== undefined ? "Flow" : "Process"} · ${title.name}${place}`;
+}
+
+// The focused card in the status bar: a click opens its pop-up (``onOpen(x, y)``)
+function FocusedCard({ info, title, onOpen }) {
+  const label = focusedCardLabel(info, title);
+  if (!label) return null;
+  return html`<button class="status-text focused-card" title=${`${label}: open its pop-up`}
+    onClick=${(e) => onOpen(e.clientX, Math.max(80, e.clientY - 360))}>${label}</button>`;
 }
 
 function EditPanel({ origin, dataset, pending, affected, locked, outdated, onForm, stage, unstage, unstageAll, onApplied, onRebuild, onCollapse }) {
@@ -8124,7 +8139,6 @@ function App() {
   // Databases loaded in the server; null: a server without the Projects dialog (one model, plain URLs)
   const [databases, setDatabases] = useState(undefined);
   const [loadOpen, setLoadOpen] = useState(false);
-  const [storageOpen, setStorageOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   // Ctrl/⌘ + K: the search of the top bar
@@ -8482,7 +8496,6 @@ function App() {
       <${DatabaseSelect} databases=${databases} />
       ${databases && html`<button onClick=${() => setLoadOpen(true)}
         title="Projects: open, add, rename, lock or remove a database">Projects</button>`}
-      <button onClick=${() => setStorageOpen(true)} title="Storage: what the project caches and Brightway projects take on disk, and what can be deleted">Storage</button>
       ${editing && html`<span class="mode-badge" title="Edit mode: changes are staged, then made together in the project">Edit mode</span>`}
       ${outdated && html`<button class="primary" disabled=${rebuilding?.status === "running"} onClick=${rebuild}
         title=${`${outdated}: the model has to be built again, and its impacts are greyed out until then`}>
@@ -8491,9 +8504,6 @@ function App() {
       </div>
       <div class="top-centre">${centre}</div>
       <div class="top-right">
-      <${ShutDownButton} />
-      <a class="source-link" href=${SOURCE_URL} target="_blank" rel="noopener noreferrer"
-        title="Source code of LCA Explorer, free software under the GNU AGPL 3.0 or later">Source</a>
       ${databases && html`
         <span class="mode-switch" role="group" aria-label="Mode">
           <button class=${`has-key ${!editing && !comparing ? "primary" : ""}`} onClick=${() => setMode("view")}
@@ -8508,7 +8518,6 @@ function App() {
     </header>
     ${shortcutsOpen && html`<${ShortcutsDialog} onClose=${() => setShortcutsOpen(false)} />`}
     ${settingsOpen && html`<${SettingsDialog} lens=${lensApi} onClose=${() => setSettingsOpen(false)} />`}
-    ${storageOpen && html`<${StorageDialog} onClose=${() => setStorageOpen(false)} />`}
     ${loadOpen &&html`<${LoadDatabase} onClose=${() => setLoadOpen(false)} onDatabases=${setDatabases} onLocks=${refreshEditor} />`}
     ${datasetOpen && origin && html`<${DatasetForm} current=${origin} edit=${datasetOpen.edit} initial=${datasetOpen.initial}
       copyFrom=${datasetOpen.copyFrom} deleted=${new Set(pending.filter((c) => c.kind === "delete").map((c) => `${c.database}/${c.code}`))}
@@ -8607,14 +8616,19 @@ function App() {
         <button class="link" onClick=${() => setToast(null)} aria-label="Dismiss">×</button>
       </div>`}
       <footer class="status-bar">
-        <button class=${`status-button ${leftOpen ? "on" : ""}`} onClick=${() => setLeftOpen(!leftOpen)} aria-pressed=${leftOpen}
-          title="Left panel: processes, methods, rules (Ctrl/⌘ + ←)"><${SidePanelIcon} left open=${leftOpen} /></button>
+        <${FocusedCard} info=${info} title=${titles[focusedTab]} onOpen=${(x, y) => {
+          if (!comparing) return POPUP_OPENERS[focusedTab]?.(x, y);
+          setMode("view");  // the tab is hidden while comparing: shown first, then its pop-up
+          setTimeout(() => POPUP_OPENERS[focusedTab]?.(x, y), 60);
+        }} />
         <button class="status-text" onClick=${() => lensApi.show("methods")} title=${methodLabel(info.methods[lens.method])}>
           ${methodSummary(info, lens.method, lens.chartMethods)}</button>
         <button class="status-text" onClick=${() => lensApi.show("groups")} title="The rule set shared by all tabs">Rules: ${lens.set} · ${lensApi.rules.filter((r) => !r.disabled).length}</button>
         <span class="spacer"></span>
         <button class="status-button" onClick=${() => setSettingsOpen(true)} aria-label="Settings" title="Settings: the colours (rules, types, locations…)"><${PaletteIcon} /></button>
         <button class="status-button" onClick=${() => setShortcutsOpen(true)} aria-label="Shortcuts" title="Keyboard shortcuts"><${KeyboardIcon} /></button>
+        <a class="status-button" href=${SOURCE_URL} target="_blank" rel="noopener noreferrer" aria-label="Source code"
+          title="Source code of LCA Explorer, free software under the GNU AGPL 3.0 or later"><${SourceIcon} /></a>
       </footer>
       </div>
     </div>
