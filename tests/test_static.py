@@ -27,3 +27,12 @@ def test_server_module_registers_the_types():
 
     assert mimetypes.guess_type("x.mjs")[0] == "text/javascript"
     assert mimetypes.guess_type("x.js")[0] == "text/javascript"
+
+
+def test_the_style_has_no_name_links_nor_pin_mark():
+    # Row names are no links any more (a click selects, a right-click opens the pop-up), and the pin is a header button
+    from lca_viewer.server import STATIC
+
+    css = (STATIC / "style.css").read_text(encoding="utf-8")
+    assert ".name-text a" not in css and ".pin-mark" not in css
+    assert ".info-head-actions button.pin.active" in css

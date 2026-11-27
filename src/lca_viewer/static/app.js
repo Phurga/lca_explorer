@@ -2498,6 +2498,23 @@ function NodePicker({ folder, project, kind, placeholder, onPick }) {
 // What the pop-ups, the tree and the edit panel need of edit mode: { editing, origin, pending, locked, stale,
 // stage(change), openForm(what) }. Outside edit mode only ``editing`` (false) is there.
 const EditorContext = createContext({ editing: false, pending: [], locked: [] });
+// What a double-click (or Enter) on a row of a process, a flow or a model does in the tab it is in (docs/ui.md, *Row
+// clicks*): ``process(index, inTab)``, ``flow(target, inTab)`` (``target``: { flow }), ``model(method, inTab)``. ``inTab``:
+// Ctrl/⌘, in a new tab. Given by each tab (``FUView``, ``FlowTab``, ``ModelTab``) to its lists and pop-ups: a process
+// becomes the process of a process tab, a flow the flow of a flow tab, a model the model of a model tab; anything else
+// opens in a new tab.
+const TabUseContext = createContext(null);
+const activityOf = (index, method) => request(`/api/activity/${index}?method=${method}`);
+// The gestures of a row (the same in the tree, its graph and the lists of the pop-ups): a click selects, a right-click
+// opens its pop-up (as Space), a double-click uses it in the tab (as Enter), Ctrl/⌘ + double-click in a new tab (as
+// Ctrl/⌘+Enter). ``use(inTab, e)``; the second click does not select the text.
+const dblUse = (use) => (use ? {
+  onDblClick: (e) => { e.stopPropagation(); use(e.ctrlKey || e.metaKey, e); },
+  onMouseDown: (e) => { if (e.detail > 1) e.preventDefault(); },
+} : {});
+// The tooltip line of a row's name: what its gestures do
+const rowHint = (open, use) => [open && "Right-click or Space: its pop-up", use && "Double-click or Enter: use it in this tab (Ctrl/⌘: in a new tab)"]
+  .filter(Boolean).join(" · ");
 const bwQuery = (o) => `folder=${encodeURIComponent(o.folder)}&project=${encodeURIComponent(o.project)}`;
 const datasetUrl = (o, database, code) => `/api/brightway/dataset?${bwQuery(o)}&database=${encodeURIComponent(database)}&code=${encodeURIComponent(code)}`;
 
@@ -2874,12 +2891,12 @@ function focusedCardLabel(info, title) {
   return `${title.flow !== undefined ? "Flow" : "Process"} · ${title.name}${place}`;
 }
 
-// The focused card in the status bar: a click opens its pop-up (``onOpen(x, y)``)
-function FocusedCard({ info, title, onOpen }) {
+// The focused card in the status bar: plain text, what the tab in focus shows (its pop-up opens from its row of the
+// Processes panel)
+function FocusedCard({ info, title }) {
   const label = focusedCardLabel(info, title);
   if (!label) return null;
-  return html`<button class="status-text focused-card" title=${`${label}: open its pop-up`}
-    onClick=${(e) => onOpen(e.clientX, Math.max(80, e.clientY - 360))}>${label}</button>`;
+  return html`<span class="status-text focused-card" title=${label}>${label}</span>`;
 }
 
 function EditPanel({ origin, dataset, pending, affected, locked, outdated, onForm, stage, unstage, unstageAll, onApplied, onRebuild, onCollapse }) {
@@ -3010,7 +3027,7 @@ function ColumnMenu({ at, columns, onChange, onClose }) {
 
 const GROUP_LOCKED = "Grouped by a rule (Rules panel): the group stays while the rule is active. Disable or remove the rule to ungroup.";
 
-function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onUngroup, onRegroup, ungroupable, groupLocked, onMergeGroup, onUnpin, onPin, onMoveToOthers, onInfo, onUnmerge, onRevert, view, focus, renaming, onStartRename, onRename, onColumns }) {
+function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onUngroup, onRegroup, ungroupable, groupLocked, onMergeGroup, onUnpin, onPin, onMoveToOthers, onInfo, onUse, onUnmerge, onRevert, view, focus, renaming, onStartRename, onRename, onColumns }) {
   const byId = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
   const [columnMenu, setColumnMenu] = useState(null);  // where the columns menu is open: { x, y }
   const shown = new Set(view.columns);
@@ -3054,6 +3071,7 @@ function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onU
               <tr data-id=${r.id} ...${dragProcess(r.kind === "process" || r.kind === "direct" ? r.meta?.index : null)} class="${r.kind} ${selection.has(r.id) ? "selected" : ""} ${focus === r.id ? "focus" : ""} ${colors.has(r.id) ? "in-group" : ""}"
                   style=${colors.has(r.id) ? { "--group-color": colors.get(r.id) } : null}
                   onClick=${(e) => onSelect(r, e.ctrlKey || e.metaKey || e.shiftKey)}
+                  ...${dblUse(onUse && ((inTab) => onUse(r, inTab)))}
                   onContextMenu=${(e) => onInfo(r, e)}>
                 <td style=${{ "--depth": r.depth }}>
                   ${colors.has(r.id) && colorModeOf(view) === "type" && flowTypeOf(r) && html`<span class="type-bar" title=${`${FLOW_TYPES[flowTypeOf(r)].label}: ${FLOW_TYPES[flowTypeOf(r)].hint}`}></span>`}
@@ -3066,7 +3084,7 @@ function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onU
                       <span class="mf-badge" title="Co-product: allocated from a multi-output process (its inputs and emissions are a share of the dataset's)">M</span>`}
                     ${renaming === r.id
                       ? html`<${RenameInput} value=${rowNames(r, byId, view).main} renamed=${!!r.custom} onDone=${(name) => onRename(r, name)} />`
-                      : html`<span class="label" title=${r.custom ? `${r.custom} — renamed from ${r.label}` : r.label}>
+                      : html`<span class="label" title=${`${r.custom ? `${r.custom} — renamed from ${r.label}` : r.label}${r.kind === "process" || r.kind === "flow" ? `\n${rowHint(true, !!onUse)}` : ""}`}>
                           ${(() => {
                             const n = rowNames(r, byId, view);
                             return html`${n.main}${n.qual && html` <span class="loc">${n.qual}</span>`}`;
@@ -3341,7 +3359,8 @@ function bandPath({ from, to, y1, y2, t }) {
 
 // Tooltip of a box or a Sankey bar
 function nodeTitle(r, s, places) {
-  return `${r.label}\n${fmt(r.impacts[0])} (${pct(s)})${places.length > 1 ? `\nIn ${places.length} places in the tree: amounts summed, loops counted once` : ""}`;
+  return `${r.label}\n${fmt(r.impacts[0])} (${pct(s)})${places.length > 1 ? `\nIn ${places.length} places in the tree: amounts summed, loops counted once` : ""}`
+    + (r.kind === "process" || r.kind === "flow" ? `\n${rowHint(true, true)}` : "");
 }
 
 // The colour of a row (``colors``: see groupColors) is --mark, which the boxes, edges, bars and bands are drawn with; a
@@ -3350,7 +3369,7 @@ const markStyle = (colors, r) => (colors.has(r.id)
   ? { "--mark": colors.get(r.id), ...(r.kind === "group" && { "--group": colors.get(r.id) }) } : null);
 const coloredClass = (colors, r) => (colors.has(r.id) ? "colored" : "");
 
-function sankeyMarks({ graph, byId, view, colors, selection, focus, onSelect, onToggle, onInfo }) {
+function sankeyMarks({ graph, byId, view, colors, selection, focus, onSelect, onToggle, onInfo, onUse }) {
   return html`
     ${graph.edges.map((e) => html`
       <path key=${`b-${e.key}`} class="band ${e.share < 0 ? "neg" : ""} ${e.to.row.kind} ${coloredClass(colors, e.to.row)}" d=${bandPath(e)} style=${markStyle(colors, e.to.row)}>
@@ -3364,7 +3383,7 @@ function sankeyMarks({ graph, byId, view, colors, selection, focus, onSelect, on
         <g key=${key} data-id=${r.id} class="snode ${r.kind} ${selection.has(r.id) ? "selected" : ""} ${focus === r.id ? "focus" : ""} ${r.impacts[0] < 0 ? "neg" : ""} ${coloredClass(colors, r)}"
            style=${markStyle(colors, r)}
            onClick=${(e) => onSelect(r, e.ctrlKey || e.metaKey || e.shiftKey)}
-           onDblClick=${() => r.expandable && onToggle(r)}
+           ...${dblUse(onUse && ((inTab) => onUse(r, inTab)))}
            onContextMenu=${(e) => onInfo(r, e)}>
           <title>${nodeTitle(r, s, [r])}</title>
           <rect x=${x} y=${y} width=${SANKEY.bar} height=${h} />
@@ -3376,7 +3395,7 @@ function sankeyMarks({ graph, byId, view, colors, selection, focus, onSelect, on
     })}`;
 }
 
-function TreeGraph({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onUngroup, onRegroup, ungroupable, groupLocked, onMergeGroup, onUnpin, onPin, onMoveToOthers, onInfo, onUnmerge, view, orientation: chosenOrientation, setOrientation, cycles: chosenCycles, setCycles, sankey, focus }) {
+function TreeGraph({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onUngroup, onRegroup, ungroupable, groupLocked, onMergeGroup, onUnpin, onPin, onMoveToOthers, onInfo, onUse, onUnmerge, view, orientation: chosenOrientation, setOrientation, cycles: chosenCycles, setCycles, sankey, focus }) {
   const { editing } = useContext(EditorContext);
   // The Sankey is a tree drawn left to right
   const orientation = sankey ? "horizontal" : chosenOrientation;
@@ -3467,7 +3486,7 @@ function TreeGraph({ rows, rootImpact, shareBasis, selection, onToggle, onSelect
       </div>
       <svg width="100%" height="100%">
         <g transform=${`translate(${transform.x},${transform.y}) scale(${transform.k})`}>
-          ${sankey ? sankeyMarks({ graph, byId, view, colors, selection, focus, onSelect, onToggle, onInfo }) : html`
+          ${sankey ? sankeyMarks({ graph, byId, view, colors, selection, focus, onSelect, onToggle, onInfo, onUse }) : html`
           ${graph.edges.map((e) => html`
             <path key=${`e-${e.key}`} class="edge ${e.share < 0 ? "neg" : ""} ${e.back ? "back" : ""} ${coloredClass(colors, e.to.rows[0])}"
               style=${markStyle(colors, e.to.rows[0])}
@@ -3491,7 +3510,7 @@ function TreeGraph({ rows, rootImpact, shareBasis, selection, onToggle, onSelect
               <g key=${key} data-id=${first.id} class="node ${r.kind} ${places.some((p) => selection.has(p.id)) ? "selected" : ""} ${places.some((p) => focus === p.id) ? "focus" : ""} ${coloredClass(colors, first)}"
                  style=${markStyle(colors, first)}
                  onClick=${(e) => onSelect(first, e.ctrlKey || e.metaKey || e.shiftKey)}
-                 onDblClick=${() => r.expandable && toggle()}
+                 ...${dblUse(onUse && ((inTab) => onUse(first, inTab)))}
                  onContextMenu=${(e) => onInfo(first, e)}>
                 <title>${nodeTitle(r, s, places)}</title>
                 <rect x=${x} y=${y} width=${BOX.w} height=${BOX.h} rx="6" />
@@ -3541,7 +3560,7 @@ function TreeGraph({ rows, rootImpact, shareBasis, selection, onToggle, onSelect
           })}`}
         </g>
       </svg>
-      <div class="graph-hint">Drag to pan · wheel to zoom · double-click or ${sankey ? "▸" : "±"} to expand · Ctrl/⌘-click to select${sankey ? " · band thickness ∝ impact" : ""}</div>
+      <div class="graph-hint">Drag to pan · wheel to zoom · ${sankey ? "▸" : "±"} to expand · Ctrl/⌘-click to select · right-click: its pop-up · double-click: use it (as Enter)${sankey ? " · band thickness ∝ impact" : ""}</div>
     </div>`;
 }
 
@@ -3858,7 +3877,8 @@ function ExchangeMeta({ e }) {
 // for a top row); ``ancestors``: indexes above it (a process already there is a loop: shown, not expanded).
 // ``panel``: { columns: the list's (the cells after the name: ``listCell(column, item, above, depth)``), label(item),
 // chip?(item, depth), rowClass?(item, depth), load(item, above): Promise of { items, more } (its children, none: it does
-// not expand), onOpen(item), onExchange(item, above): the exchange it stands for (none: no (i)), onUse(item), empty }
+// not expand), onOpen(item): right-click, Space, onExchange(item, above): the exchange it stands for (none: no (i)),
+// onUse(item, inTab): double-click, Enter (it expands with its ▸ or →), empty }
 function ProcessRow({ item, above, depth, ancestors, panel }) {
   const [open, setOpen] = useState(false);
   const [kids, setKids] = useState(null);
@@ -3896,15 +3916,17 @@ function ProcessRow({ item, above, depth, ancestors, panel }) {
   const span = panel.columns.length;
   return html`<${Fragment}>
     <tr class=${`exchange ${panel.rowClass?.(item, depth) || ""}`} data-nav data-depth=${depth} tabindex="-1" ...${dragProcess(item.index)} onKeyDown=${keys}
-        onDblClick=${() => expandable && setOpen(!open)} onContextMenu=${(e) => { e.preventDefault(); e.stopPropagation(); panel.onOpen(item, e); }}>
+        ...${dblUse(panel.onUse && ((inTab) => panel.onUse(item, inTab)))}
+        onContextMenu=${(e) => { e.preventDefault(); e.stopPropagation(); panel.onOpen(item, e); }}>
       <${NameCell} depth=${depth} title=${`${item.reference_product ?? ""} | ${item.name} | ${item.location}`} content=${panel.label(item)}
+        hint=${rowHint(true, !!panel.onUse)}
         chip=${html`<span class="loc-chip">${item.location}</span>${panel.chip?.(item, depth) || ""}`}
         toggle=${loop
           ? html`<span class="toggle muted" title="Already above this process: a loop">↺</span>`
           : expandable
             ? html`<button class="toggle" aria-label=${open ? "Collapse" : "Expand"} onClick=${(e) => { e.stopPropagation(); setOpen(!open); }}>${open ? "▾" : "▸"}</button>`
             : html`<span class="toggle"></span>`}
-        onOpen=${(e) => panel.onOpen(item, e)} onInfo=${exchange ? (e) => panel.onExchange(item, above, e) : null} />
+        onInfo=${exchange ? (e) => panel.onExchange(item, above, e) : null} />
       ${panel.columns.slice(1).map((c) => listCell(c, item, above, depth))}
     </tr>
     ${open && !kids && html`<tr><td colspan=${span} class="muted">…</td></tr>`}
@@ -3947,8 +3969,13 @@ function usePopupKeys(box, onClose, onBack, pinned = false) {
 }
 const BackButton = ({ onBack }) => onBack && html`
   <button class="back" onClick=${onBack} title="Back" aria-label="Back">←</button>`;
-const PinIcon = () => html`<svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true" fill="currentColor">
+// The pin of a pop-up's header: filled while it is pinned, an outline when not
+const PinIcon = ({ filled = true }) => html`<svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true"
+  fill=${filled ? "currentColor" : "none"} stroke="currentColor" stroke-width=${filled ? 0 : 1.3} stroke-linejoin="round">
   <path d="M10 1.5L14.5 6l-1.3.6-2.6 2.6.3 3-1.1 1.1-2.9-2.9L3 14.5l-1-1 4.2-4.2-2.9-2.9 1.1-1.1 3 .3 2.6-2.6z" /></svg>`;
+const PinButton = ({ pinned, onPin }) => html`
+  <button class=${`pin ${pinned ? "active" : ""}`} onClick=${onPin} aria-pressed=${!!pinned} aria-label=${pinned ? "Unpin" : "Pin"}
+    title=${pinned ? "Pinned: Esc or a click outside does not close it. Click to unpin" : "Pin: keep it open, to have several pop-ups at once"}><${PinIcon} filled=${!!pinned} /></button>`;
 
 // Pop-up windows: dragged by the header, resized by the edges and corners, pinned to stay open
 // beside others. Dropped on a pane's tab list, or on the edge of a pane, a pop-up that can
@@ -4071,10 +4098,9 @@ function PopupWindow({ target, win, label, className = "", head, width = 560, me
         <div class="info-head" title="Drag to move">
           <div>${head}</div>
           <span class="info-head-actions">
-            ${win.pinned && html`<span class="pin-mark" title="Pinned: Esc or a click outside does not close it"><${PinIcon} /></span>`}
             <${BackButton} onBack=${onBack} />
-            <${PopupMenu} items=${[...menu, { label: win.pinned ? "Unpin" : "Pin", run: win.onPin,
-              title: win.pinned ? "Unpin: Esc or a click outside closes it again" : "Pin: keep it open, to have several pop-ups at once" }]} />
+            ${menu.length > 0 && html`<${PopupMenu} items=${menu} />`}
+            ${win.onPin && html`<${PinButton} pinned=${win.pinned} onPin=${win.onPin} />`}
             <button onClick=${onClose} aria-label="Close" title="Close (Esc)">×</button>
           </span>
         </div>
@@ -4190,10 +4216,11 @@ function FlowHead({ info, kind = "Flow" }) {
 // One list for every panel of the pop-ups (the process's Used by, Alternatives and Characterisation; the flow's
 // Characterisation, Emitted by and Same substance; the model's flows), so that they look and work alike: the filter box
 // above the table, at its left; a header that sorts (click; again: the other way) and filters by column (right-click: a
-// row of boxes under the headers, "> 10" or "< 0.1" on numbers); rows of one height whose name links to the pop-up of
-// what they are; numbers right-aligned with their unit in a column of its own; shares as bars; the empty state, how
-// many rows are shown and *Show all* under it. A row's right-click (or double-click, or Space) opens the pop-up of what
-// it is (``onOpen``); its (i) (or i) the exchange it stands for (``onInfo``), and only that; Enter: ``onUse``.
+// row of boxes under the headers, "> 10" or "< 0.1" on numbers); rows of one height; numbers right-aligned with their
+// unit in a column of its own; shares as bars; the empty state, how many rows are shown and *Show all* under it. The
+// gestures of a row (``dblUse``): a click selects it; its right-click (or Space) opens the pop-up of what it is
+// (``onOpen``); its double-click (or Enter) uses it in the tab, with Ctrl/⌘ in a new tab (``onUse(row, inTab)``); its (i)
+// (or i) the exchange it stands for (``onInfo``), and only that.
 // ``columns``: { key, label, title?, kind?: "num" | "unit" | "share" | "text" (the first column is the name: its link, its
 //   (i), ``chip(row)`` after it), value(row, …), cell?(row, …): its content, format?: of a number, tip?(row): its title,
 //   width?: px, sort?: false }. ``rows``, ``rowKey(row)``, ``rowClass?(row)``, ``pinned?(row)``: rows kept on top whatever
@@ -4219,15 +4246,16 @@ function listCell(c, r, ...context) {
   const tip = c.tip ? c.tip(r, ...context) : !c.kind || c.kind === "unit" || c.kind === "text" ? (typeof v === "string" ? v : undefined) : undefined;
   return html`<td key=${c.key} class=${c.kind || "text"} title=${tip}>${content}</td>`;
 }
-// The name of a row: its (i) (the exchange it stands for), the name as a link to its pop-up, a chip after it
-function NameCell({ content, chip, title, depth = 0, toggle, onOpen, onInfo, infoTitle = "The exchange: amount, comment, uncertainty, pedigree (i)" }) {
+// The name of a row: its (i) (the exchange it stands for), the name, a chip after it. The name is no link: a click
+// selects the row, a right-click opens its pop-up, a double-click uses it (``dblUse``), which ``hint`` tells in the tooltip
+function NameCell({ content, chip, title, hint, depth = 0, toggle, onInfo, infoTitle = "The exchange: amount, comment, uncertainty, pedigree (i)" }) {
   return html`
-    <td class="name" title=${title}>
+    <td class="name" title=${[title, hint].filter(Boolean).join("\n") || undefined}>
       <span class="name-cell" style=${depth ? { paddingLeft: `${depth * 16}px` } : null}>
         ${toggle}
         ${onInfo && html`<button class="info-btn" title=${infoTitle} aria-label="The exchange"
           onClick=${(e) => { e.stopPropagation(); onInfo(e); }}>i</button>`}
-        <span class="name-text">${onOpen ? html`<a href="#" onClick=${(e) => { e.preventDefault(); e.stopPropagation(); onOpen(e); }}>${content}</a>` : content}</span>
+        <span class="name-text">${content}</span>
         ${chip}
       </span></td>`;
 }
@@ -4285,18 +4313,20 @@ function PopupList({ columns, rows, rowKey, rowClass, pinned, match, query, setQ
   const click = (c) => c.sort !== false && setSort((s) => (s.key === c.key ? { key: c.key, desc: !s.desc } : { key: c.key, desc: c.kind === "num" || c.kind === "share" }));
   const [first, ...rest] = columns;
   const keys = (r) => (e) => {
-    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const inTab = (e.ctrlKey || e.metaKey) && !e.altKey && e.key === "Enter";  // Ctrl/⌘+Enter: in a new tab
+    if ((e.ctrlKey || e.metaKey || e.altKey) && !inTab) return;
     const used = () => { e.preventDefault(); e.stopPropagation(); };
     if (e.key === " " && onOpen) { used(); onOpen(r, e); }
     else if (e.key === "i" && onInfo && hasInfo(r)) { used(); onInfo(r, e); }
-    else if (e.key === "Enter" && onUse) { used(); onUse(r); }
+    else if (e.key === "Enter" && onUse) { used(); onUse(r, inTab); }
   };
+  const hint = rowHint(!!onOpen, !!onUse);
   const plainRow = (r) => html`
     <tr key=${rowKey(r)} data-nav tabindex="-1" class=${`exchange ${rowClass?.(r) || ""}`} ...${drag?.(r) || {}} onKeyDown=${keys(r)}
       onContextMenu=${onOpen ? (e) => { e.preventDefault(); e.stopPropagation(); onOpen(r, e); } : undefined}
-      onDblClick=${onOpen ? (e) => onOpen(r, e) : undefined}>
-      <${NameCell} content=${first.cell ? first.cell(r) : first.value(r)} chip=${first.chip?.(r)} title=${first.tip?.(r)}
-        onOpen=${onOpen && first.link !== false ? (e) => onOpen(r, e) : null} onInfo=${onInfo && hasInfo(r) ? (e) => onInfo(r, e) : null} />
+      ...${dblUse(onUse && ((inTab) => onUse(r, inTab)))}>
+      <${NameCell} content=${first.cell ? first.cell(r) : first.value(r)} chip=${first.chip?.(r)} title=${first.tip?.(r)} hint=${hint}
+        onInfo=${onInfo && hasInfo(r) ? (e) => onInfo(r, e) : null} />
       ${rest.map((c) => listCell(c, r))}
     </tr>`;
   const row = (r) => (renderRow ? renderRow(r) : plainRow(r));
@@ -4345,6 +4375,7 @@ function PopupList({ columns, rows, rowKey, rowClass, pinned, match, query, setQ
 // the same substance; ``onCategory(method, e)``: the model pop-up of a method that characterises it (the cycle process →
 // flow → model → flow…)
 function FlowPanels({ info, shown, method, methods, scope, scoped, onActivity, onExchange, onFlow, onCategory, body }) {
+  const use = useContext(TabUseContext);  // a double-click (Enter) on a row
   const [all, setAll] = useState(false);
   const root = scoped && scope ? `&root=${scope.index}&amount=${scope.amount ?? 1}` : "";
   const index = info.index;
@@ -4364,14 +4395,12 @@ function FlowPanels({ info, shown, method, methods, scope, scoped, onActivity, o
           <${PopupList} key=${`factors-${index}`} noun="model" empty="No method of this model characterises this flow."
             rows=${info.factors.map((f) => ({ ...f, label: methodTitle(methods[f.method]), unit: `${methods[f.method].unit} / ${u}` }))}
             rowKey=${(f) => f.method} rowClass=${(f) => (f.method === method ? "current" : "")}
-            onOpen=${onCategory ? (f, e) => onCategory(f.method, e) : null}
+            onOpen=${onCategory ? (f, e) => onCategory(f.method, e) : null} onUse=${use && ((f, inTab) => use.model(f.method, inTab))}
             columns=${[
               { key: "method", label: "Model", title: "The impact categories of the methods of this database that characterise the flow: open one for all its flows",
                 value: (f) => f.label, tip: (f) => `${methods[f.method].name.join(" | ")} [${methods[f.method].unit}]: its model card` },
               { key: "cf", label: "Factor", kind: "num", value: (f) => f.cf },
               { key: "unit", label: "Unit", kind: "unit", width: 150, value: (f) => f.unit },
-              { key: "rank", label: "Rank", kind: "num", title: "Rank of this flow by |factor| among the flows of the model the method characterises",
-                value: (f) => f.rank, cell: (f) => html`<span class="muted">${ordinal(f.rank)} of ${f.of}</span>` },
             ]} />
         </section>`}
       ${shown === "emitters" && html`
@@ -4380,6 +4409,7 @@ function FlowPanels({ info, shown, method, methods, scope, scoped, onActivity, o
             <${PopupList} key=${`emitters-${index}`} noun="process" empty="No process of the database has an exchange of this flow."
               rows=${emitters.data.emitters} rowKey=${(p) => p.index} drag=${(p) => dragProcess(p.index)}
               onOpen=${(p, e) => onActivity(p.index, e)} onInfo=${onExchange ? (p, e) => onExchange(index, p, e) : null}
+              onUse=${use && ((p, inTab) => use.process(p.index, inTab))}
               columns=${[
                 { key: "name", label: "Process", value: (p) => p.name, chip: (p) => html`<span class="loc-chip">${p.location}</span>`,
                   tip: (p) => `${p.reference_product} | ${p.name} | ${p.location}` },
@@ -4400,7 +4430,7 @@ function FlowPanels({ info, shown, method, methods, scope, scoped, onActivity, o
             <p class="muted">${info.name} in each compartment of the model, with its factor in ${methodLabel(methods[method])}: a factor in one
               and none in another often means a method that does not cover a compartment.</p>
             <${PopupList} key=${`same-${index}`} noun="flow" rows=${same.data.flows} rowKey=${(f) => f.flow} rowClass=${(f) => (f.current ? "current" : "")}
-              onOpen=${(f) => !f.current && onFlow(f.flow)}
+              onOpen=${(f, e) => !f.current && onFlow(f.flow, e)} onUse=${use && ((f, inTab) => use.flow({ flow: f.flow }, inTab))}
               columns=${[
                 { key: "compartment", label: "Compartment", value: (f) => f.compartment || "–",
                   chip: (f) => (f.current ? html`<span class="muted">this flow</span>` : "") },
@@ -4432,7 +4462,6 @@ function FlowPanels({ info, shown, method, methods, scope, scoped, onActivity, o
         </section>`}
     </div>`;
 }
-const ordinal = (n) => `${n}${n % 100 >= 11 && n % 100 <= 13 ? "th" : ["th", "st", "nd", "rd"][n % 10] || "th"}`;
 
 function FlowTabsBar({ tabs, shown, setTab }) {
   return html`<div class="tabs info-tabs" role="tablist" onKeyDown=${tabKeys(tabs.map((t) => t.id), shown, setTab)}>
@@ -4557,12 +4586,13 @@ function UnlinkedFactors({ unlinked, both, a, b, open, setOpen, words }) {
 // elementary flows, in the whole database: the flows of the model that it characterises, their factor, the factor
 // relative to the largest one of the same unit and how many processes emit them directly. *Organize by* arranges them in
 // sections (substance, compartment, location). *Compare with* lines it up with another method (the factors of both,
-// their ratio, the flows only one of them characterises). A flow's name, right-click or double-click: its pop-up
-// (``onFlow(target, event)``). Shown as a pop-up (``CategoryPopup``) or as a tab (``ModelTab``): ``frame({ head, menu,
+// their ratio, the flows only one of them characterises). A flow's right-click (Space): its pop-up (``onFlow(target,
+// event)``); its double-click (Enter): its flow tab (``TabUseContext``). Shown as a pop-up (``CategoryPopup``) or as a tab (``ModelTab``): ``frame({ head, menu,
 // body, state, children })`` draws the chrome around it (``body``: the ref of the scrolling list, for the keys; ``state``:
 // { method, compare, organize }, what a tab keeps). ``initial``: { compare, organize } it starts with; ``onState``: they
 // changed. Not in the supply chain of the process of the tab, for now: a pinned pop-up would follow the focus of the tab.
 function CategoryView({ info, method, initial = {}, onState, onFlow, frame }) {
+  const use = useContext(TabUseContext);  // a double-click (Enter) on a flow
   const methods = info.methods;
   const [compare, setCompare] = useState(initial.compare ?? null);
   const [organize, setOrganize] = useState(initial.organize || "");
@@ -4654,7 +4684,7 @@ function CategoryView({ info, method, initial = {}, onState, onFlow, frame }) {
           ${picked && html`<span class=${`category-unit ${otherUnit ? "differs" : ""}`}
             title=${otherUnit ? `Not the unit of the reference (${a.unit}): comp. / ref. mixes units` : "Its unit, the same as the reference's"}>${picked.unit}</span>`}
         </label>
-        <${InfoTip} label="About this table" text=${`The flows of this model that the method characterises, in the whole database. Relative: the factor over the largest of the method among the flows of the same unit. Emitters: the processes emitting (or taking) the flow directly. ${both ? "ref.: the method of this model card; comp.: the one it is compared with; comp. / ref.: the ratio of their factors (in their units). " : ""}Factors of the method on flows that are not in the model are under the table${data && !data.unlinked ? " once the model is rebuilt (it did not record them)" : ""}. A flow's name, or a right-click on its row, opens its pop-up.`} />
+        <${InfoTip} label="About this table" text=${`The flows of this model that the method characterises, in the whole database. Relative: the factor over the largest of the method among the flows of the same unit. Emitters: the processes emitting (or taking) the flow directly. ${both ? "ref.: the method of this model card; comp.: the one it is compared with; comp. / ref.: the ratio of their factors (in their units). " : ""}Factors of the method on flows that are not in the model are under the table${data && !data.unlinked ? " once the model is rebuilt (it did not record them)" : ""}. A right-click on a flow (or Space) opens its pop-up, a double-click (or Enter) its flow tab.`} />
       </div>
       ${error && html`<div class="error">${error}</div>`}
       <div class="info-body" ref=${body}>
@@ -4664,7 +4694,8 @@ function CategoryView({ info, method, initial = {}, onState, onFlow, frame }) {
             rowKey=${(it) => it.flows[0]} rowClass=${(it) => `${by ? "in-section" : ""} ${it.only ? `only-${it.only}` : ""}`}
             match=${(it) => `${it.name} ${it.compartment} ${it.location || ""}`} query=${filter} setQuery=${setFilter}
             sections=${by ? (rows) => organizeFlows(rows, by).map((s) => ({ ...s, cells: sectionCells(s) })) : null}
-            empty="No flow of the model has a factor in this method." onOpen=${(it, e) => onFlow(flowTarget(it), e)} />
+            empty="No flow of the model has a factor in this method." onOpen=${(it, e) => onFlow(flowTarget(it), e)}
+            onUse=${use && ((it, inTab) => use.flow({ flow: it.flows[0] }, inTab))} />
           ${data.unlinked && html`<${UnlinkedFactors} unlinked=${data.unlinked} both=${both} a=${a} b=${b} open=${outside} setOpen=${setOutside} words=${words} />`}`}
       </div>` });
 }
@@ -4807,21 +4838,33 @@ function FlowTab({ id, info: model, initial, visible, onSave, onTitle, onOpenTab
     rowsById: new Map(), rootImpact: 0, root: null, amount: 1, onUseAsRoot: null, onGoTo: () => {},
     onOpenTab: (r, place) => onOpenTab(id, r, place),
   };
+  // A double-click (Enter) on a row: a flow becomes the flow of this tab; a process or a model opens in a new tab
+  const use = {
+    process: (index) => activityOf(index, lens.method).then((found) => { stack.close(); onOpenTab(id, found); }).catch(() => {}),
+    flow: (target, inTab) => {
+      stack.close();
+      if (inTab) onOpenTab(id, { ...target, scope: scoped ? scope : null });
+      else if (target.flow !== current) setCurrent(target.flow);
+    },
+    model: (method) => { stack.close(); onOpenTab(id, { model: { method } }); },
+  };
   return html`
+    <${TabUseContext.Provider} value=${use}>
     <div class="flow-tab" style=${{ display: visible ? "" : "none" }}>
       <div class="flow-tab-head"><${FlowHead} info=${info} /></div>
       ${error && html`<div class="error">${error}</div>`}
       ${info && html`
         <${FlowTabsBar} tabs=${tabs} shown=${shown} setTab=${setTab} />
         <${FlowPanels} info=${info} shown=${shown} method=${lens.method} methods=${model.methods} chartMethods=${lens.chartMethods}
-          scope=${scope} scoped=${scoped} onFlow=${setCurrent}
+          scope=${scope} scoped=${scoped} onFlow=${(flow, e) => stack.open({ flow, ...at(e) })}
           onActivity=${(index, e) => stack.open({ index, row: null, ...at(e) })}
           onExchange=${(flow, p, e) => stack.open({ flow, activities: [p.index], exchange: true, ...at(e) })}
           onCategory=${(category, e) => stack.open({ category, ...at(e) })} />`}
       ${stack.popups.map((p) => objectPopup(p, { stack, model, method: lens.method, chartMethods: lens.chartMethods, scope,
         follow: (next) => stack.follow(p.key, next), process,
         onOpenFlowTab: (f, place) => onOpenTab(id, f, place), onOpenModelTab: (m, place) => onOpenTab(id, m, place) }))}
-    </div>`;
+    </div>
+    <//>`;
 }
 
 // The title of a model tab: { name, model } (a method no longer in the database: "Model")
@@ -4834,12 +4877,23 @@ const modelTitle = (info, method) => ({ name: info.methods[method] ? methodTitle
 function ModelTab({ id, info: model, initial, visible, onSave, onTitle, onOpenTab }) {
   const lens = useContext(LensContext);
   const start = initial?.state?.model || initial?.model;
-  const method = start.method;
+  const [method, setMethod] = useState(start.method);
   const m = model.methods[method];
   const kept = useRef({ compare: start.compare ?? null, organize: start.organize || "" });
   const stack = usePopupStack();
-  const save = () => onSave(id, { model: { method, ...kept.current } });
+  const save = (shown = method) => onSave(id, { model: { method: shown, ...kept.current } });
   useEffect(() => { if (m) onTitle(id, modelTitle(model, method)); }, [m, lens.nameFormat]);
+  // A double-click (Enter) on a row: a model becomes the model of this tab (its *Organize by* kept, no comparison);
+  // a process or a flow opens in a new tab
+  const use = {
+    process: (index) => activityOf(index, lens.method).then((found) => { stack.close(); onOpenTab(id, found); }).catch(() => {}),
+    flow: (target) => { stack.close(); onOpenTab(id, target); },
+    model: (next, inTab) => {
+      stack.close();
+      if (inTab) onOpenTab(id, { model: { method: next } });
+      else if (next !== method) { kept.current = { ...kept.current, compare: null }; setMethod(next); save(next); }
+    },
+  };
   CATEGORY_OPENERS[id] = (category, x, y) => stack.open({ category, x, y });
   const at = (e) => ({ x: e?.clientX ?? window.innerWidth / 3, y: e?.clientY ?? 120 });
   const process = {
@@ -4847,6 +4901,7 @@ function ModelTab({ id, info: model, initial, visible, onSave, onTitle, onOpenTa
     onOpenTab: (r, place) => onOpenTab(id, r, place),
   };
   return html`
+    <${TabUseContext.Provider} value=${use}>
     <div class="flow-tab model-tab category-popup" style=${{ display: visible ? "" : "none" }}>
       ${!m ? html`<div class="empty">This model is not in this database.</div>` : html`
         <${CategoryView} info=${model} method=${method} initial=${kept.current}
@@ -4863,7 +4918,8 @@ function ModelTab({ id, info: model, initial, visible, onSave, onTitle, onOpenTa
       ${stack.popups.map((p) => objectPopup(p, { stack, model, method: lens.method, chartMethods: lens.chartMethods, scope: null,
         follow: (next) => stack.follow(p.key, next), process,
         onOpenFlowTab: (f, place) => onOpenTab(id, f, place), onOpenModelTab: (mt, place) => onOpenTab(id, mt, place) }))}
-    </div>`;
+    </div>
+    <//>`;
 }
 
 // A GET of the server for a component, when ``enabled``: { data, error } (the last answer stays while the next comes)
@@ -4899,7 +4955,7 @@ function inputSection(e) {
   return e.amount < 0 ? "avoided" : "technosphere";
 }
 // ``onOpen(row, e)``: the pop-up of its process or flow; ``onExchange(row, e)``: its exchange pop-up; ``onUse(row, inTab)``:
-// Enter on a process. Its tools: *Edit* (Edit mode for the whole app: a Brightway-built database), and in Edit mode
+// Enter (double-click) on a process or a flow. Its tools: *Edit* (Edit mode for the whole app: a Brightway-built database), and in Edit mode
 // *Done editing* and *Edit process…*; amounts then change in place (staged, as in the exchange pop-up).
 function ProcessExchanges({ index, info, exchanges, locked, onOpen, onExchange, onUse }) {
   const ctx = useContext(EditorContext);
@@ -4935,9 +4991,9 @@ function ProcessExchanges({ index, info, exchanges, locked, onOpen, onExchange, 
   return html`
     <${PopupList} key=${`dataset-${index}`} noun="exchange" rows=${rows} rowKey=${(r) => r.key} sections=${sections} tools=${tools}
       className="exchange-list" empty="The dataset records no exchange." match=${(r) => `${r.name} ${r.place || ""} ${r.comment || ""}`}
-      onOpen=${onOpen} onInfo=${onExchange} hasInfo=${(r) => !r.own} onUse=${(r, inTab) => r.kind === "process" && onUse(r, inTab)}
+      onOpen=${onOpen} onInfo=${onExchange} hasInfo=${(r) => !r.own} onUse=${onUse}
       columns=${[
-        { key: "name", label: "Exchange", title: "Its process or flow: open it for its pop-up; (i): the exchange (comment, uncertainty, pedigree)",
+        { key: "name", label: "Exchange", title: "Its process or flow: right-click for its pop-up, double-click to use it in the tab; (i): the exchange (comment, uncertainty, pedigree)",
           value: (r) => r.name, tip: (r) => (r.product && r.product !== r.name ? `${r.name} · product: ${r.product}` : r.name),
           chip: (r) => (!r.place ? "" : r.kind === "flow" ? html` <span class="muted small">${r.place}</span>` : html` <span class="loc-chip">${r.place}</span>`) },
         { key: "amount", label: "Amount", kind: "num", title: "As recorded in the dataset (waste and avoided products positive, as in the process form)",
@@ -4962,6 +5018,7 @@ function DockedShell({ children }) {
 function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsById, onClose, onUseAsRoot, onOpenTab, root, amount, onFollow, onGoTo, onBack, docked, active, treeSlot, onDown }) {
   const idle = !!docked && !active;
   const exchange = !!target.exchange;
+  const use = useContext(TabUseContext);  // a double-click (Enter) on a flow or a model of its lists
   const explorerKeys = useRef(null);  // set by the explorer of the Exchanges tab: asked first for the keys
   const [info, setInfo] = useState(null);
   const [error, setError] = useState(null);
@@ -5203,7 +5260,7 @@ function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsByI
               <${ProcessExchanges} index=${target.index} info=${info} exchanges=${exchanges} locked=${locked}
                 onOpen=${(r, e) => (r.kind === "flow" ? follow({ flow: r.index }, e) : openActivity(r.index, e))}
                 onExchange=${(r, e) => (r.kind === "flow" ? follow({ flow: r.index, activities: [target.index], exchange: true }, e) : openExchange(r.index, base, e))}
-                onUse=${useAsRoot} />
+                onUse=${(r, inTab) => (r.kind === "flow" ? use?.flow({ flow: r.index }, inTab) : useAsRoot(r, inTab))} />
             </section>`}
           ${shown === "characterisation" && info && html`
             <section>
@@ -5213,7 +5270,7 @@ function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsByI
                   Methods panel).</p>
                 <${PopupList} key=${`totals-${target.index}`} noun="method" rows=${totals} rowKey=${(t) => t.method}
                   rowClass=${(t) => (t.method === method ? "current" : "")}
-                  onOpen=${(t, e) => follow({ category: t.method }, e)}
+                  onOpen=${(t, e) => follow({ category: t.method }, e)} onUse=${use && ((t, inTab) => use.model(t.method, inTab))}
                   columns=${[
                     { key: "method", label: "Method", title: "The main method and the methods shown together: open one for its model card",
                       value: (t) => methodTitle(model.methods[t.method]), tip: (t) => `${model.methods[t.method].name.join(" | ")} [${model.methods[t.method].unit}]: its model card`,
@@ -6972,6 +7029,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
     embedded.onInfo({ ...rest, row: null, ...(row?.kind === "process" ? { parents: suppliedTo(row, rowsById) } : {}) });
   }
   const closeInfo = stack.close;
+  const outerUse = useContext(TabUseContext);  // embedded: the tab's (a flow of its tree opens in a flow tab)
   const [focus, setFocus] = useState(null);
   const focusTimer = useRef(null);
   const [expanded, setExpanded] = useState(new Set());
@@ -7446,6 +7504,18 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
     }
   }
 
+  // Enter or a double-click on a row of the tree (Ctrl/⌘: in a new tab): a process becomes the process of the tab, a flow
+  // opens in a flow tab (a process tab cannot show it); a bundle has nothing to use. True when it was used
+  function useRow(row, inTab = false) {
+    if (row.kind === "process" && row.meta) {
+      if (inTab) { if (embedded) embedded.onUse(row.meta, true); else onOpenTab(id, row.meta); }
+      else if (embedded) embedded.onUse(row.meta);
+      else if (row.meta.index !== root?.index) { closeInfo(); selectRoot(row.meta); }
+      return true;
+    }
+    if (row.kind === "flow" && row.flow && tabUse) { tabUse.flow({ flow: row.flow.index }, inTab); return true; }
+    return false;
+  }
   // Keys on the selected row (see docs/ui.md); returns true when the key was used
   function onTreeKey(e) {
     const rows = data.rows;
@@ -7557,12 +7627,9 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
         editor.openForm({ edit: { database: row.meta.database, code: row.meta.code } });
         return true;
       case "Enter":
-        // The process becomes the process of the tab; with Ctrl/⌘ it opens in a new tab instead.
-        if (selectedRows.length !== 1 || row.kind !== "process" || !row.meta) return false;
-        if (inTab) { if (embedded) embedded.onUse(row.meta, true); else onOpenTab(id, row.meta); }
-        else if (embedded) embedded.onUse(row.meta);
-        else if (row.meta.index !== root?.index) { closeInfo(); selectRoot(row.meta); }
-        return true;
+        // The process becomes the process of the tab (a flow opens in a flow tab); with Ctrl/⌘ in a new tab instead
+        if (selectedRows.length !== 1) return false;
+        return useRow(row, inTab);
       case "g":
         followCursor.current = true;
         if (selectedRows.length === 1 && row.kind === "group" && ungroupable(row)) ungroup(row);
@@ -7620,6 +7687,20 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
   }, [selection, data]);
 
   const methodInfo = info.methods[method];
+  // A double-click (Enter) on a row of its lists and pop-ups: a process becomes the process of the tab; a flow or a
+  // model opens in a new tab (a process tab cannot show it), with this tab's process as the flow's scope
+  const tabUse = embedded ? outerUse : {
+    process: (index, inTab) => activityOf(index, method).then((found) => {
+      closeInfo();
+      if (inTab) onOpenTab(id, found);
+      else if (found.index !== root?.index) selectRoot(found);
+    }).catch((e) => setError(e.message)),
+    flow: (target) => {
+      closeInfo();
+      onOpenTab(id, { ...target, scope: root ? { index: root.index, name: root.name, location: root.location, amount } : null });
+    },
+    model: (m) => { closeInfo(); onOpenTab(id, { model: { method: m } }); },
+  };
   // One pop-up: of a bundle (others, merged, group), an elementary flow, or a process
   function renderPopup(p) {
     const t = p.target;
@@ -7689,10 +7770,10 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
           ${display === "list"
             ? html`<${Tree} rows=${data.rows} rootImpact=${rootImpact} shareBasis=${shareBasisOf(cutoffBasis)} selection=${selection} onToggle=${toggle} onSelect=${select}
                 renaming=${renaming} onStartRename=${startRename} onRename=${rename}
-                onUngroup=${ungroup} onRegroup=${regroup} ungroupable=${ungroupable} groupLocked=${groupLocked} onMergeGroup=${(r) => mergeRows([r])} onUnpin=${unpin} onPin=${pinSelected} onMoveToOthers=${moveSelectedToOthers} onInfo=${showInfo} onUnmerge=${unmerge} onRevert=${revertInput} view=${view} focus=${focus}
+                onUngroup=${ungroup} onRegroup=${regroup} ungroupable=${ungroupable} groupLocked=${groupLocked} onMergeGroup=${(r) => mergeRows([r])} onUnpin=${unpin} onPin=${pinSelected} onMoveToOthers=${moveSelectedToOthers} onInfo=${showInfo} onUse=${useRow} onUnmerge=${unmerge} onRevert=${revertInput} view=${view} focus=${focus}
                 onColumns=${(columns) => setView({ ...view, columns })} />`
             : html`<${TreeGraph} rows=${data.rows} rootImpact=${rootImpact} shareBasis=${shareBasisOf(cutoffBasis)} selection=${selection} onToggle=${toggle} onSelect=${select}
-                onUngroup=${ungroup} onRegroup=${regroup} ungroupable=${ungroupable} groupLocked=${groupLocked} onMergeGroup=${(r) => mergeRows([r])} onUnpin=${unpin} onPin=${pinSelected} onMoveToOthers=${moveSelectedToOthers} onInfo=${showInfo} onUnmerge=${unmerge} view=${view}
+                onUngroup=${ungroup} onRegroup=${regroup} ungroupable=${ungroupable} groupLocked=${groupLocked} onMergeGroup=${(r) => mergeRows([r])} onUnpin=${unpin} onPin=${pinSelected} onMoveToOthers=${moveSelectedToOthers} onInfo=${showInfo} onUse=${useRow} onUnmerge=${unmerge} view=${view}
                 orientation=${orientation} setOrientation=${setOrientation} cycles=${cycles} setCycles=${setCycles} sankey=${display === "sankey"} focus=${focus} />`}
           ${selection.size > 1 && html`
             <div class="selection-bar">
@@ -7715,6 +7796,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
           </div>
         </section>`;
   return html`
+    <${TabUseContext.Provider} value=${tabUse}>
     <div class=${`fu-view ${embedded ? "embedded" : ""}`} ref=${box} style=${{ display: visible ? "" : "none" }}>
       ${!embedded && root
         ? html`<${InfoPopup} docked active=${visible} treeSlot=${treeNode} target=${{ index: root.index, row: null }} win=${{}} model=${info}
@@ -7764,7 +7846,8 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
           selectedRow=${selectedRows.length === 1 ? selectedRows[0] : null}
           shared=${{ set: lens.set }} extras=${ruleExtras(lens)} />
       <//>`}
-    </div>`;
+    </div>
+    <//>`;
 }
 
 // ---------------------------------------------------------------- comparison mode
@@ -8089,13 +8172,14 @@ function MethodTree({ info, main, setMain, selected, setSelected, onCategory }) 
               <span class="muted count">${n}/${shown.length}</span>
             </div>
             ${expanded && shown.map((i) => html`
-              <div class=${`method-row ${stateOf(i)}`} key=${i}>
+              <div class=${`method-row ${stateOf(i)}`} key=${i}
+                onContextMenu=${onCategory ? (e) => { e.preventDefault(); onCategory(i, e.clientX, e.clientY); } : undefined}>
                 <button class=${`method-mark ${stateOf(i)}`} onClick=${() => step(i)} title=${markTitle(i)}
                   aria-label=${`${methodLabel(info.methods[i])}: ${{ off: "not shown", ticked: "shown together", main: "the main method" }[stateOf(i)]}`}>${MARKS[stateOf(i)][0]}</button>
                 <span class="name" title=${`${methodLabel(info.methods[i])}
 ${markTitle(i)}`} onClick=${() => step(i)}>${methodParts(info.methods[i]).main}${methodParts(info.methods[i]).qual && html` <span class="muted">${methodParts(info.methods[i]).qual}</span>`}</span>
                 ${onCategory && html`<button class="icon-plain category-open" onClick=${(e) => onCategory(i, e.clientX, e.clientY)}
-                  aria-label=${`The model card of ${methodLabel(info.methods[i])}`} title="Its model card: its elementary flows, their factors and emitters; compare with another method"><${CategoryIcon} /></button>`}
+                  aria-label=${`The model card of ${methodLabel(info.methods[i])}`} title="Its model card (or right-click the method): its elementary flows, their factors and emitters; compare with another method"><${CategoryIcon} /></button>`}
               </div>`)}
           </div>`;
       })}
@@ -8555,12 +8639,12 @@ const SHORTCUTS = [
     ["→", "Expand the row; if already expanded, go to its first child"],
     ["←", "Collapse the row; if already collapsed, go to its parent"],
     ["Tree view, root on top", "← → go across the processes (siblings), ↓ expands (then goes to the first child), ↑ collapses (then goes to the parent)"],
-    ["Space", "Open (or close) the pop-up of the process"],
+    ["Space", "Open (or close) the pop-up of the process or flow (also a right-click)"],
     ["i", "Open (or close) the pop-up of its exchange (info): comment and uncertainty"],
-    ["Enter", "Show the process in the tab"],
+    ["Enter", "Show the process in the tab; a flow opens in a flow tab (also a double-click)"],
     ["e", "In Edit mode: open the form of the process, to change it"],
     ["t / w", "A new tab like this one / close this tab"],
-    ["Ctrl/⌘ + Enter", "Open the process in a new tab"],
+    ["Ctrl/⌘ + Enter", "Open the process in a new tab (also Ctrl/⌘ + double-click)"],
     ["r", "Rename the row in this view (the database is not changed)"],
     ["g", "Group the selected rows, or ungroup a group"],
     ["m", "Merge the selected rows, or unmerge a merged row"],
@@ -8572,9 +8656,16 @@ const SHORTCUTS = [
     ["← →", "Switch panel"],
     ["↓", "Enter the panel; then ↓ ↑ move between its rows, ↑ on the first goes back to the panels"],
     ["→ ←", "On a row of a list: expand, collapse (or go to the first child, the parent)"],
-    ["Space  i  Enter  Ctrl/⌘ + Enter", "On a row of a list: as in the main list"],
+    ["Space  i  Enter  Ctrl/⌘ + Enter", "On a row of a list: as in the main list; Enter uses a process, flow or model in the tab where the tab can show it (a flow in a flow tab, a model in a model tab), else in a new tab"],
     ["Backspace", "Back to the previous pop-up"],
     ["Esc", "Close the pop-up (a pinned one only while the pointer is on it)"],
+  ]],
+  ["Mouse, on a row of a process, flow or model", [
+    ["Click", "Select the row"],
+    ["Right-click", "Its pop-up (as Space)"],
+    ["Double-click", "Use it in the tab (as Enter)"],
+    ["Ctrl/⌘ + double-click", "Open it in a new tab (as Ctrl/⌘ + Enter)"],
+    ["Right-click a method", "In the Methods panel: its model card (as the list icon at its right)"],
   ]],
   ["Search fields", [
     ["↓ ↑  Enter", "Move through the results, choose one"],
@@ -9174,11 +9265,7 @@ function App() {
         <button class="link" onClick=${() => setToast(null)} aria-label="Dismiss">×</button>
       </div>`}
       <footer class="status-bar">
-        <${FocusedCard} info=${info} title=${titles[focusedTab]} onOpen=${(x, y) => {
-          if (!comparing) return POPUP_OPENERS[focusedTab]?.(x, y);
-          setMode("view");  // the tab is hidden while comparing: shown first, then its pop-up
-          setTimeout(() => POPUP_OPENERS[focusedTab]?.(x, y), 60);
-        }} />
+        <${FocusedCard} info=${info} title=${titles[focusedTab]} />
         <button class="status-text" onClick=${() => lensApi.show("methods")} title=${methodLabel(info.methods[lens.method])}>
           ${methodSummary(info, lens.method, lens.chartMethods)}</button>
         <button class="status-text" onClick=${() => lensApi.show("groups")} title="The rule set shared by all tabs">Rules: ${lens.set} · ${lensApi.rules.filter((r) => !r.disabled).length}</button>

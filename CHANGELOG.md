@@ -27,7 +27,7 @@ Changes on `dev`, not released yet.
   with its name ("FR · France", "RER · Europe"). API: `/api/activity/{index}` gives `location_name`, and each input
   of `/api/activity/{index}/exchanges` whether it is `waste`.
 - **Status bar**: it names the **focused card**, the object of the tab in focus (*Process · name (location)*, *Flow ·
-  name (compartment)*, *Model · method*), and a click opens its pop-up. The **Source** link of the top bar is now an
+  name (compartment)*, *Model · method*), as plain text. The **Source** link of the top bar is now an
   icon (`</>`) at its right. Its left-panel icon is gone: the method and the rule set still open the panel, and so
   do the edge of the page and Ctrl/⌘ + ←.
 - **Storage** moved from the top bar into the Projects dialog, as an icon next to *+ New project*.
@@ -47,6 +47,16 @@ Changes on `dev`, not released yet.
   is shown as to rebuild. API under `/api/library/methods…`; see `docs/methods-library.md`.
 - The flow and process search of the dataset form (`NodePicker`) searches the words typed again, not only the
   filters.
+- **Row clicks, the same everywhere**: on a row of a process, a flow or a model, in the tree (list, tree view,
+  Sankey) and in the lists of the pop-ups and cards, a click selects it, a right-click opens its pop-up (as Space),
+  a double-click uses it in the tab (as Enter: a process becomes the process of the tab, a flow the flow of a flow
+  tab, a model the model of a model tab; otherwise it opens in a new tab), and Ctrl/⌘ + double-click opens it in a
+  new tab (as Ctrl/⌘+Enter). Row names are no longer links (their click opened the pop-up); their tooltip says what
+  the gestures do, and the *Shortcuts* dialog lists them. In the tree view and the Sankey a double-click no longer
+  expands a box: ± and ▸ do. Enter on a flow of the tree opens it in a flow tab.
+- **Pin** is an icon in the header of a pop-up, beside ×, filled while pinned; it left the ⋯ menu.
+- A right-click on a method of the **Methods** panel opens its model pop-up, as the list icon at its right.
+- The flow's *Characterisation* panel has no *Rank* column any more (the API still gives `rank` and `of`).
 
 ## 1.6.0 - 2026-11-27
 
