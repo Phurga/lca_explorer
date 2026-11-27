@@ -41,6 +41,12 @@
    Parked: biosphere databases listed in *Projects*; mapping unlinked factors to flows (Edit mode);
    regionalised factors; Sankey by flow.
 
+8. **Cache per Brightway project, storage menu, database graph** (design:
+   [project-cache.md](project-cache.md)): each database built once as a segment and reused by the databases
+   that use it, instead of one model per database holding its background again; disk use shown and caches
+   cleared from the app; the graph of a project's databases in its ⚙ menu. In phases: graph, storage menu,
+   project cache, memory.
+
 ## Ideas parked
 
 - "Transparent markets": option to replace market nodes by their suppliers

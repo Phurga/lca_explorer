@@ -1521,6 +1521,7 @@ function ProjectForm({ form, folder, projects, onJob, onCancel, onForm, busy }) 
         ${actions("Remove database", users.length > 0, true)}
       </form>`;
   }
+  if (form.kind === "graph") return project && html`<${DatabaseGraph} folder=${folder} project=${project} onClose=${onCancel} />`;
   if (form.kind === "delete") return html`
     <form class="project-form danger" onSubmit=${submit("/api/brightway/projects/delete", { folder, project: form.project, confirm })}>
       <h4>Delete the project ${form.project}</h4>
@@ -1530,6 +1531,203 @@ function ProjectForm({ form, folder, projects, onJob, onCancel, onForm, busy }) 
       ${actions("Delete project", confirm !== form.project, true)}
     </form>`;
   return null;
+}
+
+// ---------------------------------------------------------------- database graph
+const GRAPH_INFO = "An arrow goes from a database to one it uses. Changing a database rebuilds it and every database that uses it, "
+  + "directly or not: editing ecoinvent rebuilds all the databases built on it. Databases that use each other are built "
+  + "together. Lock the background databases you do not mean to change.";
+
+// Strongly connected components (Tarjan): databases that use each other, directly or not. ``uses``: name -> [names];
+// returns name -> the name standing for its component
+function loopsOf(names, uses) {
+  let index = 0;
+  const at = {}, low = {}, on = new Set(), stack = [], comp = {};
+  const visit = (v) => {
+    at[v] = low[v] = index++; stack.push(v); on.add(v);
+    for (const w of uses[v] || []) {
+      if (!(w in at)) { visit(w); low[v] = Math.min(low[v], low[w]); } else if (on.has(w)) low[v] = Math.min(low[v], at[w]);
+    }
+    if (low[v] === at[v]) { let w; do { w = stack.pop(); on.delete(w); comp[w] = v; } while (w !== v); }
+  };
+  names.forEach((n) => { if (!(n in at)) visit(n); });
+  return comp;
+}
+
+// The ECharts option of a project's database graph: the databases used by others at the bottom (the order they are built
+// in). ``links``: [[database, database it uses, exchanges]] counted on the server, or null while they are counted
+function graphOption(project, links) {
+  const dbs = project.databases, names = dbs.map((d) => d.name), known = new Set(names);
+  const counts = new Map((links || []).map(([o, i, n]) => [`${o}\n${i}`, n]));
+  const edges = [];
+  for (const d of dbs) for (const u of d.depends || []) if (known.has(u) && u !== d.name) edges.push({ from: d.name, to: u, listed: true });
+  for (const [o, i] of links || []) {
+    if (known.has(o) && known.has(i) && !edges.some((e) => e.from === o && e.to === i)) edges.push({ from: o, to: i, listed: false });
+  }
+  const uses = {};
+  edges.forEach((e) => (uses[e.from] ||= []).push(e.to));
+  const comp = loopsOf(names, uses);
+  const size = {};
+  names.forEach((n) => { size[comp[n]] = (size[comp[n]] || 0) + 1; });
+  // Level of a component: 0 when it uses nothing, else one more than the highest one it uses
+  const level = {};
+  const levelOf = (c) => {
+    if (c in level) return level[c];
+    level[c] = 0;  // the components form a DAG: no cycle reaches back here
+    let l = 0;
+    for (const n of names) if (comp[n] === c) for (const u of uses[n] || []) if (comp[u] !== c) l = Math.max(l, levelOf(comp[u]) + 1);
+    return (level[c] = l);
+  };
+  names.forEach((n) => levelOf(comp[n]));
+  const top = Math.max(0, ...Object.values(level));
+  const rows = {};
+  names.forEach((n) => (rows[level[comp[n]]] ||= []).push(n));
+  const text = cssVar("--text"), muted = cssVar("--muted"), accent = cssVar("--accent"), warn = cssVar("--bar-negative");
+  const usedBy = (n) => edges.filter((e) => e.to === n).map((e) => e.from);
+  const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+  const nodes = dbs.map((d) => {
+    const row = rows[level[comp[d.name]]], i = row.indexOf(d.name);
+    const state = d.model ? (d.model.key ? "open" : d.model.outdated ? "outdated" : "built") : d.processes ? "not built" : "";
+    const together = size[comp[d.name]] > 1;
+    const amount = d.processes ? `${d.processes.toLocaleString()} processes` : `${(d.flows || 0).toLocaleString()} flows`;
+    return {
+      name: d.name, x: (i - (row.length - 1) / 2) * 260, y: (top - level[comp[d.name]]) * 110,
+      symbolSize: d.processes ? 16 + 6 * Math.log10(d.processes + 1) : 12,
+      itemStyle: { color: !d.processes ? cssVar("--border") : state === "open" ? accent : state === "outdated" ? warn : state === "built" ? cssVar("--bar") : muted,
+        borderColor: together ? warn : "transparent", borderWidth: together ? 3 : 0 },
+      label: { show: true, position: "right", color: d.processes ? text : muted, fontSize: 12,
+        formatter: `${d.name}${d.locked ? " (locked)" : ""}\n{m|${amount}${state ? ` · ${state}` : ""}}`, rich: { m: { color: muted, fontSize: 11 } } },
+      tip: [`<b>${esc(d.name)}</b>`, d.processes ? amount : `biosphere: ${amount}`,
+        state && `model: ${state}${d.model?.outdated ? ` (${esc(d.model.outdated)})` : ""}`, d.locked && "locked",
+        together && "uses databases that use it: built together with them",
+        (uses[d.name] || []).length && `uses: ${uses[d.name].map(esc).join(", ")}`,
+        usedBy(d.name).length && `used by (rebuilt when it changes): ${usedBy(d.name).map(esc).join(", ")}`].filter(Boolean).join("<br>"),
+    };
+  });
+  return {
+    textStyle: { color: text, fontFamily: cssVar("--font") },
+    tooltip: { trigger: "item", confine: true, formatter: (p) => p.dataType === "edge"
+      ? `${esc(p.data.source)} uses ${esc(p.data.target)}${p.data.n != null ? `: ${p.data.n.toLocaleString()} exchanges` : ""}`
+        + (p.data.listed ? "" : "<br>found in the exchanges, not listed in the project's metadata (depends)")
+      : p.data.tip },
+    series: [{
+      type: "graph", layout: "none", roam: true, left: 40, right: 200, top: 30, bottom: 40, data: nodes,  // room for the labels edgeSymbol: ["none", "arrow"], edgeSymbolSize: 8,
+      emphasis: { focus: "adjacency" },
+      links: edges.map((e) => {
+        const n = counts.get(`${e.from}\n${e.to}`);
+        return { source: e.from, target: e.to, listed: e.listed, n,
+          lineStyle: { color: muted, width: 1.2, type: e.listed ? "solid" : "dashed", curveness: 0.08 },
+          label: { show: n != null, formatter: n != null ? n.toLocaleString() : "", color: muted, fontSize: 10 } };
+      }),
+    }],
+  };
+}
+
+// The databases of a project and those each one uses (its ``depends``), opened from the project's options. The exchanges
+// between them are counted on the server (seconds the first time), which also finds links ``depends`` does not list.
+function DatabaseGraph({ folder, project, onClose }) {
+  const [links, setLinks] = useState(null);
+  const [error, setError] = useState(null);
+  useEffect(() => {
+    serverRequest(`/api/brightway/links?folder=${encodeURIComponent(folder)}&project=${encodeURIComponent(project.name)}`)
+      .then((r) => setLinks(r.links)).catch((e) => setError(e.message));
+  }, [folder, project.name]);
+  const option = useMemo(() => graphOption(project, links), [project, links]);
+  const levels = new Set(option.series[0].data.map((n) => n.y)).size;
+  const missing = links && option.series[0].links.some((l) => !l.listed);
+  return html`
+    <div class="project-form graph-form">
+      <h4>Databases of ${project.name} <${InfoTip} label="About the databases graph" text=${GRAPH_INFO} /></h4>
+      <p class="muted small">${!links && !error ? html`<span class="spinner" aria-hidden="true"></span> Counting the exchanges between databases (once; seconds for ecoinvent)… `
+        : error ? html`<span class="error-inline">Exchanges not counted: ${error}</span> `
+        : missing ? "Dashed: links found in the exchanges that the project's metadata does not list. " : "Numbers on the arrows: exchanges. "}
+        Colours: open (accent), built, outdated (red), not built (grey); a red ring: built together. Scroll to zoom, drag to move.</p>
+      <${Chart} option=${option} height=${Math.max(220, levels * 110 + 60)} />
+      <div><button type="button" onClick=${onClose}>Close</button></div>
+    </div>`;
+}
+
+// ---------------------------------------------------------------- storage
+const fmtBytes = (n) => (n >= 2 ** 30 ? `${(n / 2 ** 30).toFixed(1)} GB` : n >= 2 ** 20 ? `${Math.round(n / 2 ** 20)} MB` : n > 0 ? `${Math.max(1, Math.round(n / 2 ** 10))} kB` : "0");
+
+// What the app and Brightway take on disk (/api/storage), and what can be deleted: built models (or only their results,
+// G, solved again when the model is next opened), what failed builds and older versions left in data/cache, downloads.
+// Brightway projects are only measured: they are deleted with Delete project… in Projects.
+function StorageDialog({ onClose }) {
+  const folder = loadPreference("brightwayFolder", "");
+  const [listing, setListing] = useState(null);
+  const [error, setError] = useState(null);
+  const [asking, setAsking] = useState(null);  // { kind, path, text }: a deletion waiting for its confirmation
+  const [busy, setBusy] = useState(false);
+  const read = () => serverRequest(`/api/storage${folder ? `?folder=${encodeURIComponent(folder)}` : ""}`).then(setListing).catch((e) => setError(e.message));
+  useEffect(() => { read(); }, []);
+  const remove = async ({ kind, path }) => {
+    setBusy(true); setError(null);
+    try { await serverRequest("/api/storage/delete", { kind, path }); await read(); } catch (e) { setError(e.message); }
+    setAsking(null); setBusy(false);
+  };
+  const ask = (kind, path, text) => setAsking({ kind, path, text });
+  const confirmRow = (kind, path) => asking && asking.kind === kind && asking.path === path && html`
+    <div class="storage-confirm">${asking.text} <button class="danger" disabled=${busy} onClick=${() => remove(asking)}>Delete</button>
+      <button disabled=${busy} onClick=${() => setAsking(null)}>Cancel</button></div>`;
+  const items = listing?.items || [];
+  const models = items.filter((i) => i.kind === "model"), leftovers = items.filter((i) => i.kind === "leftover");
+  const downloads = items.filter((i) => i.kind === "download");
+  const sum = (list) => list.reduce((a, i) => a + i.size, 0);
+  return html`
+    <${Modal} title="Storage" className="storage-dialog" onClose=${onClose}>
+      ${error && html`<div class="error">${error}</div>`}
+      ${!listing ? (!error && html`<${Waiting} text="Measuring the folders…" />`) : html`
+        <p class="muted small">LCA Explorer: <b>${fmtBytes(listing.total)}</b> in <code>${listing.data}</code> and the download caches ·
+          Brightway: <b>${fmtBytes(listing.brightway_total)}</b> in <code>${listing.brightway}</code>
+          <${InfoTip} label="About storage" text="A built model holds its database and every database it uses, so a background database (ecoinvent) is stored again in each model built on it. Results (G) are what opening a model the first time computes: dropped, they are computed again at the next open. A model deleted is built again when its database is next opened. Open databases must be closed first." /></p>
+        <h3 class="load-head">Built models <span class="muted small">${fmtBytes(sum(models))}</span></h3>
+        <table class="load-table storage-table">
+          <tr><th>Model</th><th>Project</th><th class="num">Size</th><th class="num">Results</th><th></th></tr>
+          ${models.map((m) => html`
+            <tr key=${m.path} class=${m.orphan ? "muted" : ""}>
+              <td title=${m.path}>${m.database || m.title}${m.open ? html` <span class="loc-chip">open</span>` : ""}
+                ${m.orphan && html` <span class="small" title="It cannot be built again from its project">· ${m.orphan}</span>`}</td>
+              <td>${m.project || ""}</td><td class="num">${fmtBytes(m.size)}</td><td class="num">${m.results ? fmtBytes(m.results) : "–"}</td>
+              <td class="actions">
+                <button class="link" disabled=${busy || m.open || !m.results} title=${m.open ? "Close it first" : "Delete its results (G): computed again when it is next opened"}
+                  onClick=${() => ask("results", m.path, `Drop the results of ${m.database || m.title} (${fmtBytes(m.results)})?`)}>Drop results</button>
+                <button class="link danger" disabled=${busy || m.open} title=${m.open ? "Close it first" : "Delete the model: built again when its database is next opened"}
+                  onClick=${() => ask("model", m.path, `Delete the model of ${m.database || m.title} (${fmtBytes(m.size)})?${m.orphan ? " It cannot be built again." : ""}`)}>Delete</button>
+                ${confirmRow("results", m.path)}${confirmRow("model", m.path)}
+              </td>
+            </tr>`)}
+        </table>
+        ${models.length > 0 && html`<div class="storage-bulk">
+          <button class="link danger" disabled=${busy || models.some((m) => m.open)} title=${models.some((m) => m.open) ? "Close the open databases first" : "Delete every built model and left-over: each database is built again when next opened"}
+            onClick=${() => ask("all", null, `Delete all ${models.length} built models and what unfinished builds left (${fmtBytes(sum(models) + sum(leftovers.filter((l) => l.bulk)))})?`)}>Delete all built models…</button>
+          ${confirmRow("all", null)}</div>`}
+        ${leftovers.length > 0 && html`
+          <h3 class="load-head">Left-overs <span class="muted small">${fmtBytes(sum(leftovers))}</span></h3>
+          <table class="load-table storage-table">
+            ${leftovers.map((l) => html`<tr key=${l.path}><td title=${l.path}>${l.title}</td><td class="muted">${l.reason}</td>
+              <td class="num">${fmtBytes(l.size)}</td>
+              <td class="actions"><button class="link danger" disabled=${busy} onClick=${() => ask("leftover", l.path, `Delete ${l.title} (${fmtBytes(l.size)})?`)}>Delete</button>
+                ${confirmRow("leftover", l.path)}</td></tr>`)}
+          </table>
+          ${leftovers.some((l) => l.bulk) && html`<div class="storage-bulk"><button class="link danger" disabled=${busy}
+            onClick=${() => ask("leftovers", null, `Delete what unfinished builds left (${fmtBytes(sum(leftovers.filter((l) => l.bulk)))})?`)}>Delete what unfinished builds left</button>
+            ${confirmRow("leftovers", null)}</div>`}`}
+        ${downloads.length > 0 && html`
+          <h3 class="load-head">Downloads</h3>
+          <table class="load-table storage-table">
+            ${downloads.map((d) => html`<tr key=${d.path}><td title=${d.path}>${d.title}</td><td class="num">${fmtBytes(d.size)}</td>
+              <td class="actions"><button class="link danger" disabled=${busy || !d.size} title="Downloaded again when needed"
+                onClick=${() => ask("download", d.path, `Delete ${d.title} (${fmtBytes(d.size)})? Downloaded again when needed.`)}>Delete</button>
+                ${confirmRow("download", d.path)}</td></tr>`)}
+          </table>`}
+        <h3 class="load-head">Brightway projects <span class="muted small">${fmtBytes(sum(listing.projects))}</span>
+          <${InfoTip} label="About Brightway projects" text="The projects themselves (their databases, impact methods, search index, backups), for Activity Browser too. Delete one with Delete project… in Projects." /></h3>
+        <table class="load-table storage-table">
+          ${[...listing.projects].sort((a, b) => b.size - a.size).map((p) => html`<tr key=${p.path}><td title=${p.path}>${p.name}${p.twofive ? "" : html` <span class="muted small">· Brightway 2</span>`}</td>
+            <td class="num">${fmtBytes(p.size)}</td></tr>`)}
+        </table>`}
+    <//>`;
 }
 
 // What the Projects dialog last listed, shown at once when it opens again while it is read again
@@ -1766,7 +1964,8 @@ function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
                       run: () => setForm({ kind: "add", project: p.name }) }] : []),
                     ...(p.twofive ? [
                       { label: "Rename…", disabled: busy, title: "Give the project another name", run: () => setForm({ kind: "renameProject", project: p.name }) },
-                      { label: "Copy…", disabled: busy, title: "A copy of the project, with its databases", run: () => setForm({ kind: "copyProject", project: p.name }) }] : []),
+                      { label: "Copy…", disabled: busy, title: "A copy of the project, with its databases", run: () => setForm({ kind: "copyProject", project: p.name }) },
+                      { label: "Databases graph…", title: "The databases of this project, which ones each uses, and what a change rebuilds", run: () => setForm({ kind: "graph", project: p.name }) }] : []),
                     { label: "Delete project…", danger: true, title: "Delete this project", run: () => setForm({ kind: "delete", project: p.name }) }]} />
                 </td>
               </tr>
@@ -7842,6 +8041,7 @@ function App() {
   // Databases loaded in the server; null: a server without the Projects dialog (one model, plain URLs)
   const [databases, setDatabases] = useState(undefined);
   const [loadOpen, setLoadOpen] = useState(false);
+  const [storageOpen, setStorageOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   // Ctrl/⌘ + K: the search of the top bar
@@ -8199,6 +8399,7 @@ function App() {
       <${DatabaseSelect} databases=${databases} />
       ${databases && html`<button onClick=${() => setLoadOpen(true)}
         title="Projects: open, add, rename, lock or remove a database">Projects</button>`}
+      <button onClick=${() => setStorageOpen(true)} title="Storage: what the built models and Brightway projects take on disk, and what can be deleted">Storage</button>
       ${editing && html`<span class="mode-badge" title="Edit mode: changes are staged, then made together in the project">Edit mode</span>`}
       ${outdated && html`<button class="primary" disabled=${rebuilding?.status === "running"} onClick=${rebuild}
         title=${`${outdated}: the model has to be built again, and its impacts are greyed out until then`}>
@@ -8224,6 +8425,7 @@ function App() {
     </header>
     ${shortcutsOpen && html`<${ShortcutsDialog} onClose=${() => setShortcutsOpen(false)} />`}
     ${settingsOpen && html`<${SettingsDialog} lens=${lensApi} onClose=${() => setSettingsOpen(false)} />`}
+    ${storageOpen && html`<${StorageDialog} onClose=${() => setStorageOpen(false)} />`}
     ${loadOpen &&html`<${LoadDatabase} onClose=${() => setLoadOpen(false)} onDatabases=${setDatabases} onLocks=${refreshEditor} />`}
     ${datasetOpen && origin && html`<${DatasetForm} current=${origin} edit=${datasetOpen.edit} initial=${datasetOpen.initial}
       copyFrom=${datasetOpen.copyFrom} deleted=${new Set(pending.filter((c) => c.kind === "delete").map((c) => `${c.database}/${c.code}`))}

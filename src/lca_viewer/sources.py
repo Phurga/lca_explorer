@@ -66,6 +66,54 @@ def register(data, output, title: str, default_root: str | None, source: dict | 
     path.write_text(json.dumps(models, indent=2) + "\n", encoding="utf-8")
 
 
+def unregister(data, output) -> None:
+    """Remove a model from ``data/models.json`` (its folder is not touched)."""
+    path = Path(data) / "models.json"
+    if not path.exists():
+        return
+    output = Path(output).resolve()
+    models = [m for m in json.loads(path.read_text(encoding="utf-8")) if (path.parent / m["path"]).resolve() != output]
+    path.write_text(json.dumps(models, indent=2) + "\n", encoding="utf-8")
+
+
+def folder_size(path) -> int:
+    """Bytes of the files under ``path`` (0 when it does not exist); links are not followed."""
+    total, todo = 0, [Path(path)]
+    while todo:
+        try:
+            with os.scandir(todo.pop()) as entries:
+                for e in entries:
+                    try:
+                        if e.is_dir(follow_symlinks=False):
+                            todo.append(Path(e.path))
+                        elif e.is_file(follow_symlinks=False):
+                            total += e.stat(follow_symlinks=False).st_size
+                    except OSError:
+                        pass
+        except OSError:
+            pass
+    return total
+
+
+def database_links(project_dir: Path, cache: dict | None = None) -> list[list]:
+    """``[[database, database it uses, exchanges], ...]`` read from the exchanges of the project (biosphere ones
+    included): the links Brightway's ``depends`` should list. Seconds to tens of seconds (5.8M exchanges: 20 s), so
+    ``cache`` (``{path: {"stamp", "links"}}``) keeps them until the file is written again."""
+    path = Path(project_dir) / "lci" / "databases.db"
+    if not path.is_file():
+        return []
+    stamp, key = _file_stamp(path), str(path)
+    if cache is not None and (cache.get(key) or {}).get("stamp") == stamp:
+        return cache[key]["links"]
+    with closing(sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)) as con:
+        links = [[o, i, n] for o, i, n in con.execute(
+            "SELECT output_database, input_database, COUNT(*) FROM exchangedataset "
+            "WHERE output_database != input_database GROUP BY output_database, input_database")]
+    if cache is not None:
+        cache[key] = {"stamp": stamp, "links": links}
+    return links
+
+
 def slug(text: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "-", text).strip("-") or "model"
 

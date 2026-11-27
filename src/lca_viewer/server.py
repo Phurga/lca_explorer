@@ -13,6 +13,7 @@ import os
 import re
 import sqlite3
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 import pandas as pd
@@ -1178,6 +1179,13 @@ class UnloadRequest(BaseModel):
     key: str
 
 
+class StorageDeleteRequest(BaseModel):
+    """``kind``: "model", "results" (the ``G`` of a model), "leftover", "download" (with ``path``), or "leftovers" /
+    "all" (every left-over / every model and left-over)."""
+    kind: Literal["model", "results", "leftover", "download", "leftovers", "all"]
+    path: str | None = None
+
+
 class ProjectRequest(BaseModel):
     folder: str
     """A Brightway data folder (created if needed)."""
@@ -1645,6 +1653,122 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
                 # outdated: what changed in the project since the build (None: nothing)
                 d["model"] = b and {"key": b["key"], "outdated": sources.changes(b["source"], sources.database_state(p, d["name"]))}
         return {"folder": folder, "projects": projects}
+
+    links_file = data / "cache" / "links.json"
+    try:
+        links_cache = json.loads(links_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        links_cache = {}
+
+    @app.get("/api/brightway/links")
+    def brightway_links(folder: str, project: str):
+        """The links between the databases of a project, counted in its exchanges (seconds to tens of seconds the first
+        time, then kept until the project is written again): ``{"links": [[database, database it uses, exchanges]]}``."""
+        try:
+            directory = sources.project_dir(folder_of(folder), project)
+        except (ValueError, FileNotFoundError) as e:
+            raise HTTPException(404, str(e))
+        key = str(directory / "lci" / "databases.db")
+        before = links_cache.get(key)
+        found = sources.database_links(directory, links_cache)
+        if links_cache.get(key) is not before:  # counted again: kept for the next start
+            try:
+                links_file.parent.mkdir(parents=True, exist_ok=True)
+                links_file.write_text(json.dumps(links_cache), encoding="utf-8")
+            except OSError:
+                pass
+        return {"links": found}
+
+    # ------------------------------------------------ Storage: what the app and Brightway take on disk
+
+    def storage_items() -> dict[str, dict]:
+        """What the storage dialog lists, by path: built models, left-overs in data/cache, downloads, Brightway projects.
+        Only these paths can be deleted from it."""
+        items: dict[str, dict] = {}
+        cache = (data / "cache").resolve()
+        catalog_paths = set()
+        known_projects: dict[str, dict] = {}
+        for m in sources.catalog(data):
+            path = Path(m["path"]).resolve()
+            catalog_paths.add(path)
+            origin = built_from(m)
+            reason = None if (path / "A.npz").exists() else "not built"
+            if origin and reason is None:
+                folder, project, database = origin
+                if folder not in known_projects:
+                    try:
+                        known_projects[folder] = {p["name"]: {d["name"] for d in p["databases"]} for p in projects_in(folder)}
+                    except (FileNotFoundError, OSError):
+                        known_projects[folder] = {}
+                names = known_projects[folder]
+                reason = (None if database in names.get(project, ()) else
+                          f"database {database} no longer in {project}" if project in names else f"project {project} no longer exists")
+            results = sum((path / f).stat().st_size for f in ("G.npy", "G.json") if (path / f).exists())
+            items[str(path)] = {"kind": "model", "path": str(path), "title": m["title"], "size": sources.folder_size(path),
+                                "results": results, "open": loaded_key(path) is not None, "orphan": reason,
+                                "project": origin and origin[1], "database": origin and origin[2]}
+        if cache.is_dir():  # what the catalog does not list: models of an older layout, builds left half done
+            for first in cache.iterdir():
+                for path in ([first] if (first / "A.npz").exists() or first.suffix in (".part", ".old") else
+                             list(first.iterdir()) if first.is_dir() else []):
+                    if path.is_dir() and path.resolve() not in catalog_paths:
+                        items[str(path.resolve())] = {"kind": "leftover", "path": str(path.resolve()), "title": path.name,
+                                                      "size": sources.folder_size(path), "bulk": path.suffix in (".part", ".old"),
+                                                      "reason": ("build left unfinished" if path.suffix in (".part", ".old")
+                                                                 else "not in models.json (a model opened with --model?)")}
+                if first.is_dir() and first.name.startswith("bw-") and not any(first.iterdir()):
+                    items[str(first.resolve())] = {"kind": "leftover", "path": str(first.resolve()), "title": first.name,
+                                                   "size": 0, "bulk": True, "reason": "empty folder"}
+        for path, title in [(data / "downloads", "Downloads of LCA Explorer (biosphere, methods, projects)"),
+                            (sources.default_brightway_dir().parent / "EcoinventInterface", "ecoinvent releases (ecoinvent_interface)")]:
+            if path.is_dir():
+                items[str(path.resolve())] = {"kind": "download", "path": str(path.resolve()), "title": title,
+                                              "size": sources.folder_size(path)}
+        return items
+
+    @app.get("/api/storage")
+    def storage(folder: str | None = None):
+        """Sizes on disk: the app's items (see ``storage_items``) and the projects of the Brightway data folder."""
+        items = list(storage_items().values())
+        base = Path(folder_of(folder)) if folder else sources.brightway_dir()
+        projects = []
+        try:
+            for name, twofive, directory in sources._projects(base):
+                projects.append({"name": name, "twofive": twofive, "path": str(directory),
+                                 "size": sources.folder_size(directory)})
+        except (FileNotFoundError, OSError, ValueError):
+            pass
+        return {"data": str(data), "brightway": str(base), "items": items, "projects": projects,
+                "total": sum(i["size"] for i in items), "brightway_total": sources.folder_size(base) if base.is_dir() else 0}
+
+    @app.post("/api/storage/delete")
+    def storage_delete(req: StorageDeleteRequest):
+        """Delete what the storage dialog lists: a model (``results``: its ``G`` only, solved again when it is next
+        opened), a left-over, a download folder. A model that is open is closed first by the page."""
+        items = storage_items()
+        # in bulk: the models, and what builds left (not a model folder that only models.json leaves out)
+        targets = [i for i in items.values() if i["kind"] == "model" or i.get("bulk")] if req.kind == "all" else \
+            [i for i in items.values() if i.get("bulk")] if req.kind == "leftovers" else \
+            [items[str(Path(req.path).resolve())]] if req.path and str(Path(req.path).resolve()) in items else []
+        if req.kind not in ("all", "leftovers") and targets and targets[0]["kind"] != ("model" if req.kind == "results" else req.kind):
+            raise HTTPException(400, f"{targets[0]['title']} is not a {req.kind}")
+        if not targets:
+            raise HTTPException(404, "Nothing to delete there")
+        busy = [i["title"] for i in targets if i.get("open")]
+        if busy:
+            raise HTTPException(409, f"Close {', '.join(busy)} first")
+        if any(j["status"] == "running" for j in jobs.values()):
+            raise HTTPException(409, "Wait for the job under way to end")
+        for item in targets:
+            path = Path(item["path"])
+            if req.kind == "results":
+                for name in ("G.npy", "G.json"):
+                    (path / name).unlink(missing_ok=True)
+                continue
+            shutil.rmtree(path, ignore_errors=True)
+            if item["kind"] == "model":
+                sources.unregister(data, path)
+        return storage(None)
 
     @app.post("/api/load")
     def load(req: LoadRequest):
