@@ -70,6 +70,24 @@ API in `src/lca_viewer/server.py`.
   each source (ecoinvent no longer makes its own project). These forms sit
   in the Projects dialog, next to the projects they change, rather than
   in a separate manager.
+- **Methods library** (a section of *Projects*, below the projects, folded and unfolded with its arrow; see
+  `docs/methods-library.md`): impact methods of the user's own, kept by the app in `data/methods/` (one JSON file
+  each), not by a project. Its **+** adds one: *Copy a method of a project…* (an editable copy, its family marked
+  *(copy)*), *New empty method…* (name parts and unit) or *Import a CSV file…* (flow name, compartment,
+  subcompartment, unit, factor, matched to the elementary flows of a project chosen in the form; the rows of no flow
+  are listed with the reason). The methods are listed by family, with their unit, origin and number of factors; *Edit*
+  opens the **method editor** under the row (`MethodEditor`, in the style of `ProjectForm`): name parts, unit and
+  description (*Save*), the factors with a filter, a value saved when its field is left, × to remove one, and a
+  factor added by searching the emissions or resources of a project (`NodePicker`) with the value typed beside it;
+  the factors whose flow the project chosen does not have are greyed out. Then *Import CSV…*, *Export CSV*,
+  *Duplicate…* and *Delete…* (confirmed), also in the row's ⚙ menu. Building a database offers the library's methods
+  after the project's, as the source *library* ("EF v3.1 (copy) · library"), and so does *Add impact methods* of the
+  Methods panel. Decision: the app's own files rather than methods written into each Brightway project (through a
+  subprocess, and marking all the project's databases as to rebuild at every write): a library method is not tied to
+  one project, and is matched to the flows of each build's project (by key, by code, else by name and compartments).
+  Decision: a section of the Projects dialog, with its forms inline, as the project forms are, rather than a dialog of
+  its own: one place for what a build is made of. Decision: a factor changed is written at once; a database built
+  with a method edited since is shown as to rebuild (*methods of the library changed since the model was built*).
 - **Process form** (opened from the edit panel): a wide dialog to enter
   a process as in SimaPro: target (folder, project, database or new one),
   process and documentation, products (co-products with allocation %, their
@@ -284,8 +302,8 @@ API in `src/lca_viewer/server.py`.
   custom format with the tokens `{source}`, `{family}`, `{category}`, `{indicator}` and `{unit}`. A method name is
   read as (family, category, indicator…), except the methods that come with an ecoinvent release, which have it first:
   ("ecoinvent-3.10.1", family, category, indicator). A first part `<name>-<version>` of a name of four parts or more is
-  that **source** (`methodPath` in the app, `_method_family` on the server); the *Source* box shows only when a method
-  has one, off by default. The method lists group by family and source ("EF v3.1 · ecoinvent-3.11"), and the methods
+  that **source** (`methodPath` in the app, `_method_family` on the server), as is `library` for the methods of the
+  methods library (*Projects*); the *Source* box shows only when a method has one, off by default. The method lists group by family and source ("EF v3.1 · ecoinvent-3.11"), and the methods
   shown together at first, like those a build offers, are the family of the default method (not the whole release).
   Kept per database in `localStorage` (by method name, so a rebuilt model finds them);
   a workspace saved before takes the method and rules of its first tab; rules that other

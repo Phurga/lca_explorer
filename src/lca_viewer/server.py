@@ -272,9 +272,11 @@ _METHOD_SOURCE = re.compile(r"^[a-z]\w*-\d+(\.\d+)+$", re.IGNORECASE)
 def _method_family(name) -> tuple[str, str]:
     """The family of a method (its source, its family): Brightway names a method (family, category, indicator...); those
     that come with an ecoinvent release have the release first ("ecoinvent-3.10.1", family, category, indicator), as
-    ``methodPath`` of the app reads them."""
+    ``methodPath`` of the app reads them. The methods of the app's library have "library" first."""
+    from .methods_library import is_library
+
     name = [str(part) for part in name]
-    if len(name) >= 4 and _METHOD_SOURCE.match(name[0]):
+    if (len(name) >= 4 and _METHOD_SOURCE.match(name[0])) or is_library(name):
         return name[0], name[1]
     return "", name[0] if name else ""
 
@@ -1380,9 +1382,10 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
     from fastapi.responses import RedirectResponse
     from starlette.routing import Mount
 
-    from . import project_cache, sources
+    from . import methods_library, project_cache, sources
 
     data = Path(data or "data").resolve()
+    library = methods_library.Library(data / "methods")
     # Files the page uploaded are deleted once imported: those left are of an import that failed or was
     # abandoned (no job runs yet)
     shutil.rmtree(data / "uploads", ignore_errors=True)
@@ -1470,7 +1473,7 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
             now = {r["id"]: [r["version"], r.get("basis")] for r in project_cache.closure(info, database)}
             if now != origin["segments"]:
                 return "built again since it was opened"
-        return state["outdated"]
+        return state["outdated"] or library.stale(project_cache.read_project(entry["cache"]))
 
     def in_use(cache) -> set[str]:
         """The segment folders of a project cache that open databases read."""
@@ -1584,7 +1587,7 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
         entry = bw_entry(folder, project, database)
         cache = Path(entry["cache"])
         state = project_cache.status(cache, database, p)
-        if state["built"] and not rebuild and not state["solve"]:
+        if state["built"] and not rebuild and not state["solve"] and not library.stale(project_cache.read_project(cache)):
             return entry
         if loaded_key(entry["path"]) and not reopen:
             raise ValueError(f"{database} is open: close it first (Close, in the list of loaded databases), then rebuild it")
@@ -1604,6 +1607,9 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
             if methods is not None:
                 if not methods:
                     raise ValueError("Choose at least one impact method")
+                methods = library_file(chosen, methods, folder, project, args)
+                if not methods:
+                    raise ValueError("None of the chosen impact methods is in the project or the methods library")
                 chosen.parent.mkdir(parents=True, exist_ok=True)
                 chosen.write_text(json.dumps(methods), encoding="utf-8")
                 args += ["--methods-file", str(chosen)]
@@ -1615,6 +1621,7 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
                 raise ValueError(f"The build failed: {e}") from None
             finally:
                 chosen.unlink(missing_ok=True)
+                chosen.with_suffix(".library.json").unlink(missing_ok=True)
         with lock:
             key = loaded_key(entry["path"])
             if key and reopen:  # served until now, from the folders of its former build: opened again by the caller
@@ -1623,6 +1630,18 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
         gc.collect()
         clean(cache)
         return entry
+
+    def library_file(chosen: Path, methods: list, folder: str, project: str, args: list[str]) -> list:
+        """The methods of a build, those of the library under their current names (those no longer in it left out);
+        the library's factors on the project's flows written next to ``chosen`` for the build process
+        (``--library-file`` added to ``args``)."""
+        names, found = methods_library.build_entries(library, methods, folder, project)
+        if found:
+            path = chosen.with_suffix(".library.json")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(found), encoding="utf-8")
+            args += ["--library-file", str(path)]
+        return names
 
     def run(job: dict, req: LoadRequest) -> dict:
         if req.brightway:
@@ -1925,7 +1944,19 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
         if methods:
             family = _method_family(methods[_default_index([m["name"] for m in methods])]["name"])
             default = [m["name"] for m in methods if _method_family(m["name"]) == family]
-        return {"methods": methods, "selected": selected, "default": default}
+        # The methods of the app's library, under the names they take in a model, with how many of their factors are
+        # on flows of the project; those chosen before, under their current names
+        offered = []
+        for m in library.all():
+            try:
+                cover = methods_library.coverage(m, folder, project)
+            except (FileNotFoundError, ValueError):
+                cover = {"matched": 0, "total": len(m["factors"])}
+            offered.append({"name": methods_library.model_name(m["name"]), "unit": m["unit"], "library": m["id"],
+                            "matched": cover["matched"], "factors": cover["total"]})
+        if selected and any(methods_library.is_library(n) for n in selected):
+            selected = methods_library.build_entries(library, selected, folder, project)[0]
+        return {"methods": methods, "selected": selected, "default": default, "library": offered}
 
     def add_methods_job(job: dict, key: str, names: list[list[str]]) -> dict:
         m = loaded.get(key)
@@ -1944,15 +1975,21 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
         cache = Path(entry["cache"])
         chosen = cache.with_name(cache.name + ".add-methods.json")
         job["message"] = f"Reading {len(names)} impact methods from {project}"
+        args = ["add-methods", "--project", project, "--database", database, "--cache", str(cache)]
         with build_lock(cache):
+            names = [n for n in methods_library.build_entries(library, names, folder, project)[0] if tuple(n) not in have]
+            if not names:
+                return {"added": 0, "message": "These methods are there already, or no longer in the library"}
+            # The library methods the project cache has are given again: the build process keeps only those it knows
+            library_file(chosen, project_cache.method_names(cache) + names, folder, project, args)
             chosen.write_text(json.dumps(names), encoding="utf-8")
             try:
                 # Their factors read, and their columns of G solved for every segment, in the build process
-                cli(job, folder, ["add-methods", "--project", project, "--database", database, "--cache", str(cache),
-                                  "--methods-file", str(chosen)],
+                cli(job, folder, [*args, "--methods-file", str(chosen)],
                     lambda line: line.startswith(("Reading", "Solving")) and line)
             finally:
                 chosen.unlink(missing_ok=True)
+                chosen.with_suffix(".library.json").unlink(missing_ok=True)
         methods, columns, unlinked = project_cache.method_columns(model, names)
         added = model.add_methods(methods, unlinked=unlinked, columns=columns)
         clean(cache)
@@ -2023,6 +2060,9 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
         """Delete a file the page uploaded (``/api/upload``) once it has been used."""
         if Path(path).resolve().parent == (data / "uploads").resolve():
             Path(path).unlink(missing_ok=True)
+
+    # The methods library (data/methods): /api/library/methods…
+    app.include_router(methods_library.router(library, folder_of, uploaded))
 
     @app.post("/api/brightway/projects")
     def create_project(req: ProjectRequest):

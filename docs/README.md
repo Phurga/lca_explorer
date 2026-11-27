@@ -12,6 +12,7 @@ One file per theme; each records the decisions taken and why.
 | [charts.md](charts.md) | contribution charts built from the tree frontier |
 | [ui.md](ui.md) | front-end stack and interaction design |
 | [data-import.md](data-import.md) | Brightway import of ecoinvent (ecoSpold2) and Agribalyse (SimaPro CSV), licensing |
+| [methods-library.md](methods-library.md) | impact methods of the user's own (data/methods): storage, flow matching, CSV, builds |
 | [project-cache.md](project-cache.md) | design (not implemented): cache per Brightway project in segments, storage menu, database graph |
 | [reference-example.md](reference-example.md) | the dataset used for all checks (GLO wheat, feed) |
 | [environment.md](environment.md) | conda env, data folders, how to run |

@@ -658,6 +658,7 @@ def build(project: str, database: str, methods: list | None, cache, rebuild: boo
     import bw2data as bd
 
     from .brightway import _unlinked_factors, flow_frame, method_factors
+    from .methods_library import registered
     from .sources import _methods_stamp
 
     try:
@@ -677,7 +678,7 @@ def build(project: str, database: str, methods: list | None, cache, rebuild: boo
                 "project": project, "methods_stamp": None, "methods": [], "segments": [], "retired": []}
     (cache / "segments").mkdir(parents=True, exist_ok=True)
     names = [tuple(m) for m in (methods if methods is not None else [m["name"] for m in info["methods"]] or list(bd.methods))]
-    names = [m for m in names if m in bd.methods]
+    names = [m for m in names if m in bd.methods or registered(m)]  # a method of the library: given by the server
     if not names:
         raise ValueError(f"Project {project!r} has no impact methods: install some first (e.g. with "
                          f"bw2io's bw2setup or ecoinvent_interface)")
@@ -707,7 +708,8 @@ def build(project: str, database: str, methods: list | None, cache, rebuild: boo
             uses_databases = sorted({d for r in closure(info, record["databases"][0]) for d in r["databases"]}
                                     - set(record["databases"]))
             try:
-                ids, seen = _build_segment(record["databases"], uses_databases, path, names[0], log)
+                ids, seen = _build_segment(record["databases"], uses_databases, path,
+                                           next((m for m in names if m in bd.methods), None), log)
             except BaseException:
                 shutil.rmtree(path, ignore_errors=True)
                 raise
@@ -738,6 +740,7 @@ def build(project: str, database: str, methods: list | None, cache, rebuild: boo
     if (cache / "methods.pkl").exists():
         with open(cache / "methods.pkl", "rb") as f:
             old = {tuple(m.name): (m, t["token"]) for m, t in zip(pickle.load(f), info["methods"])}
+    old_digests = {tuple(t["name"]): t.get("library") for t in info["methods"]}
     if new_flows:
         log(f"Reading {len(new_flows)} elementary flows")
         added = flow_frame(np.array(sorted(new_flows), dtype=np.int64))
@@ -748,9 +751,11 @@ def build(project: str, database: str, methods: list | None, cache, rebuild: boo
     changed = stamp != info["methods_stamp"]
     # Kept in the order they had, those added after: the columns of the methods already there do not move
     order = [n for n in old if n in names] + [n for n in names if n not in old]
-    if changed or new_flows or order != list(old):
-        # Read again: all of them when the project's methods were written since, else those added
-        fresh_names = order if changed else [n for n in order if n not in old]
+    library = [n for n in order if registered(n)]
+    if changed or new_flows or order != list(old) or any(registered(n)["digest"] != old_digests.get(n) for n in library):
+        # Read again: all of them when the project's methods were written since, else those added (and those of
+        # the library, which may have been edited: their columns of G are kept if their factors are the same)
+        fresh_names = order if changed else [n for n in order if n not in old or n in library]
         if fresh_names:
             log(f"Reading {len(fresh_names)} impact methods")
         fresh = {tuple(m.name): m for m in method_factors(fresh_names, flow_ids)} if fresh_names else {}
@@ -771,7 +776,8 @@ def build(project: str, database: str, methods: list | None, cache, rebuild: boo
                 m, token = before
                 m = Method(m.name, m.unit, np.concatenate([m.cfs, extra.get(n, np.zeros(len(flow_ids) - len(m.cfs)))]))
             loaded.append(m)
-            entries.append({"name": list(n), "unit": m.unit, "token": token})
+            entries.append({"name": list(n), "unit": m.unit, "token": token,
+                            **({"library": registered(n)["digest"]} if registered(n) else {})})
         log("Reading the factors of the methods on flows outside the project cache")
         unlinked = _unlinked_factors(order, flow_ids)
         _replace_pickle(cache / "flows.pkl", flows)
