@@ -260,8 +260,13 @@ API in `src/lca_viewer/server.py`.
   applies its tree, not its method or its set of rules (a notice says so). The explorer
   inside a pop-up takes the method of its tab, with rules of its own.
   *Name display* (a section of the Methods panel) sets how a method is named in the titles, the files, the
-  several-methods chart and the matrix: parts (family, category, indicator, unit) or a
-  custom format with the tokens `{family}`, `{category}`, `{indicator}` and `{unit}`.
+  several-methods chart and the matrix: parts (source, family, category, indicator, unit) or a
+  custom format with the tokens `{source}`, `{family}`, `{category}`, `{indicator}` and `{unit}`. A method name is
+  read as (family, category, indicator…), except the methods that come with an ecoinvent release, which have it first:
+  ("ecoinvent-3.10.1", family, category, indicator). A first part `<name>-<version>` of a name of four parts or more is
+  that **source** (`methodPath` in the app, `_method_family` on the server); the *Source* box shows only when a method
+  has one, off by default. The method lists group by family and source ("EF v3.1 · ecoinvent-3.11"), and the methods
+  shown together at first, like those a build offers, are the family of the default method (not the whole release).
   Kept per database in `localStorage` (by method name, so a rebuilt model finds them);
   a workspace saved before takes the method and rules of its first tab; rules that other
   tabs had of their own are dropped.
@@ -495,15 +500,15 @@ API in `src/lca_viewer/server.py`.
   **Alternatives** lists the other activities producing the same product
   with their cumulative impact per unit and its unit, lowest first, the current one on top whatever the order or
   the filter (rows like the others; below an expanded one, its inputs with their impact and share of it).
-  **Characterisation** (second, after *Exchanges*): the process's own exchanges with nature per unit of its product,
-  by elementary flow in the active method: the flow (icon, name, compartment), its amount and unit, its factor, its
-  impact and its share of the direct score, largest first; above the list, the direct score per unit and the
-  cumulative one (with its supply chain), and how many of its exchanges with nature have no factor. A flow's name or
-  right-click opens the flow pop-up, its (i) the exchange in this dataset. Decision: the impact by elementary flow in
-  the active method rather than the direct and cumulative scores across the methods shown together: it reads one
-  column of `B` (no solve) and makes the panel the process's side of the cycle process → flow → model, while the
-  scores of every method are the *Multi indicator matrix*'s. API: `GET /api/activity/{index}/characterisation?method=&limit=`
-  (`direct`, `cumulative`, `count`, `uncharacterised`, `flows`).
+  **Characterisation** (second, after *Exchanges*): the process's **total impacts** per unit of its product, one row
+  per method — the main method (on top, "main") then the methods shown together (ticked in the *Methods* panel) —
+  with its total (cumulative, `G`), its direct score (`U`), their unit and the direct share; a method's name or
+  right-click opens its model pop-up. Read from `U` and `G`: no solve. Method names follow the *Name display* of the
+  *Methods* panel (`methodTitle`, unit included), as in the flow's *Characterisation*. Decision: no list of the
+  process's elementary flows here — they are in its *Exchanges*, and a flow's *Characterisation* leads on to the
+  models. API: `GET /api/activity/{index}/characterisation?method=&limit=` (`totals`: `{direct, cumulative}`, one value
+  per method of the model, in their order; also `direct`, `cumulative`, `count`, `uncharacterised` and `flows`, its
+  exchanges with nature in `method`, which the panel no longer shows).
   Descriptions are stored in the cached model (`details.pkl`, 77 MB for
   ecoinvent, loaded on first use).
   **Exchanges** is an instance of the main view's left panel (header, list, bars

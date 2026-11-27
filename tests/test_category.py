@@ -175,4 +175,24 @@ def test_api_process_characterisation_splits_its_own_emissions_per_unit(client):
     market = client.get("/api/activity/0/characterisation?method=0").json()
     assert market["flows"] == [] and market["direct"] == 0
     assert market["cumulative"] == pytest.approx(0.6 * (1 + 2 + 2.73) + 0.4 * 5.96)
+    # the totals of every method, the active one among them
+    assert data["totals"]["direct"][0] == pytest.approx(data["direct"])
+    assert market["totals"]["cumulative"][0] == pytest.approx(market["cumulative"])
+    assert len(data["totals"]["direct"]) == len(data["totals"]["cumulative"]) == len(client.get("/api/info").json()["methods"])
     assert client.get("/api/activity/9/characterisation").status_code == 404
+
+
+def test_method_family_reads_the_source_of_an_ecoinvent_release():
+    """The methods that come with an ecoinvent release have the release first: their family is the second part (the
+    build offers the family of the default method, not every method of the release)."""
+    from lca_viewer.server import _default_index, _method_family
+
+    assert _method_family(["ecoinvent-3.10.1", "EF v3.1", "climate change", "GWP100"]) == ("ecoinvent-3.10.1", "EF v3.1")
+    assert _method_family(["EF v3.1", "climate change", "global warming potential (GWP100)"]) == ("", "EF v3.1")
+    assert _method_family(["Ecological Scarcity 2021", "Water resources, evaporated"]) == ("", "Ecological Scarcity 2021")
+    assert _method_family(["AESA CC sous-globale", "climate change", "x"]) == ("", "AESA CC sous-globale")
+    names = [["ecoinvent-3.10.1", "CML v4.8 2016 no LT", "acidification no LT", "acidification"],
+             ["ecoinvent-3.10.1", "EF v3.1", "climate change", "global warming potential (GWP100)"],
+             ["ecoinvent-3.10.1", "EF v3.1", "acidification", "accumulated exceedance (AE)"]]
+    family = _method_family(names[_default_index(names)])
+    assert [n for n in names if _method_family(n) == family] == names[1:]

@@ -85,16 +85,29 @@ function fmtAxis(v) {
   return String(Number(v.toPrecision(3)));
 }
 const pct = (x) => `${(x * 100).toFixed(1)}%`;
-// How the impact methods are named in the results (set in the Methods panel): from parts (the family, the category, the
-// indicator, the unit after the name) or from a format of one's own with the
-// tokens {family}, {category}, {indicator} and {unit}
-const DEFAULT_NAME_FORMAT = { family: true, category: true, indicator: true, unit: true, mode: "parts", recipe: "{category} | {indicator} [{unit}]" };
-const METHOD_TOKENS = ["family", "category", "indicator", "unit"];
+// The parts of a method's name. Brightway names a method (family, category, indicator…); the methods that come with an
+// ecoinvent release (bw2io 0.9) have the release first, their source: ("ecoinvent-3.10.1", family, category, indicator).
+// A first part "<name>-<version>" in a name of four parts or more is that source.
+const METHOD_SOURCE = /^[a-z][\w]*-\d+(\.\d+)+$/i;
+function methodPath(m) {
+  const source = m.name.length >= 4 && METHOD_SOURCE.test(m.name[0]) ? m.name[0] : "";
+  const rest = source ? m.name.slice(1) : m.name;
+  return { source, family: rest[0] ?? "", category: rest[1] ?? "", indicator: rest.slice(2).join(" | "), rest };
+}
+// A family as the lists group the methods: the family, and its source when it has one (the same family in two releases
+// stays apart)
+const familyKey = (m) => { const p = methodPath(m); return p.source ? `${p.family} · ${p.source}` : p.family; };
+// How the impact methods are named in the results (set in the Methods panel): from parts (the source, the family, the
+// category, the indicator, the unit after the name) or from a format of one's own with the
+// tokens {source}, {family}, {category}, {indicator} and {unit}
+const DEFAULT_NAME_FORMAT = { source: false, family: true, category: true, indicator: true, unit: true, mode: "parts", recipe: "{category} | {indicator} [{unit}]" };
+const METHOD_TOKENS = ["source", "family", "category", "indicator", "unit"];
 let nameFormat = DEFAULT_NAME_FORMAT;
 let nameStamp = "";  // changes with the format, for the memos that hold names
 // A format applied: empty brackets and separators left by an empty part are dropped
 function applyMethodRecipe(recipe, m) {
-  const values = { family: m.name[0] ?? "", category: m.name[1] ?? "", indicator: m.name.slice(2).join(" | "), unit: m.unit ?? "" };
+  const p = methodPath(m);
+  const values = { source: p.source, family: p.family, category: p.category, indicator: p.indicator, unit: m.unit ?? "" };
   return recipe.replace(/\{(\w+)\}/g, (token, key) => (key in values ? values[key] : token))
     .replace(/\[\s*\]|\(\s*\)/g, "").replace(/(\s*\|\s*)+(?=\s*\|)/g, "").replace(/^[\s|,·-]+|[\s|,·-]+$/g, "").replace(/\s+/g, " ").trim();
 }
@@ -102,7 +115,8 @@ const customName = () => nameFormat.mode === "custom";
 // The name of a method without its unit
 const methodLabel = (m) => {
   if (customName()) return applyMethodRecipe(nameFormat.recipe.replace(/\s*\[?\{unit\}\]?/g, ""), m) || m.name.join(" | ");
-  const parts = [nameFormat.family && m.name[0], nameFormat.category && m.name[1], nameFormat.indicator && m.name.slice(2).join(" | ")].filter(Boolean);
+  const p = methodPath(m);
+  const parts = [nameFormat.source && p.source, nameFormat.family && p.family, nameFormat.category && p.category, nameFormat.indicator && p.indicator].filter(Boolean);
   return (parts.length ? parts : [m.name.join(" | ")]).join(" | ");
 };
 // A method with its unit, for the titles and the headers of files
@@ -111,8 +125,9 @@ const methodTitle = (m) => (customName() ? applyMethodRecipe(nameFormat.recipe, 
 // A method as a row or a bar of the several methods (the family is the same for all of them: not repeated unless asked)
 const methodRow = (m) => {
   if (customName()) return applyMethodRecipe(nameFormat.recipe, m) || m.name.join(" | ");
-  const parts = [nameFormat.category && m.name[1], nameFormat.indicator && m.name.slice(2).join(" | ")].filter(Boolean);
-  return parts.length ? parts.join(" | ") : m.name.slice(1).join(" | ") || m.name[0];
+  const p = methodPath(m);
+  const parts = [nameFormat.category && p.category, nameFormat.indicator && p.indicator].filter(Boolean);
+  return parts.length ? parts.join(" | ") : p.rest.slice(1).join(" | ") || p.family;
 };
 const productOf = (rowId) => Number(rowId.split("/").pop());
 // The reference product of a process row: its label starts with it ("product | name | location")
@@ -1166,7 +1181,7 @@ function MethodPicker({ methods, chosen, setChosen }) {
   const [open, setOpen] = useState(() => new Set());
   const families = useMemo(() => {
     const map = new Map();
-    methods.forEach((m) => map.set(m.name[0], [...(map.get(m.name[0]) || []), m]));
+    methods.forEach((m) => map.set(familyKey(m), [...(map.get(familyKey(m)) || []), m]));
     return [...map];
   }, [methods]);
   const words = text.toLowerCase().split(/\s+/).filter(Boolean);
@@ -4005,12 +4020,12 @@ function FlowPanels({ info, shown, method, methods, scope, scoped, onActivity, o
       ${shown === "factors" && html`
         <section>
           <${PopupList} key=${`factors-${index}`} noun="model" empty="No method of this model characterises this flow."
-            rows=${info.factors.map((f) => ({ ...f, label: methodLabel(methods[f.method]), unit: `${methods[f.method].unit} / ${u}` }))}
+            rows=${info.factors.map((f) => ({ ...f, label: methodTitle(methods[f.method]), unit: `${methods[f.method].unit} / ${u}` }))}
             rowKey=${(f) => f.method} rowClass=${(f) => (f.method === method ? "current" : "")}
             onOpen=${onCategory ? (f, e) => onCategory(f.method, e) : null}
             columns=${[
               { key: "method", label: "Model", title: "The impact categories of the methods of this database that characterise the flow: open one for all its flows",
-                value: (f) => f.label, tip: (f) => `${methodTitle(methods[f.method])}: its model pop-up` },
+                value: (f) => f.label, tip: (f) => `${methods[f.method].name.join(" | ")} [${methods[f.method].unit}]: its model pop-up` },
               { key: "cf", label: "Factor", kind: "num", value: (f) => f.cf },
               { key: "unit", label: "Unit", kind: "unit", width: 150, value: (f) => f.unit },
               { key: "rank", label: "Rank", kind: "num", title: "Rank of this flow by |factor| among the flows of the model the method characterises",
@@ -4131,12 +4146,12 @@ const CATEGORY_LIMIT = 300;  // rows drawn before "Show all"
 // The other methods, for *Compare with*: those of the same category name first (the same impact in another family or
 // version), then the others by family
 function compareChoices(methods, method) {
-  const category = (methods[method].name[1] || "").toLowerCase();
+  const category = methodPath(methods[method]).category.toLowerCase();
   const same = [], families = new Map();
   methods.forEach((m, i) => {
     if (i === method) return;
-    if (category && (m.name[1] || "").toLowerCase() === category) same.push(i);
-    else families.set(m.name[0], [...(families.get(m.name[0]) || []), i]);
+    if (category && methodPath(m).category.toLowerCase() === category) same.push(i);
+    else families.set(familyKey(m), [...(families.get(familyKey(m)) || []), i]);
   });
   return { same, families: [...families] };
 }
@@ -4272,7 +4287,7 @@ function CategoryPopup({ target, win, info, onClose, onBack, onFlow }) {
       head=${html`
         <div class="info-title"><span class="kind-mark category" title="Model: an impact category of a method, seen from its elementary flows"><${CategoryIcon} /></span>
           ${methodLabel(a)}${picked && html` <span class="role-tag ref" title="The reference: the method of this pop-up">ref.</span>`}</div>
-        <div class="muted">Model · ${a.name[0]} · ${a.unit}</div>`}>
+        <div class="muted">Model · ${familyKey(a)} · ${a.unit}</div>`}>
       <div class="category-controls">
         <div class="view-group" role="group" aria-label="Organize by">
           <span class="view-group-label">Organize by</span>
@@ -4287,10 +4302,10 @@ function CategoryPopup({ target, win, info, onClose, onBack, onFlow }) {
           <span class="view-group-label">Compare with</span>
           <select value=${compare ?? ""} onChange=${(e) => setCompare(e.target.value === "" ? null : Number(e.target.value))} aria-label="Compare with another method">
             <option value="">—</option>
-            ${choices.same.length > 0 && html`<optgroup label=${`Same category: ${a.name[1]}`}>
+            ${choices.same.length > 0 && html`<optgroup label=${`Same category: ${methodPath(a).category}`}>
               ${choices.same.map((i) => html`<option value=${i}>${methods[i].name.join(" | ")}</option>`)}</optgroup>`}
             ${choices.families.map(([family, list]) => html`<optgroup label=${family}>
-              ${list.map((i) => html`<option value=${i}>${methods[i].name.slice(1).join(" | ") || family}</option>`)}</optgroup>`)}
+              ${list.map((i) => html`<option value=${i}>${methodPath(methods[i]).rest.slice(1).join(" | ") || family}</option>`)}</optgroup>`)}
           </select>
           ${picked && html`<span class=${`category-unit ${otherUnit ? "differs" : ""}`}
             title=${otherUnit ? `Not the unit of the reference (${a.unit}): comp. / ref. mixes units` : "Its unit, the same as the reference's"}>${picked.unit}</span>`}
@@ -4632,15 +4647,17 @@ function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsByI
           onClick=${(e) => { e.stopPropagation(); useInstead(a); }}>use instead</button>` : "") }] : []),
     ],
   };
-  // Characterisation: the process's own exchanges with nature per unit of its product, by elementary flow in the method
-  // of the tab (one column of B: nothing solved), with its direct and cumulative scores (U, G)
+  // Characterisation: its total impacts per unit of its product (cumulative, G, and direct, U: nothing solved) in the
+  // method of the tab and in the methods shown together (the Methods panel)
   const [characterisation, setCharacterisation] = useState(null);
+  const chartMethods = useContext(LensContext)?.chartMethods || [];
+  const totalMethods = [method, ...chartMethods.filter((k) => k !== method)].filter((k) => model.methods[k]);
   // The exchange pop-up is its one panel; the activity's: exchanges first (a direct emissions row
   // opens on its emissions), then users, alternatives, information (what the process is, and its description)
   const tabs = (info || docked) && !exchange ? [
     docked ? { id: "exchanges", label: "Process" }
       : exchanges?.available && { id: "exchanges", label: `Exchanges · ${(production ? 1 : 0) + exchanges.inputs.length + exchanges.flows.length}` },
-    info && { id: "characterisation", label: `Characterisation${characterisation?.index === target.index && characterisation.method === method ? ` · ${characterisation.count}` : ""}` },
+    info && { id: "characterisation", label: `Characterisation · ${totalMethods.length}` },
     info && { id: "users", label: `${users?.waste ? "Treats" : "Used by"}${users ? ` · ${users.count}` : ""}` },
     alternatives && !target.direct && { id: "alternatives", label: `Alternatives · ${alternatives.count}` },
     info && { id: "information", label: "Information" },
@@ -4655,6 +4672,8 @@ function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsByI
     return () => { live = false; };
   }, [shown, target.index, method, idle]);
   const characterised = characterisation?.index === target.index && characterisation.method === method ? characterisation : null;
+  const totals = characterised && totalMethods.filter((k) => k < characterised.totals.direct.length)
+    .map((k) => ({ method: k, direct: characterised.totals.direct[k], cumulative: characterised.totals.cumulative[k] }));
   return html`
     <${docked ? DockedShell : PopupWindow} target=${target} win=${win} label=${exchange ? "Exchange information" : "Activity information"} onClose=${onClose} onBack=${onBack}
       onDock=${info && !exchange ? (place) => { onOpenTab(info, place); onClose(); } : null}
@@ -4711,22 +4730,21 @@ function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsByI
               embedded=${{ method, onInfo: follow, onUse: useAsRoot, keys: explorerKeys }} onSave=${() => {}} onTitle=${() => {}} />`}
           ${shown === "characterisation" && info && html`
             <section>
-              ${!characterised ? html`<${Waiting} text="Reading its exchanges with nature…" />` : html`
-                <p class="muted list-summary">Per ${unit(info.unit)} of ${info.reference_product}: <b>${fmt(characterised.direct)}</b> ${methodInfo.unit} directly
-                  (its own exchanges with nature, below) of <b>${fmt(characterised.cumulative)}</b> with its supply chain${characterised.cumulative
-                  ? ` (${pct(characterised.direct / characterised.cumulative)} direct)` : ""}.${characterised.uncharacterised
-                  ? ` ${characterised.uncharacterised} of its exchanges with nature have no factor in this method.` : ""}</p>
-                <${PopupList} key=${`characterisation-${target.index}-${method}`} noun="flow" rows=${characterised.flows} rowKey=${(f) => f.flow}
-                  empty="No exchange of this process with nature has a factor in this method: its impact is all in its supply chain."
-                  onOpen=${(f, e) => follow({ flow: f.flow }, e)} onInfo=${(f, e) => follow({ flow: f.flow, activities: [target.index], exchange: true }, e)}
+              ${!characterised ? html`<${Waiting} text="Reading its impacts…" />` : html`
+                <p class="muted list-summary">Per ${unit(info.unit)} of ${info.reference_product}, with its supply chain (<i>Total</i>) and
+                  from its own exchanges with nature (<i>Direct</i>), in the main method and the methods shown together (ticked in the
+                  Methods panel).</p>
+                <${PopupList} key=${`totals-${target.index}`} noun="method" rows=${totals} rowKey=${(t) => t.method}
+                  rowClass=${(t) => (t.method === method ? "current" : "")}
+                  onOpen=${(t, e) => follow({ category: t.method }, e)}
                   columns=${[
-                    { key: "name", label: "Flow", value: (f) => `${f.name} ${f.compartment}`,
-                      cell: (f) => html`<${FlowIcon} resource=${f.resource} /> ${f.name} <span class="muted">${f.compartment}</span>` },
-                    { key: "amount", label: "Amount", kind: "num", format: fmtAmount, title: `Per unit of ${info.reference_product}`, value: (f) => f.amount },
-                    { key: "unit", label: "Unit", kind: "unit", value: (f) => `${unit(f.unit)}/${unit(info.unit)}` },
-                    { key: "cf", label: "Factor", kind: "num", title: `${methodInfo.unit} per unit of the flow`, value: (f) => f.cf },
-                    { key: "impact", label: "Impact", kind: "num", title: `${methodInfo.unit} per ${unit(info.unit)} of ${info.reference_product}`, value: (f) => f.impact },
-                    { key: "share", label: "Share", kind: "share", title: "Share of its direct impact", value: (f) => (characterised.direct ? f.impact / characterised.direct : null) },
+                    { key: "method", label: "Method", title: "The main method and the methods shown together: open one for its model pop-up",
+                      value: (t) => methodTitle(model.methods[t.method]), tip: (t) => `${model.methods[t.method].name.join(" | ")} [${model.methods[t.method].unit}]: its model pop-up`,
+                      chip: (t) => (t.method === method ? html`<span class="muted">main</span>` : "") },
+                    { key: "cumulative", label: "Total", kind: "num", title: "With its supply chain (cumulative)", value: (t) => t.cumulative },
+                    { key: "direct", label: "Direct", kind: "num", title: "Its own exchanges with nature", value: (t) => t.direct },
+                    { key: "unit", label: "Unit", kind: "unit", width: 150, value: (t) => `${model.methods[t.method].unit} / ${unit(info.unit)}` },
+                    { key: "share", label: "Direct share", kind: "share", title: "Share of the total that is direct", value: (t) => (t.cumulative ? t.direct / t.cumulative : null) },
                   ]} />`}
             </section>`}
           ${shown === "users" && users && info && html`
@@ -5870,7 +5888,7 @@ function MethodSelect({ info, value, onChange, choices, exclude, label = "Compar
   const families = useMemo(() => {
     const map = new Map();
     [...choices].sort((a, b) => a - b).filter((i) => i !== exclude)
-      .forEach((i) => map.set(info.methods[i].name[0], [...(map.get(info.methods[i].name[0]) || []), i]));
+      .forEach((i) => map.set(familyKey(info.methods[i]), [...(map.get(familyKey(info.methods[i])) || []), i]));
     return [...map];
   }, [info, choices, exclude]);
   const none = families.length === 0;
@@ -5882,7 +5900,7 @@ function MethodSelect({ info, value, onChange, choices, exclude, label = "Compar
         <option value="">${none ? "no other method ticked" : "no other method"}</option>
         ${families.map(([family, indices]) => html`
           <optgroup key=${family} label=${family}>
-            ${indices.map((i) => html`<option key=${i} value=${i}>${info.methods[i].name.slice(1).join(" | ") || family}</option>`)}
+            ${indices.map((i) => html`<option key=${i} value=${i}>${methodPath(info.methods[i]).rest.slice(1).join(" | ") || family}</option>`)}
           </optgroup>`)}
       </select>
     </label>`;
@@ -6160,7 +6178,7 @@ function saveViewPreferences({ view, display, orientation, cycles }) {
 const LensContext = createContext(null);
 const sameJson = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const methodNamed = (info, name) => info.methods.findIndex((m) => m.name.join("|") === (name || []).join("|"));
-const familyOf = (info, k) => info.methods.flatMap((m, i) => (m.name[0] === info.methods[k].name[0] ? [i] : []));
+const familyOf = (info, k) => info.methods.flatMap((m, i) => (familyKey(m) === familyKey(info.methods[k]) ? [i] : []));
 
 // The lens of the workspace: what was kept, else that of ``seed`` (the first tab of a workspace saved before the lens)
 function initLens(info, seed) {
@@ -6194,12 +6212,13 @@ function saveLens(info, lens) {
 
 // A method as the Brightway name (family, category, indicator…) shown in parts: the category as the main text, the indicator
 // and what follows in grey, as the products of the explorer
-const methodParts = (m) => ({ family: m.name[0], main: m.name[1] ?? m.name[0], qual: m.name.slice(2).join(" | ") });
+const methodParts = (m) => { const p = methodPath(m); return { family: familyKey(m), main: p.rest[1] ?? p.family, qual: p.indicator }; };
 // ``Methods`` summary: the active method, and how many more are shown together
 const methodSummary = (info, method, chartMethods) => {
   const m = info.methods[method];
   const more = chartMethods.filter((k) => k !== method).length;
-  return `${m.name[0]} · ${m.name.slice(1).join(" | ") || m.name[0]}${more ? ` (+${more})` : ""}`;
+  const p = methodPath(m);
+  return `${p.family} · ${p.rest.slice(1).join(" | ") || p.family}${more ? ` (+${more})` : ""}`;
 };
 
 // The impact methods in one list nested by family: one mark per method, ✓ shown together, ★ the main (active)
@@ -6218,7 +6237,8 @@ function MethodMenu({ info, method, setMethod, chartMethods, setChartMethods, no
         </div>
         ${format.mode === "parts" ? html`
           <div class="row">
-            ${[["family", "Family", "EF v3.1"], ["category", "Category", "Climate change"], ["indicator", "Indicator", "GWP100"], ["unit", "Unit", "kg CO₂ eq"]].map(([k, label, hint]) => html`
+            ${[...(info.methods.some((m) => methodPath(m).source) ? [["source", "Source", "ecoinvent-3.10.1: the release the method came with"]] : []),
+              ["family", "Family", "EF v3.1"], ["category", "Category", "Climate change"], ["indicator", "Indicator", "GWP100"], ["unit", "Unit", "kg CO₂ eq"]].map(([k, label, hint]) => html`
               <label title=${hint}><input type="checkbox" checked=${format[k]} onChange=${(e) => setFormat({ ...format, [k]: e.target.checked })} /> ${label}</label>`)}
           </div>` : html`
           <div class="row">
@@ -7479,10 +7499,10 @@ function CompareDifference({ results, base, target, setTarget, unitLabel, names,
 // *Impact categories* heat map), ★ the active method (tree, charts, comparison); a family box ticks the whole family
 function MethodTree({ info, main, setMain, selected, setSelected, onCategory }) {
   const [text, setText] = useState("");
-  const [open, setOpen] = useState(() => new Set([info.methods[main].name[0]]));
+  const [open, setOpen] = useState(() => new Set([familyKey(info.methods[main])]));
   const families = useMemo(() => {
     const map = new Map();
-    info.methods.forEach((m, i) => map.set(m.name[0], [...(map.get(m.name[0]) || []), i]));
+    info.methods.forEach((m, i) => map.set(familyKey(m), [...(map.get(familyKey(m)) || []), i]));
     return [...map];
   }, [info]);
   const words = text.toLowerCase().split(/\s+/).filter(Boolean);

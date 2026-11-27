@@ -46,6 +46,14 @@ Large databases: one built with hundreds of thousands of processes opens, and ev
 - **Process information in one place**: the *Description* and *Metadata* tabs of a process (pop-up or tab) are one
   *Information* tab, which also shows what the process is: its product and unit, activity, location, activity type
   (market, production…), ISIC and CPC classes and code, then its description.
+- **Total impacts in a process's *Characterisation***: instead of its elementary flows (they are in its *Exchanges*),
+  its total (with its supply chain) and direct impact per unit of its product in the main method and in every method
+  shown together, with the direct share; a method opens its model pop-up. The method names there and in a flow's
+  *Characterisation* follow the *Name display* of the *Methods* panel, unit included.
+- **Fixed**: the impact methods that come with an ecoinvent release (3.10 and later: "ecoinvent-3.10.1 | EF v3.1 |
+  climate change | …") were named and grouped by the release instead of their family, and a database built with them
+  showed and offered all of the release's methods at first instead of the family of the default one. The release is
+  now a *Source* part of *Name display* (off by default) and the token `{source}`.
 - **Fixed**: at a cut-off of 0 the processes without impact for the method were all shown, with no *others* row;
   they now go to *others* ("no impact"), as flows did. The cut-off can no longer be set under 0, and a saved view with one
   that is not a number opens at 0.

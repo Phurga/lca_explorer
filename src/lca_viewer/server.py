@@ -265,6 +265,19 @@ def _default_method(model: LCAModel) -> int:
     return _default_index([m.name if m.cfs.any() else () for m in model.methods])
 
 
+_METHOD_SOURCE = re.compile(r"^[a-z]\w*-\d+(\.\d+)+$", re.IGNORECASE)
+
+
+def _method_family(name) -> tuple[str, str]:
+    """The family of a method (its source, its family): Brightway names a method (family, category, indicator...); those
+    that come with an ecoinvent release have the release first ("ecoinvent-3.10.1", family, category, indicator), as
+    ``methodPath`` of the app reads them."""
+    name = [str(part) for part in name]
+    if len(name) >= 4 and _METHOD_SOURCE.match(name[0]):
+        return name[0], name[1]
+    return "", name[0] if name else ""
+
+
 def _default_index(names: list) -> int:
     """Of :func:`_default_method`, on the method names (an empty one: a method to pass over)."""
     names = [tuple(str(part).lower() for part in name) for name in names]
@@ -788,7 +801,8 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
     def activity_characterisation(index: int, method: int | None = None, limit: int = 500):
         """The *Characterisation* panel of a process's pop-up: its own exchanges with nature per unit of its product,
         split by elementary flow in ``method`` (amount, factor, impact), largest |impact| first, at most ``limit``;
-        with its direct and cumulative scores per unit (``U`` and ``G``: one column of ``B``, nothing solved)."""
+        with its direct and cumulative scores per unit (``U`` and ``G``: one column of ``B``, nothing solved), in
+        ``method`` and, under ``totals``, in every method of the model (one value per method, in their order)."""
         check(activity=[index], method=[method])
         k = default_method if method is None else method
         per_unit = 1 / model.diagonal[index]
@@ -802,6 +816,7 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
             "method": k, "unit": units[index],
             "direct": float(model.direct(index)[k] * per_unit), "cumulative": float(model.G[index, k]),
             "count": int(len(characterised)), "uncharacterised": int(len(exchanged) - len(characterised)),
+            "totals": {"direct": _floats(model.U[:, index] * per_unit), "cumulative": _floats(model.G[index, :])},
             "flows": [{"flow": int(f), "name": flows["name"].iat[f], "compartment": flows["place"].iat[f],
                        "unit": flows["unit"].iat[f], "resource": is_resource(int(f)), "amount": float(amounts[f]),
                        "cf": float(cfs[f]), "impact": float(impacts[f])} for f in shown],
@@ -1903,8 +1918,8 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
         selected = project_cache.method_names(cache_of(folder, project)) or None
         default = []
         if methods:
-            family = methods[_default_index([m["name"] for m in methods])]["name"][0]
-            default = [m["name"] for m in methods if m["name"][0] == family]
+            family = _method_family(methods[_default_index([m["name"] for m in methods])]["name"])
+            default = [m["name"] for m in methods if _method_family(m["name"]) == family]
         return {"methods": methods, "selected": selected, "default": default}
 
     def add_methods_job(job: dict, key: str, names: list[list[str]]) -> dict:
