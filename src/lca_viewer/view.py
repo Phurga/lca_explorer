@@ -14,6 +14,7 @@ nodes keep their real paths, so expansion state survives regrouping.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -34,6 +35,7 @@ def below_cutoff(magnitudes: list[float], basis: str, cutoff: float, total: floa
     most ``cutoff`` (a fraction) of ``total``; ``parent``: the same, of all the rows together; ``cumulative``: the rows
     after the largest ones that together reach ``cutoff`` of all the rows."""
     below = [False] * len(magnitudes)
+    cutoff = cutoff if cutoff is not None and math.isfinite(cutoff) and cutoff > 0 else 0.0  # never under 0
     if basis == "top":
         keep = round(cutoff)
         return [i >= keep for i in range(len(magnitudes))] if keep >= 1 else below
@@ -440,9 +442,9 @@ class View:
     def _apply_cutoff(self, rows: list[Row], parent: Row) -> list[Row]:
         """Sort siblings and bundle into "others" those below the cut-off or moved there."""
         rows.sort(key=lambda r: -abs(r.impacts[self.method]))
-        # Flows without impact for this method (they are kept for the other methods) are
-        # noise here: always in others, like moved rows
-        zero = [r.kind == "flow" and bool(r.impacts[self.method] == 0) for r in rows]
+        # Rows without impact for this method (processes or flows; they are kept for the other methods) are noise here:
+        # always in others, like moved rows, whatever the cut-off (even 0)
+        zero = [bool(r.impacts[self.method] == 0) for r in rows]
         kept, hidden, forced = [], [], False
         for r, b, z in zip(rows, self._bottom_contributors(rows), zero):
             r.moved = r.id in self.others

@@ -2938,7 +2938,7 @@ function OthersPopup({ target, win, rest, rows, rootImpact, cutoff, cutoffBasis,
   const shownPins = rows.filter((r) => r.parent === rest.parent && r.pinned);
   const items = [...shownPins, ...rest.members].sort((a, b) => Math.abs(b.impacts[0]) - Math.abs(a.impacts[0]));
   const nMoved = rest.members.filter((m) => m.moved).length;
-  const nZero = rest.members.filter((m) => !m.moved && m.kind === "flow" && m.impacts[0] === 0).length;
+  const nZero = rest.members.filter((m) => !m.moved && m.impacts[0] === 0).length;
   const nCut = rest.members.length - nMoved - nZero;
   const share = (r) => (rootImpact ? r.impacts[0] / rootImpact : 0);
   // Showing = not in others, and pinned in case it is below the cut-off
@@ -2974,7 +2974,7 @@ function OthersPopup({ target, win, rest, rows, rootImpact, cutoff, cutoffBasis,
                   <td><input type="checkbox" checked=${shown} aria-label="Restore: show in tree and chart" title="Restore: show in tree and chart"
                         onChange=${(e) => setShown([r.id], e.target.checked)} /></td>
                   <td class="name-cell" title=${r.label}>${names.main}${names.qual && html` <span class="loc">${names.qual}</span>`}</td>
-                  <td class="reason">${r.moved ? "moved" : r.pinned ? "restored" : r.kind === "flow" && r.impacts[0] === 0 ? "no impact" : "cut-off"}</td>
+                  <td class="reason">${r.moved ? "moved" : r.pinned ? "restored" : r.impacts[0] === 0 ? "no impact" : "cut-off"}</td>
                   <td class="num">${amount}</td>
                   <td class="num">${fmt(r.impacts[0])}</td>
                   <td class="num">${pct(share(r))}</td>
@@ -4374,17 +4374,14 @@ function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsByI
   // of the tab (one column of B: nothing solved), with its direct and cumulative scores (U, G)
   const [characterisation, setCharacterisation] = useState(null);
   // The exchange pop-up is its one panel; the activity's: exchanges first (a direct emissions row
-  // opens on its emissions), then users, alternatives, description, metadata
-  const hasDescription = ctx.editing || DETAIL_SECTIONS.some(([k]) => d[k])
-    || (production && (production.comment || production.properties || production["production volume"]));
+  // opens on its emissions), then users, alternatives, information (what the process is, and its description)
   const tabs = (info || docked) && !exchange ? [
     docked ? { id: "exchanges", label: "Process" }
       : exchanges?.available && { id: "exchanges", label: `Exchanges · ${(production ? 1 : 0) + exchanges.inputs.length + exchanges.flows.length}` },
     info && { id: "characterisation", label: `Characterisation${characterisation?.index === target.index && characterisation.method === method ? ` · ${characterisation.count}` : ""}` },
     info && { id: "users", label: `${users?.waste ? "Treats" : "Used by"}${users ? ` · ${users.count}` : ""}` },
     alternatives && !target.direct && { id: "alternatives", label: `Alternatives · ${alternatives.count}` },
-    info && hasDescription && { id: "description", label: "Description" },
-    info && { id: "metadata", label: "Metadata" },
+    info && { id: "information", label: "Information" },
   ].filter(Boolean) : [];
   const shown = exchange ? "tree" : tabs.some((t) => t.id === tab) ? tab : tabs[0]?.id;
   useEffect(() => { body.current?.scrollTo(0, 0); }, [shown]);
@@ -4484,12 +4481,33 @@ function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsByI
                 renderRow=${(a) => html`<${ProcessRow} key=${a.index} item=${a} above=${null} depth=${0} ancestors=${a.current ? [] : [target.index]} panel=${alternativesPanel} />`}
                 more=${alternatives.count > alternatives.alternatives.length && `+ ${alternatives.count - alternatives.alternatives.length} more, not listed`} />
             </section>`}
-          ${shown === "description" && html`
+          ${shown === "information" && info && html`
+          <section>
+            <table class="kv">
+              <tr><th>Product</th><td>${info.reference_product ?? "–"}${info.unit && html` <span class="muted">· ${unit(info.unit)}</span>`}</td></tr>
+              <tr><th>Activity</th><td>${info.name}</td></tr>
+              <tr><th>Location</th><td>${info.location ? html`<span class="loc-chip">${info.location}</span>` : "–"}</td></tr>
+              ${info.activity_type && html`<tr><th>Activity type</th><td title="Market (a mix of the suppliers of a product), production, treatment…">${info.activity_type}</td></tr>`}
+              ${info.multifunctional && html`<tr><th>Products</th><td>Multifunctional: it has more than one product</td></tr>`}
+              ${(d.start_date || d.end_date) && html`<tr><th>Time period</th><td>${d.start_date ?? "?"} – ${d.end_date ?? "?"}</td></tr>`}
+              ${info.isic && html`<tr><th>ISIC</th><td>${info.isic}</td></tr>`}
+              ${info.cpc && html`<tr><th>CPC</th><td>${info.cpc}</td></tr>`}
+              ${(d.classifications || []).filter(([system]) => !(info.isic && /isic/i.test(system)) && !(info.cpc && /cpc/i.test(system)))
+                .map(([system, value]) => html`<tr><th>${system}</th><td>${value}</td></tr>`)}
+              ${d.synonyms && html`<tr><th>Synonyms</th><td>${d.synonyms.join("; ")}</td></tr>`}
+              ${d.authors && Object.entries(d.authors).map(([role, name]) => html`<tr><th>${role}</th><td>${name}</td></tr>`)}
+              <tr><th>Database</th><td>${info.database}</td></tr>
+              ${info.code && html`<tr><th>Code</th><td class="mono muted">${info.code}</td></tr>`}
+              ${d.filename && html`<tr><th>File</th><td class="muted">${d.filename}</td></tr>`}
+            </table>
+          </section>
           ${ctx.editing && html`<section><h4>Description</h4><p class="text"><${Editable} multiline value=${d.comment || ""} display=${d.comment ? String(d.comment).trim() : "(none: double-click to add one)"}
             edit=${ds ? ds.process.comment : d.comment || ""} disabled=${locked} title="Double-click to change the description (Ctrl+Enter to stage it)"
             onCommit=${(t) => own((dr) => { dr.process.comment = t; })} /></p></section>`}
           ${DETAIL_SECTIONS.filter(([k]) => d[k] && !(ctx.editing && k === "comment")).map(([k, title]) => html`
             <section><h4>${title}</h4><p class="text">${String(d[k]).split("\n").filter((line) => line.trim() !== "None").join("\n").trim()}</p></section>`)}
+          ${!ctx.editing && !DETAIL_SECTIONS.some(([k]) => d[k]) && html`
+            <p class="muted">No description: the dataset has none, or the model is not opened from its Brightway project (open it from <i>Projects</i>).</p>`}
           ${production && (production.comment || production.properties || production["production volume"]) && html`
             <section>
               <h4>Reference product exchange</h4>
@@ -4502,18 +4520,6 @@ function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsByI
                     ${p.comment && html`<span class="muted">· ${truncate(p.comment, 80)}</span>`}</td></tr>`)}
               </table>
             </section>`}`}
-          ${shown === "metadata" && info && html`
-          <section>
-            <h4>Metadata</h4>
-            <table class="kv">
-              ${(d.start_date || d.end_date) && html`<tr><th>Time period</th><td>${d.start_date ?? "?"} – ${d.end_date ?? "?"}</td></tr>`}
-              ${(d.classifications || []).map(([system, value]) => html`<tr><th>${system}</th><td>${value}</td></tr>`)}
-              ${d.synonyms && html`<tr><th>Synonyms</th><td>${d.synonyms.join("; ")}</td></tr>`}
-              ${d.authors && Object.entries(d.authors).map(([role, name]) => html`<tr><th>${role}</th><td>${name}</td></tr>`)}
-              <tr><th>Database</th><td>${info.database}</td></tr>
-              ${d.filename && html`<tr><th>File</th><td class="muted">${d.filename}</td></tr>`}
-            </table>
-          </section>`}
         </div>`}
     <//>`;
 }
@@ -6129,7 +6135,9 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
   }
   // The options of the view (cut-off, display, names, colours, columns…) are the tab's own; the ones of the last tab
   // changed are the preferences that a new tab starts with
-  const [cutoff, setCutoff] = useState(DEFAULT_CUTOFF);
+  const [cutoff, setCutoffState] = useState(DEFAULT_CUTOFF);
+  // Never under 0 (nor not a number, from an old or hand-edited save): 0 is the least, all rows with an impact shown
+  const setCutoff = (v) => setCutoffState(Number.isFinite(+v) && +v > 0 ? +v : 0);
   const [cutoffBasis, setCutoffBasis] = useState("parent");
   const [view, setView] = useState(() => initialView(embedded));
   const [display, setDisplay] = useState(() => (embedded ? "list" : loadPreference("display", "list")));

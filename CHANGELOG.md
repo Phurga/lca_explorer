@@ -28,6 +28,12 @@ Large databases: one built with hundreds of thousands of processes opens, and ev
   pings come from a worker, so a dialog or a long calculation on the page no longer holds them up, and one ping that
   fails (on waking up) no longer silences the tab for good.
 - Impact methods are read from the project directly when a database is built: the same factors as before, faster.
+- **Process information in one place**: the *Description* and *Metadata* tabs of a process (pop-up or tab) are one
+  *Information* tab, which also shows what the process is: its product and unit, activity, location, activity type
+  (market, production…), ISIC and CPC classes and code, then its description.
+- **Fixed**: at a cut-off of 0 the processes without impact for the method were all shown, with no *others* row;
+  they now go to *others* ("no impact"), as flows did. The cut-off can no longer be set under 0, and a saved view with one
+  that is not a number opens at 0.
 - **First start made simple**: the tree has the room, with its *Amount*, *Impact* and *Share* columns (*Comment* and the
   others in the columns menu) and the direct emissions organised by compartment; the left panel (processes, methods,
   rules) is closed and the side panel opens on the chart, its *Options* folded. The panels' widths follow the window
