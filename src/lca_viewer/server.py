@@ -13,6 +13,7 @@ import os
 import re
 import sqlite3
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 import pandas as pd
@@ -542,7 +543,7 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
             "details": model.activity_details(index),
             "method": k,
             "cumulative_per_unit": float(model.G[index, k]),
-            "direct_per_unit": float(model.U[k, index] * per_unit),
+            "direct_per_unit": float(model.direct(index)[k] * per_unit),
             "direct_flows": [
                 {"name": model.flows["name"].iat[f],
                  "categories": list(categories.iat[f]) if categories is not None else [],
@@ -596,11 +597,15 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
         k = default_method if method is None else method
         f = flows.iloc[index]
         # Rank of the flow in each method that characterises it: by |factor| among the flows of the model it characterises
-        CF = np.abs(model.CF)
-        mine = CF[:, index]
+        CF = abs(model.CF)
+        CF.eliminate_zeros()
+        mine = CF[:, [index]].toarray().ravel()
         characterised = np.flatnonzero(mine)
-        ranks = (CF[characterised] > mine[characterised, None]).sum(axis=1) + 1
-        counts = np.count_nonzero(CF[characterised], axis=1)
+        theirs = CF[characterised]  # sparse: the factors of the methods that characterise it
+        counts = np.diff(theirs.indptr)
+        above = theirs.data > np.repeat(mine[characterised], counts)
+        ranks = np.bincount(np.repeat(np.arange(len(characterised)), counts), weights=above,
+                            minlength=len(characterised)).astype(int) + 1
         factors = [{"method": int(i), "cf": float(model.methods[i].cfs[index]), "rank": int(r), "of": int(n)}
                    for i, r, n in zip(characterised, ranks, counts)]
         exchanges = []
@@ -795,7 +800,7 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
         shown = characterised[np.argsort(-np.abs(impacts[characterised]), kind="stable")][:limit]
         return {
             "method": k, "unit": units[index],
-            "direct": float(model.U[k, index] * per_unit), "cumulative": float(model.G[index, k]),
+            "direct": float(model.direct(index)[k] * per_unit), "cumulative": float(model.G[index, k]),
             "count": int(len(characterised)), "uncharacterised": int(len(exchanged) - len(characterised)),
             "flows": [{"flow": int(f), "name": flows["name"].iat[f], "compartment": flows["place"].iat[f],
                        "unit": flows["unit"].iat[f], "resource": is_resource(int(f)), "amount": float(amounts[f]),
@@ -1164,6 +1169,8 @@ class LoadRequest(BaseModel):
     reopen: bool = False
     """With ``rebuild`` of a database that is open: it keeps being served until the new build is
     ready, then it is replaced by it (the page is reloaded for it)."""
+    open: bool = True
+    """False: built only (Rebuild, in the storage dialog)."""
     methods: list[list[str]] | None = None
     """The impact methods of a build (names); None: those of the previous build, else all."""
 
@@ -1176,6 +1183,14 @@ class AddMethodsRequest(BaseModel):
 
 class UnloadRequest(BaseModel):
     key: str
+
+
+class StorageDeleteRequest(BaseModel):
+    """``kind``: "model" (made from files), "segment" (with the segments that use it), "results" (the ``G`` of a model
+    or a segment), "project" (a project cache), "obsolete", "leftover", "download" (with ``path``), or "obsolete" /
+    "leftovers" / "all" without ``path`` (every obsolete cache / left-over / every cache, model and left-over)."""
+    kind: Literal["model", "segment", "results", "project", "obsolete", "leftover", "download", "leftovers", "all"]
+    path: str | None = None
 
 
 class ProjectRequest(BaseModel):
@@ -1345,7 +1360,7 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
     from fastapi.responses import RedirectResponse
     from starlette.routing import Mount
 
-    from . import sources
+    from . import project_cache, sources
 
     data = Path(data or "data").resolve()
     # Files the page uploaded are deleted once imported: those left are of an import that failed or was
@@ -1378,35 +1393,86 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
                 pass  # counted again at the next start
         return projects
 
+    def entries() -> list[dict]:
+        """What can be opened: the models of ``models.json`` made from files (those of Brightway databases, from before
+        the project cache, are obsolete: listed in Storage only), and the databases built in the project caches."""
+        out = [m for m in sources.catalog(data) if not (m.get("source") or {}).get("brightway")]
+        for cache in sorted((data / "cache").glob("project-*")):
+            info = project_cache.read_project(cache)
+            if info:
+                folder = str(Path(info["brightway"]).resolve())
+                for r in info["segments"]:
+                    out += [bw_entry(folder, info["project"], d) for d in r["databases"]]
+        return out
+
+    def cache_of(folder: str, project: str) -> Path:
+        return sources.project_cache_dir(data, folder, project).resolve()
+
+    def bw_entry(folder: str, project: str, database: str) -> dict:
+        """A database of a project cache, as the catalog lists models; ``path``: its name in the cache (not a folder)."""
+        cache = cache_of(folder, project)
+        return {"path": str(sources.cached_database(cache, project, database)), "title": f"{database} ({project})",
+                "default_root": None, "cache": str(cache), "database": database,
+                "source": {"brightway": folder, "project": project, "database": database}}
+
+    def is_built(entry: dict) -> bool:
+        if "cache" in entry:
+            return project_cache.status(entry["cache"], entry["database"])["built"]
+        return (Path(entry["path"]) / "A.npz").exists()
+
     def listing() -> list[dict]:
         """The loaded databases; ``brightway``: the data folder, project and database a model was built from."""
-        entries = {Path(c["path"]).resolve(): c for c in sources.catalog(data)}
+        found = {Path(c["path"]).resolve(): c for c in entries()}
         out = []
         for m in loaded.values():
-            entry = entries.get(m["path"])
+            entry = found.get(m["path"])
             origin = entry and built_from(entry)
             out.append({"key": m["key"], "title": m["title"], "activities": m["activities"],
                         "brightway": origin and dict(zip(("folder", "project", "database"), origin)),
-                        "outdated": origin and outdated(entry, *origin)})
+                        "outdated": origin and outdated(entry, *origin, model=m["model"])})
         return out
 
-    def outdated(entry: dict, folder: str, project: str, database: str) -> str | None:
-        """What changed in the project since the model of a Brightway database was built (a rebuild is
-        required), or None."""
+    def outdated(entry: dict, folder: str, project: str, database: str, p: dict | None = None,
+                 model: LCAModel | None = None) -> str | None:
+        """What changed in the project since a Brightway database was built (a rebuild is required), or None.
+        ``p``: the project, as :func:`sources.brightway_projects` lists it (read when not given); ``model``: the
+        database open, which may have been put together from segments built again since."""
         try:
-            p = next(p for p in projects_in(folder) if p["name"] == project)
-            return sources.changes(entry["source"], sources.database_state(p, database))
-        except (StopIteration, KeyError, FileNotFoundError, ValueError):
+            p = p or next(p for p in projects_in(folder) if p["name"] == project)
+        except (StopIteration, FileNotFoundError, ValueError):
             return None
+        state = project_cache.status(entry["cache"], database, p)
+        if not state["built"]:
+            return "no longer built"
+        origin = getattr(model, "project_cache", None)
+        if state["outdated"] is None and origin:
+            info = project_cache.read_project(entry["cache"])
+            now = {r["id"]: [r["version"], r.get("basis")] for r in project_cache.closure(info, database)}
+            if now != origin["segments"]:
+                return "built again since it was opened"
+        return state["outdated"]
+
+    def in_use(cache) -> set[str]:
+        """The segment folders of a project cache that open databases read."""
+        return {f for m in loaded.values() if (getattr(m["model"], "project_cache", None) or {}).get("cache") == str(cache)
+                for f in m["model"].project_cache["folders"]}
+
+    def clean(cache) -> None:
+        """Delete the folders of segments rebuilt or deleted that no open database reads any more."""
+        try:
+            project_cache.remove_retired(cache, in_use(cache))
+        except OSError:
+            pass  # deleted at the next try
 
     def loaded_key(path) -> str | None:
         path = Path(path).resolve()
         return next((k for k, m in loaded.items() if m["path"] == path), None)
 
-    def mount(path, title: str, default_root: str | None) -> str:
-        """Load, factorise and serve a model; returns its key."""
+    def mount(path, title: str, default_root: str | None, entry: dict | None = None) -> str:
+        """Load, factorise and serve a model (``entry``: a database of a project cache); returns its key."""
         path = Path(path).resolve()
-        model = LCAModel.load(path)
+        model = (project_cache.load(entry["cache"], entry["database"]) if entry and "cache" in entry
+                 else LCAModel.load(path))
         sub = create_app(model, title=title, default_root=default_root)  # factorises
         with lock:
             key = loaded_key(path)
@@ -1476,94 +1542,83 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
             raise ValueError(lines[-1] if lines else "no output")
         return lines
 
+    build_locks: dict[str, threading.Lock] = {}
+
+    def build_lock(cache) -> threading.Lock:
+        """One build at a time in a project cache: two would write its files at once."""
+        with lock:
+            return build_locks.setdefault(str(cache), threading.Lock())
+
     def build(job: dict, folder: str, project: str, database: str, rebuild: bool, reopen: bool = False,
               methods: list[list[str]] | None = None) -> dict:
-        """The catalog entry of a Brightway database's model, built (in a separate process) if
-        there is none yet, or again with ``rebuild`` (the page asks for it when the project
-        changed since). A database that is open is not rebuilt, unless ``reopen``: it would mix its
-        old matrices with the new metadata files. With ``reopen`` it keeps being served while the
-        new build is made, then is replaced by it (the caller opens it again). ``methods``: the
-        impact methods to build it with; None: those of the previous build, else all of the project's."""
+        """The entry of a Brightway database, built (in a separate process) in its project cache if it is not yet,
+        or its results are to be solved again, or again with ``rebuild`` (the page asks for it when the project
+        changed since): the segments it needs that are missing or changed are read, the others kept. A database
+        that is open is not rebuilt, unless ``reopen``: it keeps being served while the build is made (from other
+        folders), then it is closed (the caller opens it again). ``methods``: the impact methods of the project
+        cache; None: those it has, else all of the project's."""
         import importlib.util
 
         folder = str(Path(folder).expanduser().resolve())
         p, _ = find_database(folder, project, database)
-        state = sources.database_state(p, database)
-        entry = next((m for m in sources.catalog(data) if built_from(m) == (folder, project, database)), None)
-        output = Path(entry["path"]) if entry else sources.cache_dir(data, folder, project, database).resolve()
-        if entry and not rebuild and (output / "A.npz").exists():
+        entry = bw_entry(folder, project, database)
+        cache = Path(entry["cache"])
+        state = project_cache.status(cache, database, p)
+        if state["built"] and not rebuild and not state["solve"]:
             return entry
-        if loaded_key(output) and not reopen:
+        if loaded_key(entry["path"]) and not reopen:
             raise ValueError(f"{database} is open: close it first (Close, in the list of loaded databases), then rebuild it")
         if importlib.util.find_spec("bw2data") is None:
             raise ValueError("Brightway is not installed in the Python environment running lca_viewer: "
                              "run pip install -e \".[brightway]\" in it, then restart the app")
-        building = f"Building the model of {database} (once; one or two minutes for ecoinvent)"
+        building = (f"Building {database} (the databases it uses once for the project: one or two minutes for "
+                    f"ecoinvent)" if not state["built"] else f"Building {database} again")
         job["message"] = building
-        part = output.with_name(output.name + ".part")
-        shutil.rmtree(part, ignore_errors=True)
         if methods is None:
-            methods = LCAModel.method_names(output) or None  # a rebuild keeps the methods chosen before
-        chosen = output.with_name(output.name + ".methods.json")
-        args = ["build", "--project", project, "--database", database, "--output", str(part)]
-        if methods is not None:
-            if not methods:
-                raise ValueError("Choose at least one impact method")
-            chosen.parent.mkdir(parents=True, exist_ok=True)
-            chosen.write_text(json.dumps(methods), encoding="utf-8")
-            args += ["--methods-file", str(chosen)]
-        try:
-            # The steps of from_brightway, not Brightway's own messages
-            cli(job, folder, args, lambda line: line.startswith("Reading") and f"{building}: {line[0].lower()}{line[1:]}")
-        except ValueError as e:
-            shutil.rmtree(part, ignore_errors=True)
-            raise ValueError(f"The build failed: {e}") from None
-        finally:
-            chosen.unlink(missing_ok=True)
-        old = output.with_name(output.name + ".old")
-        shutil.rmtree(old, ignore_errors=True)
-        closed, failure = None, None
-        with lock:  # not while the database is being opened
-            key = loaded_key(output)
-            if key and not reopen:
-                shutil.rmtree(part, ignore_errors=True)
-                raise ValueError(f"{database} was opened during the build: close it, then rebuild it")
-            if key:  # served until now: its files are replaced
+            methods = project_cache.method_names(cache) or None  # the project's methods, as chosen before
+        chosen = cache.with_name(cache.name + ".methods.json")
+        args = ["build", "--project", project, "--database", database, "--cache", str(cache)]
+        if rebuild:
+            args.append("--rebuild")
+        with build_lock(cache):
+            if methods is not None:
+                if not methods:
+                    raise ValueError("Choose at least one impact method")
+                chosen.parent.mkdir(parents=True, exist_ok=True)
+                chosen.write_text(json.dumps(methods), encoding="utf-8")
+                args += ["--methods-file", str(chosen)]
+            try:
+                # The steps of project_cache.build, not Brightway's own messages
+                cli(job, folder, args, lambda line: line.startswith(("Reading", "Solving")) and
+                    f"{building}: {line[0].lower()}{line[1:]}")
+            except ValueError as e:
+                raise ValueError(f"The build failed: {e}") from None
+            finally:
+                chosen.unlink(missing_ok=True)
+        with lock:
+            key = loaded_key(entry["path"])
+            if key and reopen:  # served until now, from the folders of its former build: opened again by the caller
                 closed = loaded.pop(key)
                 app.router.routes.remove(closed["route"])
-                gc.collect()
-            try:
-                if output.exists():
-                    output.rename(old)  # fails, leaving the previous build whole, when a file in it is in use
-                part.rename(output)
-            except OSError as e:
-                if old.exists() and not output.exists():
-                    old.rename(output)
-                shutil.rmtree(part, ignore_errors=True)
-                failure = f"Could not replace the previous build in {output}: {e}"
-        if failure:
-            if closed:
-                mount(output, closed["title"], None)  # the previous build keeps being served
-            raise ValueError(failure)
-        shutil.rmtree(old, ignore_errors=True)
-        title = f"{database} ({project})"
-        source = {"brightway": folder, "project": project, "database": database, **state}
-        sources.register(data, output, title, None, source)
-        return {"path": str(output), "title": title, "default_root": None}
+        gc.collect()
+        clean(cache)
+        return entry
 
     def run(job: dict, req: LoadRequest) -> dict:
         if req.brightway:
             entry = build(job, req.brightway, req.project, req.database, req.rebuild, req.reopen, req.methods)
         else:
-            entry = next((m for m in sources.catalog(data) if Path(m["path"]) == Path(req.path).resolve()), None)
+            entry = next((m for m in entries() if Path(m["path"]) == Path(req.path).resolve()), None)
             if entry is None:
                 raise ValueError(f"{req.path} is not in {data / 'models.json'}")
+        if not req.open:
+            return {"message": f"{entry['title']} is built"}
         key = loaded_key(entry["path"])
         if key is None:
-            if not (Path(entry["path"]) / "A.npz").exists():
-                raise ValueError(f"No model in {entry['path']} (no A.npz): build it again")
+            if not is_built(entry):
+                raise ValueError(f"No model in {entry['path']}: build it again")
             job["message"] = f"Loading {entry['title']} and factorising its matrix"
-            key = mount(entry["path"], entry["title"], entry.get("default_root"))
+            key = mount(entry["path"], entry["title"], entry.get("default_root"), entry)
         return {"key": key, "message": f"{entry['title']} is ready"}
 
     def public(job: dict) -> dict:
@@ -1606,10 +1661,10 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
     def sources_():
         """What can be loaded (built models, Brightway data folders), and the loads under way."""
         models = []
-        for m in sources.catalog(data):
+        for m in entries():
             path = Path(m["path"])
             models.append({"path": str(path), "title": m["title"], "key": loaded_key(path),
-                           "built": (path / "A.npz").exists(), "source": m.get("source")})
+                           "built": is_built(m), "source": m.get("source")})
         return {
             "data": str(data),
             "loaded": listing(),
@@ -1634,17 +1689,196 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
         projects = copy.deepcopy(projects_cache[key])
         folder = key
         built = {}
-        for m in sources.catalog(data):
+        for m in entries():
             origin = built_from(m)
-            if origin and origin[0] == folder and (Path(m["path"]) / "A.npz").exists():
-                built[origin[1:]] = {"key": loaded_key(m["path"]), "source": m["source"]}
+            if origin and origin[0] == folder and "cache" in m and is_built(m):
+                built[origin[1:]] = m
         for p in projects:
             for d in p["databases"]:
                 d["locked"] = d["name"] in locked_read(folder, p["name"])
                 b = built.get((p["name"], d["name"]))
                 # outdated: what changed in the project since the build (None: nothing)
-                d["model"] = b and {"key": b["key"], "outdated": sources.changes(b["source"], sources.database_state(p, d["name"]))}
+                key = b and loaded_key(b["path"])
+                d["model"] = b and {"key": key, "outdated": outdated(b, folder, p["name"], d["name"], p,
+                                                                     key and loaded[key]["model"])}
         return {"folder": folder, "projects": projects}
+
+    links_file = data / "cache" / "links.json"
+    try:
+        links_cache = json.loads(links_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        links_cache = {}
+
+    @app.get("/api/brightway/links")
+    def brightway_links(folder: str, project: str):
+        """The links between the databases of a project, counted in its exchanges (seconds to tens of seconds the first
+        time, then kept until the project is written again): ``{"links": [[database, database it uses, exchanges]]}``."""
+        try:
+            directory = sources.project_dir(folder_of(folder), project)
+        except (ValueError, FileNotFoundError) as e:
+            raise HTTPException(404, str(e))
+        key = str(directory / "lci" / "databases.db")
+        before = links_cache.get(key)
+        found = sources.database_links(directory, links_cache)
+        if links_cache.get(key) is not before:  # counted again: kept for the next start
+            try:
+                links_file.parent.mkdir(parents=True, exist_ok=True)
+                links_file.write_text(json.dumps(links_cache), encoding="utf-8")
+            except OSError:
+                pass
+        return {"links": found}
+
+    # ------------------------------------------------ Storage: what the app and Brightway take on disk
+
+    def storage_items() -> dict[str, dict]:
+        """What the storage dialog lists, by path: project caches and their segments, models made from files, obsolete
+        caches, left-overs in data/cache, downloads. Only these paths can be deleted from it."""
+        items: dict[str, dict] = {}
+        cache_root = (data / "cache").resolve()
+        catalog_paths = set()
+        known_projects: dict[str, dict] = {}
+
+        def databases_of(folder: str) -> dict[str, set]:
+            if folder not in known_projects:
+                try:
+                    known_projects[folder] = {p["name"]: {d["name"] for d in p["databases"]} for p in projects_in(folder)}
+                except (FileNotFoundError, OSError):
+                    known_projects[folder] = {}
+            return known_projects[folder]
+
+        for m in sources.catalog(data):
+            path = Path(m["path"]).resolve()
+            catalog_paths.add(path)
+            source = m.get("source") or {}
+            if source.get("brightway"):  # one model per database, before the project cache
+                items[str(path)] = {"kind": "obsolete", "path": str(path), "title": m["title"], "size": sources.folder_size(path),
+                                    "open": loaded_key(path) is not None,
+                                    "reason": "a model of its own (before the project cache): the database is built "
+                                              "again in its project cache when next opened"}
+                continue
+            results = sum((path / f).stat().st_size for f in ("G.npy", "G.json") if (path / f).exists())
+            items[str(path)] = {"kind": "model", "path": str(path), "title": m["title"], "size": sources.folder_size(path),
+                                "results": results, "open": loaded_key(path) is not None,
+                                "orphan": None if (path / "A.npz").exists() else "not built"}
+        for cache in sorted(cache_root.glob("project-*")) if cache_root.is_dir() else []:
+            if not cache.is_dir():
+                continue
+            info = project_cache.read_project(cache)
+            if info is None:
+                items[str(cache)] = {"kind": "obsolete", "path": str(cache), "title": cache.name, "size": sources.folder_size(cache),
+                                     "reason": "a project cache of another version of LCA Explorer"}
+                continue
+            folder, project = str(Path(info["brightway"]).resolve()), info["project"]
+            names = databases_of(folder).get(project)
+            gone = None if names is not None else f"project {project} no longer exists"
+            used = in_use(cache)
+            segments = project_cache.ordered(info)
+            for r in segments:
+                path = project_cache.folder(cache, r)
+                missing = [d for d in r["databases"] if names is not None and d not in names]
+                items[str(path)] = {
+                    "kind": "segment", "path": str(path), "title": ", ".join(r["databases"]), "databases": r["databases"],
+                    "project": project, "folder": folder, "size": sources.folder_size(path),
+                    "results": sum((path / f).stat().st_size for f in ("G.npy", "G.json") if (path / f).exists()),
+                    "open": str(path) in used, "users": [", ".join(u["databases"]) for u in project_cache.users(info, [r["id"]])],
+                    "orphan": gone or (missing and f"database {missing[0]} no longer in {project}") or None}
+            listed = {r["folder"] for r in info["segments"]}
+            for child in sorted((cache / "segments").iterdir()) if (cache / "segments").is_dir() else []:
+                if child.name not in listed:
+                    retired = child.name in info.get("retired", [])
+                    items[str(child)] = {"kind": "leftover", "path": str(child), "title": f"{project}: {child.name}",
+                                         "size": sources.folder_size(child), "open": str(child) in used,
+                                         "bulk": str(child) not in used,
+                                         "reason": "replaced by a rebuild" if retired else "build left unfinished"}
+            files = sum((cache / f).stat().st_size for f in ("project.json", "flows.pkl", "methods.pkl", "unlinked.pkl")
+                        if (cache / f).exists())
+            items[str(cache)] = {"kind": "project", "path": str(cache), "title": project, "folder": folder,
+                                 "size": sources.folder_size(cache), "files": files, "open": bool(used), "orphan": gone,
+                                 "methods": len(info["methods"]), "segments": [str(project_cache.folder(cache, r)) for r in segments]}
+        if cache_root.is_dir():  # what the catalog does not list: models of an older layout, builds left half done
+            for first in cache_root.iterdir():
+                if first.name.startswith("project-"):
+                    continue
+                for path in ([first] if (first / "A.npz").exists() or first.suffix in (".part", ".old") else
+                             list(first.iterdir()) if first.is_dir() else []):
+                    if path.is_dir() and path.resolve() not in catalog_paths:
+                        items[str(path.resolve())] = {"kind": "leftover", "path": str(path.resolve()), "title": path.name,
+                                                      "size": sources.folder_size(path), "bulk": path.suffix in (".part", ".old"),
+                                                      "reason": ("build left unfinished" if path.suffix in (".part", ".old")
+                                                                 else "not in models.json (a model opened with --model?)")}
+                if first.is_dir() and first.name.startswith("bw-") and not any(first.iterdir()):
+                    items[str(first.resolve())] = {"kind": "leftover", "path": str(first.resolve()), "title": first.name,
+                                                   "size": 0, "bulk": True, "reason": "empty folder"}
+        for path, title in [(data / "downloads", "Downloads of LCA Explorer (biosphere, methods, projects)"),
+                            (sources.default_brightway_dir().parent / "EcoinventInterface", "ecoinvent releases (ecoinvent_interface)")]:
+            if path.is_dir():
+                items[str(path.resolve())] = {"kind": "download", "path": str(path.resolve()), "title": title,
+                                              "size": sources.folder_size(path)}
+        return items
+
+    @app.get("/api/storage")
+    def storage(folder: str | None = None):
+        """Sizes on disk: the app's items (see ``storage_items``) and the projects of the Brightway data folder."""
+        items = list(storage_items().values())
+        base = Path(folder_of(folder)) if folder else sources.brightway_dir()
+        projects = []
+        try:
+            for name, twofive, directory in sources._projects(base):
+                projects.append({"name": name, "twofive": twofive, "path": str(directory),
+                                 "size": sources.folder_size(directory)})
+        except (FileNotFoundError, OSError, ValueError):
+            pass
+        return {"data": str(data), "brightway": str(base), "items": items, "projects": projects,
+                "total": sum(i["size"] for i in items if i["kind"] != "segment"), "brightway_total": sources.folder_size(base) if base.is_dir() else 0}
+
+    @app.post("/api/storage/delete")
+    def storage_delete(req: StorageDeleteRequest):
+        """Delete what the storage dialog lists: a model (``results``: its ``G`` only, solved again when it is next
+        opened), a left-over, a download folder. A model that is open is closed first by the page."""
+        items = storage_items()
+        path = str(Path(req.path).resolve()) if req.path else None
+        bulk = {"all": lambda i: i["kind"] in ("model", "project", "obsolete") or i.get("bulk"),
+                "leftovers": lambda i: i.get("bulk"), "obsolete": lambda i: i["kind"] == "obsolete"}
+        if req.kind in bulk and not path:
+            targets = [i for i in items.values() if bulk[req.kind](i)]
+        else:
+            targets = [items[path]] if path in items else []
+            if not targets:
+                raise HTTPException(404, "Nothing to delete there")
+            kinds = ("model", "segment") if req.kind == "results" else (req.kind,)
+            if targets[0]["kind"] not in kinds:
+                raise HTTPException(400, f"{targets[0]['title']} is not a {req.kind}")
+        if not targets:
+            raise HTTPException(404, "Nothing to delete there")
+        if any(j["status"] == "running" for j in jobs.values()):
+            raise HTTPException(409, "Wait for the job under way to end")
+        if req.kind == "segment":  # with the segments that use it
+            gone = [targets[0]["title"], *targets[0]["users"]]
+            busy = [i["title"] for i in items.values() if i["kind"] == "segment" and i["title"] in gone
+                    and i.get("project") == targets[0]["project"] and i["open"]]
+        else:
+            busy = [i["title"] for i in targets if i.get("open") and req.kind != "results"]
+        if busy:
+            raise HTTPException(409, f"Close the databases of {', '.join(busy)} first")
+        for item in targets:
+            target = Path(item["path"])
+            if item["kind"] == "segment":
+                cache, info = target.parent.parent, project_cache.read_project(target.parent.parent)
+                ids = [r["id"] for r in info["segments"] if r["folder"] == target.name]
+                if req.kind == "results":
+                    project_cache.drop_results(cache, ids)
+                else:
+                    project_cache.delete_segments(cache, ids)
+                    clean(cache)
+                continue
+            if req.kind == "results":
+                for name in ("G.npy", "G.json"):
+                    (target / name).unlink(missing_ok=True)
+                continue
+            shutil.rmtree(target, ignore_errors=True)
+            if item["kind"] in ("model", "obsolete"):
+                sources.unregister(data, target)
+        return storage(None)
 
     @app.post("/api/load")
     def load(req: LoadRequest):
@@ -1665,11 +1899,8 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
             methods = sources.project_methods(folder, project)
         except ValueError as e:
             raise HTTPException(404, str(e))
-        selected = None
-        if database:
-            entry = next((m for m in sources.catalog(data) if built_from(m) == (folder, project, database)), None)
-            if entry and (Path(entry["path"]) / "A.npz").exists():
-                selected = LCAModel.method_names(entry["path"]) or None
+        # One list of methods per project: those of its project cache, whichever database is built
+        selected = project_cache.method_names(cache_of(folder, project)) or None
         default = []
         if methods:
             family = methods[_default_index([m["name"] for m in methods])]["name"][0]
@@ -1680,33 +1911,31 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
         m = loaded.get(key)
         if m is None:
             raise ValueError(f"{key} is not loaded")
-        entry = next((e for e in sources.catalog(data) if Path(e["path"]).resolve() == m["path"]), None)
-        origin = entry and built_from(entry)
-        if not origin:
-            raise ValueError("This database was not built from a Brightway project: its impact methods cannot be added to")
-        folder, project, _ = origin
         model = m["model"]
+        origin = getattr(model, "project_cache", None)
+        entry = origin and next((e for e in entries() if Path(e["path"]).resolve() == m["path"]), None)
+        if not entry:
+            raise ValueError("This database was not built from a Brightway project: its impact methods cannot be added to")
+        folder, project, database = built_from(entry)
         have = {tuple(x.name) for x in model.methods}
         names = [n for n in names if tuple(n) not in have]
         if not names:
             return {"added": 0, "message": "These methods are there already"}
-        chosen = m["path"].with_name(m["path"].name + ".add-methods.json")
-        out = m["path"].with_name(m["path"].name + ".add-methods.pkl")
-        chosen.write_text(json.dumps(names), encoding="utf-8")
+        cache = Path(entry["cache"])
+        chosen = cache.with_name(cache.name + ".add-methods.json")
         job["message"] = f"Reading {len(names)} impact methods from {project}"
-        try:
-            cli(job, folder, ["add-methods", "--project", project, "--model", str(m["path"]),
-                              "--methods-file", str(chosen), "--output", str(out)])
-            import pickle
-
-            with open(out, "rb") as f:
-                read = pickle.load(f)
-        finally:
-            chosen.unlink(missing_ok=True)
-            out.unlink(missing_ok=True)
-        methods, unlinked = (read["methods"], read.get("unlinked")) if isinstance(read, dict) else (read, None)
-        job["message"] = f"Computing the impacts of {len(methods)} methods"
-        added = model.add_methods(methods, unlinked=unlinked)
+        with build_lock(cache):
+            chosen.write_text(json.dumps(names), encoding="utf-8")
+            try:
+                # Their factors read, and their columns of G solved for every segment, in the build process
+                cli(job, folder, ["add-methods", "--project", project, "--database", database, "--cache", str(cache),
+                                  "--methods-file", str(chosen)],
+                    lambda line: line.startswith(("Reading", "Solving")) and line)
+            finally:
+                chosen.unlink(missing_ok=True)
+        methods, columns, unlinked = project_cache.method_columns(model, names)
+        added = model.add_methods(methods, unlinked=unlinked, columns=columns)
+        clean(cache)
         return {"added": added, "message": f"{added} impact {'method' if added == 1 else 'methods'} added"}
 
     @app.post("/api/methods/add")
@@ -1735,6 +1964,9 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
                 raise HTTPException(404, f"{req.key} is not loaded")
             app.router.routes.remove(m["route"])
         gc.collect()
+        origin = getattr(m["model"], "project_cache", None)
+        if origin:  # the folders of segments rebuilt since it was opened
+            clean(origin["cache"])
         return listing()
 
     # ------------------------------------------------ Brightway projects: changes, in jobs
@@ -1803,7 +2035,7 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
         folder = folder_of(req.folder)
         project_in(folder, req.project)
         new_name = new_project_name(folder, req.new_name, "Give the project a new name")
-        if any((built_from(m) or ())[:2] == (folder, req.project) and loaded_key(m["path"]) for m in sources.catalog(data)):
+        if any((built_from(m) or ())[:2] == (folder, req.project) and loaded_key(m["path"]) for m in entries()):
             raise HTTPException(400, f"A database of {req.project} is open: close it first")
 
         def work(job):
@@ -1843,7 +2075,7 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
         if users:
             raise HTTPException(400, f"{req.database} is used by {', '.join(users)}: remove "
                                      f"{'it' if len(users) == 1 else 'them'} first")
-        if any(built_from(m) == (folder, req.project, req.database) and loaded_key(m["path"]) for m in sources.catalog(data)):
+        if any(built_from(m) == (folder, req.project, req.database) and loaded_key(m["path"]) for m in entries()):
             raise HTTPException(400, f"{req.database} is open: close it first (Close, in the list of loaded databases)")
 
         def work(job):
@@ -1883,7 +2115,7 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
                                      f"{'it links' if len(users) == 1 else 'they link'} to it")
         if req.database in locked_read(folder, req.project):
             raise HTTPException(400, f"{req.database} is locked: unlock it first")
-        if any(built_from(m) == (folder, req.project, req.database) and loaded_key(m["path"]) for m in sources.catalog(data)):
+        if any(built_from(m) == (folder, req.project, req.database) and loaded_key(m["path"]) for m in entries()):
             raise HTTPException(400, f"{req.database} is open: close it first")
 
         def work(job):

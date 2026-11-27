@@ -11,6 +11,8 @@ from lca_viewer.cli import _per_model
 from lca_viewer.server import app_for, create_library, model_key
 from lca_viewer.sources import _safe_filename, brightway_projects, register
 
+from conftest import write_project_cache
+
 
 @pytest.fixture
 def two_models(tmp_path, linear_chain_model, loop_model):
@@ -164,52 +166,44 @@ def test_brightway_builds_are_kept_per_folder_and_tell_what_changed(tmp_path, li
 
     edit("databases.json", lambda m: (m["agb"].update(depends=["ei"]), m["ei"].update(depends=["bio"])))
     data = tmp_path / "data"
-    # The same names in two Brightway folders, or names differing in punctuation only: two models
-    assert sources.cache_dir(data, tmp_path / "bw", "p", "agb") != sources.cache_dir(data, tmp_path / "other", "p", "agb")
-    assert sources.cache_dir(data, tmp_path / "bw", "a b", "agb") != sources.cache_dir(data, tmp_path / "bw", "a-b", "agb")
-
-    state = sources.database_state(brightway_projects(tmp_path / "bw")[0], "agb")
-    assert state["depends"] == {"ei": "2026-01-01T00:00:00", "bio": "2026-01-01T00:00:00"} and state["methods"]
-    # A build of agb, as the app registers it (building needs Brightway)
-    output = sources.cache_dir(data, tmp_path / "bw", "p", "agb")
-    linear_chain_model.save(output)
-    register(data, output, "agb (p)", None,
-             {"brightway": str((tmp_path / "bw").resolve()), "project": "p", "database": "agb", **state})
+    # The same names in two Brightway folders, or names differing in punctuation only: two caches
+    assert sources.project_cache_dir(data, tmp_path / "bw", "p") != sources.project_cache_dir(data, tmp_path / "other", "p")
+    assert sources.project_cache_dir(data, tmp_path / "bw", "a b") != sources.project_cache_dir(data, tmp_path / "bw", "a-b")
+    # A build of agb on ei, as the build process writes it (building needs Brightway)
+    stamp = brightway_projects(tmp_path / "bw")[0]["methods_stamp"]
+    cache = write_project_cache(data, tmp_path / "bw", "p", linear_chain_model, [(["ei"], [0]), (["agb"], [1, 2])],
+                                methods_stamp=stamp)
     client = TestClient(create_library(data))
 
     def models(folder="bw", refresh=False):
         listed = client.get("/api/brightway", params={"folder": str(tmp_path / folder), "refresh": refresh}).json()
         return {d["name"]: d["model"] for d in listed["projects"][0]["databases"]}
 
-    assert models() == {"agb": {"key": None, "outdated": None}, "bio": None, "ei": None}
+    assert models() == {"agb": {"key": None, "outdated": None}, "bio": None, "ei": {"key": None, "outdated": None}}
     assert models("other") == {"agb": None, "bio": None, "ei": None}  # not built from that folder
-    edit("databases.json", lambda m: m["bio"].update(modified="2026-02-01T00:00:00"))  # a database it links to, indirectly
+    edit("databases.json", lambda m: m["ei"].update(modified="2026-02-01T00:00:00"))  # a database it uses
     assert models()["agb"]["outdated"] is None  # changed outside the app: the projects read before are kept…
-    assert models(refresh=True)["agb"]["outdated"] == "bio (linked) changed since the model was built"  # …until read again
-    edit("databases.json", lambda m: m["bio"].update(modified="2026-01-01T00:00:00"))
+    assert models(refresh=True)["agb"]["outdated"] == "ei (linked) changed since the model was built"  # …until read again
+    edit("databases.json", lambda m: m["ei"].update(modified="2026-01-01T00:00:00"))
     edit("methods.json", lambda m: m.update({"('IPCC', 'GWP20')": {}}))
     assert models(refresh=True)["agb"]["outdated"] == "impact methods changed since the model was built"
     edit("databases.json", lambda m: m["agb"].update(modified="2026-03-01T00:00:00"))
     assert models(refresh=True)["agb"]["outdated"] == "changed since the model was built"
 
-    # Out of date, the build made before is still opened when asked (no rebuild unless asked)
+    # Out of date, the build made before is still opened when asked (no rebuild unless asked), its segment and the
+    # one it uses put together: the model of agb and all it uses
     body = {"brightway": str(tmp_path / "bw"), "project": "p", "database": "agb"}
     job = wait(client, client.post("/api/load", json=body).json())
     assert job["status"] == "done" and job["key"] == "p-agb"
     assert models()["agb"] == {"key": "p-agb", "outdated": "changed since the model was built"}
-    # Open, it is not rebuilt: its matrices in memory would not match the new files
+    info = client.get("/db/p-agb/api/info").json()
+    assert info["activities"] == 3
+    scores = client.get("/db/p-agb/api/activity/2", params={"method": 0}).json()
+    assert scores["cumulative_per_unit"] == pytest.approx(float(linear_chain_model.G[2, 0]))
+    # Open, it is not rebuilt: it reads the files of its segments
     job = wait(client, client.post("/api/load", json={**body, "rebuild": True}).json())
     assert job["status"] == "failed" and "is open" in job["error"]
-    assert (output / "A.npz").exists()
-
-
-def test_old_builds_are_compared_on_their_database_only():
-    from lca_viewer.sources import changes
-
-    state = {"modified": "1", "depends": {"bio": "2"}, "methods": "abc"}
-    assert changes({"modified": "1"}, state) is None
-    assert changes({"modified": "0"}, state) == "changed since the model was built"
-    assert changes({"modified": "1", "depends": {"bio": "2"}, "methods": "abc"}, state) is None
+    assert (cache / "project.json").exists()
 
 
 def test_layout_tells_whether_positions_moved(linear_chain_model, loop_model):

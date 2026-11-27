@@ -24,22 +24,19 @@ loads it in the background (`/api/load`, followed with `/api/jobs/<id>`).
 Each loaded model is mounted at `/db/<key>/` with the API of `create_app`;
 `/api/unload` removes it.
 
-- **Built models**: the catalog `data/models.json` (`sources.catalog` /
-  `sources.register`). Entries built from Brightway record their `source`
-  (folder, project, database) and what the build depends on
-  (`sources.database_state`): the `modified` time of the database and of the
-  databases it links to, directly or not, and a stamp of the impact methods
-  (`methods.json` has no dates: the stamp hashes it with the time and size of
-  each method's `processed/<abbreviation>.zip`). The dialog says what changed
-  since (`sources.changes`) and offers a rebuild; *Open old build* opens the
-  build as it is. Entries registered before dependencies and methods were
-  recorded are compared on their database alone. A database that is open is
-  not rebuilt (its matrices in memory would not match the new metadata
-  files): close it first. Saved tabs record the layout of their model (a
-  hash of the activities, flows and methods in order, `/api/info`'s
-  `layout`): restored on a rebuilt model whose positions moved, the
-  process and methods are found again by name, and the expanded
-  rows, pins, merges and names are dropped.
+- **Built databases**: the databases built in the project caches
+  (`data/cache/project-<hash>/project.json`, see [project-cache.md](project-cache.md)), and the models made from
+  files in the catalog `data/models.json` (`sources.catalog` / `sources.register`). Entries of `models.json` built
+  from Brightway before the project cache (one model per database) are obsolete: listed in the storage dialog,
+  never opened. A database is out of date (`project_cache.status`) when one of the databases its segments hold was
+  written since (their `modified` time in `databases.json`), or the impact methods were (`methods.json` has no
+  dates: the stamp hashes it with the time and size of each method's `processed/<abbreviation>.zip`). The dialog
+  says what changed and offers a rebuild; *Open old build* opens the build as it is. A database that is open is
+  not rebuilt unless the page asks to reopen it: the build writes new segment folders, the open database keeps
+  reading the old ones until it is closed, then they are deleted. Saved tabs record the layout of their model (a
+  hash of the activities, flows and methods in order, `/api/info`'s `layout`): restored on a rebuilt model whose
+  positions moved, the process and methods are found again by name, and the expanded rows, pins, merges and
+  names are dropped.
 - **Brightway projects** are listed by reading the files directly:
   `projects.db` (project names; the pickled metadata, read with an unpickler
   that refuses any class, says whether the project is Brightway 2.5), each
@@ -48,17 +45,15 @@ Each loaded model is mounted at `/db/<key>/` with the API of `create_app`;
   databases apart). No bw2data import, so listing is instant and read-only.
   Project folders are named as bw2data names them (`safe_filename`, short or
   full md5 hash).
-- **Building** runs `lca-viewer build` in a separate process with
-  `BRIGHTWAY2_DIR` set to the chosen folder: bw2data's data folder is fixed
-  when it is imported, and the build's memory is freed when it ends. Its steps
-  are shown in the dialog. Output goes to
-  `data/cache/bw-<hash>/<project>-<database>` (the hash of the Brightway
-  folder, project and database: the same names in two folders are two
-  models) through a `.part` folder, so an interrupted build leaves nothing
-  half written; the previous build is moved aside before the new one takes
-  its place, and kept if it cannot be (a file in it in use). A model built
-  before keeps its folder: the catalog is looked up by `source`, not path. Checked on ecoinvent 3.11 consequential (633 methods, 22,241
-  activities, 1.5 min): same score as bw2calc.
+- **Building** runs `lca-viewer build --cache <project cache>` in a separate process with `BRIGHTWAY2_DIR` set to
+  the chosen folder: bw2data's data folder is fixed when it is imported, and the build's memory is freed when it
+  ends. It builds the segments the database needs that are missing or changed, and solves the results (`G`) of
+  every segment whose inputs changed; its steps are shown in the dialog. One build at a time per project cache.
+  The cache is named by a hash of the Brightway folder and project: the same names in two folders are two caches.
+  A segment is written to a new folder, and the project's `project.json` replaced only when it is complete, so an
+  interrupted build leaves the previous one whole (its unfinished folder is listed as a left-over).
+  Checked on ecoinvent 3.12 cut-off and on the AESA project: the same `G` as a model built on its own (relative
+  difference below 3e-12).
 - Brightway 2 projects (no `25` flag) are refused with a message: opening
   them with bw2data 4 needs `projects.migrate_project_25()`, which changes
   them, and that is the user's call.

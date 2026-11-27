@@ -66,17 +66,72 @@ def register(data, output, title: str, default_root: str | None, source: dict | 
     path.write_text(json.dumps(models, indent=2) + "\n", encoding="utf-8")
 
 
+def unregister(data, output) -> None:
+    """Remove a model from ``data/models.json`` (its folder is not touched)."""
+    path = Path(data) / "models.json"
+    if not path.exists():
+        return
+    output = Path(output).resolve()
+    models = [m for m in json.loads(path.read_text(encoding="utf-8")) if (path.parent / m["path"]).resolve() != output]
+    path.write_text(json.dumps(models, indent=2) + "\n", encoding="utf-8")
+
+
+def folder_size(path) -> int:
+    """Bytes of the files under ``path`` (0 when it does not exist); links are not followed."""
+    total, todo = 0, [Path(path)]
+    while todo:
+        try:
+            with os.scandir(todo.pop()) as entries:
+                for e in entries:
+                    try:
+                        if e.is_dir(follow_symlinks=False):
+                            todo.append(Path(e.path))
+                        elif e.is_file(follow_symlinks=False):
+                            total += e.stat(follow_symlinks=False).st_size
+                    except OSError:
+                        pass
+        except OSError:
+            pass
+    return total
+
+
+def database_links(project_dir: Path, cache: dict | None = None) -> list[list]:
+    """``[[database, database it uses, exchanges], ...]`` read from the exchanges of the project (biosphere ones
+    included): the links Brightway's ``depends`` should list. Seconds to tens of seconds (5.8M exchanges: 20 s), so
+    ``cache`` (``{path: {"stamp", "links"}}``) keeps them until the file is written again."""
+    path = Path(project_dir) / "lci" / "databases.db"
+    if not path.is_file():
+        return []
+    stamp, key = _file_stamp(path), str(path)
+    if cache is not None and (cache.get(key) or {}).get("stamp") == stamp:
+        return cache[key]["links"]
+    with closing(sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)) as con:
+        links = [[o, i, n] for o, i, n in con.execute(
+            "SELECT output_database, input_database, COUNT(*) FROM exchangedataset "
+            "WHERE output_database != input_database GROUP BY output_database, input_database")]
+    if cache is not None:
+        cache[key] = {"stamp": stamp, "links": links}
+    return links
+
+
 def slug(text: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "-", text).strip("-") or "model"
 
 
-def cache_dir(data, folder, project: str, database: str) -> Path:
-    """Where the model built from a Brightway database is kept: one folder per Brightway data
-    folder, project and database (the same names in two data folders, or names that differ
-    only in punctuation, are different models)."""
-    origin = "\n".join([str(Path(folder).expanduser().resolve()), project, database])
-    digest = hashlib.sha1(origin.encode("utf-8")).hexdigest()[:10]
-    return Path(data) / "cache" / f"bw-{digest}" / f"{slug(project)}-{slug(database)}"
+def project_cache_dir(data, folder, project: str) -> Path:
+    """Where the cache of a Brightway project is kept (see project_cache): one folder per Brightway data folder and
+    project."""
+    origin = "\n".join([str(Path(folder).expanduser().resolve()), project])
+    return Path(data) / "cache" / f"project-{hashlib.sha1(origin.encode('utf-8')).hexdigest()[:10]}"
+
+
+def cached_database(cache, project: str, database: str) -> Path:
+    """The name of a database in a project cache, as the catalog and the open databases know it (not a folder): its
+    key in the page is that name, "<project>-<database>"; a hash tells apart names that differ in punctuation only."""
+    name = f"{slug(project)}-{slug(database)}"
+    if slug(database) != database:
+        name += "-" + hashlib.sha1(database.encode("utf-8")).hexdigest()[:6]
+    return Path(cache) / "databases" / name
 
 
 # ---------------------------------------------------------------- Brightway
@@ -269,22 +324,6 @@ def project_methods(base, project: str) -> list[dict]:
             for name, meta in pairs]
 
 
-def database_state(project: dict, database: str) -> dict:
-    """What a model built from ``database`` of ``project`` (as :func:`brightway_projects` lists
-    it) depends on: when the database and the databases it links to (theirs too) were last
-    written, and the impact methods. Recorded with the build, to tell when it is out of date."""
-    by_name = {d["name"]: d for d in project["databases"]}
-    depends, todo = {}, list(by_name[database]["depends"])
-    while todo:
-        name = todo.pop()
-        if name == database or name in depends:
-            continue
-        linked = by_name.get(name)
-        depends[name] = linked and linked["modified"]
-        todo.extend(linked["depends"] if linked else [])
-    return {"modified": by_name[database]["modified"], "depends": depends, "methods": project.get("methods_stamp")}
-
-
 def affected_databases(project: dict, names) -> list[str]:
     """``names`` and the databases of the project that use them, directly or through others: those
     whose results change when something in ``names`` is edited, and whose models must be built again."""
@@ -297,22 +336,6 @@ def affected_databases(project: dict, names) -> list[str]:
                 out.add(d["name"])
                 grew = True
     return sorted(out)
-
-
-def changes(source: dict, state: dict) -> str | None:
-    """What changed in the project since a model was built (``source``: as registered with the
-    build; ``state``: :func:`database_state` now), or None. Builds registered before the linked
-    databases and the methods were recorded are compared on their database alone."""
-    if source.get("modified") != state["modified"]:
-        return "changed since the model was built"
-    if "depends" in source:
-        before, now = source["depends"], state["depends"]
-        changed = sorted((n for n in set(before) | set(now) if before.get(n) != now.get(n)), key=str.lower)
-        if changed:
-            return f"{', '.join(changed)} (linked) changed since the model was built"
-    if source.get("methods") and source["methods"] != state["methods"]:
-        return "impact methods changed since the model was built"
-    return None
 
 
 def project_dir(base, project: str) -> Path:
