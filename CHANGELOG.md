@@ -9,7 +9,11 @@ version, `main` can be ahead of it with work in progress.
 
 Changes on `dev`, not released yet.
 
-Large databases: one built with hundreds of thousands of processes opens, and every database is solved faster.
+## 1.6.0 - 2026-11-27
+
+Large databases: one built with hundreds of thousands of processes opens, and every database is solved faster, with
+one cache per project. Impact methods get their coverage and a view of their own, elementary flows and models their
+pop-ups and tabs, and the first start is made simple.
 
 - **One cache per Brightway project**: each database is built once, into a *segment* of its project's cache
   (databases that use each other are built together), and opening a database puts its segment and those it uses
@@ -46,10 +50,10 @@ Large databases: one built with hundreds of thousands of processes opens, and ev
 - **Process information in one place**: the *Description* and *Metadata* tabs of a process (pop-up or tab) are one
   *Information* tab, which also shows what the process is: its product and unit, activity, location, activity type
   (market, production…), ISIC and CPC classes and code, then its description.
-- **Total impacts in a process's *Characterisation***: instead of its elementary flows (they are in its *Exchanges*),
-  its total (with its supply chain) and direct impact per unit of its product in the main method and in every method
-  shown together, with the direct share; a method opens its model pop-up. The method names there and in a flow's
-  *Characterisation* follow the *Name display* of the *Methods* panel, unit included.
+- **Characterisation panel** in the process pop-up (and tab), after *Exchanges*: the process's total (with its supply
+  chain) and direct impact per unit of its product in the main method and in every method shown together, with the
+  direct share; a method opens its model pop-up. The method names there and in a flow's *Characterisation* follow
+  the *Name display* of the *Methods* panel, unit included. API: `GET /api/activity/{index}/characterisation`.
 - **Fixed**: the impact methods that come with an ecoinvent release (3.10 and later: "ecoinvent-3.10.1 | EF v3.1 |
   climate change | …") were named and grouped by the release instead of their family, and a database built with them
   showed and offered all of the release's methods at first instead of the family of the default one. The release is
@@ -98,9 +102,6 @@ Large databases: one built with hundreds of thousands of processes opens, and ev
   a flow, then the processes emitting it: process → flow → model → flow → process in one pop-up, ← going back.
 - **Organize by location** in the model pop-up: the flows by their location (regionalised flows), those without one
   under *no location*. A model built before the flows kept their location says *rebuild to see locations*.
-- **Characterisation panel** in the process pop-up (and tab), after *Exchanges*: the process's own exchanges with
-  nature per unit of its product, by elementary flow in the active method (amount, factor, impact, share), with its
-  direct and cumulative scores. API: `GET /api/activity/{index}/characterisation`.
 - **One list for every pop-up**: *Used by*, *Alternatives*, *Characterisation*, *Emitted by*, *Same substance* and the
   model's flows look and work alike: filter box above, a header that sorts (right-click: filter by column), rows of one
   height whose name opens their pop-up, numbers with their unit in a column of its own, shares as bars.
