@@ -43,8 +43,9 @@ create datasets, add Agribalyse, run it on a shared server, set it up by hand an
   cut-off clears these choices; **Reset view** clears them, removes every
   group and merge (and *Group by product*) and collapses the tree. Both can be
   undone from the notice that appears.
-- **Group by product** and **Full / Short / Custom names** (bar under the
-  toolbar) apply to the tree and the chart.
+- **Group by product** (view options) applies to the tree and the chart. How processes and flows are
+  named (*Name display*, at the top of the *Processes* panel: by product or activity name, or your own format) is
+  one setting for every tab, card and chart.
 - **Save ▾**: download the view as a file; the arrow menu loads a saved view
   back (or copies it as JSON).
 - The **process contribution** chart shows exactly the rows visible in the tree:

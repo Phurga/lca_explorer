@@ -10,9 +10,20 @@ version, `main` can be ahead of it with work in progress.
 Changes on `dev`, not released yet.
 
 - **View options on each process**: the sliders icon of a process in the left panel's *Processes* panel opens the
-  view options of that tab in a pop-up (*Display*, *Cut-off*, *Names*, *Organise by*, *Group by*, *Color by*, *Rows*,
+  view options of that tab in a pop-up (*Display*, *Cut-off*, *Organise by*, *Group by*, *Color by*, *Rows*,
   with *Reset* and *Save ▾*); the tab is shown in its window first. Key **v** in View mode opens those of the tab in
   focus. Flow tabs have none.
+- **Name display of processes and flows**, one setting for the workspace: a fold at the top of the *Processes*
+  panel, as *Methods* has for method names, with a process format (*Product*, *Activity* or *Custom*) and a flow
+  format (*Full*, *Substance* or *Custom*), the custom ones a recipe with tokens (`{product}`, `{name}`,
+  `{location}`…, `{substance}`, `{compartment}`…). Processes are now named by their **reference product**, the
+  location in grey, by default. The tree, the Sankey, the charts, the pop-ups, the tab titles, the *Processes* panel,
+  Compare mode and the headers of process and flow cards follow it; a row's own name (✎) still wins. *Names* left the
+  view options of each tab; the old choice is carried over once (*Short* → *Product* with *Substance* flows, *Custom*
+  keeps its recipe, *Full* takes the new default).
+- **Compare and baseline in one box**: in the *Processes* panel, each tab has one box clicked in turn, as the methods
+  of the *Methods* panel: ✓ compared, ★ the baseline, then unticked (the first other compared tab becomes the
+  baseline; the baseline alone cannot be unticked). It replaces the tick and the baseline radio.
 - **Explore view**: the side panel's first panel, formerly *Custom view*, keeps only the chart of the tree's rows.
 - **Process cards: Explore and Exchanges.** The first panel of a process tab (the tree) and of a process pop-up (its
   explorer) is now called *Explore*. A new *Exchanges* panel, second, lists the exchanges as the dataset records them,

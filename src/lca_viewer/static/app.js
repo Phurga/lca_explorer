@@ -3727,12 +3727,12 @@ function SaveMenu({ disabled, onSave, onLoad, onCopy, onDefaults, icon }) {
     </span>`;
 }
 
-// ---------------------------------------------------------------- view bar (group by, organize, names, colours)
+// ---------------------------------------------------------------- view bar (group by, organize, colours)
 // The headers say what the buttons are for, so the buttons are one word
 // The colours under Color by, at most this many (the Settings pop-up lists them all)
 const LEGEND_MAX = 14;
 // ``legend``: the colours in use in the tree (colorLegend); ``onPick(key, colour)``: a colour picked; ``onColours``: the Settings pop-up
-function ViewBar({ view, setView, example, fields = [], legend = [], onPick = () => {}, onColours = () => {} }) {
+function ViewBar({ view, setView, fields = [], legend = [], onPick = () => {}, onColours = () => {} }) {
   const set = (patch) => setView({ ...view, ...patch });
   const toggle = (key, label, title, on = !!view[key]) => html`
     <button class=${on ? "primary" : ""} onClick=${() => set({ [key]: !on })} aria-pressed=${on} title=${title}>${label}</button>`;
@@ -3756,14 +3756,6 @@ function ViewBar({ view, setView, example, fields = [], legend = [], onPick = ()
   const shownLegend = legend.slice(0, LEGEND_MAX);
   return html`
     <div class="view-bar">
-      <div class="view-group" role="group" aria-label="Names">
-        <span class="view-group-label">Names</span>
-        <span class="segmented">
-          ${[["full", "Full", "Product, process, place"], ["short", "Short", "Main name"], ["custom", "Custom", "Your format"]].map(([id, label, hint]) => html`
-            <button class=${view.naming === id ? "primary" : ""} title=${hint} onClick=${() => set({ naming: id })}>${label}</button>`)}
-        </span>
-      </div>
-      ${view.naming === "custom" && html`<${RecipeEditor} recipe=${view.recipe} setRecipe=${(recipe) => set({ recipe })} example=${example} />`}
       <div class="view-group" role="group" aria-label="Organise by">
         <span class="view-group-label">Organise by</span>
         ${choice(view.organize === "type", ORGANIZE.type, ORGANIZE_HINTS.type, () => organize("organize", "type"))}
@@ -4181,7 +4173,7 @@ function FlowHead({ info, kind = "Flow" }) {
   if (!info) return html`<div class="info-title">…</div>`;
   return html`
     <div class="info-title flow-title" style=${{ "--flow-color": FLOW_TYPES[info.resource ? "resource" : "emission"].color }}>
-      <${FlowIcon} resource=${info.resource} size=${13} /> ${info.name}<span class="flow-compartment">, ${info.place || "no compartment"}</span>
+      <${FlowIcon} resource=${info.resource} size=${13} /> ${flowTitleNames(info).main}${flowTitleNames(info).qual && html`<span class="flow-compartment">, ${flowTitleNames(info).qual}</span>`}
       ${info.location && html` <span class="loc-chip" title="Location of the flow">${info.location}</span>`}</div>
     <div class="muted">${kind} · ${info.resource ? "resource" : "emission"} · ${unit(info.unit)}</div>`;
 }
@@ -5157,7 +5149,7 @@ function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsByI
       onKeyDown=${popupKeys({ tabs, shown, setTab, body, onClose, exchange, explorerKeys })}
       head=${html`
         <div class="info-title">${target.direct ? "Direct emissions of " : ""}${(target.direct ? rowsById.get(row?.parent)?.custom : row?.custom)
-          || (info ? info.name : "…")}${" "}
+          || (info ? processTitle(info) : "…")}${" "}
           ${info && html`<span class="loc-chip">${info.location}</span>`}
           ${stagedHere && html` <span class="chip staged" title="A change of this process is staged: the values below are those of the last build">changes staged</span>`}
           ${ctx.editing && locked && html` <span class="chip" title="Its database is locked">🔒 locked</span>`}</div>
@@ -5321,6 +5313,63 @@ function flowNames(flow, naming, recipe) {
   return { main: flow.name, qual: compartmentOf(flow) };
 }
 
+// ---------------------------------------------------------------- name display of processes and flows
+// How processes and flows are named everywhere (the tree, the Sankey, the charts, the pop-ups, the tab titles, the
+// Processes panel and Compare mode): the *Name display* of the Processes panel, one setting of the workspace kept in the
+// lens, not per tab. A format for the processes and one for the flows, each a preset or the custom recipe (a main part,
+// and a secondary part in grey, with the tokens of RECIPE_TOKENS and FLOW_RECIPE_TOKENS).
+const PROCESS_NAMINGS = {
+  product: { label: "Product", hint: "The reference product, the location in grey", main: "{product}", secondary: "{location}" },
+  activity: { label: "Activity", hint: "The activity name, the location in grey (the full names of before)", main: "{name}", secondary: "{location}" },
+  custom: { label: "Custom", hint: "Your format, with tokens" },
+};
+const FLOW_NAMINGS = {
+  full: { label: "Full", hint: "The substance, its compartment in grey", flowMain: "{substance}", flowSecondary: "{compartment}, {subcompartment}" },
+  short: { label: "Substance", hint: "The substance alone", flowMain: "{substance}", flowSecondary: "" },
+  custom: { label: "Custom", hint: "Your format, with tokens" },
+};
+// The default: the product as the name, the location as the qualifier; flows with their compartment
+const DEFAULT_NAMING = { process: "product", flow: "full", recipe: { ...DEFAULT_RECIPE } };
+let nameDisplay = DEFAULT_NAMING;  // the lens's, set by App
+// The recipe of a name display: the presets' parts, or the custom recipe's
+function namingRecipe(n = nameDisplay) {
+  const own = { ...DEFAULT_RECIPE, ...(n.recipe || {}) };
+  const p = n.process !== "custom" && PROCESS_NAMINGS[n.process], f = n.flow !== "custom" && FLOW_NAMINGS[n.flow];
+  return { main: p ? p.main : own.main, secondary: p ? p.secondary : own.secondary,
+    flowMain: f ? f.flowMain : own.flowMain, flowSecondary: f ? f.flowSecondary : own.flowSecondary };
+}
+// ``view.naming`` and ``view.recipe`` as the readers of a view know them (the tree, the Sankey, the chart, the members
+// pop-ups): the full names of before for activity names with full flows, else the recipe of the name display
+const viewNaming = (n = nameDisplay) => ({ naming: n.process === "activity" && n.flow === "full" ? "full" : "custom", recipe: namingRecipe(n) });
+// The name display kept in the lens. Before it, each tab had a *Names* option (a preference): Short named processes by
+// their product and flows by their substance, Custom used its recipe; Full, the default then, takes the new default
+function namingOf(stored) {
+  if (stored && typeof stored === "object") {
+    return { process: stored.process in PROCESS_NAMINGS ? stored.process : DEFAULT_NAMING.process,
+      flow: stored.flow in FLOW_NAMINGS ? stored.flow : DEFAULT_NAMING.flow, recipe: { ...DEFAULT_RECIPE, ...(stored.recipe || {}) } };
+  }
+  const recipe = Object.fromEntries(Object.entries(RECIPE_PREFERENCES).map(([part, key]) => [part, loadPreference(key, DEFAULT_RECIPE[part])]));
+  const old = loadPreference("naming", "full");
+  if (old === "custom") return { process: "custom", flow: "custom", recipe };
+  if (old === "short") return { process: "product", flow: "short", recipe };
+  return { ...DEFAULT_NAMING, recipe };
+}
+// A process (``meta``: name, reference_product, location… as the API gives them) named by the name display:
+// { main, qual }. A process with no product (a tab saved before titles kept it) goes by its activity name.
+function processNames(meta, n = nameDisplay) {
+  const recipe = namingRecipe(n);
+  return { main: applyRecipe(recipe.main, [meta]) || meta.name || "", qual: applyRecipe(recipe.secondary, [meta], 6) };
+}
+// The title of a process card (its pop-up, its tab, its row of the Processes panel)
+const processTitle = (info) => processNames(info).main;
+// A flow ({ name, compartment, subcompartment } or { name, place: "air, urban air…" }) named by the name display: { main, qual }
+function flowTitleNames(f, n = nameDisplay) {
+  const split = f.subcompartment === undefined;
+  const [compartment, ...sub] = String((split ? f.place ?? f.compartment : f.compartment) || "").split(", ");
+  const flow = { name: f.name, compartment: split ? compartment : f.compartment, subcompartment: split ? sub.join(", ") : f.subcompartment };
+  return flowNames(flow, "custom", namingRecipe(n));
+}
+
 function chartItems(rows, byId) {
   return frontier(rows)
     .map((r) => {
@@ -5472,9 +5521,11 @@ function textWidth(text) {
   return measureContext.measureText(text).width;
 }
 
-function RecipeEditor({ recipe, setRecipe, example }) {
+// ``kinds``: the recipes shown, of processes and of flows (the Name display shows those set to Custom)
+function RecipeEditor({ recipe, setRecipe, example, kinds = ["process", "flow"] }) {
   const inputs = { main: useRef(null), secondary: useRef(null), flowMain: useRef(null), flowSecondary: useRef(null) };
-  const [target, setTarget] = useState("main");  // field receiving inserted tokens
+  const [chosen, setTarget] = useState(kinds[0] === "flow" ? "flowMain" : "main");  // field receiving inserted tokens
+  const target = kinds.includes(chosen.startsWith("flow") ? "flow" : "process") ? chosen : kinds[0] === "flow" ? "flowMain" : "main";
   function insert(token) {
     const el = inputs[target].current;
     const text = recipe[target] ?? DEFAULT_RECIPE[target];
@@ -5489,19 +5540,20 @@ function RecipeEditor({ recipe, setRecipe, example }) {
     </label>`;
   return html`
     <div class="recipe">
-      <div class="row">
+      ${kinds.includes("process") && html`<div class="row">
         <span class="recipe-kind">Processes</span>
         ${field("main", "Main")}
         ${field("secondary", "Secondary (grey)")}
-        <button onClick=${() => setRecipe(DEFAULT_RECIPE)}>Default</button>
-      </div>
-      <div class="row">
+      </div>`}
+      ${kinds.includes("flow") && html`<div class="row">
         <span class="recipe-kind">Flows</span>
         ${field("flowMain", "Main")}
         ${field("flowSecondary", "Secondary (grey)")}
-      </div>
+      </div>`}
       <div class="row tokens">Insert in ${target.startsWith("flow") ? "flow" : "process"} ${target.endsWith("ain") ? "main" : "secondary"}:
         ${Object.keys(target.startsWith("flow") ? FLOW_RECIPE_TOKENS : RECIPE_TOKENS).map((t) => html`<button class="token" onClick=${() => insert(t)}>{${t}}</button>`)}
+        <button onClick=${() => setRecipe({ ...recipe, ...pick(DEFAULT_RECIPE, kinds.flatMap((k) => (k === "flow" ? ["flowMain", "flowSecondary"] : ["main", "secondary"]))) })}
+          title="The default recipe">Default</button>
       </div>
       ${example && html`<p class="note">e.g. <span class="example-main">${example.main}</span>${example.qual && html` <span class="muted">${example.qual}</span>`}${" — when items are combined, their values are listed comma-separated"}</p>`}
     </div>`;
@@ -6630,7 +6682,7 @@ function Portal({ slot, children }) {
 
 // ---------------------------------------------------------------- lens: impact methods and group rules
 // The impact methods and the group rules are chosen once for the workspace and shared by all tabs (the Methods and
-// Rules panel on the left). The options of the view (display, cut-off, names, colours, columns…) belong to each tab
+// Rules panel on the left). The options of the view (display, cut-off, colours, columns…) belong to each tab
 // (the view options pop-up, from the tab's row in the Processes panel or key v). Methods: the *active* method (tree, charts, totals) and the ones *shown together* (the several
 // methods chart, the heat map). Rules: named sets, one of them active; rules scoped to a row of one tree stay in
 // their tab. Kept per database in ``localStorage``, by method name (positions change when a model is rebuilt).
@@ -6655,9 +6707,10 @@ const preferredView = () => oneGrouping(withOrganize({
   ...Object.fromEntries(Object.entries(DEFAULT_VIEW).map(([key, fallback]) => [key, loadOption(key, fallback)])),
   recipe: Object.fromEntries(Object.entries(RECIPE_PREFERENCES).map(([part, key]) => [part, loadPreference(key, DEFAULT_RECIPE[part])])),
 }, { splitByType: loadPreference("splitByType", "0") === "1", ...(loadPreference("organize", "") ? { organize: true } : {}) }));
+// The names are not a preference of the tabs any more (the Name display of the lens): ``naming`` and the recipe
+// preferences are only read once, to start the lens (namingOf)
 function saveViewPreferences({ view, display, orientation, cycles }) {
-  for (const key of Object.keys(DEFAULT_VIEW)) saveOption(key, view[key] ?? DEFAULT_VIEW[key]);
-  for (const [part, key] of Object.entries(RECIPE_PREFERENCES)) savePreference(key, view.recipe[part] ?? DEFAULT_RECIPE[part]);
+  for (const key of Object.keys(DEFAULT_VIEW)) if (key !== "naming") saveOption(key, view[key] ?? DEFAULT_VIEW[key]);
   savePreference("display", display);
   savePreference("orientation", orientation);
   savePreference("cycles", cycles ? "on" : "off");
@@ -6683,6 +6736,7 @@ function initLens(info, seed) {
     method, chartMethods: chart ? chart.filter((k) => k >= 0) : familyOf(info, method), sets, set: stored?.set in sets ? stored.set : Object.keys(sets)[0],
     attribution: stored?.attribution === "direct" ? "direct" : "first_match",  // of the impacts to the rules: Rules contributions and Compare
     nameFormat: { ...DEFAULT_NAME_FORMAT, ...(stored?.nameFormat || {}) },
+    naming: namingOf(stored?.naming),  // the Name display of processes and flows (the Processes panel)
     palettes: stored?.palettes && typeof stored.palettes === "object" ? stored.palettes : {},  // the user's own: name -> colours
     palette: stored?.palette in RULE_PALETTES || stored?.palette in (stored?.palettes || {}) ? stored.palette : "auto",
     // colours picked for rules, by rule name (or field, for a group-by rule); before, a preference of the tabs' views
@@ -6693,7 +6747,7 @@ function saveLens(info, lens) {
   try {
     localStorage.setItem(LENS_KEY, JSON.stringify({ method: info.methods[lens.method]?.name,
       chartMethods: lens.chartMethods.map((k) => info.methods[k]?.name).filter(Boolean), sets: lens.sets, set: lens.set,
-      attribution: lens.attribution, nameFormat: lens.nameFormat, palette: lens.palette, palettes: lens.palettes, ruleColors: lens.ruleColors }));
+      attribution: lens.attribution, nameFormat: lens.nameFormat, naming: lens.naming, palette: lens.palette, palettes: lens.palettes, ruleColors: lens.ruleColors }));
   } catch { /* storage unavailable */ }
 }
 
@@ -6842,7 +6896,8 @@ function LensPanel({ info, lens, tab, setTab, tabs, focusedTab, comparing, view,
       <button class="collapse-side" onClick=${onCollapse} title="Hide the panel (Ctrl/⌘ + ←)" aria-label="Hide the panel"><${SidePanelIcon} open left /></button>
     </div>
     <div class="panel" style=${{ display: tab === "processes" ? "" : "none" }}>
-      <${ProcessesPanel} tabs=${compareTabs} flowTabs=${flowTabs} compare=${compare} setCompare=${setCompare} windows=${windows} />
+      <${ProcessesPanel} tabs=${compareTabs} flowTabs=${flowTabs} compare=${compare} setCompare=${setCompare} windows=${windows}
+        naming=${lens.naming} setNaming=${lens.setNaming} />
     </div>
     <div class="panel methods-panel" style=${{ display: tab === "methods" ? "" : "none" }}>
       ${methods && html`<${MethodMenu} info=${info} method=${lens.method} setMethod=${lens.setMethod} chartMethods=${lens.chartMethods} setChartMethods=${lens.setChartMethods}
@@ -6883,7 +6938,7 @@ function viewOptionsPlace(id) {
   const r = button?.getBoundingClientRect();
   return r && r.width ? [r.right, r.top - 8] : [Math.round(window.innerWidth / 4), 96];
 }
-// The view options of a process tab: Display, Cut-off, Names, Organise by, Group by, Color by, Rows, with Reset and
+// The view options of a process tab: Display, Cut-off, Organise by, Group by, Color by, Rows, with Reset and
 // Save ▾. Drawn by the tab (``FUView``), which gives the options (``children``) and the buttons (``actions``).
 function ViewOptionsPopup({ target, win, title, actions, onClose, children }) {
   return html`
@@ -6942,13 +6997,16 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
     if (!sameJson(shared, lens.rules)) lens.setRules(shared);
     setOwnRules(list.filter((r) => r.scope !== "*"));
   }
-  // The options of the view (cut-off, display, names, colours, columns…) are the tab's own; the ones of the last tab
+  // The options of the view (cut-off, display, colours, columns…; not the names: see viewNaming) are the tab's own; the ones of the last tab
   // changed are the preferences that a new tab starts with
   const [cutoff, setCutoffState] = useState(DEFAULT_CUTOFF);
   // Never under 0 (nor not a number, from an old or hand-edited save): 0 is the least, all rows with an impact shown
   const setCutoff = (v) => setCutoffState(Number.isFinite(+v) && +v > 0 ? +v : 0);
   const [cutoffBasis, setCutoffBasis] = useState("parent");
-  const [view, setView] = useState(() => initialView(embedded));
+  const [ownView, setView] = useState(() => initialView(embedded));
+  // The names follow the Name display of the workspace (the Processes panel), not the tab: ``view.naming`` and
+  // ``view.recipe`` come from the lens, for every reader of the view
+  const view = useMemo(() => ({ ...ownView, ...viewNaming(lens?.naming || DEFAULT_NAMING) }), [ownView, lens?.naming]);
   const [display, setDisplay] = useState(() => (embedded ? "list" : loadPreference("display", "list")));
   const [orientation, setOrientation] = useState(() => loadPreference("orientation", "horizontal"));
   const [cycles, setCycles] = useState(() => loadPreference("cycles", "off") === "on");
@@ -7656,8 +7714,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
       ${Object.entries(CUTOFF_MODES).map(([key, mode]) => html`<option value=${key} title=${mode.hint}>${mode.label}</option>`)}
     </select>`;
   const viewBar = html`<${ViewBar} view=${view} setView=${setDisplayView} fields=${info.group_by_fields}
-    legend=${colorLegend(allData.rows, view)} onPick=${embedded ? undefined : lens.pickColor} onColours=${embedded ? undefined : lens.showColours}
-    example=${(() => { const r = data.rows.find((x) => x.kind === "process" && x.depth > 0); return r ? rowNames(r, rowsById, view) : null; })()} />`;
+    legend=${colorLegend(allData.rows, view)} onPick=${embedded ? undefined : lens.pickColor} onColours=${embedded ? undefined : lens.showColours} />`;
   // The options of the view, in a pop-up of their own (the button of the tab's row in the Processes panel, key v)
   const viewOptionsActions = html`
     <button class="icon-plain" disabled=${!root} onClick=${resetView} aria-label="Reset the view" title="Reset: the process alone, undoable"><${ResetIcon} /></button>
@@ -7786,12 +7843,14 @@ const signedPct = (r) => (r == null ? "n/a" : `${r > 0 ? "+" : r < 0 ? "−" : "
 // process when they share the place), with the amount when it is not 1, and a number when two tabs
 // would still read the same. ``full`` always has the process and the place; ``common`` is the name
 // every tab shares, if there is one.
+// Each tab named by the process format of the Name display (``processNames``): the main part, the qualifier in brackets
 function compareLabels(tabs) {
-  const roots = tabs.map((t) => t.state.root);
-  const sameName = roots.length > 1 && roots.every((r) => r.name === roots[0].name);
-  const sameLocation = roots.length > 1 && roots.every((r) => r.location === roots[0].location);
+  const names = tabs.map((t) => processNames(t.state.root));
+  const both = (n) => (n.qual ? `${n.main} (${n.qual})` : n.main);
+  const sameName = names.length > 1 && names.every((n) => n.main === names[0].main);
+  const sameLocation = names.length > 1 && names.every((n) => n.qual === names[0].qual);
   const amountOf = (t) => (t.state.amount !== 1 ? ` × ${fmtAmount(t.state.amount)}` : "");
-  const base = tabs.map((t, i) => (sameName ? roots[i].location : sameLocation ? roots[i].name : `${roots[i].name} (${roots[i].location})`) + amountOf(t));
+  const base = tabs.map((t, i) => (sameName && names[i].qual ? names[i].qual : sameLocation && !sameName ? names[i].main : both(names[i])) + amountOf(t));
   const seen = new Map();
   const numbered = (list, i) => {
     const n = (seen.get(list[i]) || 0) + 1;
@@ -7799,8 +7858,9 @@ function compareLabels(tabs) {
     return list.filter((b) => b === list[i]).length > 1 ? `${list[i]} #${n}` : list[i];
   };
   const short = Object.fromEntries(tabs.map((t, i) => [t.id, numbered(base, i)]));
-  const full = Object.fromEntries(tabs.map((t, i) => [t.id, `${roots[i].name} (${roots[i].location})${amountOf(t)}`]));
-  return { short, full, common: sameName ? roots[0].name : null };
+  const roots = tabs.map((t) => t.state.root);
+  const full = Object.fromEntries(tabs.map((t, i) => [t.id, `${both(names[i])}${amountOf(t)}${names[i].main !== roots[i].name ? ` · ${roots[i].name}` : ""}`]));
+  return { short, full, common: sameName ? names[0].main : null };
 }
 
 // The tree a tab displays, as /api/rows is asked for it (the method is the comparison's)
@@ -8157,17 +8217,69 @@ function compareSelection(tabs, compare) {
   return { labels, fullLabels, common, chosen, baseline: chosen.find((t) => t.id === compare.baseline) || chosen[0] };
 }
 
+// The *Name display* of processes and flows (the top of the Processes panel), as the Methods panel has for the
+// methods: a format for the processes and one for the flows, each a preset or Custom (the recipe, with tokens). One
+// setting of the workspace (the lens), which the tree, the Sankey, the charts, the pop-ups and the titles follow.
+// ``example``: a process to show it on (the first tab's)
+const SAMPLE_FLOW = { name: "Carbon dioxide, fossil", compartment: "air", subcompartment: "urban air close to ground" };
+function NameDisplay({ naming, setNaming, example }) {
+  const choice = (key, presets, label) => html`
+    <div class="view-group" role="group" aria-label=${`${label} names`}>
+      <span class="view-group-label">${label}</span>
+      <span class="segmented">
+        ${Object.entries(presets).map(([k, preset]) => html`
+          <button class=${naming[key] === k ? "primary" : ""} aria-pressed=${naming[key] === k} title=${preset.hint}
+            onClick=${() => setNaming({ ...naming, [key]: k })}>${preset.label}</button>`)}
+      </span>
+    </div>`;
+  const custom = [naming.process === "custom" && "process", naming.flow === "custom" && "flow"].filter(Boolean);
+  const shown = (names) => html`<span class="example-main">${names.main}</span>${names.qual && html` <span class="muted">${names.qual}</span>`}`;
+  return html`
+    <${Fold} id="namedisplay" title="Name display" open=${false}
+      actions=${html`<${InfoTip} text="How processes and flows are named in every tab: the tree, the Sankey, the charts, the pop-ups, the tab titles and this panel. A name you give a row (✎) still wins." label="About the names" />`}>
+      <div class="name-display">
+        ${choice("process", PROCESS_NAMINGS, "Processes")}
+        ${choice("flow", FLOW_NAMINGS, "Flows")}
+        ${custom.length > 0 && html`<${RecipeEditor} recipe=${naming.recipe} setRecipe=${(recipe) => setNaming({ ...naming, recipe })} kinds=${custom} />`}
+        <p class="note">e.g. ${example && html`${shown(processNames(example, naming))} · `}${shown(flowTitleNames(SAMPLE_FLOW, naming))}</p>
+      </div>
+    <//>`;
+}
+
+// The compare selection's next step for tab ``id``, as the method boxes of the Methods panel: not compared → ✓ compared
+// → ★ the baseline (the one before stays compared) → not compared, the first other compared tab becoming the baseline.
+// The baseline alone cannot be unticked. Returns the patch of ``compare`` ({ chosen, baseline }).
+function compareStep(tabs, compare, id) {
+  const { chosen, baseline } = compareSelection(tabs, compare);
+  const ids = chosen.map((t) => t.id);
+  if (!ids.includes(id)) return { chosen: [...ids, id], baseline: baseline?.id ?? id };
+  if (baseline?.id !== id) return { chosen: ids, baseline: id };
+  const others = tabs.filter((t) => t.id !== id && ids.includes(t.id));
+  return others.length ? { chosen: others.map((t) => t.id), baseline: others[0].id } : {};
+}
+// The one box of a tab in the Processes panel, drawn as a method's box (``.method-mark``): "off", "ticked" (✓ compared)
+// or "main" (★ the baseline); ``alone``: the baseline is the only tab compared, so it cannot be unticked
+function CompareMark({ state, alone, label, onStep }) {
+  const TITLES = {
+    off: "Not compared: click to compare it in Compare mode",
+    ticked: "Compared: click to make it the baseline",
+    main: alone ? "The baseline, the others are read against it: tick another tab to untick this one"
+      : "The baseline, the others are read against it: click to untick it (the first other compared tab becomes the baseline)",
+  };
+  return html`<button class=${`method-mark compare-mark ${state}`} onClick=${onStep} title=${TITLES[state]}
+    aria-label=${`${label}: ${{ off: "not compared", ticked: "compared", main: "the baseline" }[state]}`}>${{ off: "", ticked: "✓", main: "★" }[state]}</button>`;
+}
+
 // The tabs open (*Processes* of the left panel), grouped by window (the panes of the split): the ones to compare in
-// Compare mode (ticked), the baseline (round mark) and a button to close the tab; a right-click opens the pop-up of the
+// Compare mode and the baseline (one box: ✓ and ★, see CompareMark) and a button to close the tab; a right-click opens the pop-up of the
 // process. Drag a process to another window, before another one, or to the zone for a new window; drop a process from a
 // row of the explorer or a panel to open it in a new tab. What each does is in its tooltip.
 // ``windows``: { panes, current: the pane used last, select(pane, tab), focus(pane), close(tab), closePane(pane), drag(tab),
 // move(tab, pane, zone, before), openProcess(index, pane, zone), reopen(at), history: [{ at, label }] of what was closed, dragging: tab }
-function ProcessesPanel({ tabs, flowTabs = [], compare, setCompare, windows }) {
+function ProcessesPanel({ tabs, flowTabs = [], compare, setCompare, windows, naming, setNaming }) {
   const { labels, fullLabels, common, chosen, baseline } = compareSelection(tabs, compare);
   const [over, setOver] = useState(null);  // where a drop would go: { pane, before } or { fresh: true }
   const set = (patch) => setCompare((c) => ({ ...c, ...patch }));
-  const toggle = (id) => set({ chosen: chosen.some((t) => t.id === id) ? chosen.filter((t) => t.id !== id).map((t) => t.id) : [...chosen.map((t) => t.id), id] });
   // The tab shown in its window first (a hidden tab has no pop-up to see), then its pop-up
   const showTab = (pane, t) => { windows.select(pane.id, t.id); windows.focus(pane.id); };
   const openPopup = (e, pane, t) => {
@@ -8212,13 +8324,12 @@ function ProcessesPanel({ tabs, flowTabs = [], compare, setCompare, windows }) {
       onDragEnd=${() => { windows.drag(null); setOver(null); }} ...${target(pane, t.id)}
       onContextMenu=${(e) => openPopup(e, pane, t)}>
       <div class="compare-tab ${on ? "" : "off"}">
-        <input type="checkbox" checked=${on} onChange=${() => toggle(t.id)} aria-label=${`Compare ${labels[t.id]}`} title="Compare it (c)" />
+        <${CompareMark} state=${t === baseline ? "main" : on ? "ticked" : "off"} alone=${chosen.length < 2} label=${labels[t.id]}
+          onStep=${() => set(compareStep(tabs, compare, t.id))} />
         <span class="dot" style=${{ background: compareColor(i) }}></span>
         <span class="name" title=${`${fullLabels[t.id]}. Click: show it. Right-click: its details. Drag: move it to another window.`} onClick=${() => showTab(pane, t)}>${labels[t.id]}</span>
-        <input type="radio" name="baseline" checked=${t === baseline} disabled=${!on} onChange=${() => set({ baseline: t.id })} aria-label="Baseline"
-          title="Baseline: the others are read against it" />
         <button class="view-options-btn" data-view-options=${t.id} onClick=${(e) => openViewOptions(e, pane, t)} aria-label=${`View options of ${labels[t.id]}`}
-          title="View options: display, cut-off, names, organise, group, colours, rows (v for the tab in focus)"><${SlidersIcon} /></button>
+          title="View options: display, cut-off, organise, group, colours, rows (v for the tab in focus)"><${SlidersIcon} /></button>
         <button class="close-tab" onClick=${() => windows.close(t.id)} aria-label=${`Close ${labels[t.id]}`} title="Close it (w); Undo brings it back">×</button>
       </div>
     </div>`;
@@ -8229,8 +8340,8 @@ function ProcessesPanel({ tabs, flowTabs = [], compare, setCompare, windows }) {
       onDragEnd=${() => { windows.drag(null); setOver(null); }} ...${target(pane, t.id)}>
       <div class="compare-tab">
         <${FlowIcon} resource=${t.flow.resource} />
-        <span class="name" title=${`Flow: ${t.flow.name} (${t.flow.place}). Click: show it. Drag: move it to another window.`} onClick=${() => showTab(pane, t)}>${t.flow.name}
-          <span class="loc">${t.flow.place}</span></span>
+        <span class="name" title=${`Flow: ${t.flow.name} (${t.flow.place}). Click: show it. Drag: move it to another window.`} onClick=${() => showTab(pane, t)}>${flowTitleNames(t.flow).main}
+          ${flowTitleNames(t.flow).qual && html`<span class="loc">${flowTitleNames(t.flow).qual}</span>`}</span>
         <button class="close-tab" onClick=${() => windows.close(t.id)} aria-label=${`Close ${t.flow.name}`} title="Close it (w); Undo brings it back">×</button>
       </div>
     </div>`;
@@ -8250,6 +8361,7 @@ function ProcessesPanel({ tabs, flowTabs = [], compare, setCompare, windows }) {
   const groups = windows.panes.map((pane) => ({ pane, items: pane.tabs.map((id) => tabs.find((t) => t.id === id) || flowTabs.find((t) => t.id === id)).filter(Boolean) })).filter((g) => g.items.length);
   return html`
     <div class="lens-menu" ...${target(windows.panes.find((q) => q.id === windows.current) || lastPane)}>
+      ${naming && html`<${NameDisplay} naming=${naming} setNaming=${setNaming} example=${tabs[0]?.state.root} />`}
       ${common && html`<div class="muted compare-common" title=${common}>${common}</div>`}
       <div class="row history-row">
         <${PopupMenu} label="Open history ▾" title="Tabs and windows closed, the last first: bring one back" className=""
@@ -8446,6 +8558,16 @@ function SplitIcon({ dir }) {
   </svg>`;
 }
 
+// The title of a process tab: its name, location and index, and what the Name display may ask for (the product…)
+const processTitleOf = (root) => ({ ...pick(root, ["reference_product", "unit", "activity_type", "isic", "cpc", "database"]),
+  name: root.name, location: root.location, index: root.index });
+// A tab's title as the Name display has it: { main, qual } (process or flow tabs), the model tabs by their name
+function tabTitleNames(title) {
+  if (!title) return { main: "New tab", qual: "" };
+  if (title.model !== undefined) return { main: title.name, qual: "" };
+  if (title.flow !== undefined) return flowTitleNames({ name: title.name, place: title.location });
+  return processNames(title);
+}
 function PaneView({ pane, focused, multiple, titles, dragging, drop, setDrop, actions, children }) {
   const body = useRef(null);
   function zoneAt(e) {
@@ -8470,7 +8592,7 @@ function PaneView({ pane, focused, multiple, titles, dragging, drop, setDrop, ac
     if (processDrag) { const { index } = processDrag; processDrag = null; setDrop(null); actions.openProcess(index, pane.id, drop.zone); return; }
     actions.move(dragging, pane.id, drop.zone, drop.before);
   };
-  const title = (id) => titles[id] ? titles[id].name : "New tab";
+  const title = (id) => tabTitleNames(titles[id]).main;
   return html`
     <div class="pane ${focused && multiple ? "focused" : ""}" onMouseDownCapture=${() => actions.focus(pane.id)}>
       <div class="pane-tabs" role="tablist" data-pane=${pane.id} onDragOver=${over("center")} onDrop=${dropHere}>
@@ -8478,7 +8600,7 @@ function PaneView({ pane, focused, multiple, titles, dragging, drop, setDrop, ac
           <div key=${id} role="tab" aria-selected=${id === pane.active} draggable="true"
                class="pane-tab ${id === pane.active ? "active" : ""} ${titles[id]?.flow !== undefined ? "flow" : ""} ${titles[id]?.model !== undefined ? "model" : ""} ${drop?.pane === pane.id && drop.before === id ? "drop-before" : ""}"
                style=${titles[id]?.flow !== undefined ? { "--flow-color": FLOW_TYPES[titles[id].resource ? "resource" : "emission"].color } : null}
-               title=${titles[id]?.model !== undefined ? `Model card: ${titles[id].name}` : titles[id] ? `${titles[id].name} (${titles[id].location})` : "New tab: choose a process"}
+               title=${titles[id]?.model !== undefined ? `Model card: ${titles[id].name}` : titles[id] ? `${titles[id].reference_product ? `${titles[id].reference_product} | ` : ""}${titles[id].name} (${titles[id].location})` : "New tab: choose a process"}
                onClick=${() => actions.select(pane.id, id)}
                onAuxClick=${(e) => e.button === 1 && actions.close(id)}
                onDragStart=${(e) => { e.dataTransfer.setData("text/plain", id); e.dataTransfer.effectAllowed = "move"; actions.drag(id); }}
@@ -8487,7 +8609,7 @@ function PaneView({ pane, focused, multiple, titles, dragging, drop, setDrop, ac
             ${titles[id]?.flow !== undefined && html`<${FlowIcon} resource=${titles[id].resource} />`}
             ${titles[id]?.model !== undefined && html`<span class="model-mark"><${CategoryIcon} /></span>`}
             <span class="pane-tab-title">${title(id)}</span>
-            ${titles[id]?.location && html`<span class="loc">${titles[id].location}</span>`}
+            ${tabTitleNames(titles[id]).qual && html`<span class="loc">${tabTitleNames(titles[id]).qual}</span>`}
             <button class="close" aria-label="Close tab" title="Close (w, or middle-click)"
               onClick=${(e) => { e.stopPropagation(); actions.close(id); }}>×</button>
           </div>`)}
@@ -8678,6 +8800,7 @@ function App() {
   const [lens, setLens] = useState(null);
   nameFormat = lens?.nameFormat || DEFAULT_NAME_FORMAT;
   nameStamp = JSON.stringify(nameFormat);
+  nameDisplay = lens?.naming || DEFAULT_NAMING;
   rulePalette = { name: lens?.palette || "auto", keys: (lens?.sets[lens.set] || []).map((r) => r.by || r.name), own: lens?.palettes || {},
     picked: lens?.ruleColors || {} };
   paletteStamp = `${rulePalette.name}|${rulePalette.keys.join("|")}|${JSON.stringify(rulePalette.own[rulePalette.name] || "")}|${JSON.stringify(rulePalette.picked)}`;
@@ -8858,7 +8981,7 @@ function App() {
         states.current = saved.tabs || {};
         const first = panesOf(saved.layout)[0];
         seed = states.current[first.active] || states.current[first.tabs[0]] || null;
-        setTitles(Object.fromEntries(Object.entries(states.current).map(([id, s]) => [id, s?.root ? { name: s.root.name, location: s.root.location, index: s.root.index }
+        setTitles(Object.fromEntries(Object.entries(states.current).map(([id, s]) => [id, s?.root ? processTitleOf(s.root)
           : s?.flow ? { name: s.flow.name, location: s.flow.place, flow: s.flow.flow, resource: s.flow.resource }
           : s?.model ? modelTitle(i, s.model.method) : null])));
         setLayout(saved.layout);
@@ -8883,7 +9006,7 @@ function App() {
   const onSave = (id, state) => { states.current[id] = state; persist(); if (watchStates.current) setTick((t) => t + 1); };
   const onTitle = (id, root) => setTitles((t) => ({ ...t, [id]: root ? (root.flow !== undefined ? { name: root.name, location: root.location, flow: root.flow, resource: root.resource }
     : root.model !== undefined ? { name: root.name, model: root.model }
-    : { name: root.name, location: root.location, index: root.index }) : null }));
+    : processTitleOf(root)) : null }));
   // A flow tab (its panels, no tree): its state, or how it starts, has ``flow``
   const flowOf = (id) => states.current[id]?.flow || starts.current[id]?.state?.flow || starts.current[id]?.flow || null;
   // A model tab (the model card): its state, or how it starts, has ``model`` ({ method, compare, organize })
@@ -9021,6 +9144,7 @@ function App() {
     setChartMethods: (chartMethods) => setLens((l) => ({ ...l, chartMethods })),
     setAttribution: (attribution) => setLens((l) => ({ ...l, attribution })),
     setNameFormat: (format) => setLens((l) => ({ ...l, nameFormat: format })),
+    setNaming: (naming) => setLens((l) => ({ ...l, naming })),
     // choosing a palette, or making one, clears the colours picked for rules
     setPalette: (palette) => setLens((l) => ({ ...l, palette, ruleColors: {} })),
     addPalette: (name, colors) => setLens((l) => { const n = freshName(name, { ...RULE_PALETTES, ...l.palettes }); return { ...l, palettes: { ...l.palettes, [n]: colors }, palette: n, ruleColors: {} }; }),
@@ -9032,7 +9156,7 @@ function App() {
     // The settings of a first start: the method, the methods shown together, the rules, the names and the palette, and the panels
     resetDefaults: () => {
       setLens((l) => ({ ...l, method: info.default_method, chartMethods: familyOf(info, info.default_method),
-        sets: { ...l.sets, Default: defaultRules() }, set: "Default", palette: "auto", ruleColors: {}, nameFormat: DEFAULT_NAME_FORMAT, attribution: "first_match" }));
+        sets: { ...l.sets, Default: defaultRules() }, set: "Default", palette: "auto", ruleColors: {}, nameFormat: DEFAULT_NAME_FORMAT, naming: DEFAULT_NAMING, attribution: "first_match" }));
       setLeftOpen(FIRST_PANELS.leftOpen); setSideOpen(FIRST_PANELS.sideOpen); setLeftWidth(null); setSideWidth(null);
     },
     addSet: (name, copy) => setLens((l) => { const n = freshName(name, l.sets); return { ...l, set: n, sets: { ...l.sets, [n]: copy ? l.sets[l.set] : [] } }; }),
