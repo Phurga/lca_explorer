@@ -5510,7 +5510,7 @@ function RecipeEditor({ recipe, setRecipe, example }) {
 // ---------------------------------------------------------------- chart panel
 // What each tab of the side panel shows, in a popup on its name
 const PANEL_TIPS = {
-  view: "The chart of the tree's rows: single indicator, or the methods shown together. The view options (display, cut-off, rows) are on each process of the Processes panel (v).",
+  view: "The chart of the tree's rows as your view shows them: single indicator, or the methods shown together. The view options (display, cut-off, rows) are on each process of the Processes panel (v).",
   chart: "What each process of the supply chain adds by its own emissions, wherever it is in the tree.",
   flows: "Which substances drive the score, and which processes emit them.",
   missing: "The flows of the inventory that the active method has no factor for: what the score leaves out, and which another method characterises.",
@@ -5519,6 +5519,51 @@ const PANEL_TIPS = {
   methods: "The indicator of the tree and charts, and the ones to show together.",
   global: "The score split by your rules over the whole supply chain, to see what each rule weighs.",
 };
+// The panels of the side panel of a process tab, in the order of its tab bar
+const SIDE_PANELS = [["view", "Custom"], ["chart", "Process"], ["flows", "Flow"], ["missing", "Uncharacterised"], ["global", "Rules"]];
+// The icon of a side panel's tab, when the panel is too narrow for their names
+const SIDE_PANEL_ICONS = {
+  view: "M2.5 13.5h11M4 13.5v-4M7 13.5V4.5M10 13.5v-6M13 13.5v-8",  // bars: the chart of the tree's rows
+  chart: "M2.5 13.5V7l3.5 2.2V7l3.5 2.2V4.5h4v9Z",  // a factory: what each process adds
+  flows: "M8 2.2c2.4 3 3.9 5.2 3.9 7.2a3.9 3.9 0 0 1-7.8 0c0-2 1.5-4.2 3.9-7.2Z",  // a drop: the elementary flows
+  missing: "M8 14.2a6.2 6.2 0 1 0 0-12.4 6.2 6.2 0 0 0 0 12.4ZM6.2 6.3a1.9 1.9 0 1 1 2.6 1.8c-.5.2-.8.6-.8 1.1v.5M8 11.6h.01",  // ?
+  global: "M2.5 3.5h11l-4.2 5v4.3l-2.6 1.2V8.5Z",  // a funnel: the rules
+};
+function SidePanelTabIcon({ panel }) {
+  return html`
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3"
+      stroke-linecap="round" stroke-linejoin="round"><path d=${SIDE_PANEL_ICONS[panel]} /></svg>`;
+}
+// The tab bar of a process tab's side panel: the panels' names, or their icons (the name in the tooltip and as the
+// label) when the bar is too narrow for the names. The width the names take is measured while they are shown, and
+// they come back once the bar is that wide again.
+function SidePanelTabs({ tab, setTab, onCollapse }) {
+  const bar = useRef(null);
+  const needed = useRef(0);
+  const [compact, setCompact] = useState(false);
+  useEffect(() => {
+    const el = bar.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const fit = () => {
+      if (!el.clientWidth) return;  // hidden (another tab's panel, or the panel closed)
+      if (!el.classList.contains("compact")) {
+        if (el.scrollWidth > el.clientWidth + 1) { needed.current = el.scrollWidth; setCompact(true); }
+      } else if (el.clientWidth >= needed.current) setCompact(false);
+    };
+    const observer = new ResizeObserver(fit);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  return html`
+    <div ref=${bar} class=${`tabs side-tabs ${compact ? "compact" : ""}`} role="tablist" onKeyDown=${tabKeys(SIDE_PANELS.map(([key]) => key), tab, setTab)}>
+      ${SIDE_PANELS.map(([key, label]) => html`
+        <${TabButton} key=${key} role="tab" class=${tab === key ? "active" : ""} aria-selected=${tab === key} onClick=${() => setTab(key)}
+          aria-label=${compact ? label : undefined} tip=${compact ? html`<strong>${label}</strong>: ${PANEL_TIPS[key]}` : PANEL_TIPS[key]}>
+          ${compact ? html`<${SidePanelTabIcon} panel=${key} />` : label}<//>`)}
+      <span class="spacer"></span>
+      <button class="collapse-side" onClick=${onCollapse} title="Hide the side panel (Ctrl/⌘ + →)" aria-label="Hide the side panel"><${SidePanelIcon} open /></button>
+    </div>`;
+}
 
 function ChartPanel({ data, info, method, chartMethods, onPickMethods, view, header }) {
   const { naming, recipe } = view;
@@ -5994,7 +6039,7 @@ function GroupPanel({ info, rules, setRules, selectedRow, view, setView, shared,
             </div>`
           : html`<div class="row"><button onClick=${() => setOwnerQuery(emptyQuery("name", "contains"))} title="Only the emissions of some processes">+ Owning process</button></div>`)}
         ${preview && !queryLocked && html`<p class="note" title=${preview.results.slice(0, 3).map((r) => `${r.name} (${r.location})`).join("; ") + (preview.total > 3 ? "…" : "")}>${usesExchange(predicate)
-          ? `Matches ${preview.total} ${flows ? "flows" : "processes"}, where their exchange matches. In Rules contributions it takes what goes through the exchanges it matches.`
+          ? `Matches ${preview.total} ${flows ? "flows" : "processes"}, where their exchange matches. In the side panel's Rules tab it takes what goes through the exchanges it matches.`
           : `Matches ${preview.total} ${flows ? "flows" : "processes"}`}</p>`}
       ` : html`
         <div class="row"><select value=${by} onChange=${(e) => setBy(e.target.value)} aria-label="Group by field">
@@ -6187,7 +6232,7 @@ function AttributionHelp() {
       </div>`}`;
 }
 
-// How the impacts go to the rules, one choice for Rules contributions and for Compare (``rule``: "first_match" or "direct")
+// How the impacts go to the rules, one choice for the side panel's Rules tab and for Compare (``rule``: "first_match" or "direct")
 function AttributionSwitch({ rule, setRule }) {
   return html`
     <div class="view-group" role="group" aria-label="Attribution">
@@ -6579,7 +6624,7 @@ function FlowContribution({ info, root, amount, method, onLocate, onInfo, onFlow
                 : { name: `${flow.name} (${flow.compartment})`, predicate: { flows: flow.flows }, target: "flows", scope: "*" };
               const exists = rules.some((r) => r.name === rule.name && r.target === "flows");
               return html`<button disabled=${exists} onClick=${() => setRules([...rules, rule])}
-                title="A flow group: in the Rules contributions tab it takes these flows from what the process groups leave; in the tree it bundles them under direct emissions">
+                title="A flow group: in the side panel's Rules tab it takes these flows from what the process groups leave; in the tree it bundles them under direct emissions">
                 ${exists ? "In groups" : "Add as a group"}</button>`;
             })()}
             <button onClick=${() => setFlow(null)} aria-label="Close">×</button>
@@ -6626,6 +6671,22 @@ function Portal({ slot, children }) {
     if (el) render(null, el);
   }, [slot]);
   return null;
+}
+
+// Over the side panel and the Rules panel while a flow or model tab is in focus: they are those of a process tab, the
+// one last in focus (``title``: its title, null for a tab with no process yet), or, with no process tab open
+// (``title`` undefined), what they are for. ``onCollapse``: the side panel's hide button, which the empty state has too.
+function PanelsFollow({ title, onCollapse }) {
+  if (title === undefined) return html`
+    ${onCollapse && html`<div class="tabs"><span class="spacer"></span>
+      <button class="collapse-side" onClick=${onCollapse} title="Hide the side panel (Ctrl/⌘ + →)" aria-label="Hide the side panel"><${SidePanelIcon} open /></button></div>`}
+    <div class="panels-follow-empty" role="note">
+      <p>These panels follow a process tab: its charts, contributions and rules. A flow or model tab has none.</p>
+      <p>Open a process in a tab (the search of the top bar, or <em>Open in new tab</em> on a process) to see them here.</p>
+    </div>`;
+  const name = title ? `${title.name}${title.location ? ` (${title.location})` : ""}` : "an empty tab";
+  return html`<p class="panels-follow" role="note" title="A flow or model tab is in focus: these panels are those of a process tab">
+    Showing <strong>${name}</strong>, the last process in focus</p>`;
 }
 
 // ---------------------------------------------------------------- lens: impact methods and group rules
@@ -6681,7 +6742,7 @@ function initLens(info, seed) {
   const sets = stored?.sets && Object.keys(stored.sets).length ? stored.sets : { Default: seeded_rules.length ? seeded_rules : defaultRules() };
   return {
     method, chartMethods: chart ? chart.filter((k) => k >= 0) : familyOf(info, method), sets, set: stored?.set in sets ? stored.set : Object.keys(sets)[0],
-    attribution: stored?.attribution === "direct" ? "direct" : "first_match",  // of the impacts to the rules: Rules contributions and Compare
+    attribution: stored?.attribution === "direct" ? "direct" : "first_match",  // of the impacts to the rules: the side panel's Rules tab and Compare
     nameFormat: { ...DEFAULT_NAME_FORMAT, ...(stored?.nameFormat || {}) },
     palettes: stored?.palettes && typeof stored.palettes === "object" ? stored.palettes : {},  // the user's own: name -> colours
     palette: stored?.palette in RULE_PALETTES || stored?.palette in (stored?.palettes || {}) ? stored.palette : "auto",
@@ -6832,7 +6893,8 @@ const tabKeys = (ids, current, setCurrent) => (e) => {
 // methods and the group rules are chosen: *Processes*, *Methods* and *Rules* (the rule sets and the rules). The rules
 // shown are those of the tab in focus, which its own component puts in its slot (``groups-<tab id>``); in Compare mode
 // they are those of the workspace's set (``view``: a tab's view, where the colours picked for rules are kept).
-function LensPanel({ info, lens, tab, setTab, tabs, focusedTab, comparing, view, compareTabs, flowTabs = [], compare, setCompare, windows, onCollapse, adder, onCategory }) {
+// ``focusedTab``: the process tab whose rules are shown, ``follow``: the line that says so when it is not the tab in focus.
+function LensPanel({ info, lens, tab, setTab, tabs, focusedTab, follow, comparing, view, compareTabs, flowTabs = [], compare, setCompare, windows, onCollapse, adder, onCategory }) {
   const methods = lens.method < info.methods.length;
   return html`
     <div class="tabs" role="tablist" onKeyDown=${tabKeys(["processes", "methods", "groups"], tab, setTab)}>
@@ -6851,6 +6913,7 @@ function LensPanel({ info, lens, tab, setTab, tabs, focusedTab, comparing, view,
     <div class="groups-panel" style=${{ display: tab === "groups" ? "" : "none" }}>
       ${comparing && view && html`<${GroupPanel} info=${info} rules=${lens.rules} setRules=${lens.setRules} selectedRow=${null} view=${view.view} setView=${view.setView}
         shared=${{ set: lens.set }} extras=${ruleExtras(lens)} />`}
+      ${!comparing && follow}
       ${tabs.map((id) => html`<div key=${id} id=${`groups-${id}`} class="groups-slot" style=${{ display: id === focusedTab && !comparing ? "" : "none" }}></div>`)}
     </div>`;
 }
@@ -7737,12 +7800,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
       <//>`}
       ${!embedded && html`<${Portal} slot=${`side-${id}`}>
         <section class="side">
-          <div class="tabs" role="tablist" onKeyDown=${tabKeys(["view", "chart", "flows", "missing", "global"], tab, setTab)}>
-            ${[["view", "Explore view"], ["chart", "Process contribution"], ["flows", "Flow contribution"], ["missing", "Uncharacterised"], ["global", "Rules contributions"]].map(([key, label]) => html`
-              <${TabButton} role="tab" class=${tab === key ? "active" : ""} onClick=${() => setTab(key)} tip=${PANEL_TIPS[key]}>${label}<//>`)}
-            <span class="spacer"></span>
-            <button class="collapse-side" onClick=${onCollapseSide} title="Hide the side panel (Ctrl/⌘ + →)" aria-label="Hide the side panel"><${SidePanelIcon} open /></button>
-          </div>
+          <${SidePanelTabs} tab=${tab} setTab=${setTab} onCollapse=${onCollapseSide} />
           ${tab === "view" && (allData.rows.length > 0
             ? html`<${ChartPanel} key=${editing ? "edit" : "view"} data=${allData} info=${info} method=${method}
                 chartMethods=${chartMethods} onPickMethods=${() => lens.show("methods")} view=${view} />`
@@ -8284,7 +8342,7 @@ function ComparisonView({ info, tabs, compare, setCompare }) {
   const panel = compare.panel || "groups";
 
   // The groups of the comparison: the rule set of the workspace (named rules on processes, and on elementary flows
-  // as flow groups, as in the Rules contributions tab); they are changed in the Rules panel
+  // as flow groups, as in the side panel's Rules tab); they are changed in the Rules panel
   const rules = lens.rules;
   const { groups, flowGroups, flowOwners, order, ruleOf } = useMemo(() => namedGroups(rules), [rules]);
   // The methods of the heat map: those shown together
@@ -8658,9 +8716,25 @@ function SettingsDialog({ lens, onClose }) {
 // dragged is kept, and fitted to a smaller window.
 const FIRST_PANELS = { leftOpen: false, sideOpen: true, leftWidth: 340 };
 const PANEL_MIN = { left: 260, side: 280 };
-const sideWidthFor = (width) => Math.max(PANEL_MIN.side, width
-  ? Math.min(width, window.innerWidth - 320) : Math.min(Math.round(window.innerWidth * 0.42), window.innerWidth - 720));
-const leftWidthFor = (width) => Math.max(PANEL_MIN.left, Math.min(width ?? FIRST_PANELS.leftWidth, window.innerWidth - 400));
+// The panels never push the page wider than the window: the workspace between them keeps WORKSPACE_MIN, the rest
+// (less the resizers, or the buttons that reopen a closed panel) is what the two panels can share. The left panel is
+// fitted first (leaving the side panel its minimum), the side panel takes at most what is left; a window too small
+// for both minimums squeezes the workspace, and below that ``.body`` clips rather than scrolls.
+const WORKSPACE_MIN = 360;
+const PANEL_EDGE = { open: 4, closed: 30 };  // a resizer, or the button that reopens the panel
+const viewportWidth = () => document.documentElement.clientWidth || window.innerWidth;
+const panelRoom = (leftOpen, sideOpen) => viewportWidth() - WORKSPACE_MIN
+  - PANEL_EDGE[leftOpen ? "open" : "closed"] - PANEL_EDGE[sideOpen ? "open" : "closed"];
+const clampWidth = (width, min, max) => Math.max(min, Math.min(width, max));
+// The left panel's width shown (``width``: as dragged, or null), the side panel open or not
+const leftWidthFor = (width, sideOpen) => clampWidth(width ?? FIRST_PANELS.leftWidth, PANEL_MIN.left,
+  panelRoom(true, sideOpen) - (sideOpen ? PANEL_MIN.side : 0));
+// The side panel's width shown (``width``: as dragged, or null: 42 % of the window, the tree keeping 720 px), next to
+// the left panel's ``left`` px (0: closed)
+const sideWidthFor = (width, left) => {
+  const wanted = width || Math.min(Math.round(viewportWidth() * 0.42), viewportWidth() - 720);
+  return clampWidth(wanted, PANEL_MIN.side, panelRoom(left > 0, true) - left);
+};
 const keptWidth = (name) => Number(loadPreference(name, "")) || null;
 // Keeps ``value`` as the preference ``name`` when it changes (not at the first render: a default that was never chosen is
 // not written, so that a later version's defaults still apply)
@@ -8748,6 +8822,7 @@ function App() {
     if (leftOpen && !was.left) focusOn(".leftbar .tabs button.active");
     if (sideOpen && !was.side) focusOn(".sidebar .side-slot:not([style*=\"none\"]) .tabs button.active, .sidebar .edit-title button");
   }, [leftOpen, sideOpen]);
+  const processFocus = useRef([]);  // the process tabs, last in focus first (what the side and Rules panels show for a flow or model tab)
   const states = useRef({});  // tab id → its saved view (what a remounted tab starts from)
   const starts = useRef({});  // tab id → how a tab without a saved view starts
   const current = useRef({});
@@ -9090,13 +9165,21 @@ function App() {
   const showStaged = !editing && !!origin && pending.length > 0;
   const focusedTab = activeTabOf(focus);
   const compareTabs = allTabs.filter((id) => states.current[id]?.root).map((id) => ({ id, state: states.current[id], title: titles[id] }));
-  const sideShown = sideWidthFor(sideWidth), leftShown = leftWidthFor(leftWidth);
+  const sideVisible = sideOpen && !comparing;
+  const leftShown = leftWidthFor(leftWidth, sideVisible), sideShown = sideWidthFor(sideWidth, leftOpen ? leftShown : 0);
   // The Processes panel lists the flow and model tabs too (with their icon; they are not compared)
   const flowTabs = allTabs.filter(treeless).map((id) => ({ id, flow: flowOf(id), model: modelOf(id), title: titles[id] }));
+  // The side panel and the Rules panel are filled by process tabs (their slots side-<id>, groups-<id>): with a flow or
+  // model tab in focus they show the process tab last in focus (else the first open one), and say so (PanelsFollow)
+  const panelsFollow = !!focusedTab && treeless(focusedTab);
+  if (focusedTab && !panelsFollow) processFocus.current = [focusedTab, ...processFocus.current.filter((id) => id !== focusedTab)];
+  processFocus.current = processFocus.current.filter((id) => allTabs.includes(id));
+  const panelTab = !panelsFollow ? focusedTab : processFocus.current[0] ?? allTabs.find((id) => !treeless(id)) ?? null;
+  const followNote = (onCollapse) => panelsFollow && html`<${PanelsFollow} title=${panelTab ? titles[panelTab] ?? null : undefined} onCollapse=${onCollapse} />`;
   function startSideResize(e) {
     e.preventDefault();
     const start = e.clientX, width = sideShown;
-    const move = (ev) => setSideWidth(sideWidthFor(width + start - ev.clientX));
+    const move = (ev) => setSideWidth(sideWidthFor(width + start - ev.clientX, leftOpen ? leftShown : 0));
     const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
@@ -9104,7 +9187,9 @@ function App() {
   function startLeftResize(e) {
     e.preventDefault();
     const start = e.clientX, width = leftShown;
-    const move = (ev) => setLeftWidth(leftWidthFor(width + ev.clientX - start));
+    // Not wider than what the side panel leaves, at the width it has (dragging one panel does not shrink the other)
+    const move = (ev) => setLeftWidth(clampWidth(width + ev.clientX - start, PANEL_MIN.left,
+      panelRoom(true, sideVisible) - (sideVisible ? sideShown : 0)));
     const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
@@ -9140,7 +9225,7 @@ function App() {
       <div class="body">
         ${!leftOpen && html`<button class="side-reopen left" onClick=${() => setLeftOpen(true)} title="Show the Processes, Methods and Rules panel (Ctrl/⌘ + ←)" aria-label="Show the Processes, Methods and Rules panel"><${SidePanelIcon} left /></button>`}
         <aside class="leftbar" style=${{ width: `${leftShown}px`, display: leftOpen ? "" : "none" }}>
-          <${LensPanel} info=${info} lens=${lensApi} tab=${leftTab} setTab=${setLeftTab} tabs=${allTabs} focusedTab=${focusedTab} comparing=${comparing}
+          <${LensPanel} info=${info} lens=${lensApi} tab=${leftTab} setTab=${setLeftTab} tabs=${allTabs} focusedTab=${panelTab} follow=${followNote(null)} comparing=${comparing}
             view=${TAB_API[focusedTab] || Object.values(TAB_API)[0]} compareTabs=${compareTabs} flowTabs=${flowTabs} compare=${compare} setCompare=${setCompare} onCollapse=${() => setLeftOpen(false)}
             adder=${origin && DATABASE ? { origin, onAdded: () => request("/api/info").then((i) => { clearAnswers(); setInfo(i); }).catch((e) => setError(e.message)) } : null}
             onCategory=${(category, x, y) => CATEGORY_OPENERS[focusedTab]?.(category, x, y)}
@@ -9161,7 +9246,8 @@ function App() {
           ? html`<div class="side-resizer" onPointerDown=${startSideResize} title="Drag to resize"></div>`
           : html`<button class="side-reopen" onClick=${() => setSideOpen(true)} title="Show the side panel (Ctrl/⌘ + →)" aria-label="Show the side panel"><${SidePanelIcon} /></button>`)}
         <aside class="sidebar" style=${{ width: `${sideShown}px`, display: sideOpen && !comparing ? "" : "none" }}>
-          ${allTabs.map((id) => html`<div key=${id} id=${`side-${id}`} class="side-slot" style=${{ display: id === focusedTab && !editing ? "" : "none" }}></div>`)}
+          ${!editing && followNote(() => setSideOpen(false))}
+          ${allTabs.map((id) => html`<div key=${id} id=${`side-${id}`} class="side-slot" style=${{ display: id === panelTab && !editing ? "" : "none" }}></div>`)}
           ${editing && html`<${EditPanel} origin=${origin} dataset=${dataset} pending=${pending} affected=${pendingView.affected}
             locked=${pendingView.locked} outdated=${outdated} onForm=${setDatasetOpen} stage=${stage} unstage=${unstage} unstageAll=${unstageAll}
             onApplied=${() => { refreshEditor(); refreshDatabases(); }} onRebuild=${rebuild} onCollapse=${() => setSideOpen(false)} />`}

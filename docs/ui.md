@@ -117,7 +117,7 @@ API in `src/lca_viewer/server.py`.
   bars the same way, chosen with the switch **By groups / By tree / By flows** (shared
   by both):
   - *By groups*: the named rules of the workspace's rule set (process rules as groups,
-    flow rules as flow groups, as in *Rules contributions*), and the attribution (*own
+    flow rules as flow groups, as in the side panel's *Rules*), and the attribution (*own
     emissions of each group*, or *whole supply chain below the first match*, see
     [grouping.md](grouping.md)). The rules are edited in the *Rules* panel on the left (link under
     the groups): the same rule set as in the tabs that follow it, so a change there is seen in
@@ -218,6 +218,18 @@ API in `src/lca_viewer/server.py`.
   page, and resized by dragging its left edge. Each tab
   renders its panels into its own slot of the side panel (a small portal), so
   a tab keeps its panel state (current tab, chart choices) when hidden.
+  The two side panels are **fitted to the window** (`leftWidthFor`, `sideWidthFor`): the workspace between them
+  keeps `WORKSPACE_MIN` (360 px), the left panel is fitted first (leaving the side panel its minimum), and the side
+  panel takes at most what is left, when dragged, when the other one opens and when the window is resized; dragging
+  one does not shrink the other. A width dragged is kept and shown fitted. A window too small for both minimums
+  squeezes the workspace, and `.body` clips (`overflow-x: clip`) rather than make the page wider than the window.
+  Decision: a first version clamped each panel to the window alone, so the side panel dragged wide with the left
+  panel open pushed the page past the window's right edge.
+  Only process tabs fill the side panel and the left panel's *Rules* (slots `side-<id>`, `groups-<id>`): while a
+  **flow or model tab** is in focus they show those of the **process tab last in focus** (`App` keeps them, last
+  first, in `processFocus`; else the first process tab open), under a muted line *Showing ‹process›, the last process
+  in focus* (`PanelsFollow`); with no process tab open, a note that they follow a process tab. Decision: rather than
+  blank panels (a first version left them empty), or panels of their own for flow tabs, which have their pop-up's.
 - **Top bar**: in the middle, the **search** of a process, like a command palette
   (Ctrl/⌘ + K focuses it; Enter makes the result the process of the tab in
   focus, Ctrl/⌘ + Enter opens it in a new tab); the mode switch is at the right. At the left, the title, the
@@ -254,7 +266,7 @@ API in `src/lca_viewer/server.py`.
   left panel; the status bar has no icon of its own for it any more (the edge of the page and Ctrl/⌘ + ← do it).
 - **First start** (nothing kept in the browser): the plain reading first, complexity when asked for. A tab is a list
   with *Amount*, *Impact* and *Share*, no cut-off, nothing grouped, the direct emissions organised by compartment, full names, no colours; the left
-  panel is closed, the side panel open on *Explore view* (the chart; the view options are in their pop-up, closed). Widths follow the window until dragged
+  panel is closed, the side panel open on *Custom* (the chart; the view options are in their pop-up, closed). Widths follow the window until dragged
   (side panel 42 % of it, leaving the tree 720 px). Constants `DEFAULT_VIEW`, `DEFAULT_CUTOFF` and `FIRST_PANELS` in
   `app.js`. Decision: a preference is written when the user changes it, not at the first render, so a default never
   chosen can still change in a later version; *Default settings* (save menu) restores all of it, panels included.
@@ -274,7 +286,7 @@ API in `src/lca_viewer/server.py`.
   tab. Closing a tab or a window shows a notice with *Undo*, and the panel has an *Open history* menu at the top (what was closed, the last first: pick one to bring it back). Decision: the impact
   methods and the group rules are chosen once for the workspace and **shared by all
   tabs**, not per tab and per panel as before (a method list in the header, another in the
-  *Process contribution* panel and a third in Compare mode; rules copied from tab to tab,
+  side panel's *Process* panel and a third in Compare mode; rules copied from tab to tab,
   which then drifted apart). A first version let a tab have its own (a link in its header);
   it is dropped for now, which keeps the page simpler, and can come back. *Methods* is one
   list nested by family (fold, filter box); the coverage of a method over the whole model (its factors on flows of the model
@@ -669,7 +681,7 @@ API in `src/lca_viewer/server.py`.
   **i** its **exchange** only, in the dataset of the process emitting it: header *Exchange of ‹flow› in ‹process›* (the
   flow's name links to the flow), amount, comment, uncertainty, pedigree, formula; under a merged or grouped emitter, one
   exchange per member process; for a substance row over several compartments, one per flow. A right-click opens the
-  flow pop-up, as on a process row (the exchange: its (i)). On a substance or flow of the *Flow contribution* tab, which is summed over the
+  flow pop-up, as on a process row (the exchange: its (i)). On a substance or flow of the side panel's *Flow* tab, which is summed over the
   supply chain and has no single exchange, the right-click offers *Flow…* and *Emitted by…* (the flow pop-up on its
   *Emitted by* panel, in the scope of the tab); in its list of emitters, *Exchange…* is the exchange of that process.
   A flow of the *Uncharacterised* tab or of the model pop-up opens the same flow pop-up (from the model pop-up, with
@@ -707,15 +719,21 @@ API in `src/lca_viewer/server.py`.
   without the tick and baseline of Compare mode (flows are not compared); the search of the top bar, Enter on a flow
   tab, opens the process in a new tab. Decision: one shell for both kinds of tabs (a tab's saved state holds `root` for a
   process, `flow` for a flow), so saving, closing, *Undo* and the open history work for both.
-- **Side panel — tabs** (what each shows is explained in a popup on its name, not in the panel):
-  - *Explore view*: the chart of the tree's rows (the view options are in their pop-up, above): **single indicator**, the
+- **Side panel — tabs** (what each shows is explained in a popup on its name, not in the panel): *Custom*,
+  *Process*, *Flow*, *Uncharacterised*, *Rules* (`SIDE_PANELS`). Decision: short names, the side panel's place saying
+  that they are contributions (they were *Explore view*, *Process contribution*, *Flow contribution*, *Rules
+  contributions*). When the panel is too narrow for the names, the bar shows **icons** instead (`SidePanelTabs`: a
+  chart, a factory, a drop, a question mark, a funnel), each with its name as `aria-label` and at the head of its
+  popup. A `ResizeObserver` measures the bar: names that overflow it switch to icons, and the width they took is kept
+  to switch back once the bar is that wide again (no flicker at the threshold).
+  - *Custom* (formerly *Explore view*): the chart of the tree's rows (the view options are in their pop-up, above): **single indicator**, the
     bars of the main method, or **multi indicator**, the methods ticked in the Methods panel as 100 % stacked
     bars; CSV export.
-  - *Process contribution*: what each process contributes by its own emissions (direct contributions, wherever
+  - *Process* (formerly *Process contribution*): what each process contributes by its own emissions (direct contributions, wherever
     it is in the supply chain), as a chart and as the table of the same rows, largest first; a click on a bar or a row chooses
     it in both; the filter (*Top* n, *Cut-off* %, *Cumulative* %: click its name to change the type) leaves the rest in one row
     (`/api/global/contributors` with no group). See [charts.md](charts.md).
-  - *Flow contribution*: the score split by elementary flow: the whole
+  - *Flow* (formerly *Flow contribution*): the score split by elementary flow: the whole
     inventory of the process (B·s) times the current method's
     characterisation factors, so it sums to the total. The panel's own buttons *Substance*, *Compartment* and
     *Subcompartment* (alone or together; none: one row per flow) group the rows: *Substance*
@@ -741,7 +759,7 @@ API in `src/lca_viewer/server.py`.
     likely gaps of the active method, come first and are highlighted, with their count in the summary and on
     each unit's row. Right-click a flow for its pop-up; *CSV* exports the list. API: `POST
     /api/flows/uncharacterised` (`analysis.uncharacterised`; `query` for the search). Decisions: a tab of its
-    own rather than a switch in *Flow contribution* (first version), as it answers another question (what the
+    own rather than a switch in *Flow* (first version), as it answers another question (what the
     score leaves out, not what makes it); a reference among the ticked methods, which keeps the list short, and
     chosen by the user rather than matched by category name, which differs between method families.
   - *Rules* (in the **left panel**, *Rules*, not in the side panel): active rules (reorder, **edit** — the form below is filled in with
@@ -761,7 +779,7 @@ API in `src/lca_viewer/server.py`.
     the selected row. *Group elementary flows* makes the same kinds of rules
     on flows (substance, compartment, subcompartment, unit), which group the
     flows under direct emissions and split what the process groups leave in
-    *Rules contributions*; "product / waste" (`flow_type`) is a field of
+    the side panel's *Rules*; "product / waste" (`flow_type`) is a field of
     processes, not of flows. The colours are settings of the workspace, the same in every tab, chart
     and comparison: the **Settings** pop-up (the palette icon of the status bar, or *Colours…* under *Color by*) picks
     one palette for every mode (automatic hues, categorical, colour-blind safe, vivid, soft, earth), given in the order
@@ -770,19 +788,18 @@ API in `src/lca_viewer/server.py`.
     another one (*reset* goes back to the palette's; choosing a palette clears them; kept in the lens's `ruleColors`,
     `type:…`, `location:…` for the others). Each rule
     of the Rules panel has its swatch too: click it to pick a colour, right-click resets it. They are kept with the
-    rule sets (`lens.ruleColors`), not in the views. A group of the analyses (*Rules contributions*, Compare) and a
+    rule sets (`lens.ruleColors`), not in the views. A group of the analyses (the side panel's *Rules*, Compare) and a
     bar of a tab's tree in Compare take the colour of their rule (`namedGroups(…).ruleOf`, the `rule` of the rows),
     whatever their name. A quick group in use is filled with its colour. The groups of a rule carry it in
-    the tree, graph and Sankey, and the bars of the *Process contribution*,
-    *Flow contribution* (a substance in a named flow group) and *Group
-    contributions* charts; *No colours* in the view bar switches all colours off. *Flow type
+    the tree, graph and Sankey, and the bars of the side panel's *Process*,
+    *Flow* (a substance in a named flow group) and *Rules* charts; *No colours* in the view bar switches all colours off. *Flow type
     colours* colour the rows (list, tree view, Sankey and charts) by the kind of exchange instead:
     product (the root), technosphere input, waste (output to treatment),
     resource (input from nature), emission (output to nature) and direct
     emissions rows; *Rules colours* goes back to the colours of groups. A row that a rule matches takes the colour of the rule even when it is not in a group (the page sends the rules
     to `/api/rows` as `colour_rules`; each row says which one matches it as `rule`), and what is below it inherits it. The groups of *Group by* product, substance, compartment or subcompartment are not rules: they have no colour of
     their own (they take the one of the row above).
-  - *Rules contributions*: global grouping with the named groups, direct
+  - *Rules* (formerly *Rules contributions*): global grouping with the named groups, direct
     (the default) or first-match attribution (see [grouping.md](grouping.md)),
     groups sorted by decreasing impact with *other* last.
     Named rules on elementary flows are **flow groups** ("flows" chip): process

@@ -13,7 +13,16 @@ Changes on `dev`, not released yet.
   view options of that tab in a pop-up (*Display*, *Cut-off*, *Names*, *Organise by*, *Group by*, *Color by*, *Rows*,
   with *Reset* and *Save ▾*); the tab is shown in its window first. Key **v** in View mode opens those of the tab in
   focus. Flow tabs have none.
-- **Explore view**: the side panel's first panel, formerly *Custom view*, keeps only the chart of the tree's rows.
+- **Side panel tabs renamed**: *Custom* (the chart of the tree's rows; it was *Explore view*, formerly *Custom view*,
+  and keeps only that chart), *Process*, *Flow*, *Uncharacterised* and *Rules* (they were *Process contribution*,
+  *Flow contribution* and *Rules contributions*). When the panel is too narrow for the names, the tab bar shows an icon
+  per panel instead, its name in the tooltip.
+- **Side panel and Rules with a flow or model tab in focus**: they showed nothing; they now show those of the process
+  tab last in focus, with a muted line *Showing ‹process›, the last process in focus*, or, with no process tab open, a
+  note that they follow a process tab.
+- **Fixed**: dragging the side panel wider (above all with the left panel open) made the page wider than the window
+  and pushed the panel past its right edge. The two panels are now fitted to the window, leaving the workspace
+  360 px, when dragged, when the other panel opens and when the window is resized.
 - **Process cards: Explore and Exchanges.** The first panel of a process tab (the tree) and of a process pop-up (its
   explorer) is now called *Explore*. A new *Exchanges* panel, second, lists the exchanges as the dataset records them,
   in the sections of the process form (products, inputs from technosphere, inputs from nature, emissions, waste to

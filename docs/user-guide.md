@@ -47,14 +47,14 @@ create datasets, add Agribalyse, run it on a shared server, set it up by hand an
   toolbar) apply to the tree and the chart.
 - **Save ▾**: download the view as a file; the arrow menu loads a saved view
   back (or copies it as JSON).
-- The **process contribution** chart shows exactly the rows visible in the tree:
+- The *Custom* chart of the side panel shows exactly the rows visible in the tree:
   expand, collapse or group to change it. Export as PNG or CSV.
-- *Flow contribution* splits the score by elementary flow (substance, or
+- *Flow* splits the score by elementary flow (substance, or
   substance and compartment) over the whole supply chain; click one to list
   the processes emitting it.
-- *Rules contributions* answers "how much electricity / transport / … anywhere
+- *Rules* (of the side panel) answers "how much electricity / transport / … anywhere
   upstream?" using the named groups, and "how much N2O outside them?" with
-  flow groups (*Add as a group* on a substance in *Flow contribution*). Click a group (e.g. *other*) to list
+  flow groups (*Add as a group* on a substance in *Flow*). Click a group (e.g. *other*) to list
   the processes it is made of; right-click one and *Go to in tree* to open
   the tree where it sits (along its largest supply path). *Export CSV* saves
   the table of groups, and the list of a group's processes (all of them, not

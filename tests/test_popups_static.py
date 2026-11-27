@@ -94,7 +94,7 @@ def test_view_options_open_from_each_process_of_the_processes_panel():
     assert "VIEW_OPTIONS_OPENERS[id] =" in body("FUView")
     assert "<${ViewOptionsPopup}" in body("FUView") and "<${PagePortal}>" in body("FUView")
     assert "VIEW_OPTIONS_OPENERS" not in body("FlowTab")  # flow tabs have no view options
-    assert '["view", "Explore view"]' in body("FUView") and "header=${viewOptions}" not in body("FUView")
+    assert '["view", "Custom"]' in APP and "<${SidePanelTabs}" in body("FUView") and "header=${viewOptions}" not in body("FUView")
     # key v: the view options of the tab in focus
     assert 'new CustomEvent("lca:custom-view", { detail: { id } })' in body("App")
 
@@ -132,6 +132,39 @@ def test_information_names_the_unit_and_the_location():
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
+def test_the_side_panel_tabs_have_short_names_and_icons_when_narrow():
+    # Custom, Process, Flow, Uncharacterised, Rules: the side panel says they are contributions
+    assert ('const SIDE_PANELS = [["view", "Custom"], ["chart", "Process"], ["flows", "Flow"], ["missing", "Uncharacterised"], '
+            '["global", "Rules"]];') in APP
+    for old in ("Explore view", "Process contribution", "Flow contribution", "Rules contributions"):
+        assert f'"{old}"' not in APP
+    tabs = body("SidePanelTabs")
+    assert "new ResizeObserver(fit)" in tabs and "el.scrollWidth > el.clientWidth" in tabs
+    assert "aria-label=${compact ? label : undefined}" in tabs and "<${SidePanelTabIcon} panel=${key} />" in tabs
+    assert all(f"  {key}: \"M" in APP for key in ("view", "chart", "flows", "missing", "global"))
+
+
+def test_the_panels_are_fitted_to_the_window():
+    # The workspace keeps its minimum; the left panel leaves the side panel its own, the side panel takes what is left
+    assert "const WORKSPACE_MIN = 360;" in APP
+    assert "panelRoom(true, sideOpen) - (sideOpen ? PANEL_MIN.side : 0)" in APP
+    assert "panelRoom(left > 0, true) - left" in APP
+    app = body("App")
+    assert "sideWidthFor(sideWidth, leftOpen ? leftShown : 0)" in app
+    assert "sideWidthFor(width + start - ev.clientX, leftOpen ? leftShown : 0)" in app
+    assert "panelRoom(true, sideVisible) - (sideVisible ? sideShown : 0)" in app
+
+
+def test_a_flow_or_model_tab_shows_the_panels_of_the_last_process_tab():
+    app = body("App")
+    assert "processFocus.current[0] ?? allTabs.find((id) => !treeless(id)) ?? null" in app
+    assert 'id=${`side-${id}`} class="side-slot" style=${{ display: id === panelTab && !editing' in app
+    assert "focusedTab=${panelTab} follow=${followNote(null)}" in app
+    assert "${!comparing && follow}" in body("LensPanel")
+    follow = body("PanelsFollow")
+    assert "the last process in focus" in follow and "These panels follow a process tab" in follow
+
+
 def test_app_js_parses(tmp_path):
     copy = tmp_path / "app.mjs"  # an ES module (its imports)
     copy.write_text(APP, encoding="utf-8")

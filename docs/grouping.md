@@ -116,7 +116,7 @@ already summed.
 A rule does not merge its groups (a view file of an older version with a rule's
 `merge` loads, as a rule that groups): a group is merged from its row. A rule can be **disabled**
 (`GroupRule.disabled`): kept in the list and the saved view but not applied,
-in the tree or in the *Rules contributions* analysis, to compare with and
+in the tree or in the side panel's *Rules* analysis, to compare with and
 without it.
 
 ![Merge](img/merge.png)
@@ -136,7 +136,7 @@ energy carriers or transport services among them):
   aircraft, ship… ("machine operation" excluded: it is a service in hours).
 
 On 1 kg of GLO wheat (feed), infrastructure is 10.0 % of EF 3.1 climate
-change (first-match rule, *Rules contributions* tab). In the tree, like any
+change (first-match rule, the side panel's *Rules* tab). In the tree, like any
 named group, it only bundles two or more infrastructure siblings.
 
 ### Direct emissions: elementary flows
@@ -160,7 +160,7 @@ unspecified air as one row, amounts summed) and **by compartment**, and
 Ctrl/⌘-click → Group for a manual `{"flows": [...]}` group. Flow groups are
 labelled by the value alone ("air", "Carbon dioxide, fossil"). Named flow
 rules (a predicate over flows, e.g. *Add as a group* on a substance in the
-Flow contribution tab: `{"field": "name", "op": "eq", "value": "Dinitrogen
+side panel's Flow tab: `{"field": "name", "op": "eq", "value": "Dinitrogen
 monoxide"}`, all compartments) are also **flow groups** of the *Whole supply
 chain* analysis (below); `by` flow rules are not.
 
@@ -236,7 +236,7 @@ A flow rule can be **on the emissions of some processes only** (an *Owning proce
 in the rule, `flow_owners` in the API: a predicate over activities, e.g. `cpc_section = 1` for the N2O of agricultural
 processes). The group then takes an emission (a flow of an activity) only if the flow and the activity that emits it
 both match: in the matrices, `D_flows · B · D_owners`. Under a direct row of the tree, the rule applies only when the
-process of that row matches. The Flow contribution tab, which lists the inventory of the whole supply chain, does not
+process of that row matches. The side panel's Flow tab, which lists the inventory of the whole supply chain, does not
 colour by such a rule.
 
 Each emission (a flow of an activity) then goes to one group only (the first flow group
@@ -254,8 +254,8 @@ only (`method`).
 
 Reference example (EF 3.1 climate change, wheat grain feed), with
 pesticides / fertilisers / agricultural machinery and a *Dinitrogen
-monoxide* flow group: see the Rules contributions tab; the flow group is the
-field N2O of the crops (the Flow contribution tab gives all N2O, 34.1 %).
+monoxide* flow group: see the side panel's Rules tab; the flow group is the
+field N2O of the crops (the Flow tab gives all N2O, 34.1 %).
 
 ### What a group is made of, and finding it in the tree
 
