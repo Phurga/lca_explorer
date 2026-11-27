@@ -11,6 +11,21 @@ Changes on `dev`, not released yet.
 
 Large databases: one built with hundreds of thousands of processes opens, and every database is solved faster.
 
+- **One cache per Brightway project**: each database is built once, into a *segment* of its project's cache
+  (databases that use each other are built together), and opening a database puts its segment and those it uses
+  together. A foreground database on ecoinvent no longer stores and solves ecoinvent again: the AESA project takes
+  1.3 GB instead of 3 GB. A database changed is built again alone, and the results of the databases that use
+  it solved again (no new reading from Brightway). The results (`G`) are solved in the build, not at the first open:
+  opening ecoinvent 3.12 takes 2 s and 0.4 GB instead of 6 s and 1.3 GB, and the build's peak memory is halved (a
+  sixth on the AESA project). A foreground database rebuilt on a built background takes seconds. The caches of the former layout are listed as *obsolete* in *Storage*: delete them
+  there, their databases are built again when next opened.
+- **Impact methods: one list per project**, for all its databases: methods chosen at a build, or added to an open
+  database, are computed for each of them.
+- **Storage** lists each project's cache with its segments: *Rebuild*, *Drop results*, *Delete* (with the databases
+  that use it).
+- **Less memory when open**: the direct impacts per process (`U`, as large as the results) are no longer kept, but
+  computed for the process shown or the methods an analysis uses.
+
 - **Impact methods chosen before a build**: *Build and open…* first lists the impact methods of the project, by
   family, those of the previous build (or the family of the default method) ticked. Only their impacts are
   computed and kept: the fewer, the faster and the lighter. A rebuild keeps them.

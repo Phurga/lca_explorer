@@ -1,9 +1,10 @@
 # Project cache, storage menu and database graph
 
-Status (2026-11): phases 1 (database graph) and 2 (storage menu, on today's caches) **done**; phases 3 and 4
-**design, not implemented**. Replaces the cache of one model per database described in
-[data-import.md](data-import.md#loading-from-the-app) and the calculation of `G` at first open described in
-[calculation-engine.md](calculation-engine.md#model-independence).
+Status (2026-11): phases 1 (database graph), 2 (storage menu), 3 (project cache, `project_cache.py`) and 4 (`U` not
+kept, `CF` sparse, `G` solved by chunks) **done**. Not done: segments shared in memory between two open databases,
+the method list in the project's ⚙ menu (it is chosen at a build), a smaller default method list. Replaces the cache
+of one model per database and the calculation of `G` at first open (see [data-import.md](data-import.md#loading-from-the-app)
+and [calculation-engine.md](calculation-engine.md#model-independence)). Measured: see [Measured](#measured).
 
 ## Problem
 
@@ -120,27 +121,42 @@ positions one after the other, in the order of the closed set (segments used fir
 
 ```
 data/cache/project-<hash>/              hash of (Brightway folder, project)
-  project.json      format version, Brightway origin, methods, segments in build order, the graph
+  project.json      format, Brightway origin, methods (name, unit, token), segments, retired folders
   flows.pkl         elementary flows of the segments built so far (appended to)
   methods.pkl       factors of the methods on those flows (extended when flows are appended)
   unlinked.pkl      factors of the methods on flows outside them
-  segments/<slug>-<hash>/
-    segment.json    its databases, what it uses, its state (sources.database_state) and its version
-    A.npz B.npz     its columns: rows of its own products by position, other segments' products by node id;
-                    flows by node id
+  segments/<slug>-<version>/
+    segment.json    its databases, what it uses, the state of its databases (their `modified`)
+    A.npz           its own block (by position), the node id of its products, its inputs of other segments'
+                    products (node id, column, amount)
+    B.npz           its flows (node id, column, amount)
     G.npy G.json    its rows of G (its products × the project's methods), and what they were solved from
-    activities.pkl details.pkl exchanges.sqlite
+    activities.pkl details.pkl exchanges.sqlite (rows: node ids)
 ```
 
 `project.json`'s `format` is a number, increased when the files change meaning. A cache of another format
-is listed as *obsolete* in the storage menu, never opened. Models made from files (not from a Brightway project)
-keep today's one-folder model.
+is listed as *obsolete* in the storage menu, never opened, and replaced by the next build. Models made from files
+(not from a Brightway project) keep the one-folder model.
+
+Decided while building it:
+- **A segment rebuilt goes to a new folder** (its `version`). A database open keeps reading the old one (its details
+  and exchanges are read on demand), which the server deletes once no open database reads it (`retired`). Windows
+  cannot delete a folder with open files, and a database open during a build keeps working.
+- **What `G` was solved from.** A segment's `basis` changes when its version, or the basis of a segment it uses,
+  changes: then all its rows are solved again. Its columns are named by method tokens: a method added is solved
+  alone, one removed is dropped, one whose factors changed in the project gets a new token. *Drop results* keeps the
+  basis: the next build solves the same numbers, and the segments above it are left as they are.
+- **Methods: one list per project.** Choosing other methods at a build changes it for every database of the project
+  (columns dropped without a solve, new ones solved for every segment).
 
 ## Building
 
 `lca-viewer build --project P --database X` (separate process, as today):
 
-1. Read the graph of the databases X uses. Group the loops.
+1. Read the graph of the databases X uses. Group the loops. A database whose segment is unchanged since its build
+   gives the links its exchanges had then; the others start from Brightway's `depends`, which is checked against
+   their exchanges as they are read (step 4). When they differ, the segments are grouped again from the exchanges
+   and built again. A query of the exchanges up front took 23 s on Agribalyse (5M exchanges).
 2. For each segment X needs, in order (used first), check its state:
    - **Missing, or its databases changed:** build it (steps 3 to 5).
    - **A segment it uses was rebuilt:** solve its `G` rows again (step 5 only). If a node id it links to no
@@ -189,15 +205,11 @@ A *Storage* entry in the top bar opens a dialog: what the app and Brightway take
 Sizes are measured when the dialog opens: walking the folders is quick (27 GB of Brightway projects: 0.35 s), so
 there is no job and nothing kept.
 
-Done in phase 2, on today's one-model caches (`/api/storage`, `/api/storage/delete`, `StorageDialog`):
-- built models with their results (`G`), *Drop results* and *Delete* (closed first, removed from `models.json`), and
-  *Delete all built models…*;
-- left-overs in `data/cache`: `.part` / `.old` folders and empty folders (deleted in bulk), and model folders that
-  `models.json` does not list (deleted one by one only: a model served with `--model` is one);
-- downloads (`data/downloads`, ecoinvent_interface's releases: 12 GB on the development machine);
-- Brightway projects, measured only.
-
-The `format` number comes with phase 3, when the cache files change.
+Done in phase 2 on the one-model caches, then in phase 3 on the project caches (`/api/storage`, `/api/storage/delete`,
+`StorageDialog`): projects with their segments (*Rebuild*, *Drop results*, *Delete* with the segments that use it),
+models made from files, obsolete caches (*Delete all*), left-overs (unfinished builds, folders of rebuilt segments
+that no open database reads), downloads, Brightway projects (measured only), *Clear all app caches…*. Orphans
+(a project or database that no longer exists) are marked on their row rather than listed apart.
 
 | row | size | actions |
 |---|---|---|
@@ -277,3 +289,28 @@ Each phase is usable on its own.
   segment of the process that makes it.
 - Datasets made in the app (Edit mode) change one foreground database. Its segment alone is rebuilt, so check
   how long *Apply* then takes on a large foreground database.
+
+## Measured
+
+2026-11-27, all the project's methods, peak working set of the process (psutil `peak_wset`). *Before*: the model of
+one database and all it uses (HEAD of phase 2); *after*: the project cache. Times vary by ±20 % between runs on
+this machine (a cold disk added 30 s once).
+
+| | before | after |
+|---|---|---|
+| ecoinvent 3.12 (26.5k processes, 633 methods): build | 66 s, 2.0 GB | 88 s, 1.1 GB |
+| ecoinvent 3.12: open (load, factorise, `G`) | 5.8 s, 1.26 GB (`G` solved: 3.5 s) | 2.3 s, 0.43 GB (`G` read) |
+| ecoinvent 3.12 on disk | 477 MB | 483 MB |
+| AESA, canne_sucre_reunion (9 processes on ecoinvent 3.10.1): build | 54 s, 1.7 GB | 101 s, 1.1 GB (ecoinvent included, once) |
+| AESA, aval_sucre_reunion (uses the three others): build | 216 s, 5.7 GB | 178 s, 0.9 GB (Agribalyse and aval only) |
+| AESA, canne_sucre_reunion rebuilt on its built background | 54 s, 1.7 GB | 6.5 s, 0.26 GB (aval above it solved again) |
+| AESA, aval_sucre_reunion: open | 8.8 s, 1.56 GB | 3.3 s, 0.63 GB |
+| AESA project on disk (4 databases) | 3.0 GB | 1.33 GB |
+
+- `G` opened from segments equals that of a model built on its own: relative difference at most 2.2e-12 (aval,
+  42,210 × 687) and 4.1e-13 (ecoinvent 3.12), on entries above 1e-9 of their column's largest.
+- Agribalyse has 5.07M exchanges: reading them takes 160 s of the aval build (36 s to iterate them alone). The
+  exchanges of ecoinvent 3.12 took 65 s streamed to SQLite, against 34 + 14 s read into a list then written: the
+  join that maps the inputs to node ids costs some of it. Not looked into further.
+- The build's peak no longer grows with the exchanges (streamed) nor with `G` (solved by chunks into a
+  memory-mapped file): it is that of `bc.LCA` reading the matrices.

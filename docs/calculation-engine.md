@@ -10,7 +10,8 @@ infinite. Classic graph traversal (bw2calc's former `GraphTraversal`,
 `bw_graph_tools`) does a cut-off-driven search over supply amounts, which ties
 what the user sees to a calculation parameter.
 
-We instead compute, once per (database, set of methods):
+We instead compute, once per (database, set of methods) — per segment of the project cache, see
+[project-cache.md](project-cache.md#why-it-is-exact):
 
 ```
 U = CF · B                 (methods × activities)   direct impacts per unit of operation
@@ -19,7 +20,11 @@ G = (Aᵀ)⁻¹ Uᵀ              (products × methods)     cumulative impacts p
 
 `G[p, k]` is "impact k of 1 unit of product p, whole supply chain included".
 All methods are solved with a **single factorisation** of `A` (multiple
-right-hand sides).
+right-hand sides), by chunks of methods (100 MB of `G` at a time), so the peak is `G` and one chunk.
+
+`U` is as large as `G` (1.9 GB at 300k processes × 800 methods), so it is not kept: a node reads its column
+(`LCAModel.direct(j)` = `CF · B[:, j]`), an analysis the rows of its methods (`direct_impacts(methods)`). `CF` is a
+sparse matrix: a method characterises a few hundred flows of thousands.
 
 A tree node is *(path, amount of product p)*. Expanding it reads column `p`
 of `A`:
@@ -27,7 +32,7 @@ of `A`:
 ```
 operation x  = amount / A[p, p]            (handles production ≠ 1 and waste, A[p,p] < 0)
 child i      = amount_i = −A[i, p] · x     impact = amount_i · G[i]
-direct       = x · U[:, p]
+direct       = x · U[:, p]                 (CF · B[:, p], computed for the node)
 ```
 
 Because `Aᵀ G = Uᵀ`, children + direct = parent **exactly**, at every node.
@@ -65,8 +70,10 @@ persisted (TODO, phase 4).
 dataframes. It does not depend on Brightway: importers (Brightway now,
 direct ecoSpold2 / openLCA later) produce an `LCAModel`. The model can be
 cached to disk (`save` / `load`, npz + pickle; `G`, whose 762 solves take about 10 s on ecoinvent, is kept as
-`G.npy` with a `G.json` of the files it was made from, and computed again when they change) — loading ecoinvent from the
-Brightway project takes ~4 s.
+`G.npy` with a `G.json` of the files it was made from, and computed again when they change). This one-folder model is
+kept for models made from files. A Brightway database is built into its project cache instead, and opened from its
+segment and those it uses (`project_cache.load`), with `G` solved in the build process
+([project-cache.md](project-cache.md)).
 
 Restrictions (for now):
 - square, single-output technosphere (true for ecoinvent allocated system

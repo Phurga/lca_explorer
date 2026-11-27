@@ -8462,7 +8462,7 @@ function App() {
       <${DatabaseSelect} databases=${databases} />
       ${databases && html`<button onClick=${() => setLoadOpen(true)}
         title="Projects: open, add, rename, lock or remove a database">Projects</button>`}
-      <button onClick=${() => setStorageOpen(true)} title="Storage: what the built models and Brightway projects take on disk, and what can be deleted">Storage</button>
+      <button onClick=${() => setStorageOpen(true)} title="Storage: what the project caches and Brightway projects take on disk, and what can be deleted">Storage</button>
       ${editing && html`<span class="mode-badge" title="Edit mode: changes are staged, then made together in the project">Edit mode</span>`}
       ${outdated && html`<button class="primary" disabled=${rebuilding?.status === "running"} onClick=${rebuild}
         title=${`${outdated}: the model has to be built again, and its impacts are greyed out until then`}>
