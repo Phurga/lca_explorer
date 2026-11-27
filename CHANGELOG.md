@@ -26,6 +26,13 @@ Changes on `dev`, not released yet.
 - **Information panel**: a *Unit* row with what it measures ("kg · mass", "m2·a · land occupation") and the location
   with its name ("FR · France", "RER · Europe"). API: `/api/activity/{index}` gives `location_name`, and each input
   of `/api/activity/{index}/exchanges` whether it is `waste`.
+- **Status bar**: it names the **focused card**, the object of the tab in focus (*Process · name (location)*, *Flow ·
+  name (compartment)*, *Model · method*), and a click opens its pop-up. The **Source** link of the top bar is now an
+  icon (`</>`) at its right. Its left-panel icon is gone: the method and the rule set still open the panel, and so
+  do the edge of the page and Ctrl/⌘ + ←.
+- **Storage** moved from the top bar into the Projects dialog, as an icon next to *+ New project*.
+- **No Shut down button**: closing the app's last tab stops it, as before (the browser asks first). The
+  `/api/shutdown` route is gone.
 
 ## 1.6.0 - 2026-11-27
 

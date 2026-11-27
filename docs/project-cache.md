@@ -201,7 +201,7 @@ reads the whole file), and `G` in float32 (children + direct would add up to the
 
 ## Storage menu
 
-A *Storage* entry in the top bar opens a dialog: what the app and Brightway take on disk, and what can be removed.
+A *Storage* icon in the Projects dialog (it was an entry of the top bar) opens a dialog: what the app and Brightway take on disk, and what can be removed.
 Sizes are measured when the dialog opens: walking the folders is quick (27 GB of Brightway projects: 0.35 s), so
 there is no job and nothing kept.
 

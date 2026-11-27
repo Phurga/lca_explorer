@@ -279,8 +279,8 @@ to log in to the server.
 If the server runs a version changed from a release (local fixes, extra
 features), the AGPL asks that its users can get that source: commit the
 changes to a public branch or fork and point `SOURCE_URL` at the top of
-`src/lca_viewer/static/app.js` to it, so the **Source** link of the top bar
-leads there.
+`src/lca_viewer/static/app.js` to it, so the **Source** icon (`</>`) of the
+status bar leads there.
 
 **1. Open a tunnel** from your computer and keep this terminal open:
 
@@ -362,8 +362,8 @@ uses that port: the terminal says which). It stops with its browser tab: closing
 asks first (the browser's own "Leave site?"), and once it is closed the app stops a few seconds later, after
 an import or a build under way finishes (a reload does not stop it). A browser that quits, crashes or closes the
 tab without a word is noticed too: a tab not heard of for 30 s counts as closed (2½ minutes for a tab hidden in the
-background, which browsers slow down), so the app stops within about 40 s then. **Shut down**, at the top right, stops it
-too, and so does Ctrl+C in the terminal (`lca_explorer.cmd` runs it in the background instead: its terminal
+background, which browsers slow down), so the app stops within about 40 s then. Closing the tab is how the app is shut down (the page has no
+button for it); Ctrl+C in the terminal stops it too (`lca_explorer.cmd` runs it in the background instead: its terminal
 closes once the app is open, the output is in `data/server.log`). It starts with no database:
 load one from **Projects**, or import one with **+ Add database** (see above). Next time, only this step is
 needed, in a terminal where the `lca_viewer` environment is active.

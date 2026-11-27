@@ -104,11 +104,12 @@ def test_jobs_under_way_finish_first():
     busy = ["Import of ecoinvent"]
     lifetime, stops = make(busy)
     lifetime.alive("a")
-    assert lifetime.shut_down() == busy
-    lifetime.check(0.0, None)
+    lifetime.bye("a")  # the last tab closed during an import
+    since = lifetime.check(0.0, None)
+    lifetime.check(20.0, since)
     assert not stops
     busy.clear()
-    lifetime.check(1.0, None)
+    lifetime.check(21.0, since)
     assert stops
 
 
@@ -128,6 +129,8 @@ def test_routes():
     assert "t1" in lifetime.hidden
     client.post("/api/tab/bye", params={"tab": "t1"})
     assert not lifetime.tabs and not lifetime.hidden
-    assert client.post("/api/shutdown").json() == {"waiting": []}
-    lifetime.check(0.0, None)
+    # No route to shut down: closing the last tab does
+    assert client.post("/api/shutdown").status_code == 404
+    since = lifetime.check(0.0, None)
+    lifetime.check(10.0, since)
     assert stops

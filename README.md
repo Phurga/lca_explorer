@@ -88,7 +88,7 @@ The first run sets everything up: it finds conda (or offers to install Miniforge
 rights), creates a `lca_viewer` conda environment and installs the packages, which takes a few minutes. Every
 run then starts the app and opens http://localhost:8765 (or the next free port, if another program uses
 8765). The app runs in the background, so the terminal closes once it is open (its output goes to
-`data/server.log`), and it stops once you close its last tab or click **Shut down**. Run again while it runs,
+`data/server.log`), and it stops once you close its last tab. Run again while it runs,
 `lca_explorer.cmd` opens a tab on it. Extra arguments go to `lca-viewer serve` (`--port 8800`);
 `lca_explorer.cmd setup` runs the setup again.
 
@@ -112,7 +112,7 @@ LCA Explorer is free software under the [GNU Affero General Public License, vers
 (`AGPL-3.0-or-later`): you may use it for any purpose, study and change it, and share it, changed or not, as long
 as what you share keeps this licence and comes with its source code. If you run a changed version for other people
 over a network (on a shared server, for instance), you must offer them its source too (section 13 of the licence);
-the **Source** link in the app's top bar is there for that, point it at your own version. It comes without any
+the **Source** icon (`</>`) of the app's status bar is there for that, point it at your own version. It comes without any
 warranty. Contributions are accepted under the same licence.
 
 The libraries in `src/lca_viewer/static/vendor/` keep their own licences: Preact (MIT), htm (Apache-2.0) and
