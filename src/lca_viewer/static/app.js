@@ -137,7 +137,7 @@ const UNITS = {
   kilogram: "kg", "kilowatt hour": "kWh", megajoule: "MJ", "cubic meter": "m3", hectare: "ha",
   "ton kilometer": "tkm", "square meter": "m2", "square meter-year": "m2·a", "meter-year": "m·a",
   "cubic meter-year": "m3·a", "kilogram day": "kg·d", "person kilometer": "pkm", "vehicle kilometer": "vkm",
-  "metric ton*km": "tkm", meter: "m", unit: "unit", hour: "h", litre: "l", "kilo becquerel": "kBq", "standard cubic meter": "Sm3",
+  "metric ton*km": "tkm", meter: "m", kilometer: "km", unit: "unit", hour: "h", litre: "l", "kilo becquerel": "kBq", "standard cubic meter": "Sm3",
 };
 const unit = (u) => UNITS[u] || (typeof u === "string" && UNITS[u.toLowerCase()]) || u;
 const movable = (r) => r.depth > 0 && r.kind !== "rest";
@@ -4479,6 +4479,67 @@ function suppliedTo(row, rowsById) {
   return p?.kind === "process" && p.meta ? [p.meta] : p?.kind === "merged" ? p.metas || [] : [];
 }
 
+// The Exchanges panel of a process card: its exchanges as its dataset records them, in the sections of the process form
+// (its products, then DATASET_SECTIONS, in that order) and as compact as the form's tables. The type of an input is read
+// as the tree reads it (``flowTypeOf``): from a waste treatment, waste; a substitution or a negative input, an avoided
+// product; waste and avoided products are shown positive, as in the form.
+const EXCHANGE_SECTIONS = [["product", "Products"], ...DATASET_SECTIONS.map(([key, label]) => [key, label])];
+function inputSection(e) {
+  if (e.waste) return "waste";
+  if (e.type === "substitution") return "avoided";
+  if (e.type === "production" || e.type === "generic production") return "product";  // a co-product
+  return e.amount < 0 ? "avoided" : "technosphere";
+}
+// ``onOpen(row, e)``: the pop-up of its process or flow; ``onExchange(row, e)``: its exchange pop-up; ``onUse(row, inTab)``:
+// Enter on a process. Its tools: *Edit* (Edit mode for the whole app: a Brightway-built database), and in Edit mode
+// *Done editing* and *Edit process…*; amounts then change in place (staged, as in the exchange pop-up).
+function ProcessExchanges({ index, info, exchanges, locked, onOpen, onExchange, onUse }) {
+  const ctx = useContext(EditorContext);
+  const positive = (section, amount) => (section === "waste" || section === "avoided" ? Math.abs(amount) : amount);
+  const p = exchanges.production;
+  const rows = [
+    ...(p ? [{ key: "production", section: "product", kind: "process", own: true, index, name: info.reference_product || info.name,
+      place: info.location, amount: p.amount, unit: p.unit ?? info.unit, comment: p.comment }] : []),
+    ...exchanges.inputs.map((e, i) => {
+      const section = inputSection(e);
+      return { key: `p${i}`, section, kind: "process", index: e.index, name: section === "product" ? e.reference_product || e.name : e.name,
+        product: e.reference_product, place: e.location, amount: e.amount, unit: e.unit, comment: e.comment, input: e.input };
+    }),
+    ...exchanges.flows.map((f, i) => ({ key: `f${i}`, section: fromNature(f.categories?.[0]) ? "resource" : "emission", kind: "flow",
+      index: f.index, name: f.name, place: (f.categories || []).join(" · "), amount: f.amount, unit: f.unit, comment: f.comment, input: f.input })),
+  ].map((r) => ({ ...r, shown: positive(r.section, r.amount ?? 0) }));
+  const sections = (shown) => EXCHANGE_SECTIONS.map(([key, label]) => ({ key, label, items: shown.filter((r) => r.section === key) }))
+    .filter((s) => s.items.length);
+  const change = (r) => (t) => quickEdit(ctx, info.database, info.code, patchExchange(r.input, r.amount, t));
+  const amountCell = (r) => (r.own || !ctx.editing ? fmtAmount(r.shown) : html`<${Editable} value=${r.shown} format=${fmtAmount}
+    disabled=${locked || !r.input} title=${r.input ? undefined : "Build this database again once, to edit amounts here"} onCommit=${change(r)} />`);
+  const editTitle = ctx.origin ? "Edit mode (e): change processes, staged then made together and the model built again"
+    : "Open a database of a Brightway project to edit it";
+  const tools = html`<span class="exchange-tools">
+    ${ctx.editing ? html`
+      <button onClick=${() => ctx.setMode?.("view")} title="Back to View mode (v): the staged changes are kept">Done editing</button>
+      <button disabled=${locked} onClick=${() => ctx.openForm({ edit: { database: info.database, code: info.code } })}
+        title=${locked ? "Its database is locked: unlock it in the Projects dialog" : "Open the form of this process: the change is staged, then applied with the others"}>Edit process…</button>
+      ${locked && html`<span class="muted">🔒 locked</span>`}`
+    : html`<button disabled=${!ctx.origin || !ctx.enterEdit} onClick=${() => ctx.enterEdit()} title=${editTitle}>Edit</button>`}
+  </span>`;
+  if (!exchanges.available) return html`${tools}<p class="muted">This model has no exchanges recorded: build it again to see them.</p>`;
+  return html`
+    <${PopupList} key=${`dataset-${index}`} noun="exchange" rows=${rows} rowKey=${(r) => r.key} sections=${sections} tools=${tools}
+      className="exchange-list" empty="The dataset records no exchange." match=${(r) => `${r.name} ${r.place || ""} ${r.comment || ""}`}
+      onOpen=${onOpen} onInfo=${onExchange} hasInfo=${(r) => !r.own} onUse=${(r, inTab) => r.kind === "process" && onUse(r, inTab)}
+      columns=${[
+        { key: "name", label: "Exchange", title: "Its process or flow: open it for its pop-up; (i): the exchange (comment, uncertainty, pedigree)",
+          value: (r) => r.name, tip: (r) => (r.product && r.product !== r.name ? `${r.name} · product: ${r.product}` : r.name),
+          chip: (r) => (!r.place ? "" : r.kind === "flow" ? html` <span class="muted small">${r.place}</span>` : html` <span class="loc-chip">${r.place}</span>`) },
+        { key: "amount", label: "Amount", kind: "num", title: "As recorded in the dataset (waste and avoided products positive, as in the process form)",
+          value: (r) => r.shown, cell: amountCell },
+        { key: "unit", label: "Unit", kind: "unit", width: 60, value: (r) => unit(r.unit) },
+        { key: "comment", label: "", width: 26, sort: false, title: "Comment on the exchange (hover the mark)", value: (r) => r.comment || "",
+          cell: (r) => (r.comment ? html`<span class="comment-mark" aria-label="Comment">✎</span>` : "") },
+      ]} />`;
+}
+
 // ``target.parents``: for a process opened from a bundle pop-up (no row of its own), the
 // processes it is an input of, for its exchange tab
 
@@ -4652,11 +4713,12 @@ function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsByI
   const [characterisation, setCharacterisation] = useState(null);
   const chartMethods = useContext(LensContext)?.chartMethods || [];
   const totalMethods = [method, ...chartMethods.filter((k) => k !== method)].filter((k) => model.methods[k]);
-  // The exchange pop-up is its one panel; the activity's: exchanges first (a direct emissions row
-  // opens on its emissions), then users, alternatives, information (what the process is, and its description)
+  // The exchange pop-up is its one panel; the activity's: Explore first (the tree of a tab; the explorer of a pop-up: a
+  // direct emissions row opens on its emissions), then its exchanges as the dataset records them, its impacts, users,
+  // alternatives, information (what the process is, and its description)
   const tabs = (info || docked) && !exchange ? [
-    docked ? { id: "exchanges", label: "Process" }
-      : exchanges?.available && { id: "exchanges", label: `Exchanges · ${(production ? 1 : 0) + exchanges.inputs.length + exchanges.flows.length}` },
+    docked ? { id: "explore", label: "Explore" } : exchanges?.available && { id: "explore", label: "Explore" },
+    info && exchanges && { id: "exchanges", label: exchanges.available ? `Exchanges · ${(production ? 1 : 0) + exchanges.inputs.length + exchanges.flows.length}` : "Exchanges" },
     info && { id: "characterisation", label: `Characterisation · ${totalMethods.length}` },
     info && { id: "users", label: `${users?.waste ? "Treats" : "Used by"}${users ? ` · ${users.count}` : ""}` },
     alternatives && !target.direct && { id: "alternatives", label: `Alternatives · ${alternatives.count}` },
@@ -4703,8 +4765,8 @@ function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsByI
             <button role="tab" aria-selected=${t.id === shown} class=${t.id === shown ? "active" : ""}
               onClick=${() => setTab(t.id)}>${t.label}</button>`)}
         </div>`}
-        ${docked && html`<div class="docked-tree" style=${{ display: shown === "exchanges" ? "" : "none" }}>${treeSlot}</div>`}
-        <div class="info-body" ref=${body} style=${docked && shown === "exchanges" ? { display: "none" } : null}>
+        ${docked && html`<div class="docked-tree" style=${{ display: shown === "explore" ? "" : "none" }}>${treeSlot}</div>`}
+        <div class="info-body" ref=${body} style=${docked && shown === "explore" ? { display: "none" } : null}>
           ${shown === "tree" && html`
             <section>
               <h4>${row ? "In this tree" : "Exchange"}</h4>
@@ -4725,9 +4787,16 @@ function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsByI
                 <p class="text muted">No comment or uncertainty recorded for this exchange.</p>`}
             </section>`}
           ${exchanges?.available && !docked && html`
-            <${FUView} key=${target.index} id=${`exchanges-${target.index}`} info=${model} visible=${shown === "exchanges"}
+            <${FUView} key=${target.index} id=${`exchanges-${target.index}`} info=${model} visible=${shown === "explore"}
               initial=${{ root: base, inherit: { method, chartMethods: [], cutoff: 500, cutoffBasis: "top", rules: [] } }}
               embedded=${{ method, onInfo: follow, onUse: useAsRoot, keys: explorerKeys }} onSave=${() => {}} onTitle=${() => {}} />`}
+          ${shown === "exchanges" && info && exchanges && html`
+            <section>
+              <${ProcessExchanges} index=${target.index} info=${info} exchanges=${exchanges} locked=${locked}
+                onOpen=${(r, e) => (r.kind === "flow" ? follow({ flow: r.index }, e) : openActivity(r.index, e))}
+                onExchange=${(r, e) => (r.kind === "flow" ? follow({ flow: r.index, activities: [target.index], exchange: true }, e) : openExchange(r.index, base, e))}
+                onUse=${useAsRoot} />
+            </section>`}
           ${shown === "characterisation" && info && html`
             <section>
               ${!characterised ? html`<${Waiting} text="Reading its impacts…" />` : html`
@@ -4764,9 +4833,10 @@ function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsByI
           ${shown === "information" && info && html`
           <section>
             <table class="kv">
-              <tr><th>Product</th><td>${info.reference_product ?? "–"}${info.unit && html` <span class="muted">· ${unit(info.unit)}</span>`}</td></tr>
+              <tr><th>Product</th><td>${info.reference_product ?? "–"}</td></tr>
+              <tr><th>Unit</th><td title="The unit of its reference product and what it measures">${unitWithQuantity(info.unit)}</td></tr>
               <tr><th>Activity</th><td>${info.name}</td></tr>
-              <tr><th>Location</th><td>${info.location ? html`<span class="loc-chip">${info.location}</span>` : "–"}</td></tr>
+              <tr><th>Location</th><td>${info.location ? `${info.location}${info.location_name ? ` · ${info.location_name}` : ""}` : "–"}</td></tr>
               ${info.activity_type && html`<tr><th>Activity type</th><td title="Market (a mix of the suppliers of a product), production, treatment…">${info.activity_type}</td></tr>`}
               ${info.multifunctional && html`<tr><th>Products</th><td>Multifunctional: it has more than one product</td></tr>`}
               ${(d.start_date || d.end_date) && html`<tr><th>Time period</th><td>${d.start_date ?? "?"} – ${d.end_date ?? "?"}</td></tr>`}
@@ -5851,8 +5921,17 @@ const QUANTITIES = {
   kilogram: "Mass", "kilo becquerel": "Radioactivity", "square meter": "Area", "square meter-year": "Land occupation",
   "cubic meter": "Volume", "standard cubic meter": "Volume", "cubic meter-year": "Volume × time", litre: "Volume",
   megajoule: "Energy", "kilowatt hour": "Energy", hectare: "Area", meter: "Length", "meter-year": "Length × time",
-  "kilogram day": "Mass × time", hour: "Time", unit: "Items",
+  "kilogram day": "Mass × time", hour: "Time", unit: "Items", kilometer: "Length", "ton kilometer": "Transport",
+  "metric ton*km": "Transport", "person kilometer": "Transport", "vehicle kilometer": "Transport",
 };
+// A unit with what it measures, for the Information panel ("kg · mass", "m2·a · land occupation"): by its Brightway name
+// (kilogram) or its short form (kg)
+function unitWithQuantity(u) {
+  if (!u) return "–";
+  const full = QUANTITIES[u.toLowerCase()] ? u.toLowerCase() : Object.keys(UNITS).find((k) => UNITS[k] === u);
+  const q = full && QUANTITIES[full];
+  return q ? `${unit(u)} · ${q.toLowerCase()}` : unit(u);
+}
 const quantityLabel = (u) => {
   if (!u) return "No unit";
   const q = QUANTITIES[u.toLowerCase()];
@@ -7982,7 +8061,7 @@ const SHORTCUTS = [
   ["Anywhere", [
     ["Ctrl/⌘ + K", "Search a process in the top bar: Enter shows it in the tab, Ctrl/⌘ + Enter opens it in a new tab"],
     ["v", "View mode; when already in View mode, the Custom view panel (view options)"],
-    ["e", "Edit mode (a Brightway-built database); when already in Edit mode, open the form of the selected process, as below"],
+    ["e", "Edit mode (a Brightway-built database; also the Edit button of a process's Exchanges panel); when already in Edit mode, open the form of the selected process, as below"],
     ["c", "Compare mode"],
     ["s", "Search a process in the top bar (as Ctrl/⌘ + K)"],
     ["Ctrl/⌘ + ←  →", "Hide or show the left panel (processes, view, methods, groups) / the right panel"],
@@ -8273,7 +8352,10 @@ function App() {
       .catch(() => { /* not a Brightway process: nothing to edit */ });
     return () => { live = false; };
   }, [editing, origin?.folder, origin?.project, focusedRoot?.index, pendingView.locked.join("|")]);
-  const editor = { editing, origin, pending, locked: pendingView.locked, stale, stage, openForm: setDatasetOpen };
+  // ``setMode`` and ``enterEdit``: the Edit button of a process card's Exchanges panel (Edit mode for the whole app, the
+  // side panel open as for the e key) and its Done editing (setMode("view"))
+  const editor = { editing, origin, pending, locked: pendingView.locked, stale, stage, openForm: setDatasetOpen, setMode,
+    enterEdit: () => { if (!origin) return; setMode("edit"); setSideOpen(true); } };
   const persist = () => current.current.layout && saveWorkspace({ layout: current.current.layout, focus: current.current.focus, tabs: states.current });
   useEffect(persist, [layout, focus]);
 
@@ -8497,12 +8579,9 @@ function App() {
       ${databases && html`
         <span class="mode-switch" role="group" aria-label="Mode">
           <button class=${`has-key ${!editing && !comparing ? "primary" : ""}`} onClick=${() => setMode("view")}
-            title="View (v): explore the results of the model built from the database"><${KeyedLabel} label="View" k="v" /></button>
+            title=${`View (v): explore the results of the model built from the database${editing ? "; leaves Edit mode (the staged changes are kept)" : ""}. Edit mode: the Edit button of a process's Exchanges panel, or e`}><${KeyedLabel} label="View" k="v" /></button>
           <button class=${`has-key ${comparing ? "primary" : ""}`} onClick=${() => setMode("compare")}
             title="Compare (c): the processes of several tabs: contribution by group, difference, impact categories"><${KeyedLabel} label="Compare" k="c" /></button>
-          <button class=${`has-key ${editing ? "primary" : ""}`} disabled=${!origin} onClick=${() => { setMode("edit"); setSideOpen(true); }}
-            title=${origin ? "Edit (e): change processes, staged then made together and the model built again" : "Open a database of a Brightway project to edit it"}>
-            <${KeyedLabel} label="Edit" k="e" />${pending.length ? ` (${pending.length} staged)` : ""}</button>
         </span>`}
       </div>
     </header>

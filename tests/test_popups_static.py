@@ -41,6 +41,38 @@ def test_right_click_on_a_tree_flow_row_opens_its_popup_not_a_menu():
     assert "flowMenu" not in body("FUView")
 
 
+def test_a_process_card_has_explore_then_exchanges():
+    # The tree (a tab) and the explorer (a pop-up) are the Explore panel; the dataset's exchanges come second
+    info = body("InfoPopup")
+    assert 'label: "Process" }' not in info and "`Exchanges · ${" in info
+    assert info.index('{ id: "explore", label: "Explore" }') < info.index('{ id: "exchanges", label:')
+    assert "<${ProcessExchanges}" in info
+
+
+def test_the_exchanges_panel_follows_the_sections_of_the_process_form():
+    panel = body("ProcessExchanges")
+    assert "<${PopupList}" in panel and "sections=${sections}" in panel
+    assert 'const EXCHANGE_SECTIONS = [["product", "Products"], ...DATASET_SECTIONS' in APP
+    # amounts editable in place in Edit mode, as in the exchange pop-up; Edit mode entered from here
+    assert "patchExchange(r.input, r.amount, t)" in panel and "ctx.enterEdit()" in panel
+    assert "Done editing" in panel and "Edit process…" in panel
+
+
+def test_edit_mode_is_entered_from_the_card_not_the_top_bar():
+    app = body("App")
+    switch = app[app.index('<span class="mode-switch"'):]
+    switch = switch[:switch.index("</span>")]
+    assert 'label="View"' in switch and 'label="Compare"' in switch and 'label="Edit"' not in switch
+    assert "openForm: setDatasetOpen, setMode," in app and "enterEdit: () =>" in app  # the card's buttons (EditorContext)
+    assert "Review and apply in Edit mode" in app  # the staged-changes warning still enters it
+
+
+def test_information_names_the_unit_and_the_location():
+    info = body("InfoPopup")
+    assert "unitWithQuantity(info.unit)" in info and "info.location_name" in info
+    assert '<tr><th>Location</th><td>${info.location ? html`<span class="loc-chip">' not in info
+
+
 @pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
 def test_app_js_parses(tmp_path):
     copy = tmp_path / "app.mjs"  # an ES module (its imports)
