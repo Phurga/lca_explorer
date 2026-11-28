@@ -400,3 +400,26 @@ def test_the_build_forms_tell_the_factors_library_methods_lose():
     coverage = body("LibraryCoverage")
     assert "are dropped" in coverage and "biosphere" in coverage
     assert "m.matched < m.factors" in body("MethodPicker")
+
+
+def test_the_sections_of_a_popup_list_fold_with_the_side_arrows():
+    # Exchanges (and any list with sections): a section's header is a stop of up/down, right unfolds it (unfolded: goes
+    # to its first row), left folds it; left on a row goes to its header; the shortcuts say so
+    src = body("PopupList")
+    assert 'class="list-section" ...${headerNav(section.key)}' in src
+    assert '"data-nav": true' in src and "sectionKeys(k)" in src
+    assert 'groups && (e.key === "ArrowLeft" || e.key === "ArrowRight")' in src and "go(headerOf(e.currentTarget))" in src
+    assert "fold their section" in APP.split("const SHORTCUTS")[1].split("];")[0]
+
+
+def test_used_by_expands_to_all_the_users_of_a_row():
+    # Below a row of Used by, every user, as on the first level: keeping only those of the tab's supply chain said
+    # "No activity uses it." of a process outside it (see test_used_by_lists_the_users_of_a_process_outside_...)
+    src = body("InfoPopup")
+    users_of = src[src.index("const usersOf"):src.index("const inChain")]
+    assert "Math.abs(c.flow) > 1e-12" not in users_of
+    assert "items: found.users, more: found.count - found.users.length" in users_of
+
+
+def test_the_alternatives_name_the_product_in_their_first_header():
+    assert 'label: `Processing ${alternatives?.product' in body("InfoPopup")

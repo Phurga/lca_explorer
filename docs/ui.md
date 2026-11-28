@@ -590,8 +590,11 @@ API in `src/lca_viewer/server.py`.
   hangs from; where a row does not use ←/→ they switch panel), Space opens the
   process's pop-up, **i** the pop-up of the exchange the row stands for, and **Enter**
   makes it the process of the tab (the pop-up closes), **Ctrl/⌘+Enter** the one of a new tab. Expanding an
-  exchange or an alternative lists its own inputs; expanding a user, the activities
-  using it. Esc or Space with no row selected closes the pop-up; Backspace goes back.
+  exchange or an alternative lists its own inputs; expanding a user, all the activities
+  using it, at every level as on the first (those of the tab's supply chain first, *In chain* telling them apart).
+  Decision: a row below another lists all its users, not only those of the tab's supply chain: keeping only those
+  (with a flow above 1e-12) said "No activity uses it." of a process outside the chain, or reached by a tiny flow,
+  that its own card shows used. Esc or Space with no row selected closes the pop-up; Backspace goes back.
   **Used by** (the activities consuming its product — or, for a waste
   treatment, generating the waste — with the amount per unit of their
   product and, largest first, the amount each takes in this functional
@@ -604,7 +607,8 @@ API in `src/lca_viewer/server.py`.
   its foot; *Pin* is an icon of its own beside it (see *Pop-up windows*). The explorer of the
   *Explore* panel shows the plain tree, whatever the options of the view are: no options of its own,
   no cut-off, no grouping.
-  **Alternatives** lists the other activities producing the same product
+  **Alternatives** lists the other activities producing the same product (its first column is headed *Processing
+  {product}*, the product of the card)
   with their cumulative impact per unit and its unit, lowest first, the current one on top whatever the order or
   the filter (rows like the others; below an expanded one, its inputs with their impact and share of it).
   **Exchanges** (second, after *Explore*, in a tab and in a pop-up; `ProcessExchanges`): the process's exchanges as its
@@ -740,7 +744,11 @@ API in `src/lca_viewer/server.py`.
   name is no link, its tooltip says what they do), numbers at the right with their unit in a column of their own,
   shares as bars with their percentage, foldable sections, and under it the empty state, how many rows the filters
   leave, *Show all*. The keys are those of the pop-ups' rows (↑/↓, Space: its pop-up, i: its exchange, Enter: used in
-  the tab, Ctrl/⌘+Enter: in a new tab). The *Exchanges* panel replaces the filter row by a columns menu
+  the tab, Ctrl/⌘+Enter: in a new tab). In a list with sections (*Exchanges*, a model's flows by substance…) the
+  section headers are rows of ↑/↓ too: → unfolds a section (on an unfolded one: goes to its first row), ← folds it,
+  Space or Enter toggles it, and ← on a row goes to its section's header; there ←/→ do not switch panel (↑ to the
+  panels' tabs, then ←/→, does). Decision: the headers take the keys of the expandable rows of *Used by*, so that a
+  long *Exchanges* folds from the keyboard as a tree does. The *Exchanges* panel replaces the filter row by a columns menu
   (`onHeaderMenu`). A list keeps a minimum
   width: in a narrow pane it scrolls rather than squeezing the names. Decision: the *Explore* panel stays the main
   view's own list (the tree), which the others follow in row height and number style.

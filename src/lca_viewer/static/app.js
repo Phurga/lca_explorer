@@ -4635,6 +4635,22 @@ function PopupList({ columns, rows, rowKey, rowClass, pinned, match, query, setQ
   const fold = (k) => { const next = new Set(folded); next.has(k) ? next.delete(k) : next.add(k); setFolded(next); };
   const click = (c) => c.sort !== false && setSort((s) => (s.key === c.key ? { key: c.key, desc: !s.desc } : { key: c.key, desc: c.kind === "num" || c.kind === "share" }));
   const [first, ...rest] = columns;
+  // A section's header is a stop of ↑/↓ (``popupKeys``): → unfolds it (unfolded: goes to its first row), ← folds it,
+  // Space or Enter toggles; ← on a row of a section goes to its header. ←/→ stop there (they would else switch panel)
+  const go = (to) => { to?.focus({ preventScroll: true }); to?.scrollIntoView({ block: "nearest" }); };
+  const headerOf = (tr) => { let h = tr.previousElementSibling; while (h && !h.matches("tr.list-section")) h = h.previousElementSibling; return h; };
+  const sectionKeys = (k) => (e) => {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const used = () => { e.preventDefault(); e.stopPropagation(); };
+    const open = !folded.has(k);
+    if (e.key === "ArrowRight") {
+      used();
+      if (!open) fold(k);
+      else { const next = e.currentTarget.nextElementSibling; if (next?.matches("[data-nav]:not(.list-section)")) go(next); }
+    } else if (e.key === "ArrowLeft") { used(); if (open) fold(k); }
+    else if (e.key === " " || e.key === "Enter") { used(); fold(k); }
+  };
+  const headerNav = (k) => ({ "data-nav": true, "data-section": k, tabindex: "-1", onKeyDown: sectionKeys(k) });
   const keys = (r) => (e) => {
     const inTab = (e.ctrlKey || e.metaKey) && !e.altKey && e.key === "Enter";  // Ctrl/⌘+Enter: in a new tab
     if ((e.ctrlKey || e.metaKey || e.altKey) && !inTab) return;
@@ -4642,6 +4658,7 @@ function PopupList({ columns, rows, rowKey, rowClass, pinned, match, query, setQ
     if (e.key === " " && onOpen) { used(); onOpen(r, e); }
     else if (e.key === "i" && onInfo && hasInfo(r)) { used(); onInfo(r, e); }
     else if (e.key === "Enter" && onUse) { used(); onUse(r, inTab); }
+    else if (groups && (e.key === "ArrowLeft" || e.key === "ArrowRight")) { used(); if (e.key === "ArrowLeft") go(headerOf(e.currentTarget)); }
   };
   const hint = rowHint(!!onOpen, !!onUse);
   const plainRow = (r) => html`
@@ -4679,7 +4696,7 @@ function PopupList({ columns, rows, rowKey, rowClass, pinned, match, query, setQ
           <tbody>
             ${top.map(row)}
             ${drawn.map(({ section, r }) => (section ? html`
-              <tr key=${`s:${section.key}`} class="list-section" onClick=${() => fold(section.key)} aria-expanded=${!folded.has(section.key)}>
+              <tr key=${`s:${section.key}`} class="list-section" ...${headerNav(section.key)} onClick=${() => fold(section.key)} aria-expanded=${!folded.has(section.key)}>
                 <td colspan=${section.cells ? 1 : columns.length}><span class="caret">${folded.has(section.key) ? "▸" : "▾"}</span> ${section.label}
                   <span class="muted"> · ${section.items.length} ${noun}${section.items.length === 1 ? "" : "s"}</span></td>
                 ${section.cells}
@@ -5463,12 +5480,10 @@ function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsByI
       return { items: inputs.slice(0, 15).map((e) => ({ ...e, of: of.cumulative_per_unit })), more: Math.max(0, inputs.length - 15) };
     });
   const usersOf = (item) => request(`/api/activity/${item.index}/users?method=${method}&limit=15${root ? `&root=${root.index}&amount=${amount}` : ""}`)
-    .then((found) => {
-      // Below a process, only the users in its supply chain (flows above solver noise); the users are
-      // listed largest flow first, so the ones beyond the limit are the rest of the chain
-      const items = found.users.filter((c) => !root || Math.abs(c.flow) > 1e-12);
-      return { items, more: root ? (found.users.length >= 15 ? Math.max(0, found.in_supply_chain - items.length) : 0) : found.count - found.users.length };
-    });
+    // Below a process, all its users, as on the first level (the server lists those of the tab's supply chain first,
+    // largest flow first; *In chain* tells them apart): keeping only those would say "No activity uses it." of a
+    // process outside the chain, which its own card shows used
+    .then((found) => ({ items: found.users, more: found.count - found.users.length }));
   // The lists of processes (used by, alternatives) are PopupLists whose rows expand (ProcessRow), with the same columns
   // (the process of the tab itself has no users in its own supply chain, but for loops and solver noise)
   const inChain = !!root && root.index !== target.index;
@@ -5510,7 +5525,8 @@ function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsByI
     chip: (a, depth) => (a.current && depth === 0 ? html` <span class="muted">current</span>` : ""), rowClass: (a, depth) => (a.current && depth === 0 ? "current" : ""),
     onOpen: (a, e) => openActivity(a.index, e), onExchange: (a, above, e) => openExchange(a.index, above, e), onUse: useAsRoot,
     columns: [
-      { key: "name", label: "Process", value: (a) => `${a.name} ${a.location}` },
+      { key: "name", label: `Processing ${alternatives?.product ?? info?.reference_product ?? "the product"}`, value: (a) => `${a.name} ${a.location}`,
+        title: "The activities making the same product, in the same unit (below an expanded one: its inputs)" },
       { key: "per_unit", label: "Impact", kind: "num", title: `Cumulative impact per unit of ${alternatives?.product ?? "the product"} (below an expanded one: of each input)`,
         value: (a, above, depth) => (depth ? a.impact || null : a.per_unit) },
       { key: "unit", label: "Unit", kind: "unit", width: 130, value: (a, above, depth) => `${methodInfo.unit} / ${unit(depth ? above?.unit : a.unit ?? alternatives?.unit)}` },
@@ -9197,6 +9213,7 @@ const SHORTCUTS = [
     ["← →", "Switch panel"],
     ["↓", "Enter the panel; then ↓ ↑ move between its rows, ↑ on the first goes back to the panels"],
     ["→ ←", "On a row of a list: expand, collapse (or go to the first child, the parent)"],
+    ["→ ←  Space", "Lists with sections (Exchanges: products, inputs, emissions…): the headers are rows too, → ← unfold and fold their section (→ on an unfolded one: its first row), Space or Enter toggles; ← on a row goes to its header"],
     ["Space  i  Enter  Ctrl/⌘ + Enter", "On a row of a list: as in the main list; Enter uses a process, flow or model in the tab where the tab can show it (a flow in a flow tab, a model in a model tab), else in a new tab"],
     ["Backspace", "Back to the previous pop-up"],
     ["Esc", "Close the pop-up (a pinned one only while the pointer is on it)"],
