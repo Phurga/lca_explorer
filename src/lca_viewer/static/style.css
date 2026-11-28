@@ -817,6 +817,34 @@ tr.form-row > td { padding: 0 0 4px; }
 table.factor-table th { text-align: left; font-weight: 600; font-size: 12px; padding: 3px 6px; color: var(--muted); }
 table.factor-table th.num { text-align: right; }
 table.factor-table td { font-size: 12px; padding: 2px 6px; }
+.paths-input { display: flex; flex-direction: column; gap: 4px; }
+.path-chip { display: flex; gap: 6px; align-items: center; font-size: 12px; padding: 1px 6px; background: var(--panel);
+  border: 1px solid var(--border); border-radius: 4px; align-self: flex-start; max-width: 100%; }
+.path-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.add-report .report-list { margin: 0 0 6px; padding-left: 18px; max-height: 200px; overflow: auto; font-size: 13px; }
+.add-report p { margin: 4px 0; }
+.project-form.add-report label.inline { flex-direction: row; gap: 6px; align-items: center; }
+.add-report .suffix-input { width: 90px; }
+/* Curate names: the library's names as a table of their parts, the bulk tools above it, the preview below */
+.curate-names h4 { display: flex; align-items: center; gap: 6px; }
+.curate-names h4 .close { margin-left: auto; font-size: 16px; }
+.curate-tools { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.curate-tool { display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: center; }
+.curate-tool input { width: 130px; }
+.curate-tool .sep-input { width: 40px; }
+.curate-names .row .method-filter { flex: 1; margin: 0; }
+.curate-list { max-height: 46vh; overflow: auto; border: 1px solid var(--border); border-radius: 6px; }
+table.curate-table { border-collapse: collapse; width: 100%; }
+table.curate-table th { text-align: left; font-weight: 600; font-size: 12px; padding: 3px 4px; color: var(--muted);
+  position: sticky; top: 0; background: var(--panel); z-index: 1; }
+table.curate-table td { padding: 1px 2px; }
+table.curate-table td input:not([type=checkbox]) { width: 100%; min-width: 80px; box-sizing: border-box; font-size: 12px; padding: 2px 4px; }
+table.curate-table td input.unit-input { min-width: 70px; }
+table.curate-table tr.edited td input:not([type=checkbox]) { border-color: var(--accent); }
+table.curate-table tr.problem td input:not([type=checkbox]) { border-color: var(--danger, #c0392b); }
+.curate-preview summary { cursor: pointer; font-size: 12px; }
+.curate-preview .method-tree { max-height: 30vh; margin-top: 4px; }
+.curate-preview .method-row.edited .name { color: var(--accent); }
 .library-csv { display: flex; flex-direction: column; gap: 6px; }
 .library-csv p { margin: 0; }
 .path-input { display: flex; gap: 6px; }

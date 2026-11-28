@@ -67,6 +67,20 @@ Changes on `dev`, not released yet.
   duplicates, deletes and exports a method as CSV. Building a database (and *Add impact methods*) offers the
   library's methods next to the project's, under the source *library*; a database built with a method edited since
   is shown as to rebuild. API under `/api/library/methods…`; see `docs/methods-library.md`.
+- **Methods library, several at once**: *Copy methods of a project…* picks many methods in one go (filter, folding
+  families, a family ticked at once) and *Import CSV files…* takes several files, and files of several methods (a
+  `method` column, or `source`, `family`, `impact category` and `indicator` columns, and a `method unit`); one method
+  per method found. A report lists what was added, what was skipped (a name the library has: added with a suffix, or
+  left out) and the rows of no flow. API: `/api/library/methods/copy` takes `methods` (a list) and returns
+  `{added, skipped}`; `/import` takes `paths` and returns `methods`, `skipped`, `unmatched`.
+- **Curate names** (methods library): copies and imports keep the names they come with (a copy no longer gets
+  *(copy)* after its family; an ecoinvent release first in its name is its source); a table of every library
+  method's name parts (source, family, category, indicator, more parts, unit) edits them in place or several at once
+  (set a part, find and replace, split a part in two, merge two parts), previews how the method lists will group
+  them, and applies them in one go (`POST /api/library/methods/names`). A library method may have a **source** of its
+  own: in a model it is named `["library/<source>", family, …]`, and the lists read "EF v3.1 ·
+  library/ecoinvent-3.12". A renamed method keeps its former names: databases built with it find it and are shown as
+  to rebuild.
 - The flow and process search of the dataset form (`NodePicker`) searches the words typed again, not only the
   filters.
 - **Row clicks, the same everywhere**: on a row of a process, a flow or a model, in the tree (list, tree view,

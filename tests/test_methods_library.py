@@ -120,7 +120,9 @@ def test_create_edit_duplicate_and_delete(project, client):
 def test_copy_from_a_project(project, client):
     folder = str(project)
     copy = client.post("/api/library/methods/copy", json={"folder": folder, "project": "toy", "method": list(GWP)}).json()
-    assert copy["name"] == ["toy (copy)", "gwp"] and copy["unit"] == "kg CO2-eq" and copy["description"] == "Toy GWP"
+    # Its own name (curated in the library afterwards); in a model, "library" first keeps it apart from the project's
+    assert copy["name"] == ["toy", "gwp"] and copy["source"] == "" and copy["model_name"] == ["library", "toy", "gwp"]
+    assert copy["unit"] == "kg CO2-eq" and copy["description"] == "Toy GWP"
     assert copy["origin"] == {"project": "toy", "method": ["toy", "gwp"]}
     factors = client.get(f"/api/library/methods/{copy['id']}").json()["factors"]
     assert sorted((f["code"], f["cf"], f["name"], f["unit"]) for f in factors) == [
@@ -131,6 +133,41 @@ def test_copy_from_a_project(project, client):
                                                           "name": ["Other", "gwp"]}).json()
     assert named["factors"] == 2
     assert client.post("/api/library/methods/copy", json={"folder": folder, "project": "toy", "method": ["no", "such"]}).status_code == 400
+
+
+def test_copy_several_methods_at_once(project, client):
+    import bw2data as bd
+
+    bd.Method(("toy", "methane")).register(unit="kg CH4")
+    bd.Method(("toy", "methane")).write([(("bio", "ch4"), 1.0)])
+    release = ("ecoinvent-3.10.1", "EF v3.1", "climate change", "GWP100")
+    bd.Method(release).register(unit="kg CO2-eq")
+    bd.Method(release).write([(("bio", "co2"), 1.0)])
+    folder = str(project)
+    body = {"folder": folder, "project": "toy", "methods": [list(GWP), ["toy", "methane"], list(release), ["no", "such"]]}
+    out = client.post("/api/library/methods/copy", json=body).json()
+    assert [m["model_name"] for m in out["added"]] == [
+        ["library", "toy", "gwp"], ["library", "toy", "methane"],
+        # A release is read as the source, as the method lists read it: the family stays EF v3.1
+        ["library/ecoinvent-3.10.1", "EF v3.1", "climate change", "GWP100"]]
+    assert out["added"][2]["name"] == ["EF v3.1", "climate change", "GWP100"] and out["added"][2]["source"] == "ecoinvent-3.10.1"
+    assert _method_family(out["added"][2]["model_name"]) == ("library/ecoinvent-3.10.1", "EF v3.1")
+    assert [(s["method"], s["taken"]) for s in out["skipped"]] == [(["no", "such"], False)]
+
+    # Again: the names are taken; skipped, then added renamed with a suffix (numbered while taken)
+    again = client.post("/api/library/methods/copy", json={**body, "methods": [list(GWP), ["toy", "methane"]]}).json()
+    assert again["added"] == [] and [s["reason"] for s in again["skipped"]] == ["the library has a method of this name"] * 2
+    assert all(s["taken"] for s in again["skipped"])
+    renamed = client.post("/api/library/methods/copy", json={**body, "methods": [s["method"] for s in again["skipped"]],
+                                                            "on_conflict": "rename"}).json()
+    assert [m["name"] for m in renamed["added"]] == [["toy", "gwp (copy)"], ["toy", "methane (copy)"]]
+    assert renamed["added"][0]["wanted"] == ["toy", "gwp"]
+    twice = client.post("/api/library/methods/copy", json={**body, "methods": [list(GWP)], "on_conflict": "rename"}).json()
+    assert twice["added"][0]["name"] == ["toy", "gwp (copy) 2"]
+    third = client.post("/api/library/methods/copy", json={**body, "methods": [list(GWP)], "on_conflict": "rename",
+                                                          "suffix": ""}).json()
+    assert third["added"][0]["name"] == ["toy", "gwp (2)"]
+    assert len(client.get("/api/library/methods").json()) == 7
 
 
 CSV = """Flow name;Compartment;Subcompartment;Unit;Factor
@@ -174,6 +211,93 @@ def test_csv_import_matches_the_flows_of_a_project(project, client, tmp_path):
     refused = client.post("/api/library/methods/import", json={"folder": folder, "project": "toy", "path": str(plain),
                                                               "name": ["None"]})
     assert refused.status_code == 400 and "No row" in refused.json()["detail"]
+
+
+MULTI = """method;method unit;flow;compartment;subcompartment;unit;factor
+EF v3.1 | climate change | GWP100;kg CO2-eq;Carbon dioxide, fossil;air;;kg;1
+EF v3.1 | climate change | GWP100;kg CO2-eq;Methane;air;urban air close to ground;kg;29.7
+EF v3.1 | water use;m3 world eq.;Water, river;natural resource;in water;m3;-1
+EF v3.1 | climate change | GWP100;kg CO2-eq;Dinitrogen monoxide;air;;kg;273
+Nothing here;kg;Dinitrogen monoxide;air;;kg;1
+;kg;Methane;air;;kg;1
+"""
+
+
+def test_csv_import_of_several_methods(project, client, tmp_path):
+    folder = str(project)
+    path = tmp_path / "multi.csv"
+    path.write_text(MULTI, encoding="utf-8")
+    body = {"folder": folder, "project": "toy", "paths": [str(path)], "unit": "kg"}
+    out = client.post("/api/library/methods/import", json=body).json()
+    assert [(m["name"], m["unit"], m["factors"]) for m in out["methods"]] == [
+        (["EF v3.1", "climate change", "GWP100"], "kg CO2-eq", 2), (["EF v3.1", "water use"], "m3 world eq.", 1)]
+    assert out["matched"] == 3
+    assert [(s["name"], s["taken"]) for s in out["skipped"]] == [(["Nothing here"], False)]
+    assert {(r["line"], r["method"]): r["reason"] for r in out["unmatched"]} == {
+        (7, ""): "no method name", (5, "EF v3.1 | climate change | GWP100"): "no flow of this name in these compartments",
+        (6, "Nothing here"): "no flow of this name in these compartments"}
+    assert all(r["file"] == "multi.csv" for r in out["unmatched"])
+
+    # Again: skipped as taken (the file is kept for that), then only those added, renamed
+    again = client.post("/api/library/methods/import", json=body).json()
+    taken = [s for s in again["skipped"] if s["taken"]]
+    assert again["methods"] == [] and len(taken) == 2 and path.exists()
+    renamed = client.post("/api/library/methods/import", json={
+        **body, "on_conflict": "rename", "only": [["library", *taken[0]["name"]]]}).json()
+    assert [m["name"] for m in renamed["methods"]] == [["EF v3.1", "climate change", "GWP100 (copy)"]]
+
+    # Columns of the parts, a source among them; several files at once, one method per file that names none
+    parts = tmp_path / "parts.csv"
+    parts.write_text('source,family,impact category,indicator,flow,compartment,unit,factor\n'
+                     'mine-1.0,Mine,climate,GWP,"Carbon dioxide, fossil",air,kg,2\n', encoding="utf-8")
+    plain = tmp_path / "upload-7.csv"
+    plain.write_text("name,compartment,subcompartment,unit,factor\nMethane,air,urban air close to ground,kg,25\n", encoding="utf-8")
+    out = client.post("/api/library/methods/import", json={"folder": folder, "project": "toy", "paths": [str(parts), str(plain)],
+                                                          "names": ["parts.csv", "My methane.csv"]}).json()
+    assert [m["model_name"] for m in out["methods"]] == [["library/mine-1.0", "Mine", "climate", "GWP"], ["library", "My methane"]]
+    assert out["methods"][1]["factors"] == 1
+
+
+def test_curate_names(project, client):
+    """Names curated in the library, several at once and all or none; a model built with a former name finds the
+    method again (see the build test: it is outdated)."""
+    made = [client.post("/api/library/methods", json={"name": name, "unit": "kg"}).json()
+            for name in (["EF_climate_GWP100"], ["EF_water"], ["Mine", "a"])]
+    one, two, three = (m["id"] for m in made)
+    out = client.post("/api/library/methods/names", json={"changes": [
+        {"id": one, "source": "ecoinvent-3.10.1", "name": ["EF", "climate", "GWP100"]},
+        {"id": two, "source": "", "name": ["EF", "water"], "unit": "m3"},
+        {"id": three, "name": ["Mine", "a"]}]}).json()  # unchanged: not written
+    assert [m["id"] for m in out["changed"]] == [one, two]
+    by_id = {m["id"]: m for m in out["methods"]}
+    assert by_id[one]["model_name"] == ["library/ecoinvent-3.10.1", "EF", "climate", "GWP100"] and by_id[two]["unit"] == "m3"
+    library = methods_library.Library(project / "data" / "methods")
+    assert library.find(["library", "EF_climate_GWP100"])["id"] == one  # its former name
+    assert library.get(one)["former_names"] == [["library", "EF_climate_GWP100"]]
+
+    # All or none: two methods of one name are refused, and nothing changes
+    refused = client.post("/api/library/methods/names", json={"changes": [
+        {"id": two, "name": ["Mine", "a"]}, {"id": one, "name": ["Other"]}]})
+    assert refused.status_code == 400 and "Two methods" in refused.json()["detail"]
+    assert library.get(one)["name"] == ["EF", "climate", "GWP100"]
+    # Two methods swap their names
+    swapped = client.post("/api/library/methods/names", json={"changes": [
+        {"id": two, "name": ["Mine", "a"]}, {"id": three, "name": ["EF", "water"]}]}).json()
+    assert {m["id"]: m["name"] for m in swapped["methods"]}[two] == ["Mine", "a"]
+    assert client.post("/api/library/methods/names", json={"changes": [{"id": "abcdef0123", "name": ["x"]}]}).status_code == 404
+    assert client.post("/api/library/methods/names", json={"changes": [{"id": one, "name": ["library", "x"]}]}).status_code == 400
+    # A source set on its own (the editor's request takes it too)
+    out = client.post(f"/api/library/methods/{one}", json={"source": "library/mine"}).json()
+    assert out["source"] == "mine" and out["model_name"][0] == "library/mine"
+
+
+def test_names_of_older_files_and_sources():
+    """Files written before the sources kept their former names as names in the library."""
+    method = {"name": ["New"], "former_names": [["Old", "x"]]}
+    assert methods_library._former(method) == [["library", "Old", "x"]]
+    assert methods_library.split_name(["ecoinvent-3.12", "EF v3.1", "acidification", "AE"]) == ("ecoinvent-3.12", ["EF v3.1", "acidification", "AE"])
+    assert methods_library.split_name(["ecoinvent-3.12", "x", "y"]) == ("", ["ecoinvent-3.12", "x", "y"])
+    assert methods_library.is_library(["library/ecoinvent-3.12", "EF v3.1"]) and not methods_library.is_library(["libraryx", "a"])
 
 
 def test_flows_found_by_code_in_another_biosphere():
@@ -230,7 +354,7 @@ def test_a_build_and_an_addition_with_library_methods(project, client):
 
     assert not state()["outdated"]
     client.post(f"/api/library/methods/{triple['id']}/factors", json={"set": [{"database": "bio", "code": "co2", "cf": 4}]})
-    client.post(f"/api/library/methods/{triple['id']}", json={"name": ["Mine", "co2 four times"]})
+    client.post("/api/library/methods/names", json={"changes": [{"id": triple["id"], "name": ["Mine", "co2 four times"]}]})
     assert state()["outdated"] == "methods of the library changed since the model was built"
     selected = client.get("/api/brightway/methods", params=params).json()["selected"]
     assert ["library", "Mine", "co2 four times"] in selected and ["library", "Mine", "co2 three times"] not in selected

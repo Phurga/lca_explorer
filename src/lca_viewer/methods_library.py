@@ -11,8 +11,10 @@ One JSON file per method in ``data/methods/``::
 
 A factor is keyed by its flow (database, code); its name, compartments and unit are kept to show it, and to find the
 flow in a project whose biosphere has other keys. A library method enters a model under the name
-``["library", *name]``: *library* is its source, as the release is the source of the methods that come with ecoinvent
-(``_method_family`` of the server, ``methodPath`` of the page). The server reads the projects' files directly (no
+``["library", *name]``, or ``["library/<source>", *name]`` when it has a source of its own (``"source"``, e.g. the
+release of the method it was copied from): *library* is its source, as the release is the source of the methods that
+come with ecoinvent (``_method_family`` of the server, ``methodPath`` of the page). ``former_names`` holds the names in
+a model it had before (older files: names in the library, of no source). The server reads the projects' files directly (no
 bw2data); a build gets the library methods it needs as a file of factors on node ids (:func:`build_entries`), which
 :func:`register_file` makes known to :func:`lca_viewer.brightway.method_factors` in the build process.
 """
@@ -22,6 +24,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import io
+import itertools
 import json
 import math
 import os
@@ -40,14 +43,32 @@ _RELEASE = re.compile(r"^[a-z]\w*-\d+(\.\d+)+$", re.IGNORECASE)  # the source of
 
 # ---------------------------------------------------------------- names
 
-def model_name(name) -> list[str]:
-    """The name of a library method in a model: its source first."""
-    return [SOURCE, *[str(part) for part in name]]
+def model_name(name, source: str = "") -> list[str]:
+    """The name of a library method in a model: its source first, "library" or "library/<source>"."""
+    return [f"{SOURCE}/{source}" if source else SOURCE, *[str(part) for part in name]]
+
+
+def model_name_of(method: dict) -> list[str]:
+    return model_name(method["name"], method.get("source") or "")
 
 
 def is_library(name) -> bool:
     """Whether a method name (in a model, a build) is that of a library method."""
-    return len(name) >= 2 and str(name[0]) == SOURCE
+    return len(name) >= 2 and (str(name[0]) == SOURCE or str(name[0]).startswith(SOURCE + "/"))
+
+
+def split_name(name) -> tuple[str, list[str]]:
+    """A method name read as the method lists read it (``methodPath``): a first part "<name>-<version>" (an ecoinvent
+    release) in a name of four parts or more is its source; the rest is family, category, indicator…"""
+    name = [str(part) for part in name]
+    if len(name) >= 4 and _RELEASE.match(name[0]):
+        return name[0], name[1:]
+    return "", name
+
+
+def _former(method: dict) -> list[list[str]]:
+    """The names in a model a method had before (older files kept its names in the library, of no source)."""
+    return [list(n) if is_library(n) else model_name(n) for n in method.get("former_names", [])]
 
 
 def clean_name(name) -> list[str]:
@@ -58,9 +79,21 @@ def clean_name(name) -> list[str]:
     parts = [p for p in parts if p]
     if not parts:
         raise ValueError("Give the method a name")
-    if parts[0] == SOURCE:
+    if parts[0] == SOURCE or parts[0].startswith(SOURCE + "/"):
         raise ValueError(f"A name cannot start with {SOURCE!r}: the source of the library's methods in a model")
     return parts
+
+
+def clean_source(source) -> str:
+    """A source given by the page, spaces tidied ("library" itself, or "library/" before it: left out)."""
+    source = re.sub(r"\s+", " ", str(source or "")).strip()
+    if source.startswith(SOURCE + "/"):
+        source = source[len(SOURCE) + 1:].strip()
+    return "" if source == SOURCE else source
+
+
+def label(name, source: str = "") -> str:
+    return " | ".join([*([source] if source else []), *name])
 
 
 def digest(method: dict) -> str:
@@ -134,22 +167,30 @@ class Library:
         return method
 
     def find(self, name) -> dict | None:
-        """The method of a name in a model (``["library", ...]``) or in the library; also by a name it had before."""
+        """The method of a name in a model (``["library", ...]``, ``["library/<source>", ...]``) or in the library (of
+        no source); also by a name it had before."""
         name = [str(p) for p in name]
-        if is_library(name):
-            name = name[1:]
+        if not is_library(name):
+            name = model_name(name)
         methods = self.all()
-        return (next((m for m in methods if m["name"] == name), None)
-                or next((m for m in methods if name in m.get("former_names", [])), None))
+        return (next((m for m in methods if model_name_of(m) == name), None)
+                or next((m for m in methods if name in _former(m)), None))
 
-    def _free(self, name: list[str], but: str | None = None) -> None:
-        if any(m["name"] == name and m["id"] != but for m in self.all()):
-            raise ValueError(f"The library has a method {' | '.join(name)!r} already: give another name")
+    def taken(self, but: str | None = None) -> set[tuple]:
+        """The names in a model of the library's methods (but one)."""
+        return {tuple(model_name_of(m)) for m in self.all() if m["id"] != but}
 
-    def create(self, name, unit: str = "", description: str = "", factors=(), origin: dict | None = None) -> dict:
+    def _free(self, name: list[str], source: str = "", but: str | None = None, taken: set | None = None) -> None:
+        if tuple(model_name(name, source)) in (self.taken(but) if taken is None else taken):
+            raise ValueError(f"The library has a method {label(name, source)!r} already: give another name")
+
+    def create(self, name, unit: str = "", description: str = "", factors=(), origin: dict | None = None,
+               source: str = "", taken: set | None = None) -> dict:
+        """A new method. ``taken``: the names in use (:meth:`taken`), given (and kept up to date) by a caller adding
+        several methods, so that the files are not all read again for each."""
         with self.lock:
-            name = clean_name(name)
-            self._free(name)
+            name, source = clean_name(name), clean_source(source)
+            self._free(name, source, taken=taken)
             merged: dict[tuple, dict] = {}
             for f in factors:
                 f = _factor(f)
@@ -158,26 +199,72 @@ class Library:
                     merged[key]["cf"] += f["cf"]
                 else:
                     merged[key] = f
-            return self._write({"format": FORMAT, "id": uuid.uuid4().hex[:10], "name": name, "unit": str(unit or "").strip(),
-                                "description": str(description or ""), "origin": origin, "former_names": [],
-                                "factors": list(merged.values())})
+            method = self._write({"format": FORMAT, "id": uuid.uuid4().hex[:10], "name": name, "source": source,
+                                  "unit": str(unit or "").strip(), "description": str(description or ""),
+                                  "origin": origin, "former_names": [], "factors": list(merged.values())})
+            if taken is not None:
+                taken.add(tuple(model_name_of(method)))
+            return method
 
-    def update(self, id: str, name=None, unit: str | None = None, description: str | None = None) -> dict:
+    @staticmethod
+    def _rename(method: dict, name: list[str], source: str) -> None:
+        """A method renamed: its former name in a model kept, so that a build made with it finds the method again
+        (and takes the new name); that build is outdated (:meth:`stale`)."""
+        old, new = model_name_of(method), model_name(name, source)
+        if old != new:
+            method["former_names"] = [*[n for n in _former(method) if n not in (old, new)], old]
+        method["name"], method["source"] = name, source
+
+    def update(self, id: str, name=None, unit: str | None = None, description: str | None = None,
+               source: str | None = None) -> dict:
         with self.lock:
             method = self.get(id)
-            if name is not None:
-                name = clean_name(name)
-                if name != method["name"]:
-                    self._free(name, but=id)
-                    # A build made with the former name finds the method again (and takes the new name)
-                    former = [n for n in method.get("former_names", []) if n != name]
-                    method["former_names"] = [*former, method["name"]]
-                    method["name"] = name
+            if name is not None or source is not None:
+                name = clean_name(name) if name is not None else method["name"]
+                source = clean_source(source) if source is not None else method.get("source") or ""
+                if model_name(name, source) != model_name_of(method):
+                    self._free(name, source, but=id)
+                self._rename(method, name, source)
             if unit is not None:
                 method["unit"] = str(unit).strip()
             if description is not None:
                 method["description"] = str(description)
             return self._write(method)
+
+    def rename_many(self, changes) -> list[dict]:
+        """Names (``name``, ``source``) and units of several methods changed at once (``[{"id", "name"?, "source"?,
+        "unit"?}]``): all or none, the names checked against the library as it will be (two methods may swap their
+        names). Returns the methods changed."""
+        with self.lock:
+            methods = {m["id"]: m for m in self.all()}
+            planned = {}
+            for change in changes:
+                id = str(change.get("id") or "")
+                if id not in methods:
+                    raise KeyError(id)
+                if id in planned:
+                    raise ValueError(f"Method {id} is changed twice")
+                m = methods[id]
+                name = clean_name(change["name"]) if change.get("name") is not None else m["name"]
+                source = clean_source(change["source"]) if change.get("source") is not None else m.get("source") or ""
+                unit = str(change["unit"]).strip() if change.get("unit") is not None else m["unit"]
+                planned[id] = (name, source, unit)
+            named: set[tuple] = set()
+            for id, m in methods.items():
+                name, source, _ = planned.get(id, (m["name"], m.get("source") or "", None))
+                key = tuple(model_name(name, source))
+                if key in named:
+                    raise ValueError(f"Two methods would be named {label(name, source)!r}: give them other names")
+                named.add(key)
+            changed = []
+            for id, (name, source, unit) in planned.items():
+                m = methods[id]
+                if (name, source, unit) == (m["name"], m.get("source") or "", m["unit"]):
+                    continue
+                self._rename(m, name, source)
+                m["unit"] = unit
+                changed.append(self._write(m))
+            return changed
 
     def set_factors(self, id: str, set_=(), remove=()) -> dict:
         """Change or add the factors ``set_`` (by their flow), then remove the flows ``remove`` ([database, code])."""
@@ -200,7 +287,7 @@ class Library:
     def duplicate(self, id: str, name) -> dict:
         method = self.get(id)
         return self.create(name, method["unit"], method.get("description", ""), method["factors"],
-                           {"copy_of": method["name"]})
+                           {"copy_of": method["name"]}, method.get("source") or "")
 
     def delete(self, id: str) -> None:
         with self.lock:
@@ -219,14 +306,15 @@ class Library:
             method = self.find(entry["name"])
             if method is None:
                 return f"{' | '.join(entry['name'][1:])} is no longer in the methods library"
-            if model_name(method["name"]) != entry["name"] or digest(method) != entry["library"]:
+            if model_name_of(method) != entry["name"] or digest(method) != entry["library"]:
                 return "methods of the library changed since the model was built"
         return None
 
 
 def summary(method: dict) -> dict:
     """A method as the library lists it (no factors)."""
-    return {"id": method["id"], "name": method["name"], "model_name": model_name(method["name"]), "unit": method["unit"],
+    return {"id": method["id"], "name": method["name"], "source": method.get("source") or "",
+            "model_name": model_name_of(method), "unit": method["unit"],
             "description": method.get("description", ""), "factors": len(method["factors"]), "origin": method.get("origin"),
             "modified": method.get("modified")}
 
@@ -331,22 +419,45 @@ def coverage(method: dict, base, project: str) -> dict:
 
 # ---------------------------------------------------------------- adding methods
 
-def copy_from_project(library: Library, base, project: str, method, name=None) -> dict:
-    """An editable copy of a method of a Brightway project, read from its files: its factors on the project's flows
-    (those of flows the project does not have are left out, and counted in ``origin``)."""
-    from .sources import _PlainUnpickler, project_dir
+def _resolve(name: list[str], source: str, taken: set, on_conflict: str, suffix: str) -> list[str] | None:
+    """The name a method added takes: its own when free; when the library has it already, None (``on_conflict``
+    "skip"), an error ("error"), or the name with ``suffix`` after its last part ("rename"), numbered while taken."""
+    if tuple(model_name(name, source)) not in taken:
+        return name
+    if on_conflict == "skip":
+        return None
+    if on_conflict != "rename":
+        raise ValueError(f"The library has a method {label(name, source)!r} already: give another name")
+    suffix = suffix.rstrip()
+    for k in itertools.count(1 if suffix else 2):
+        last = f"{name[-1]}{suffix}{f' {k}' if suffix and k > 1 else ''}" if suffix else f"{name[-1]} ({k})"
+        candidate = [*name[:-1], last.strip()]
+        if tuple(model_name(candidate, source)) not in taken:
+            return candidate
+    raise AssertionError  # pragma: no cover
 
-    method = [str(p) for p in method]
-    folder = project_dir(base, project)
+
+_TAKEN = "the library has a method of this name"
+
+
+def project_methods(base, project: str) -> list[tuple[list[str], dict]]:
+    """The impact methods of a project, read from its files (``methods.json``): their names and metadata."""
+    from .sources import project_dir
+
     try:
-        listed = json.loads((folder / "methods.json").read_text(encoding="utf-8"))
+        listed = json.loads((project_dir(base, project) / "methods.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         raise ValueError(f"Project {project!r} has no impact methods") from None
     pairs = listed.items() if isinstance(listed, dict) else [(m[0], m[1]) for m in listed if isinstance(m, list) and len(m) == 2]
-    meta = next((m for n, m in pairs if [str(p) for p in (n if isinstance(n, list) else [])] == method), None)
-    if meta is None:
-        raise ValueError(f"No method {' | '.join(method)!r} in project {project!r}")
-    path = folder / "intermediate" / f"{meta.get('abbreviation', '')}.pickle"
+    return [([str(p) for p in n], m) for n, m in pairs if isinstance(n, list) and isinstance(m, dict)]
+
+
+def _project_factors(base, project: str, method: list[str], meta: dict) -> tuple[list[dict], int]:
+    """The factors of a project's method on the project's flows (from ``intermediate/<abbreviation>.pickle``), and how
+    many are on flows the project does not have."""
+    from .sources import _PlainUnpickler, project_dir
+
+    path = project_dir(base, project) / "intermediate" / f"{meta.get('abbreviation', '')}.pickle"
     try:
         with open(path, "rb") as f:
             rows = _PlainUnpickler(f).load()
@@ -367,27 +478,84 @@ def copy_from_project(library: Library, base, project: str, method, name=None) -
             missing += 1
             continue
         factors.append({**{k: flow[k] for k in ("database", "code", "name", "categories", "unit")}, "cf": float(cf)})
-    if name is None:  # the family marked as a copy; the release (an ecoinvent source) left out
-        rest = method[1:] if len(method) >= 4 and _RELEASE.match(method[0]) else method
-        name = [f"{rest[0]} (copy)", *rest[1:]]
-    origin = {"project": project, "method": method, **({"left_out": missing} if missing else {})}
-    return library.create(name, meta.get("unit", ""), meta.get("description", ""), factors, origin)
+    return factors, missing
+
+
+def copy_methods(library: Library, base, project: str, methods, on_conflict: str = "skip", suffix: str = " (copy)",
+                 name=None, source=None) -> dict:
+    """Editable copies of methods of a Brightway project, read from its files: their factors on the project's flows
+    (those of flows the project does not have are left out, and counted in ``origin``). A copy keeps the method's
+    name as it is, its source read as the lists read it (:func:`split_name`: an ecoinvent release); in a model it is
+    under "library/<release>", apart from the project's. Its names are curated in the library afterwards
+    (:meth:`Library.rename_many`). ``name`` (and ``source``): the name of a single copy.
+
+    Returns ``{"added": [summary, with "wanted": the name taken when it was renamed], "skipped": [{"method",
+    "name", "source", "reason", "taken"}]}``."""
+    listed = dict((tuple(n), m) for n, m in project_methods(base, project))
+    added, skipped = [], []
+    with library.lock:
+        taken = library.taken()
+        for method in methods:
+            method = [str(p) for p in method]
+            own_source, own_name = split_name(method)
+            wanted_source = clean_source(source) if source is not None else own_source
+            wanted = clean_name(name) if name is not None else own_name
+            meta = listed.get(tuple(method))
+            if meta is None:
+                if on_conflict == "error":
+                    raise ValueError(f"No method {' | '.join(method)!r} in project {project!r}")
+                skipped.append({"method": method, "name": wanted, "source": wanted_source,
+                                "reason": f"no method of this name in {project}", "taken": False})
+                continue
+            final = _resolve(wanted, wanted_source, taken, on_conflict, suffix)
+            if final is None:
+                skipped.append({"method": method, "name": wanted, "source": wanted_source, "reason": _TAKEN, "taken": True})
+                continue
+            try:
+                factors, missing = _project_factors(base, project, method, meta)
+            except ValueError as e:
+                if on_conflict == "error":
+                    raise
+                skipped.append({"method": method, "name": wanted, "source": wanted_source, "reason": str(e), "taken": False})
+                continue
+            origin = {"project": project, "method": method, **({"left_out": missing} if missing else {})}
+            made = library.create(final, meta.get("unit", ""), meta.get("description", ""), factors, origin,
+                                  wanted_source, taken)
+            added.append({**summary(made), **({"wanted": wanted} if final != wanted else {})})
+    return {"added": added, "skipped": skipped}
+
+
+def copy_from_project(library: Library, base, project: str, method, name=None) -> dict:
+    """A copy of one method of a project (:func:`copy_methods`), an error when its name is taken."""
+    return library.get(copy_methods(library, base, project, [method], "error", name=name)["added"][0]["id"])
 
 
 _COLUMNS = {
     "name": ("name", "flow", "flow name", "substance", "elementary flow"),
     "compartment": ("compartment", "category", "categories"),
     "subcompartment": ("subcompartment", "sub-compartment", "sub compartment", "subcategory"),
-    "unit": ("unit",),
+    "unit": ("unit", "flow unit"),
     "cf": ("factor", "cf", "value", "characterisation factor", "characterization factor", "amount"),
     "database": ("database",),
     "code": ("code", "uuid", "key"),
+    # The method of each row, in a file of several: its whole name (parts separated by "|"), or its parts
+    "method": ("method", "method name", "impact method", "lcia method"),
+    "source": ("source", "method source"),
+    "family": ("family", "method family"),
+    "impact_category": ("impact category", "category"),
+    "indicator": ("indicator", "impact indicator"),
+    "method_unit": ("method unit", "impact unit", "indicator unit"),
 }
+_PARTS = ("family", "impact_category", "indicator")
 
 
 def parse_csv(text: str) -> tuple[list[dict], list[dict]]:
     """The factors of a CSV file (flow name, compartment, subcompartment, unit, factor; a header row naming them is
-    read, also with database and code columns, else this order), and the rows that could not be read."""
+    read, also with database and code columns, else this order), and the rows that could not be read.
+
+    A file of several methods names the method of each row in a ``method`` column (its parts separated by "|"), or
+    in ``source``, ``family``, ``impact category`` and ``indicator`` columns (``method unit``: its unit). Each factor
+    then has ``method``: ``(source, [parts])``; else ``None``."""
     text = text.lstrip("﻿")
     lines = [line for line in text.splitlines() if line.strip()]
     if not lines:
@@ -396,11 +564,12 @@ def parse_csv(text: str) -> tuple[list[dict], list[dict]]:
     delimiter = max([",", ";", "\t"], key=lambda d: sample.count(d))
     rows = list(csv.reader(io.StringIO("\n".join(lines)), delimiter=delimiter))
     head = [_text(c) for c in rows[0]]
-    columns = {}
-    for field, names in _COLUMNS.items():
-        at = next((k for k, c in enumerate(head) if c in names), None)
+    columns, used = {}, set()
+    for field, names in _COLUMNS.items():  # each column read once, the names of a field in the order above
+        at = next((head.index(n) for n in names if n in head and head.index(n) not in used), None)
         if at is not None:
             columns[field] = at
+            used.add(at)
     if "name" in columns and "cf" in columns:
         body, first = rows[1:], 2
     else:
@@ -409,12 +578,26 @@ def parse_csv(text: str) -> tuple[list[dict], list[dict]]:
             _number(rows[0][4])
         except (IndexError, ValueError):
             body, first = rows[1:], 2
+    if "impact_category" in columns and not any(f in columns for f in ("family", "indicator", "method")):
+        del columns["impact_category"]  # a "category" column alone: the compartment's other name, read above
+    named = "method" in columns or any(f in columns for f in _PARTS)
     factors, bad = [], []
     for line, row in enumerate(body, first):
         cell = lambda field: row[columns[field]].strip() if field in columns and columns[field] < len(row) else ""  # noqa: E731
         item = {"line": line, "name": cell("name"), "compartment": cell("compartment"),
                 "subcompartment": cell("subcompartment"), "unit": cell("unit"), "factor": cell("cf"),
-                "database": cell("database"), "code": cell("code")}
+                "database": cell("database"), "code": cell("code"), "method": None, "method_unit": cell("method_unit")}
+        if named:
+            parts = ([p.strip() for p in cell("method").split("|")] if "method" in columns
+                     else [cell(f) for f in _PARTS])
+            parts = [re.sub(r"\s+", " ", p) for p in parts if p]
+            source = cell("source")
+            if not source and "method" in columns:
+                source, parts = split_name(parts)
+            if not parts:
+                bad.append({**item, "reason": "no method name"})
+                continue
+            item["method"] = (source, parts)
         if not item["name"] and not item["code"]:
             bad.append({**item, "reason": "no flow name"})
             continue
@@ -441,19 +624,80 @@ def match_rows(rows: list[dict], base, project: str) -> tuple[list[dict], list[d
     return found, left
 
 
-def import_csv(library: Library, text: str, base, project: str, name=None, unit: str = "", description: str = "",
-               id: str | None = None, file: str = "") -> dict:
-    """A CSV file of factors matched to the flows of ``project``: a new method, or (``id``) factors set in one of the
-    library. Returns ``{"method", "matched", "unmatched"}`` (the rows of no flow, with the reason)."""
-    rows, bad = parse_csv(text)
-    found, left = match_rows(rows, base, project)
+def _shown(row: dict, file: str) -> dict:
+    """A row left out, as the page lists it: its file and method too."""
+    method = row.get("method")
+    return {**row, "file": file, "method": label(method[1], method[0]) if method else ""}
+
+
+def import_csv(library: Library, files, base, project: str, name=None, unit: str = "", description: str = "",
+               id: str | None = None, file: str = "", on_conflict: str = "skip", suffix: str = " (copy)",
+               only=None) -> dict:
+    """CSV files of factors matched to the flows of ``project``: one method per method named in a file (a ``method``
+    column, or its parts' columns), else one per file, named after the file (or ``name``, for a single file); or
+    (``id``) all their factors set in one method of the library. A method's name is taken as the file gives it; it is
+    curated in the library afterwards. ``files``: ``[(text, file name)]``, or the text of one file named ``file``.
+    ``only``: the names in a model (as read from the files) of the methods to add, the others passed over (to add,
+    renamed, those skipped before).
+
+    Returns ``{"methods": [summary, with "wanted" when renamed], "method": the first, "skipped": [{"method", "name",
+    "source", "file", "reason", "taken"}], "matched", "unmatched": [rows of no flow, with the reason, file, method]}``."""
+    if isinstance(files, str):
+        files = [(files, file)]
+    single = len(files) == 1
+    groups: dict[tuple, dict] = {}  # by the name in a model: the method's factors, from one file or several
+    unmatched, matched = [], 0
+    for text, filename in files:
+        try:
+            rows, bad = parse_csv(text)
+        except ValueError as e:
+            raise ValueError(f"{filename}: {e}" if filename else str(e)) from None
+        unmatched += [_shown(r, filename) for r in bad]
+        stem = Path(filename).stem.strip() or "Imported"
+        for r in rows:
+            if r["method"] is None:
+                source, parts = ("", clean_name(name)) if name is not None and single else ("", [re.sub(r"\s+", " ", stem)])
+            else:
+                source, parts = r["method"]
+            key = tuple(model_name(parts, source))
+            group = groups.setdefault(key, {"source": source, "name": parts, "rows": [], "files": [], "unit": ""})
+            group["rows"].append(r)
+            if filename not in group["files"]:
+                group["files"].append(filename)
+            group["unit"] = group["unit"] or r.get("method_unit", "")
+    if only is not None:
+        wanted = {tuple(str(p) for p in n) for n in only}
+        groups = {k: g for k, g in groups.items() if k in wanted}
     if id:
-        method = library.set_factors(id, found)
-    else:
-        if not found:
-            raise ValueError(f"No row of the file matches a flow of {project}" + (f" ({left[0]['reason']}…)" if left else ""))
-        method = library.create(name, unit, description, found, {"csv": file, "project": project})
-    return {"method": summary(method), "matched": len(found), "unmatched": bad + left}
+        found, left = match_rows([r for g in groups.values() for r in g["rows"]], base, project)
+        method = summary(library.set_factors(id, found))
+        return {"method": method, "methods": [method], "skipped": [], "matched": len(found),
+                "unmatched": unmatched + [_shown(r, "") for r in left]}
+    added, skipped = [], []
+    with library.lock:
+        taken = library.taken()
+        for group in groups.values():
+            found, left = match_rows(group["rows"], base, project)
+            unmatched += [_shown(r, ", ".join(group["files"])) for r in left]
+            entry = {"method": group["name"], "name": group["name"], "source": group["source"],
+                     "file": ", ".join(group["files"])}
+            if not found:
+                skipped.append({**entry, "reason": f"no row matches a flow of {project}"
+                                + (f" ({left[0]['reason']}…)" if left else ""), "taken": False})
+                continue
+            final = _resolve(group["name"], group["source"], taken, on_conflict, suffix)
+            if final is None:
+                skipped.append({**entry, "reason": _TAKEN, "taken": True})
+                continue
+            made = library.create(final, group["unit"] or unit, description, found,
+                                  {"csv": entry["file"], "project": project}, group["source"], taken)
+            matched += len(found)
+            added.append({**summary(made), **({"wanted": group["name"]} if final != group["name"] else {})})
+    if not added and not any(s["taken"] for s in skipped):
+        why = next((r["reason"] for r in unmatched if r.get("reason")), None)
+        raise ValueError(f"No row of the file matches a flow of {project}" + (f" ({why}…)" if why else ""))
+    return {"methods": added, "method": added[0] if added else None, "skipped": skipped, "matched": matched,
+            "unmatched": unmatched}
 
 
 def to_csv(method: dict) -> str:
@@ -482,7 +726,7 @@ def build_entries(library: Library, names, base, project: str) -> tuple[list[lis
         method = library.find(name)
         if method is None:
             continue
-        current = model_name(method["name"])
+        current = model_name_of(method)
         if current in out_names:
             continue
         if flows is None:
@@ -523,8 +767,13 @@ class NewMethod(BaseModel):
 
 class MethodChange(BaseModel):
     name: list[str] | None = None
+    source: str | None = None
     unit: str | None = None
     description: str | None = None
+
+class NameChanges(BaseModel):
+    changes: list[dict]
+    """``[{"id", "name"?, "source"?, "unit"?}]``, applied all at once (:meth:`Library.rename_many`)."""
 
 class FactorChanges(BaseModel):
     set: list[dict] = []
@@ -538,21 +787,36 @@ class Duplicate(BaseModel):
 class CopyRequest(BaseModel):
     folder: str
     project: str
-    method: list[str]
+    method: list[str] | None = None
+    """One method: the copy is returned (an error when its name is taken)."""
+    methods: list[list[str]] = []
+    """Several: ``{"added", "skipped"}`` is returned (:func:`copy_methods`)."""
     name: list[str] | None = None
-    """None: the family of the method, marked as a copy."""
+    """Of ``method``: None, its own name."""
+    on_conflict: str = "skip"
+    """Of ``methods``, when the library has a method of the name: "skip" it, or "rename" it with ``suffix``."""
+    suffix: str = " (copy)"
 
 class ImportRequest(BaseModel):
     folder: str
     project: str
     """The project whose elementary flows the rows are matched to."""
-    path: str
+    path: str = ""
+    paths: list[str] = []
+    """Several files (with ``path``, if given)."""
+    names: list[str] = []
+    """The names of the files of ``paths`` as chosen in the page (an uploaded file is renamed): a method of a file
+    that names none is named after its file."""
     name: list[str] | None = None
     unit: str = ""
+    """Of the methods whose file gives no unit (a ``method unit`` column)."""
     description: str = ""
     id: str | None = None
-    """Set the factors in this method of the library, instead of making a new one."""
-
+    """Set the factors in this method of the library, instead of making new ones."""
+    on_conflict: str = "skip"
+    suffix: str = " (copy)"
+    only: list[list[str]] | None = None
+    """The methods to add (their names in a model, as read from the files), the others passed over."""
 
 
 def router(library: Library, folder_of, uploaded=lambda path: None):
@@ -589,10 +853,15 @@ def router(library: Library, folder_of, uploaded=lambda path: None):
 
     @api.post("/copy")
     def copy_method(req: CopyRequest):
-        """An editable copy of a method of a Brightway project."""
+        """Editable copies of methods of a Brightway project, under their own names (curated afterwards): one
+        (``method``, its summary returned) or several (``methods``: ``{"added", "skipped"}``)."""
         folder = folder_of(req.folder)
         try:
-            return summary(copy_from_project(library, folder, req.project, req.method, req.name))
+            if req.method is not None:
+                return summary(copy_from_project(library, folder, req.project, req.method, req.name))
+            if req.on_conflict not in ("skip", "rename"):
+                raise ValueError(f"on_conflict: skip or rename, not {req.on_conflict!r}")
+            return copy_methods(library, folder, req.project, req.methods, req.on_conflict, req.suffix)
         except FileNotFoundError as e:
             raise HTTPException(404, str(e)) from None
         except ValueError as e:
@@ -600,26 +869,44 @@ def router(library: Library, folder_of, uploaded=lambda path: None):
 
     @api.post("/import")
     def import_method(req: ImportRequest):
-        """A CSV file of factors (flow name, compartment, subcompartment, unit, factor), matched to the elementary
-        flows of a project: a new method (or factors set in ``id``); the rows of no flow are listed."""
-        path = Path(req.path.strip().strip("'\"")).expanduser()
-        try:
-            raw = path.read_bytes()
-        except OSError as e:
-            raise HTTPException(404, f"Cannot read {path}: {e.strerror or e}") from None
-        try:
-            text = raw.decode("utf-8")
-        except UnicodeDecodeError:
-            text = raw.decode("cp1252", errors="replace")  # Excel's CSV on Windows
+        """CSV files of factors (flow name, compartment, subcompartment, unit, factor; a method column for files of
+        several methods), matched to the elementary flows of a project: one new method per method found (or factors
+        set in ``id``); the methods skipped and the rows of no flow are listed (:func:`import_csv`)."""
+        paths = [p for p in [req.path, *req.paths] if p.strip()]
+        if not paths:
+            raise HTTPException(400, "Give the CSV file")
+        named = ([""] if req.path.strip() else []) + list(req.names)
+        files, read = [], []
+        for k, given in enumerate(paths):
+            path = Path(given.strip().strip("'\"")).expanduser()
+            try:
+                raw = path.read_bytes()
+            except OSError as e:
+                raise HTTPException(404, f"Cannot read {path}: {e.strerror or e}") from None
+            try:
+                text = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                text = raw.decode("cp1252", errors="replace")  # Excel's CSV on Windows
+            files.append((text, (named[k] if k < len(named) else "") or path.name))
+            read.append(path)
         if req.id:
             found(req.id)
         try:
-            out = checked(import_csv, library, text, folder_of(req.folder), req.project, req.name, req.unit,
-                          req.description, req.id, path.name)
+            out = checked(import_csv, library, files, folder_of(req.folder), req.project, req.name, req.unit,
+                          req.description, req.id, on_conflict=req.on_conflict, suffix=req.suffix, only=req.only)
         except FileNotFoundError as e:
             raise HTTPException(404, str(e)) from None
-        uploaded(path)
+        if not any(s["taken"] for s in out["skipped"]):  # kept while methods skipped may be added renamed
+            for path in read:
+                uploaded(path)
         return out
+
+    @api.post("/names")
+    def rename_methods(req: NameChanges):
+        """Names (source, parts) and units of several methods changed at once, all or none (*Curate names*).
+        Databases built with a method renamed find it under its former name and are shown as to rebuild."""
+        changed = checked(library.rename_many, req.changes)
+        return {"changed": [summary(m) for m in changed], "methods": [summary(m) for m in library.all()]}
 
     @api.get("/{id}")
     def get_method(id: str, folder: str | None = None, project: str | None = None):
@@ -639,9 +926,9 @@ def router(library: Library, folder_of, uploaded=lambda path: None):
 
     @api.post("/{id}")
     def change_method(id: str, req: MethodChange):
-        """Rename a method, change its unit or its description."""
+        """Rename a method (its name, its source), change its unit or its description."""
         found(id)
-        return summary(checked(library.update, id, req.name, req.unit, req.description))
+        return summary(checked(library.update, id, req.name, req.unit, req.description, req.source))
 
     @api.post("/{id}/factors")
     def change_factors(id: str, req: FactorChanges):
