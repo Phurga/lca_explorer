@@ -162,7 +162,7 @@ def test_the_exchanges_panel_has_the_keys_of_the_popup_lists():
     plist = body("PopupList")
     # Enter: the process of the tab; Ctrl/⌘+Enter: of a new tab
     assert "onUse(r, inTab)" in plist and 'const inTab = (e.ctrlKey || e.metaKey) && !e.altKey && e.key === "Enter";' in plist
-    assert "onUse=${(r, inTab) => r.kind === \"process\" && onUse(r, inTab)}" in body("ProcessExchanges")
+    assert "onUse=${onUse}" in body("ProcessExchanges")  # processes and flows (Row clicks)
     # in a tab (a docked card): the card has the keys of the pop-ups on its panels, ↑ on the first row goes back to the
     # active panel tab, ↓ on the tabs enters the panel, and the tree leaves those keys to the card
     info = body("InfoPopup")

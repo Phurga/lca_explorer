@@ -8376,7 +8376,7 @@ function CompareBasis({ basis, setBasis, cut, setCut, none }) {
       <span class="view-group-label">Breakdown</span>
       <span class="segmented">
         ${[...(none ? [["none", "None", "Total only"]] : []), ["groups", "Rules", "By rule"], ["flows", "Flows", "By elementary flow"],
-          ["tree", "Custom view", "Rows of each tab's view"], ["activities", "Each content", "Own emissions and each input, first tier only"]].map(([k, label, hint]) => html`
+          ["tree", "Explore", "Rows of each tab's view"], ["activities", "Each content", "Own emissions and each input, first tier only"]].map(([k, label, hint]) => html`
           <button class=${basis === k ? "primary" : ""} onClick=${() => setBasis(k)} title=${hint}>${label}</button>`)}
       </span>
       ${(basis === "flows" || basis === "activities") && html`<${CutField} cut=${cut} setCut=${setCut} what="bars" />`}
@@ -8900,7 +8900,7 @@ function ComparisonView({ info, tabs, compare, setCompare }) {
         </div>
         ${(units.length > 1 || (substituted.length > 0 && basis !== "tree")) && html`<div class="compare-info">
           ${units.length > 1 && html`<p class="warning">The processes are in ${units.join(", ")}: compare them only if they deliver an equivalent function.</p>`}
-          ${substituted.length > 0 && basis !== "tree" && html`<p class="warning">Substitutions made in ${substituted.map((t) => labels[t.id]).join(", ")} are not applied here, only in the Custom view.</p>`}
+          ${substituted.length > 0 && basis !== "tree" && html`<p class="warning">Substitutions made in ${substituted.map((t) => labels[t.id]).join(", ")} are not applied here, only in the Explore view.</p>`}
         </div>`}
         <div class="panel">
           ${chosen.length < 2 ? html`<div class="empty">Tick at least two tabs to compare.</div>`
