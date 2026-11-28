@@ -328,8 +328,17 @@ console.log(JSON.stringify(out));
     ]
 
 
+def test_name_display_is_a_recipe_builder_with_a_default_button():
+    # No preset buttons any more: the recipe of processes and of flows, always, and Default
+    display = body("NameDisplay")
+    assert "<${RecipeEditor}" in display and "kinds=" not in display
+    assert "segmented" not in display and "PROCESS_NAMINGS" not in display and "FLOW_NAMINGS" not in display
+    assert "setNaming({ recipe: { ...DEFAULT_RECIPE } })" in display and ">Default</button>" in display
+    assert "Default</button>" not in body("RecipeEditor")
+
+
 @pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
-def test_names_default_to_the_product_and_migrate_the_old_preference():
+def test_names_default_to_the_product_and_migrate_the_old_presets():
     start = APP.index("const RECIPE_TOKENS")
     end = APP.index("\nfunction chartItems(")
     script = APP[start:end] + """
@@ -340,27 +349,54 @@ const loadPreference = (k, fallback) => (k in prefs ? prefs[k] : fallback);
 const market = { name: "market for electricity, high voltage", reference_product: "electricity, high voltage", location: "CH" };
 const out = {
   product: processNames(market),
-  activity: processNames(market, { ...DEFAULT_NAMING, process: "activity" }),
+  activity: processNames(market, { recipe: { ...DEFAULT_RECIPE, main: "{name}" } }),
+  legacyActivity: processNames(market, { process: "activity" }),
   view: viewNaming(DEFAULT_NAMING).naming,
-  full: viewNaming({ ...DEFAULT_NAMING, process: "activity" }).naming,
+  full: viewNaming({ recipe: { ...DEFAULT_RECIPE, main: "{name}" } }).naming,
+  legacyFull: viewNaming({ process: "activity", flow: "full" }).naming,
   flow: flowTitleNames({ name: "Carbon dioxide", place: "air, urban air" }),
-  short: flowTitleNames({ name: "Carbon dioxide", compartment: "air", subcompartment: "" }, { ...DEFAULT_NAMING, flow: "short" }),
+  bare: flowTitleNames({ name: "Carbon dioxide", compartment: "air", subcompartment: "" }),
+  short: flowTitleNames({ name: "Carbon dioxide", compartment: "air", subcompartment: "x" }, { recipe: { ...DEFAULT_RECIPE, flowSecondary: "" } }),
   fresh: namingOf(undefined),
 };
 prefs = { naming: "short" }; out.wasShort = namingOf(undefined);
 prefs = { naming: "custom", recipeMain: "{name}" }; out.wasCustom = namingOf(undefined);
 out.stored = namingOf({ process: "activity", flow: "nonsense" });
-console.log(JSON.stringify(out));
+out.storedCustom = namingOf({ process: "custom", flow: "custom", recipe: { main: "{name} ({unit})", flowSecondary: "{compartment}" } });
+out.storedPreset = namingOf({ process: "product", flow: "short", recipe: { main: "{name}" } });
+out.recipeOnly = namingOf({ recipe: { secondary: "{database}" } });
+console.log(JSON.stringify({ out, DEFAULT_RECIPE }));
 """
     import json
 
-    out = json.loads(run_node(script))
+    got = json.loads(run_node(script))
+    out, default = got["out"], got["DEFAULT_RECIPE"]
+    assert default == {"main": "{product}", "secondary": "{location}", "flowMain": "{substance}",
+                       "flowSecondary": "{compartment}, {subcompartment}"}
     assert out["product"] == {"main": "electricity, high voltage", "qual": "CH"}
-    assert out["activity"] == {"main": "market for electricity, high voltage", "qual": "CH"}
-    assert out["view"] == "custom" and out["full"] == "full"
+    assert out["activity"] == out["legacyActivity"] == {"main": "market for electricity, high voltage", "qual": "CH"}
+    assert out["view"] == "custom" and out["full"] == "full" and out["legacyFull"] == "full"
     assert out["flow"] == {"main": "Carbon dioxide", "qual": "air, urban air"}
+    assert out["bare"] == {"main": "Carbon dioxide", "qual": "air"}
     assert out["short"] == {"main": "Carbon dioxide", "qual": ""}
-    assert (out["fresh"]["process"], out["fresh"]["flow"]) == ("product", "full")
-    assert (out["wasShort"]["process"], out["wasShort"]["flow"]) == ("product", "short")
-    assert out["wasCustom"]["process"] == "custom" and out["wasCustom"]["recipe"]["main"] == "{name}"
-    assert (out["stored"]["process"], out["stored"]["flow"]) == ("activity", "full")
+    # the lens keeps the recipe alone
+    assert out["fresh"] == {"recipe": default}
+    assert out["wasShort"]["recipe"] == {**default, "flowSecondary": ""}
+    assert out["wasCustom"]["recipe"]["main"] == "{name}"
+    assert out["stored"] == {"recipe": {**default, "main": "{name}"}}
+    assert out["storedCustom"]["recipe"] == {**default, "main": "{name} ({unit})", "flowSecondary": "{compartment}"}
+    assert out["storedPreset"]["recipe"] == {**default, "flowSecondary": ""}
+    assert out["recipeOnly"]["recipe"] == {**default, "secondary": "{database}"}
+
+def test_a_copy_of_many_methods_goes_by_chunks_with_its_progress():
+    form = body("LibraryForm")
+    assert "copyInChunks(copyBody, picked)" in form and "COPY_CHUNK" in form and "<${CopyProgress}" in form
+    assert "stopped.current = true" in form
+
+
+def test_the_build_forms_tell_the_factors_library_methods_lose():
+    for name in ("BuildForm", "AddMethods"):
+        assert "<${LibraryCoverage}" in body(name)
+    coverage = body("LibraryCoverage")
+    assert "are dropped" in coverage and "biosphere" in coverage
+    assert "m.matched < m.factors" in body("MethodPicker")

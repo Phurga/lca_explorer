@@ -49,8 +49,10 @@ create datasets, add Agribalyse, run it on a shared server, set it up by hand an
   group and merge (and *Group by product*) and collapses the tree. Both can be
   undone from the notice that appears.
 - **Group by product** (view options) applies to the tree and the chart. How processes and flows are
-  named (*Name display*, at the top of the *Processes* panel: by product or activity name, or your own format) is
-  one setting for every tab, card and chart.
+  named (*Name display*, at the top of the *Processes* panel: a main part and a grey part for processes and for
+  flows, built from tokens such as `{product}`, `{name}`, `{location}`, `{substance}`; *Default* names a process by
+  its reference product, the location in grey, and a flow by its substance, the compartments in grey) is one setting
+  for every tab, card and chart.
 - **Save ▾**: download the view as a file; the arrow menu loads a saved view
   back (or copies it as JSON).
 - The *Explore* chart of the side panel shows exactly the rows visible in the tree:
@@ -153,9 +155,11 @@ with its arrow) keeps impact methods of your own, in the app's `data/methods`
 folder rather than in a Brightway project, so one method serves the databases
 of all your projects. Its **+** adds one:
 
-- **Copy a method of a project**: pick the project and the method; the copy is
-  named after it with *(copy)* after the family (change the name if you like),
-  and its factors can then be edited.
+- **Copy methods of a project**: pick the project and tick the methods (a
+  family at once, or *All*); each copy keeps its method's name, and its factors
+  can then be edited. Copying all the methods of an ecoinvent release (some 600)
+  takes about 20 seconds: a bar shows the progress, and *Stop* keeps those
+  copied so far.
 - **New empty method**: give its name (family, category, indicator: as many
   parts as you need) and unit, then add factors in the editor.
 - **Import a CSV file** of factors, one per row: flow name, compartment,
@@ -180,6 +184,38 @@ its source. A factor applies to the flow of the same database and code in the
 project, else of the same code (ecoinvent's flows keep their codes from one
 version to the next), else of the same name and compartments. After you edit a
 method, the databases built with it are shown as to rebuild in *Projects*.
+
+**Methods of another ecoinvent release.** A characterisation factor belongs to
+one elementary flow (one row of the biosphere database, keyed by its code, the
+UUID ecoinvent gives it). ecoinvent publishes its methods for each release, on
+that release's list of elementary flows, and the list changes between
+releases: flows are added, and some are renamed, split or removed. A library
+method copied from one release and used to build a database of another keeps
+the factors whose flow it finds there (by code, else by name and compartments)
+and drops the others. The build form says so for the library methods you tick:
+how many factors find a flow of the project, how many are dropped, and which
+methods lose some (each such method also shows *matched/total factors* in the
+list).
+
+- A dropped factor of a flow the older biosphere does not have changes nothing:
+  no exchange of the database can use that flow. This is most of what an older
+  database drops (e.g. ecoinvent 3.12's methods on a 3.9.1 project: about 60% of
+  the factors are dropped, almost all for substances added since).
+- A flow that the older release has under another name or compartment loses its
+  factor, and its impact with it. Measured on these projects: from 3.11 to 3.12
+  no flow changed, from 3.10.1 to 3.12 two; but 3.10 removed the *lower
+  stratosphere + upper troposphere* air compartment and renamed the ore-grade
+  resource flows (*Copper, 0.52% in sulfide…*), so a 3.12 method on a 3.9.1 (or
+  3.8) database misses about 10% of the factors that release's own method has
+  there (aircraft emissions at altitude, metal resources).
+- Factor values change between releases too (a few hundred of 600 methods
+  between 3.11 and 3.12).
+
+So a recent method bundle on an older database is fine for neighbouring
+releases (3.10 to 3.12), and loses impacts on 3.9 and older. For an older
+database, prefer the methods of its own release (those of its project, or
+copied from a project of that release); copy a newer method to compare, or for
+a method the older release lacks.
 
 ## Creating a dataset
 

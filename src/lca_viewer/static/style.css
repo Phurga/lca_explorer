@@ -1139,5 +1139,8 @@ textarea.editing { width: 100%; box-sizing: border-box; }
 .name-display .recipe-field { min-width: 0; flex-basis: 100%; }
 .name-display .recipe .recipe-kind { width: auto; flex-basis: 100%; }
 .name-display .example-main { color: var(--text); }
+.name-display .name-display-foot { justify-content: space-between; align-items: baseline; flex-wrap: nowrap; }
+.name-display .name-display-foot .note { margin: 0; min-width: 0; }
+.name-display .name-display-foot button { flex: none; }
 /* The compare mark of a tab: a method's box (.method-mark), ✓ compared, ★ the baseline */
 .compare-tab .compare-mark { margin-right: 1px; }

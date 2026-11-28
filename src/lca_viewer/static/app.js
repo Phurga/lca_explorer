@@ -5704,9 +5704,9 @@ const RECIPE_TOKENS = {
 };
 // Elementary flows have their own tokens and recipe
 const FLOW_RECIPE_TOKENS = { substance: "name", compartment: "compartment", subcompartment: "subcompartment" };
-// Custom names: a main part (normal text) and a secondary part (grey), for processes
-// and for elementary flows
-const DEFAULT_RECIPE = { main: "{product}", secondary: "{location}", flowMain: "{substance}", flowSecondary: "{compartment}" };
+// Names: a main part (normal text) and a secondary part (grey), for processes and for elementary flows. The default:
+// a process by its reference product, its location in grey; a flow by its substance, its compartments in grey
+const DEFAULT_RECIPE = { main: "{product}", secondary: "{location}", flowMain: "{substance}", flowSecondary: "{compartment}, {subcompartment}" };
 
 function joinValues(values, limit = 3) {
   const unique = [...new Set(values.filter(Boolean))];
@@ -5737,43 +5737,38 @@ function flowNames(flow, naming, recipe) {
 // ---------------------------------------------------------------- name display of processes and flows
 // How processes and flows are named everywhere (the tree, the Sankey, the charts, the pop-ups, the tab titles, the
 // Processes panel and Compare mode): the *Name display* of the Processes panel, one setting of the workspace kept in the
-// lens, not per tab. A format for the processes and one for the flows, each a preset or the custom recipe (a main part,
-// and a secondary part in grey, with the tokens of RECIPE_TOKENS and FLOW_RECIPE_TOKENS).
-const PROCESS_NAMINGS = {
-  product: { label: "Product", hint: "The reference product, the location in grey", main: "{product}", secondary: "{location}" },
-  activity: { label: "Activity", hint: "The activity name, the location in grey (the full names of before)", main: "{name}", secondary: "{location}" },
-  custom: { label: "Custom", hint: "Your format, with tokens" },
-};
-const FLOW_NAMINGS = {
-  full: { label: "Full", hint: "The substance, its compartment in grey", flowMain: "{substance}", flowSecondary: "{compartment}, {subcompartment}" },
-  short: { label: "Substance", hint: "The substance alone", flowMain: "{substance}", flowSecondary: "" },
-  custom: { label: "Custom", hint: "Your format, with tokens" },
-};
-// The default: the product as the name, the location as the qualifier; flows with their compartment
-const DEFAULT_NAMING = { process: "product", flow: "full", recipe: { ...DEFAULT_RECIPE } };
+// lens, not per tab: ``{ recipe }``, a main part and a secondary part in grey for the processes (``main``,
+// ``secondary``, with the tokens of RECIPE_TOKENS) and for the flows (``flowMain``, ``flowSecondary``, with those of
+// FLOW_RECIPE_TOKENS). Its Default button sets DEFAULT_RECIPE.
+const DEFAULT_NAMING = { recipe: { ...DEFAULT_RECIPE } };
+// The formats it had before, as buttons: kept by name in a lens saved then ({ process, flow, recipe }), read as recipes
+const PROCESS_NAMINGS = { product: { main: "{product}", secondary: "{location}" }, activity: { main: "{name}", secondary: "{location}" } };
+const FLOW_NAMINGS = { full: { flowMain: "{substance}", flowSecondary: "{compartment}, {subcompartment}" }, short: { flowMain: "{substance}", flowSecondary: "" } };
+// The full names of before (``view.naming`` "full"): the activity name, the location; the flow's compartments
+const FULL_RECIPE = { ...PROCESS_NAMINGS.activity, ...FLOW_NAMINGS.full };
 let nameDisplay = DEFAULT_NAMING;  // the lens's, set by App
-// The recipe of a name display: the presets' parts, or the custom recipe's
+// The recipe of a name display (one of a lens saved with the former buttons: their parts in place of its own)
 function namingRecipe(n = nameDisplay) {
-  const own = { ...DEFAULT_RECIPE, ...(n.recipe || {}) };
-  const p = n.process !== "custom" && PROCESS_NAMINGS[n.process], f = n.flow !== "custom" && FLOW_NAMINGS[n.flow];
-  return { main: p ? p.main : own.main, secondary: p ? p.secondary : own.secondary,
-    flowMain: f ? f.flowMain : own.flowMain, flowSecondary: f ? f.flowSecondary : own.flowSecondary };
+  return { ...DEFAULT_RECIPE, ...(n?.recipe || {}), ...(PROCESS_NAMINGS[n?.process] || {}), ...(FLOW_NAMINGS[n?.flow] || {}) };
 }
+const sameRecipe = (a, b) => Object.keys(DEFAULT_RECIPE).every((k) => (a[k] || "") === (b[k] || ""));
 // ``view.naming`` and ``view.recipe`` as the readers of a view know them (the tree, the Sankey, the chart, the members
-// pop-ups): the full names of before for activity names with full flows, else the recipe of the name display
-const viewNaming = (n = nameDisplay) => ({ naming: n.process === "activity" && n.flow === "full" ? "full" : "custom", recipe: namingRecipe(n) });
-// The name display kept in the lens. Before it, each tab had a *Names* option (a preference): Short named processes by
-// their product and flows by their substance, Custom used its recipe; Full, the default then, takes the new default
+// pop-ups): the full names of before for the recipe of activity names with full flows, else the recipe
+const viewNaming = (n = nameDisplay) => {
+  const recipe = namingRecipe(n);
+  return { naming: sameRecipe(recipe, FULL_RECIPE) ? "full" : "custom", recipe };
+};
+// The name display kept in the lens, as a recipe. A lens saved with the former buttons ({ process, flow, recipe }: a
+// preset, or "custom" for the recipe) takes their recipe. Before the lens, each tab had a *Names* option (a
+// preference): Short named processes by their product and flows by their substance, Custom used its recipe; Full, the
+// default then, takes the default
 function namingOf(stored) {
-  if (stored && typeof stored === "object") {
-    return { process: stored.process in PROCESS_NAMINGS ? stored.process : DEFAULT_NAMING.process,
-      flow: stored.flow in FLOW_NAMINGS ? stored.flow : DEFAULT_NAMING.flow, recipe: { ...DEFAULT_RECIPE, ...(stored.recipe || {}) } };
-  }
+  if (stored && typeof stored === "object") return { recipe: namingRecipe(stored) };
   const recipe = Object.fromEntries(Object.entries(RECIPE_PREFERENCES).map(([part, key]) => [part, loadPreference(key, DEFAULT_RECIPE[part])]));
   const old = loadPreference("naming", "full");
-  if (old === "custom") return { process: "custom", flow: "custom", recipe };
-  if (old === "short") return { process: "product", flow: "short", recipe };
-  return { ...DEFAULT_NAMING, recipe };
+  if (old === "custom") return { recipe: { ...DEFAULT_RECIPE, ...recipe } };
+  if (old === "short") return { recipe: { ...DEFAULT_RECIPE, ...FLOW_NAMINGS.short } };
+  return { recipe: { ...DEFAULT_RECIPE } };
 }
 // A process (``meta``: name, reference_product, location… as the API gives them) named by the name display:
 // { main, qual }. A process with no product (a tab saved before titles kept it) goes by its activity name.
@@ -5942,7 +5937,8 @@ function textWidth(text) {
   return measureContext.measureText(text).width;
 }
 
-// ``kinds``: the recipes shown, of processes and of flows (the Name display shows those set to Custom)
+// The recipe of the names: its main and grey parts for processes and for flows (``kinds``), the tokens inserted in the
+// field last focused. The Name display (the Processes panel) shows it, with its Default button.
 function RecipeEditor({ recipe, setRecipe, example, kinds = ["process", "flow"] }) {
   const inputs = { main: useRef(null), secondary: useRef(null), flowMain: useRef(null), flowSecondary: useRef(null) };
   const [chosen, setTarget] = useState(kinds[0] === "flow" ? "flowMain" : "main");  // field receiving inserted tokens
@@ -5973,8 +5969,6 @@ function RecipeEditor({ recipe, setRecipe, example, kinds = ["process", "flow"] 
       </div>`}
       <div class="row tokens">Insert in ${target.startsWith("flow") ? "flow" : "process"} ${target.endsWith("ain") ? "main" : "secondary"}:
         ${Object.keys(target.startsWith("flow") ? FLOW_RECIPE_TOKENS : RECIPE_TOKENS).map((t) => html`<button class="token" onClick=${() => insert(t)}>{${t}}</button>`)}
-        <button onClick=${() => setRecipe({ ...recipe, ...pick(DEFAULT_RECIPE, kinds.flatMap((k) => (k === "flow" ? ["flowMain", "flowSecondary"] : ["main", "secondary"]))) })}
-          title="The default recipe">Default</button>
       </div>
       ${example && html`<p class="note">e.g. <span class="example-main">${example.main}</span>${example.qual && html` <span class="muted">${example.qual}</span>`}${" — when items are combined, their values are listed comma-separated"}</p>`}
     </div>`;
@@ -8726,31 +8720,25 @@ function compareSelection(tabs, compare) {
   return { labels, fullLabels, common, chosen, baseline: chosen.find((t) => t.id === compare.baseline) || chosen[0] };
 }
 
-// The *Name display* of processes and flows (the top of the Processes panel), as the Methods panel has for the
-// methods: a format for the processes and one for the flows, each a preset or Custom (the recipe, with tokens). One
-// setting of the workspace (the lens), which the tree, the Sankey, the charts, the pop-ups and the titles follow.
-// ``example``: a process to show it on (the first tab's)
+// The *Name display* of processes and flows (the top of the Processes panel): the recipe of their names, a main part and
+// a grey part for each, with tokens (RecipeEditor), and Default (a process by its reference product, its location in
+// grey; a flow by its substance, its compartments in grey). One setting of the workspace (the lens), which the tree,
+// the Sankey, the charts, the pop-ups and the titles follow. ``example``: a process to show it on (the first tab's)
 const SAMPLE_FLOW = { name: "Carbon dioxide, fossil", compartment: "air", subcompartment: "urban air close to ground" };
 function NameDisplay({ naming, setNaming, example }) {
-  const choice = (key, presets, label) => html`
-    <div class="view-group" role="group" aria-label=${`${label} names`}>
-      <span class="view-group-label">${label}</span>
-      <span class="segmented">
-        ${Object.entries(presets).map(([k, preset]) => html`
-          <button class=${naming[key] === k ? "primary" : ""} aria-pressed=${naming[key] === k} title=${preset.hint}
-            onClick=${() => setNaming({ ...naming, [key]: k })}>${preset.label}</button>`)}
-      </span>
-    </div>`;
-  const custom = [naming.process === "custom" && "process", naming.flow === "custom" && "flow"].filter(Boolean);
+  const recipe = namingRecipe(naming);
+  const isDefault = sameRecipe(recipe, DEFAULT_RECIPE);
   const shown = (names) => html`<span class="example-main">${names.main}</span>${names.qual && html` <span class="muted">${names.qual}</span>`}`;
   return html`
     <${Fold} id="namedisplay" title="Name display" open=${false}
-      actions=${html`<${InfoTip} text="How processes and flows are named in every tab: the tree, the Sankey, the charts, the pop-ups, the tab titles and this panel. A name you give a row (✎) still wins." label="About the names" />`}>
+      actions=${html`<${InfoTip} text="How processes and flows are named in every tab: the tree, the Sankey, the charts, the pop-ups, the tab titles and this panel. Each has a main part and a part in grey, made of tokens such as {product}, {name} (the activity name) or {location}; click a token to insert it in the field last clicked. A name you give a row (✎) still wins." label="About the names" />`}>
       <div class="name-display">
-        ${choice("process", PROCESS_NAMINGS, "Processes")}
-        ${choice("flow", FLOW_NAMINGS, "Flows")}
-        ${custom.length > 0 && html`<${RecipeEditor} recipe=${naming.recipe} setRecipe=${(recipe) => setNaming({ ...naming, recipe })} kinds=${custom} />`}
-        <p class="note">e.g. ${example && html`${shown(processNames(example, naming))} · `}${shown(flowTitleNames(SAMPLE_FLOW, naming))}</p>
+        <${RecipeEditor} recipe=${recipe} setRecipe=${(next) => setNaming({ recipe: { ...recipe, ...next } })} />
+        <div class="row name-display-foot">
+          <p class="note">e.g. ${example && html`${shown(processNames(example, { recipe }))} · `}${shown(flowTitleNames(SAMPLE_FLOW, { recipe }))}</p>
+          <button disabled=${isDefault} onClick=${() => setNaming({ recipe: { ...DEFAULT_RECIPE } })}
+            title="Processes by their reference product, the location in grey; flows by their substance, the compartments in grey">Default</button>
+        </div>
       </div>
     <//>`;
 }
