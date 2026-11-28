@@ -1134,3 +1134,5 @@ textarea.editing { width: 100%; box-sizing: border-box; }
 .name-display .example-main { color: var(--text); }
 /* The compare mark of a tab: a method's box (.method-mark), ✓ compared, ★ the baseline */
 .compare-tab .compare-mark { margin-right: 1px; }
+/* What a database opened before its build ended does not have yet (its exchanges) */
+.arriving { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
