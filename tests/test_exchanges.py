@@ -96,3 +96,22 @@ def test_activity_names_its_location(grouping_model):
     client = TestClient(create_app(grouping_model))
     names = [client.get(f"/api/activity/{i}").json()["location_name"] for i in (0, 1, 4)]
     assert names == ["Global", "France", "Europe"]
+
+
+def test_a_model_open_while_its_exchanges_are_read(linear_chain_model):
+    """A database is opened once its results are solved, before its build has read the exchanges: the tree, the
+    impacts and the pop-ups answer, and say the exchanges are coming rather than missing."""
+    linear_chain_model.exchanges_pending = True
+    client = TestClient(create_app(linear_chain_model))
+    info = client.get("/api/info").json()
+    assert info["pending"] == ["exchanges"] and info["pending_error"] is None
+    rows = client.post("/api/rows", json={"root": [2], "expanded": ["2"]}).json()["rows"]
+    assert len(rows) > 1 and all("comment" not in r for r in rows)
+    body = client.get("/api/activity/2/exchanges?method=0").json()
+    assert body["pending"] and not body["available"] and body["inputs"] == []
+    assert client.get("/api/activity/2").status_code == 200
+    flow = client.get("/api/flow/0", params={"activities": "2"}).json()
+    assert flow["exchanges_pending"] and flow["exchanges"][0]["exchanges"] == []
+    # Once read (``project_cache.attach_exchanges``), nothing is pending
+    linear_chain_model.exchanges_pending = False
+    assert client.get("/api/info").json()["pending"] == []

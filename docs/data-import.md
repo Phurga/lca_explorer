@@ -20,7 +20,9 @@ Every database goes through the same steps: into a Brightway project
 
 `lca-viewer serve` starts with no database (unless given `--model`); *Load
 database* lists what can be loaded (`/api/sources`, `/api/brightway`) and
-loads it in the background (`/api/load`, followed with `/api/jobs/<id>`).
+loads it in the background (`/api/load`, followed with `/api/jobs/<id>`). A build's job gets the database's `key`
+and `ready: true` while it still runs, once the database is open (its impacts computed); it ends when the build has
+read the exchanges.
 Each loaded model is mounted at `/db/<key>/` with the API of `create_app`;
 `/api/unload` removes it.
 

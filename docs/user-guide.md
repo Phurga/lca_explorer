@@ -78,8 +78,9 @@ The app starts with no database loaded. **Projects** (top bar, it was *Projects*
   run on this computer, as Brightway itself would. *Other folder…* takes any
   other Brightway data folder (the one with a `projects.db` file). Pick a database and click **Build and open**: the app
   builds the matrices it reads from the database and every database it uses
-  (one or two minutes for ecoinvent), keeps them in `data/cache/` and adds
-  them to *Built models*. A database changed in Brightway since then (or a
+  (about 15 s for ecoinvent or Agribalyse before it opens), keeps them in `data/cache/` and adds
+  them to *Built models*. The database opens as soon as its impacts are computed; the comments and uncertainty
+  of its exchanges come a few seconds later (*Reading exchanges…* in the top bar until then). A database changed in Brightway since then (or a
   database it links to, or the impact methods) is offered as *Rebuild and
   open*; an open database is closed first. The app does not watch the
   projects: an open database stays as it was built until it is rebuilt.

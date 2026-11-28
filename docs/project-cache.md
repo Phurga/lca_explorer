@@ -1,7 +1,8 @@
 # Project cache, storage menu and database graph
 
 Status (2026-11): phases 1 (database graph), 2 (storage menu), 3 (project cache, `project_cache.py`) and 4 (`U` not
-kept, `CF` sparse, `G` solved by chunks) **done**. Not done: segments shared in memory between two open databases,
+kept, `CF` sparse, `G` solved by chunks) **done**; a database opens before its exchanges are read, which processes
+of their own read (see [Opening before the exchanges](#decision-opening-before-the-exchanges)). Not done: segments shared in memory between two open databases,
 the method list in the project's ⚙ menu (it is chosen at a build), a smaller default method list. Replaces the cache
 of one model per database and the calculation of `G` at first open (see [data-import.md](data-import.md#loading-from-the-app)
 and [calculation-engine.md](calculation-engine.md#model-independence)). Measured: see [Measured](#measured).
@@ -131,8 +132,12 @@ data/cache/project-<hash>/              hash of (Brightway folder, project)
                     products (node id, column, amount)
     B.npz           its flows (node id, column, amount)
     G.npy G.json    its rows of G (its products × the project's methods), and what they were solved from
-    activities.pkl details.pkl exchanges.sqlite (rows: node ids)
+    activities.pkl details.pkl
+    exchanges-<k>.sqlite   the exchanges of a run of its activities (rows: node ids), one file per process that read them
+    exchanges.json  the runs and their files, written once all are read (none: the exchanges are not read yet)
 ```
+
+Segments built before the runs have one `exchanges.sqlite` (no `exchanges.json`): it is read as one run.
 
 `project.json`'s `format` is a number, increased when the files change meaning. A cache of another format
 is listed as *obsolete* in the storage menu, never opened, and replaced by the next build. Models made from files
@@ -166,16 +171,23 @@ Decided while building it:
    - **A segment it uses was rebuilt:** solve its `G` rows again (step 5 only). If a node id it links to no
      longer exists, its database changed too, so build it in full.
    - **Otherwise:** keep it.
-3. Read its matrices: as today (`bc.LCA` on one of its nodes, `load_lci_data`), keeping its own columns.
+3. Read its matrices: as today (`bc.LCA` on one of its nodes, `load_lci_data`), keeping its own columns, then its
+   activities and details.
    - This still reads the matrices of the databases it uses (6 s for ecoinvent). It is kept for now because the
      sign conventions and multifunctional allocation then stay Brightway's own.
    - Reading the segment's processed datapackage alone would be faster, but would redo what bw2calc does.
      Measure on a 300k-process project before deciding.
-4. Read its activities, details and exchanges, **streamed** to `exchanges.sqlite` in batches instead of held as a
-   list. The build's memory then stays flat. Its new elementary flows are appended to `flows.pkl`, and the
-   methods' factors on them to `methods.pkl`.
+   - The links between databases are checked here, from the matrix: the databases of the products in its columns.
+     When they differ from what step 1 assumed (`depends` out of date), the segments are grouped again and built
+     again, before any result is solved. They were checked from the exchanges, which are now read later (step 4).
+4. Start reading its exchanges (comments, uncertainty, pedigree), by **processes of their own**
+   (`_ExchangeReader`, `exchange_store.read_part`), while the build goes on: see
+   [Opening before the exchanges](#decision-opening-before-the-exchanges). Its new elementary flows are appended to
+   `flows.pkl`, and the methods' factors on them to `methods.pkl`.
 5. Solve its `G` rows: factorise `A_ss`, then `A_ssᵀ G_s = U_sᵀ − A_usᵀ G_u`, **in chunks of methods** written
    into a memory-mapped `G.npy`. The peak is then the size of `G_s` plus one chunk, not ~6.7 × `G` as today.
+6. Once the rows of `G` of X and the segments it uses are solved, log *Results ready* (`project_cache.READY`): X can
+   be opened. Then wait for the exchanges, and write each segment's `exchanges.json`.
 
 Products stored apart from their process (SimaPro imports) belong to the segment of the process that produces
 them, matched as `brightway._product_rows` does today.
@@ -189,6 +201,70 @@ them, matched as `brightway._product_rows` does today.
 4. The factorisation that `supply()` and flow-group analyses need is made on first use, one per segment.
 
 Later step: two databases of one project open at once share their common segments in memory.
+
+## Decision: opening before the exchanges
+
+Asked: show the process tree as early as possible, e.g. *exchanges and tree*, then *metadata*, then *impacts*.
+Measured (2026-11-28, see [Measured](#measured)), that order does not fit this engine. "Exchanges" are two different
+things here:
+
+| step of a first build | ecoinvent 3.12 | Agribalyse 3.1 | needed for |
+|---|---|---|---|
+| imports, database graph | 3.4 s | 8.8 s | |
+| matrices (`A`, `B`: the exchanges' amounts) | 2.6 s | 4.1 s | the tree |
+| activities (names, locations) and details | 2.1 s | 0.5 s | the tree, the pop-ups |
+| flows and methods | 0.3 s | 0.2 s | the impacts |
+| `G` (factorise, solve) | 4.8 s | 0.5 s | the impacts, the tree's order and sizes |
+| **the exchanges' metadata** (comments, uncertainty, pedigree) | **65.6 s** | **177.3 s** | the Exchanges panel, the comments of tree rows |
+| total | 79 s | 191 s | |
+
+The tree cannot be shown without its impacts: its rows are ordered and sized by them, and every view, chart and
+panel reads `G`. The impacts take 0.5 to 5 s; the slow part is the metadata of the exchanges (Agribalyse: 5.07M
+exchanges, 1 GB of pickled data in Brightway's SQLite file). So the order is:
+
+1. **Tree and impacts**: matrices, activities, methods, `G` (~14 s for either database). The build logs *Results
+   ready*; the server opens the database at that line (`create_library.run`, `on_ready`): the job gets its `key`
+   and `ready: true`, and the page opens it.
+2. **The exchanges' metadata**, read meanwhile by processes of their own. Until they are read, `/api/info` lists
+   `pending: ["exchanges"]`, the exchanges and flow endpoints answer `pending` (not "missing"), and the top bar shows
+   *Reading exchanges…*; then the model gets them (`project_cache.attach_exchanges`), and the page asks its tabs'
+   rows and the Exchanges panel again.
+
+How they are read: raw SQLite (`exchange_store.read_part`, 3 to 4× faster than Brightway's ORM: no row objects, no
+second join for the output, `data` unpickled as bw2data's `PickleField` does), by runs of consecutive activities
+with about as many exchanges each (counted from the index of the outputs, 0.2 to 1 s), one process per run, each
+writing its own SQLite file: no merge. Processes: as many as the machine has cores but two, at most 16
+(`exchange_workers`, `LCA_VIEWER_WORKERS` overrides it, 0: none), started with the `spawn` method and run below the
+normal priority, so that the solve and the app come first. Agribalyse's exchanges: 30 s with 4 processes, 23 s with
+8, 17 s with 16; SQLite reading does not scale much further. A segment of fewer than 50,000 exchanges is read in the
+build process, after its results (starting a process takes about a second). The numbers do not depend on it: a
+test builds the same project with and without processes and finds `A`, `B`, `G`, the activities and the exchanges
+equal.
+
+Not taken:
+- **Impacts last.** They are a few seconds of a first build and the tree needs them: a tree without impacts
+  would be a list of names in no order, and every endpoint would need a state without `G`.
+- **Exchanges read on demand from Brightway's file** (no copy in the cache, nothing to wait for). An open database
+  would then show the project's exchanges as they are now, not as they were when it was built: after an edit,
+  amounts in the Exchanges panel would disagree with the tree until the rebuild. The cache keeps what the model was
+  built from.
+- **One SQLite file merged from the runs.** Copying 5M rows into one file costs 10 to 15 s after the parallel part;
+  a model reads one run's file per activity anyway (`LCAModel._exchange_parts`: `(start, end, file)`). The comments,
+  stored once per file, repeat across files: ecoinvent's cache grew from 336 to 344 MB.
+
+A build stopped after *Results ready* (the app closed) leaves a database that opens without its exchanges
+(`status()["exchanges"]` false). The next opening builds it again for them alone (no matrix read, nothing solved),
+the database opening at once, if the project has not changed since: else it opens without them (they would be those
+of the changed project), and its rebuild reads them.
+
+Other costs of a build, cut on the way:
+- `A.npz` and `B.npz` at deflate level 1 (`_save_npz`): Agribalyse's `B.npz` in 0.7 s and 24 MB, against 2 s and
+  16 MB; read faster too.
+- The databases with processes, found with the index on `(database, code)` for the databases of the graph only,
+  not a scan of the whole `activitydataset` table (4.8 s on the 4.7 GB AESA project).
+
+And of opening a built database: `sources._methods_stamp` listed each method's file with a `stat` (5,054 for the
+projects here, 0.6 s), paid twice per opening; one `os.scandir` of the folder gives the same stamp in 0.05 s.
 
 ## Memory
 
@@ -318,3 +394,24 @@ this machine (a cold disk added 30 s once).
   join that maps the inputs to node ids costs some of it. Not looked into further.
 - The build's peak no longer grows with the exchanges (streamed) nor with `G` (solved by chunks into a
   memory-mapped file): it is that of `bc.LCA` reading the matrices.
+
+2026-11-28, results first and exchanges read by processes of their own (22 cores, 16 processes for the
+exchanges; `scripts/time_loading.py`). The methods of the user's caches: 30 for ecoinvent 3.12, 25 for Agribalyse
+3.1 (project `AESA_CC_sg_reunion`), each built alone into a scratch cache. *Open*: from `/api/load` to the first
+tree of a built database, through the app's API.
+
+| | before | after |
+|---|---|---|
+| ecoinvent 3.12: first build | 79 s (exchanges 65.6 s) | **10 to 14 s to open**, 11 to 15 s in all (16 processes; 13.7 and 17.9 s with 8) |
+| Agribalyse 3.1: first build | 191 s (exchanges 177.3 s) | **11.5 s to open**, 28 s in all (16 processes; 36 s with 8) |
+| ecoinvent 3.12: open a built database | 1.72 s | 0.41 s |
+| Agribalyse 3.1: open a built database | 1.85 s | 0.66 s |
+| build's peak memory (build process) | 0.57 / 0.80 GB | 0.57 / 0.79 GB |
+| ecoinvent 3.12 cache on disk | 336 MB | 344 MB |
+
+- Of what is left before the database opens: 3.4 s of imports (Brightway), 2.5 to 6 s of `bc.LCA` reading the
+  matrices, 1.4 s of activities (ecoinvent), 0.5 to 4 s of `G`.
+- With the processes reading the exchanges at the normal priority, ecoinvent's solve took 8.2 s instead of 3.9 s:
+  they run below it.
+- In the app (the page's *Build and open*), ecoinvent 3.12 showed its tree about 18 s after the click, Agribalyse
+  about 15 s, with *Reading exchanges…* in the top bar until the exchanges came.

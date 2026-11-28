@@ -163,13 +163,15 @@ def _g_ready(cache, info: dict, record: dict) -> bool:
 
 
 def status(cache, database: str, project: dict | None = None) -> dict:
-    """``{"built", "outdated", "solve"}`` of ``database`` in the project cache: whether its segment and those it uses
-    are there; what changed in the Brightway project since (``project`` as :func:`sources.brightway_projects`
-    lists it; None: not checked), or None; whether results are to be computed again (no reading from Brightway)."""
+    """``{"built", "outdated", "solve", "exchanges"}`` of ``database`` in the project cache: whether its segment and
+    those it uses are there; what changed in the Brightway project since (``project`` as
+    :func:`sources.brightway_projects` lists it; None: not checked), or None; whether results are to be computed again
+    (no reading from Brightway); whether the exchanges of its segments are read (a build stopped before reading them
+    leaves a database that opens without them: the next build reads them alone)."""
     info = read_project(cache)
     segments = closure(info, database) if info else []
     if not segments or not all((folder(cache, r) / "A.npz").exists() for r in segments):
-        return {"built": False, "outdated": None, "solve": False}
+        return {"built": False, "outdated": None, "solve": False, "exchanges": False}
     outdated = None
     if project is not None:
         modified = {d["name"]: d.get("modified") for d in project["databases"]}
@@ -187,7 +189,9 @@ def status(cache, database: str, project: dict | None = None) -> dict:
         if outdated is None and project.get("methods_stamp") and project["methods_stamp"] != info.get("methods_stamp"):
             outdated = "impact methods changed since the model was built"
     solve = not all(_g_ready(cache, info, r) for r in segments)
-    return {"built": True, "outdated": outdated or ("results to compute again" if solve else None), "solve": solve}
+    exchanges = all(exchange_parts(folder(cache, r), 0) is not None for r in segments)
+    return {"built": True, "outdated": outdated or ("results to compute again" if solve else None), "solve": solve,
+            "exchanges": exchanges}
 
 
 def users(info: dict, ids) -> list[dict]:
@@ -323,17 +327,32 @@ def load(cache, database: str) -> LCAModel:
                      unlinked=_model_unlinked(project_flows, project_methods, project_unlinked, kept))
     model._G = G
     model._details_paths = [folder(cache, r) / "details.pkl" for r in segments if (folder(cache, r) / "details.pkl").exists()]
-    if all((folder(cache, r) / "exchanges.sqlite").exists() for r in segments):
-        model._exchange_parts = [(int(s), folder(cache, r) / "exchanges.sqlite") for r, s in zip(segments, starts)]
-        _, product_ids, product_rows = _lookup(products, np.arange(n, dtype=np.int64))
-        flow_ids = project_flows["id"].to_numpy(np.int64)[kept]
-        _, flow_ids_sorted, flow_rows = _lookup(flow_ids, np.arange(len(kept), dtype=np.int64))
-        model._node_rows = (product_ids, product_rows, flow_ids_sorted, flow_rows)
+    _, product_ids, product_rows = _lookup(products, np.arange(n, dtype=np.int64))
+    flow_ids = project_flows["id"].to_numpy(np.int64)[kept]
+    _, flow_ids_sorted, flow_rows = _lookup(flow_ids, np.arange(len(kept), dtype=np.int64))
+    model._node_rows = (product_ids, product_rows, flow_ids_sorted, flow_rows)
     # What the model was put together from: the server tells from it when a segment was rebuilt since
     model.project_cache = {"cache": str(cache), "database": database,
                            "segments": {r["id"]: [r["version"], r.get("basis")] for r in segments},
-                           "folders": [str(folder(cache, r)) for r in segments]}
+                           "folders": [str(folder(cache, r)) for r in segments],
+                           "starts": [int(s) for s in starts]}
+    attach_exchanges(model)
     return model
+
+
+def attach_exchanges(model: LCAModel) -> bool:
+    """Give a model opened from a project cache the exchanges of its segments read so far (a model opened while its
+    build reads them gets them when it is done); returns whether it has those of all of them."""
+    origin = model.project_cache
+    parts, complete = [], True
+    for path, start, end in zip(origin["folders"], origin["starts"], [*origin["starts"][1:], model.size]):
+        found = exchange_parts(Path(path), end - start)
+        if found is None:
+            complete = False
+            continue
+        parts += [(start + a, start + b, file) for a, b, file in found]
+    model._exchange_parts = parts or None
+    return complete
 
 
 def method_columns(model: LCAModel, names: list[list[str]]) -> tuple[list[Method], np.ndarray, pd.DataFrame | None]:
@@ -418,9 +437,9 @@ def drop_results(cache, ids) -> None:
 
 def _database_graph(project_dir: Path, database: str, links: dict[str, set[str]]) -> dict[str, set[str]]:
     """database -> the databases with processes it takes inputs from, for ``database`` and those it uses, directly or
-    not. ``links``: those found in the exchanges of a database when its segment was built (and unchanged since);
-    for the others, Brightway's ``depends``, checked against the exchanges when they are read (a query of the
-    exchanges here would take 20 s for Agribalyse's 5M)."""
+    not. ``links``: those found in the matrix of a database when its segment was built (and unchanged since);
+    for the others, Brightway's ``depends``, checked against the matrix when it is read (a query of the exchanges
+    here would take 20 s for Agribalyse's 5M)."""
     import sqlite3
     from contextlib import closing
 
@@ -429,22 +448,30 @@ def _database_graph(project_dir: Path, database: str, links: dict[str, set[str]]
     from .sources import NON_PROCESS_TYPES
 
     path = project_dir / "lci" / "databases.db"
+    types = sorted(NON_PROCESS_TYPES)
+    marks = ", ".join("?" * len(types))
     with closing(sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)) as con:
-        marks = ", ".join("?" * len(NON_PROCESS_TYPES))
-        with_processes = {d for d, in con.execute(
-            f"SELECT DISTINCT database FROM activitydataset WHERE type IS NULL OR type NOT IN ({marks})",
-            sorted(NON_PROCESS_TYPES))}
-    uses: dict[str, set[str]] = {}
-    todo = [database]
-    while todo:
-        d = todo.pop()
-        if d in uses:
-            continue
-        found = links.get(d)
-        if found is None:
-            found = set((bd.databases[d] or {}).get("depends", [])) if d in bd.databases else set()
-        uses[d] = {u for u in found if u != d and u in with_processes}
-        todo.extend(uses[d])
+        known: dict[str, bool] = {}
+
+        def with_processes(d: str) -> bool:
+            # The index on (database, code) finds a process at once: no scan of the whole table (5 s on a 5 GB project)
+            if d not in known:
+                known[d] = bool(con.execute(
+                    f"SELECT EXISTS (SELECT 1 FROM activitydataset WHERE database = ? AND (type IS NULL OR type NOT IN "
+                    f"({marks})))", [d, *types]).fetchone()[0])
+            return known[d]
+
+        uses: dict[str, set[str]] = {}
+        todo = [database]
+        while todo:
+            d = todo.pop()
+            if d in uses:
+                continue
+            found = links.get(d)
+            if found is None:
+                found = set((bd.databases[d] or {}).get("depends", [])) if d in bd.databases else set()
+            uses[d] = {u for u in found if u != d and with_processes(u)}
+            todo.extend(uses[d])
     return uses
 
 
@@ -464,41 +491,122 @@ def _components(uses: dict[str, set[str]]) -> list[tuple[str, ...]]:
     return [tuple(sorted(g)) for g in groups.values()]
 
 
-def _segment_exchanges(databases, local: dict, products: set, flows: set, seen: dict):
-    """``(activity, type, row, data)`` of the exchanges of the segment's activities, streamed from the project:
-    ``activity`` its position in the segment, ``row`` the node id of the input (a product or a flow). ``seen``
-    gets, for each of its databases, the other databases they take inputs from (biosphere exchanges left out)."""
-    from bw2data.backends import ActivityDataset as AD
-    from bw2data.backends import ExchangeDataset as ED
-
-    from .brightway import _exchange_data
-
-    In, Out = AD.alias(), AD.alias()
-    query = (ED.select(ED.type, Out.id, In.id, ED.output_database, ED.input_database, ED.input_code, ED.data)
-             .join(Out, on=((Out.database == ED.output_database) & (Out.code == ED.output_code)))
-             .switch(ED).join(In, on=((In.database == ED.input_database) & (In.code == ED.input_code)))
-             .where(ED.output_database.in_(list(databases))))
-    for d in databases:
-        seen.setdefault(d, set())
-    for kind, out_id, in_id, out_db, in_db, in_code, data in query.tuples().iterator():
-        if kind != "biosphere" and in_db != out_db:
-            seen[out_db].add(in_db)
-        activity = local.get(out_id)
-        if activity is None or in_id not in (flows if kind == "biosphere" else products):
-            continue
-        # ``input``: what the exchange is linked to, to find it again in the project when it is edited
-        yield activity, kind, in_id, {**_exchange_data(data), "input": [in_db, in_code]}
+# Processes that read the exchanges of a build: None, as many as the machine has cores but two (the build process and
+# the app keep theirs), at most 16; 0: read in the build process. LCA_VIEWER_WORKERS (environment) overrides it.
+# Agribalyse's 5M exchanges: 30 s with 4, 23 s with 8, 17 s with 16 (reading SQLite: it does not scale further).
+EXCHANGE_WORKERS = None
+PARALLEL_EXCHANGES = 50_000  # a segment with fewer exchanges is read in the build process (a process takes 1 s to start)
+EXCHANGES = "exchanges.json"  # in a segment's folder: its exchanges are read (the runs of activities and their files)
+READY = "Results ready"  # the line of the build's log after which the database can be opened (its exchanges follow)
 
 
-def _build_segment(databases, uses_databases, path: Path, method, log) -> tuple[np.ndarray, dict]:
-    """Read the segment of ``databases`` from Brightway into ``path``; returns the node ids of its flows, and the
-    databases each of its databases takes inputs from, as its exchanges say."""
+def exchange_workers() -> int:
+    """How many processes read the exchanges of a build (0: the build process reads them)."""
+    chosen = os.environ.get("LCA_VIEWER_WORKERS", "").strip()
+    if chosen:
+        return max(0, int(chosen))
+    if EXCHANGE_WORKERS is not None:
+        return EXCHANGE_WORKERS
+    return max(0, min(16, (os.cpu_count() or 1) - 2))
+
+
+def _save_npz(path: Path, **arrays) -> None:
+    """``np.savez_compressed`` at the fastest level of deflate: Agribalyse's B.npz in 0.7 s and 24 MB, not 2 s and
+    16 MB (read by ``np.load`` as any .npz)."""
+    import zipfile
+
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED, compresslevel=1) as z:
+        for name, value in arrays.items():
+            with z.open(f"{name}.npy", "w", force_zip64=True) as out:
+                np.lib.format.write_array(out, np.asanyarray(value), allow_pickle=False)
+
+
+def exchange_parts(path: Path, n: int) -> list[tuple[int, int, Path]] | None:
+    """The files of the exchanges of the segment in ``path`` (``n`` activities): ``(first activity, end, file)``, or
+    None when they are not read (yet)."""
+    try:
+        parts = json.loads((path / EXCHANGES).read_text(encoding="utf-8"))["parts"]
+        return [(int(a), int(b), path / name) for a, b, name in parts]
+    except (OSError, ValueError, KeyError):
+        pass
+    if (path / "exchanges.sqlite").exists():  # one file, as a segment built before they were read by runs
+        return [(0, n, path / "exchanges.sqlite")]
+    return None
+
+
+class _ExchangeReader:
+    """Reads the exchanges of the segments a build reads, by runs of activities in processes of their own, while the
+    build goes on with the results (:func:`exchange_store.read_part`). They are what the activity pop-up and the
+    Exchanges panel show (comments, uncertainty, pedigree), not what the results are computed from: the model can be
+    opened before they are read."""
+
+    def __init__(self, project_dir: Path, log):
+        self.source = project_dir / "lci" / "databases.db"
+        self.log = log
+        self.pool = None
+        self.jobs: list[tuple[Path, list[tuple[int, int, str]], list | None, list]] = []
+
+    def start(self, path: Path) -> None:
+        from . import exchange_store
+
+        activities = pd.read_pickle(path / "activities.pkl")
+        keys = list(zip(activities["database"].tolist(), activities["code"].tolist()))
+        counts = exchange_store.counts(self.source, sorted(set(activities["database"])))
+        sizes = np.array([counts.get(k, 0) for k in keys], dtype=np.int64)
+        total, workers = int(sizes.sum()), exchange_workers()
+        k = 1 if not workers or total < PARALLEL_EXCHANGES else max(1, min(workers, len(keys)))
+        # ``k`` runs of consecutive activities with about as many exchanges each
+        cuts = np.searchsorted(np.cumsum(sizes), total * np.arange(1, k) / k, side="left") + 1
+        bounds = sorted({0, len(keys), *np.clip(cuts, 0, len(keys)).tolist()})
+        parts = [(a, b, f"exchanges-{i}.sqlite") for i, (a, b) in enumerate(zip(bounds[:-1], bounds[1:]))]
+        work = [keys[a:b] for a, b, _ in parts]
+        if k > 1:
+            import multiprocessing
+            from concurrent.futures import ProcessPoolExecutor
+
+            if self.pool is None:
+                self.pool = ProcessPoolExecutor(workers, mp_context=multiprocessing.get_context("spawn"),
+                                                initializer=exchange_store.lower_priority)
+            futures = [self.pool.submit(exchange_store.read_part, self.source, path / name, w)
+                       for (_, _, name), w in zip(parts, work)]
+            self.log(f"Reading the {total} exchanges of {len(keys)} activities in {len(parts)} processes")
+        else:
+            futures = None  # read in this process at the end, once the results are solved
+        self.jobs.append((path, parts, futures, work))
+
+    def started(self, path: Path) -> bool:
+        return any(p == path for p, *_ in self.jobs)
+
+    def finish(self, current: set[str]) -> None:
+        """Wait for the exchanges, and mark them read in the folders of ``current`` (segments retired meanwhile: no)."""
+        from . import exchange_store
+
+        try:
+            for path, parts, futures, work in self.jobs:
+                if futures is None:
+                    self.log(f"Reading the exchanges of {sum(len(w) for w in work)} activities")
+                    for (_, _, name), w in zip(parts, work):
+                        exchange_store.read_part(self.source, path / name, w)
+                else:
+                    for f in futures:
+                        f.result()
+                if path.name in current:
+                    _write_json(path / EXCHANGES, {"parts": [list(p) for p in parts]})
+        finally:
+            if self.pool is not None:
+                self.pool.shutdown(cancel_futures=True)
+                self.pool = None
+
+
+def _read_matrices(databases, uses_databases, path: Path, method, log) -> tuple[np.ndarray, dict]:
+    """Read the matrices and activities of the segment of ``databases`` from Brightway into ``path`` (its exchanges
+    are read apart: :class:`_ExchangeReader`); returns the node ids of its flows, and the databases each of its
+    databases takes inputs from, as its matrix says."""
     import bw2calc as bc
     import bw2data as bd
     from bw2data.backends import ActivityDataset as AD
 
-    from .brightway import _details, _product_rows, activity_frame
-    from .model import _write_exchanges
+    from .brightway import _chunks, _details, _product_rows, activity_frame
 
     log(f"Reading the matrices of {', '.join(databases)}")
     # One node of each database, so that Brightway loads all of them (not only those ``depends`` lists)
@@ -534,13 +642,14 @@ def _build_segment(databases, uses_databases, path: Path, method, log) -> tuple[
     Bt = sp.csc_matrix(lca.biosphere_matrix)[:, own_cols].tocoo()
 
     path.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(path / "A.npz", n=n, indptr=A.indptr, indices=A.indices, data=A.data,
+    _save_npz(path / "A.npz", n=n, indptr=A.indptr, indices=A.indices, data=A.data,
                         products=product_node[own_rows], link_node=product_node[T.row[~mine]],
                         link_col=T.col[~mine].astype(np.int32), link_value=T.data[~mine])
-    np.savez_compressed(path / "B.npz", flow=flow_node[Bt.row], col=Bt.col.astype(np.int32), value=Bt.data)
+    _save_npz(path / "B.npz", flow=flow_node[Bt.row], col=Bt.col.astype(np.int32), value=Bt.data)
     own_activities = activity_ids[own_cols]
-    product_set, flow_set = set(lca.dicts.product), set(lca.dicts.biosphere)
-    del lca, T, Bt
+    flows = np.unique(flow_node[Bt.row])
+    rows, cols = T.row, T.col
+    del lca, Bt
 
     log(f"Reading {n} activities")
     activities, records = activity_frame(own_activities)
@@ -548,12 +657,18 @@ def _build_segment(databases, uses_databases, path: Path, method, log) -> tuple[
     with open(path / "details.pkl", "wb") as f:
         pickle.dump([_details(records[i]) for i in own_activities], f)
     del records
-    log("Reading the exchanges")
-    local_of = {int(i): k for k, i in enumerate(own_activities)}
-    seen: dict[str, set] = {}
-    _write_exchanges(path / "exchanges.sqlite", _segment_exchanges(databases, local_of, product_set, flow_set, seen))
-    with np.load(path / "B.npz") as b:
-        return np.unique(b["flow"]), seen
+    # The databases each of its databases takes inputs from: those of the products in its columns of the matrix, the
+    # inputs its results are computed from (``depends`` can be out of date: then the segments are made again)
+    used, at = np.unique(product_node[rows], return_inverse=True)
+    database_of = {i: d for chunk in _chunks(used.tolist())
+                   for i, d in AD.select(AD.id, AD.database).where(AD.id.in_(chunk)).tuples()}
+    pairs = pd.DataFrame({"user": activities["database"].to_numpy()[cols],
+                          "used": np.array([database_of.get(int(i)) for i in used], dtype=object)[at]}).drop_duplicates()
+    seen = {d: set() for d in databases}
+    for user, by in zip(pairs["user"], pairs["used"]):
+        if by is not None and by != user:
+            seen.setdefault(user, set()).add(by)
+    return flows, seen
 
 
 def _solve_segment(cache: Path, info: dict, record: dict, methods: list[Method], flow_position, log) -> None:
@@ -654,12 +769,12 @@ def build(project: str, database: str, methods: list | None, cache, rebuild: boo
     (read from Brightway), then the rows of ``G`` of every segment whose results changed (its own, or those of a
     segment it uses), the others kept. ``methods``: the impact methods of the project cache (None: those it has,
     else all the project's); ``rebuild``: read the segment of ``database`` again even if unchanged.
+    The results come first: once those of ``database`` are solved, the build logs :data:`READY` (the database can be
+    opened), then waits for the exchanges of the segments it read, read meanwhile by other processes.
     Returns ``project.json``."""
     import bw2data as bd
 
-    from .brightway import _unlinked_factors, flow_frame, method_factors
     from .methods_library import registered
-    from .sources import _methods_stamp
 
     try:
         import multifunctional  # noqa: F401  (backend of databases with allocated multi-output processes)
@@ -683,7 +798,7 @@ def build(project: str, database: str, methods: list | None, cache, rebuild: boo
         raise ValueError(f"Project {project!r} has no impact methods: install some first (e.g. with "
                          f"bw2io's bw2setup or ecoinvent_interface)")
 
-    # The segments database needs, from the exchanges
+    # The segments database needs, from the matrices
     if database not in bd.databases:
         raise ValueError(f"No database {database!r} in project {project!r}")
     modified = {d: (bd.databases[d] or {}).get("modified") for d in bd.databases}
@@ -692,6 +807,28 @@ def build(project: str, database: str, methods: list | None, cache, rebuild: boo
     flows = pd.read_pickle(cache / "flows.pkl") if (cache / "flows.pkl").exists() else None
     known = set(flows["id"].tolist()) if flows is not None else set()
     new_flows: set[int] = set()
+    reader = _ExchangeReader(project_dir, log)
+    try:
+        info = _build(cache, info, project_dir, database, names, rebuild, modified, links, flows, known, new_flows,
+                      reader, log)
+        if reader.jobs:
+            reader.finish({r["folder"] for r in info["segments"] if r.get("folder")})
+            log("Exchanges read")
+    finally:
+        if reader.pool is not None:
+            reader.pool.shutdown(cancel_futures=True)
+    return info
+
+
+def _build(cache: Path, info: dict, project_dir: Path, database: str, names: list, rebuild: bool, modified: dict,
+           links: dict, flows, known: set, new_flows: set, reader: _ExchangeReader, log) -> dict:
+    """:func:`build`, the exchanges left to ``reader``."""
+    import bw2data as bd
+
+    from .brightway import _unlinked_factors, flow_frame, method_factors
+    from .methods_library import registered
+    from .sources import _methods_stamp
+
     for attempt in range(4):
         graph = _database_graph(project_dir, database, links)
         needed = _segments(info, graph, log)
@@ -708,7 +845,7 @@ def build(project: str, database: str, methods: list | None, cache, rebuild: boo
             uses_databases = sorted({d for r in closure(info, record["databases"][0]) for d in r["databases"]}
                                     - set(record["databases"]))
             try:
-                ids, seen = _build_segment(record["databases"], uses_databases, path,
+                ids, seen = _read_matrices(record["databases"], uses_databases, path,
                                            next((m for m in names if m in bd.methods), None), log)
             except BaseException:
                 shutil.rmtree(path, ignore_errors=True)
@@ -722,17 +859,22 @@ def build(project: str, database: str, methods: list | None, cache, rebuild: boo
             new_flows |= set(int(i) for i in ids) - known
             found = {d: {u for u in seen[d] if u in modified} for d in record["databases"]}
             if any(found[d] != graph[d] for d in record["databases"]):
-                # ``depends`` did not list what the exchanges use: the segments are made again from the exchanges
+                # ``depends`` did not list what the exchanges use: the segments are made again from the matrices
                 log(f"{', '.join(record['databases'])}: its exchanges link to other databases than its metadata "
                     f"lists: built again")
                 links.update(found)
                 record["version"] = None
                 again = True
                 break
+            reader.start(path)  # its exchanges, read while the build goes on
         if not again:
             break
     else:
         raise ValueError(f"The links between the databases {database} uses keep changing: build it again")
+    for record in needed:  # built before, their exchanges not read (a build stopped before it read them)
+        path = folder(cache, record)
+        if not reader.started(path) and exchange_parts(path, 0) is None and (path / "activities.pkl").exists():
+            reader.start(path)
 
     # Flows and methods of the project
     stamp = _methods_stamp(project_dir)
@@ -792,6 +934,14 @@ def build(project: str, database: str, methods: list | None, cache, rebuild: boo
     position, _, _ = _lookup(flow_ids, np.arange(len(flow_ids), dtype=np.int64))
     needed_ids = {r["id"] for r in needed}
     skipped: set[str] = set()
+    ready = [False]
+
+    def say_ready():
+        if not ready[0] and all(_g_ready(cache, info, r) for r in closure(info, database)):
+            ready[0] = True
+            log(f"{READY}: {database} can be opened" + (" (its exchanges are being read)" if reader.jobs else ""))
+
+    say_ready()
     for record in ordered(info):
         state = {d: (bd.databases[d] or {}).get("modified") if d in bd.databases else None for d in record["databases"]}
         by_id = {r["id"]: r for r in info["segments"]}
@@ -812,6 +962,7 @@ def build(project: str, database: str, methods: list | None, cache, rebuild: boo
             raise ValueError(f"{', '.join(record['databases'])} takes inputs of products that are no longer in "
                              f"the databases it uses: build it again") from None
         _write_json(cache / "project.json", info)
+        say_ready()
     return info
 
 

@@ -20,6 +20,9 @@ const SOURCE_URL = "https://github.com/Phurga/lca_explorer";
 const CACHED = /^\/api\/(rows|global|global\/contributors|flows|flows\/contributors|flows\/of-process|flows\/uncharacterised|compare)$/;
 const answers = new Map();  // question -> { promise, value }
 const clearAnswers = () => answers.clear();
+// A database opens once its results are solved, while its build still reads the exchanges (comments, uncertainty,
+// pedigree): bumped when they have arrived, so that the panels showing exchanges ask again
+let exchangesStamp = 0;
 function request(url, body) {
   const full = url.startsWith("/api/") ? API_BASE + url : url;
   if (body === undefined || !CACHED.test(url)) return serverRequest(full, body);
@@ -1868,7 +1871,7 @@ function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
     if (!job?.id || job.status !== "running") return;
     const timer = setTimeout(() => serverRequest(`/api/jobs/${job.id}`).then((j) => {
       setJob(j);
-      if (j.status === "done" && j.key) openDatabase(j.key);
+      if ((j.status === "done" || j.ready) && j.key) openDatabase(j.key);  // ready: open while its exchanges are read
       else if (j.status === "done") {  // a new empty project: add its first database
         setForm(j.project ? { kind: "add", project: j.project } : null);
         listProjects(folder);
@@ -3178,7 +3181,7 @@ function EditPanel({ origin, dataset, pending, affected, locked, outdated, onFor
     if (!job || job.status !== "running") return;
     const timer = setTimeout(() => serverRequest(`/api/jobs/${job.id}`).then((j) => {
       setJob(j);
-      if (j.status === "done" && j.key) { savePreference("mode", "view"); openDatabase(j.key); }  // back to the results
+      if ((j.status === "done" || j.ready) && j.key) { savePreference("mode", "view"); openDatabase(j.key); }  // back to the results
       else if (j.status !== "running") onApplied();  // made, not rebuilt: what is out of date now shows
     }).catch((e) => setJob({ ...job, status: "failed", error: e.message })), 700);
     return () => clearTimeout(timer);
@@ -5026,6 +5029,7 @@ function FlowExchangePopup({ target, win, method, methods, onClose, onOpen, onFl
               <span class="muted">${exchanges[0] ? "as recorded in the dataset" : "per operation of the process (matrix)"}</span></td></tr></table>
             ${exchanges.length === 0 ? html`<p class="text muted">${flow.exchanges_available
               ? "No comment or uncertainty recorded for this exchange."
+              : flow.exchanges_pending ? "Reading the exchanges of the database (comments, uncertainty)… open it again in a moment."
               : "This model has no exchange metadata — rebuild it to see comments and uncertainty."}</p>`
               : exchanges.map((e) => (hasExchangeMeta(e) ? html`<${ExchangeMeta} e=${e} />` : html`<p class="text muted">No comment or uncertainty recorded for this exchange.</p>`))}
           </section>`)}
@@ -5271,7 +5275,9 @@ function ProcessExchanges({ index, info, exchanges, onOpen, onExchange, onUse })
   ].map((r) => ({ ...r, shown: positive(r.section, r.amount ?? 0) }));
   const sections = (shown) => EXCHANGE_SECTIONS.map(([key, label]) => ({ key, label, items: shown.filter((r) => r.section === key) }))
     .filter((s) => s.items.length);
-  if (!exchanges.available) return html`<p class="muted">This model has no exchanges recorded: build it again to see them.</p>`;
+  if (!exchanges.available) return html`<p class="muted">${exchanges.pending
+    ? "Reading the exchanges of the database (comments, uncertainty)… they show here in a moment."
+    : "This model has no exchanges recorded: build it again to see them."}</p>`;
   const columns = [
     { key: "name", label: "Exchange", title: "Its process or flow: right-click for its pop-up, double-click to use it in the tab; (i): the exchange (comment, uncertainty, pedigree)",
       value: (r) => r.name, tip: (r) => r.full,
@@ -5337,7 +5343,7 @@ function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsByI
     setExchanges(null);
     if (exchange || idle) return;
     request(`/api/activity/${target.index}/exchanges?method=${method}`).then(setExchanges).catch(() => setExchanges(null));
-  }, [target.index, method, exchange, idle]);
+  }, [target.index, method, exchange, idle, exchangesStamp]);
   useEffect(() => {
     setLink(null);
     if (!exchange || !parentMetas.length) return;
@@ -9272,6 +9278,20 @@ function useChangeSaved(name, value) {
 
 function App() {
   const [info, setInfo] = useState(null);
+  // What the database open does not have yet (``info.pending``: its exchanges, read by its build), or why it will not
+  const [arriving, setArriving] = useState({ parts: [], error: null });
+  useEffect(() => {
+    if (!arriving.parts.length) return;
+    const timer = setTimeout(() => request("/api/info").then((i) => {
+      if (i.pending?.length) { setArriving((a) => ({ ...a })); return; }  // asked again in a moment
+      // Read: the tabs ask their rows again (the comments and uncertainty of their exchanges come with them)
+      exchangesStamp += 1;
+      clearAnswers();
+      setInfo(i);
+      setArriving({ parts: [], error: i.pending_error || null });
+    }).catch(() => setArriving((a) => ({ ...a }))), 1500);
+    return () => clearTimeout(timer);
+  }, [arriving]);
   // The impact methods and group rules of the workspace, which the tabs follow (see the lens above FUView)
   const [lens, setLens] = useState(null);
   nameFormat = lens?.nameFormat || DEFAULT_NAME_FORMAT;
@@ -9419,7 +9439,7 @@ function App() {
     if (rebuilding?.status !== "running") return;
     const timer = setTimeout(() => serverRequest(`/api/jobs/${rebuilding.id}`).then((j) => {
       setRebuilding(j);
-      if (j.status === "done" && j.key) openDatabase(j.key);
+      if ((j.status === "done" || j.ready) && j.key) openDatabase(j.key);
     }).catch((e) => setRebuilding({ status: "failed", error: e.message })), 700);
     return () => clearTimeout(timer);
   }, [rebuilding]);
@@ -9471,6 +9491,7 @@ function App() {
       }
       setLens(initLens(i, seed));
       setInfo(i);
+      setArriving({ parts: i.pending || [], error: i.pending_error || null });
     }).catch((e) => setError(e.message));
   };
 
@@ -9657,6 +9678,9 @@ function App() {
         title=${`${outdated}: the model has to be built again, and its impacts are greyed out until then`}>
         ${rebuilding?.status === "running" ? "Rebuilding…" : "Rebuild required"}</button>`}
       ${rebuilding?.status === "failed" && html`<span class="error-inline" title=${rebuilding.error}>Rebuild failed</span>`}
+      ${arriving.parts.length ? html`<span class="arriving" role="status"
+        title="The tree and the impacts are ready. The build is still reading the exchanges of the processes (their comments, uncertainty and pedigree): they show in the tree and the pop-ups once read."><span class="spinner"></span>Reading exchanges…</span>`
+        : arriving.error && html`<span class="error-inline" title=${arriving.error}>Exchanges not read</span>`}
       </div>
       <div class="top-centre">${centre}</div>
       <div class="top-right">
