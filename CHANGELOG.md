@@ -20,6 +20,13 @@ Changes on `dev`, not released yet.
   tab's supply chain (or reached by a flow under 1e-12) though its own card lists its users; every level now lists all
   the users, as the first one does, those of the supply chain first.
 - **Alternatives**: the first column is headed *Processing {product}* (the product of the card) instead of *Process*.
+- **No right panel in View mode: its panels are in each process card.** A process tab's card has a new
+  **Contribution** panel (after *Characterisation*) with sub-panels *Process*, *Flow*, *Uncharacterised* and *Rules*,
+  the side panel's contributions of before. The side panel's *Explore* chart is gone (the tree shows the same rows);
+  its export is at the foot of the card's *Explore* (the rows as CSV, their chart as PNG). The card's
+  *Characterisation* has the *Multi indicator* chart, with a table of the same shares and its export. The right
+  panel is Edit mode's (the Edit panel); Ctrl/⌘ + → shows or hides it there only. The tree's first column is
+  named **Product** (it was *Supply chain*). A pop-up's card has no *Contribution*.
 - **View options on each process**: the sliders icon of a process in the left panel's *Processes* panel opens the
   view options of that tab in a pop-up (*Display*, *Cut-off*, *Organise by*, *Group by*, *Color by*, *Rows*,
   with *Reset* and *Save ▾*); the tab is shown in its window first. Key **v** in View mode opens those of the tab in

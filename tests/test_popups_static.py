@@ -94,7 +94,7 @@ def test_view_options_open_from_each_process_of_the_processes_panel():
     assert "VIEW_OPTIONS_OPENERS[id] =" in body("FUView")
     assert "<${ViewOptionsPopup}" in body("FUView") and "<${PagePortal}>" in body("FUView")
     assert "VIEW_OPTIONS_OPENERS" not in body("FlowTab")  # flow tabs have no view options
-    assert '["view", "Explore"]' in APP and "<${SidePanelTabs}" in body("FUView") and "header=${viewOptions}" not in body("FUView")
+    assert "header=${viewOptions}" not in body("FUView")
     # key v: the view options of the tab in focus
     assert 'new CustomEvent("lca:custom-view", { detail: { id } })' in body("App")
 
@@ -236,17 +236,34 @@ def test_the_shortcuts_list_the_mouse_gestures():
     assert '["Right-click", "Its pop-up (as Space)"]' in shortcuts
 
 
-@pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
-def test_the_side_panel_tabs_have_short_names_and_icons_when_narrow():
-    # Explore, Process, Flow, Uncharacterised, Rules: the side panel says they are contributions
-    assert ('const SIDE_PANELS = [["view", "Explore"], ["chart", "Process"], ["flows", "Flow"], ["missing", "Uncharacterised"], '
+def test_view_mode_has_no_side_panel_its_panels_are_the_cards():
+    # The side panel of View mode left: its contributions are the Contribution panel of a process tab's card (sub-panels
+    # Process, Flow, Uncharacterised, Rules), its Explore chart's export is on the card's Explore panel, its multi indicator
+    # chart and table are in the card's Characterisation panel; the right panel is Edit mode's (the Edit panel)
+    assert ('const CONTRIBUTION_PANELS = [["chart", "Process"], ["flows", "Flow"], ["missing", "Uncharacterised"], '
             '["global", "Rules"]];') in APP
-    for old in ("Explore view", "Process contribution", "Flow contribution", "Rules contributions"):
-        assert f'"{old}"' not in APP
-    tabs = body("SidePanelTabs")
-    assert "new ResizeObserver(fit)" in tabs and "el.scrollWidth > el.clientWidth" in tabs
-    assert "aria-label=${compact ? label : undefined}" in tabs and "<${SidePanelTabIcon} panel=${key} />" in tabs
-    assert all(f"  {key}: \"M" in APP for key in ("view", "chart", "flows", "missing", "global"))
+    for gone in ("SIDE_PANELS", "SidePanelTabs", "SidePanelTabIcon", "function ChartPanel", "onCollapseSide", "side-slot"):
+        assert gone not in APP, gone
+    fu = body("FUView")
+    assert "slot=${`side-${id}`}" not in fu and "slot=${`groups-${id}`}" in fu
+    assert "<${TreeExport} data=${allData}" in fu.split("const treeNode")[1].split("</section>`;")[0] and "<${MultiIndicator}" in fu and "<${ContributionPanels}" in fu and "card=${cardPanels}" in fu
+    info = body("InfoPopup")
+    assert 'card?.contribution && { id: "contribution", label: "Contribution" }' in info
+    assert "${!idle && card?.characterisation}" in info
+    # the tree's export: the rows as CSV, and the single indicator chart drawn off the page for its image
+    export = body("TreeExport")
+    assert 'downloadCsv("contributions.csv"' in export and "offscreenImage(singleChartOption(" in export
+    multi = body("MultiIndicator")
+    assert 'stack: "total"' in multi and 'class="results multi-table"' in multi and 'name="multi-indicator"' in multi
+    app = body("App")
+    assert "const sideVisible = sideOpen && editing;" in app
+    assert '${editing && html`<aside class="sidebar"' in app
+    assert 'if (e.key === "ArrowRight" && !editingRef.current) return;' in app
+
+
+def test_the_tree_names_its_first_column_product():
+    tree = body("Tree")
+    assert "<tr><th>Product</th>" in tree and "Supply chain</th>" not in tree
 
 
 def test_the_panels_are_fitted_to_the_window():
@@ -263,11 +280,10 @@ def test_the_panels_are_fitted_to_the_window():
 def test_a_flow_or_model_tab_shows_the_panels_of_the_last_process_tab():
     app = body("App")
     assert "processFocus.current[0] ?? allTabs.find((id) => !treeless(id)) ?? null" in app
-    assert 'id=${`side-${id}`} class="side-slot" style=${{ display: id === panelTab && !editing' in app
-    assert "focusedTab=${panelTab} follow=${followNote(null)}" in app
+    assert "focusedTab=${panelTab} follow=${followNote}" in app
     assert "${!comparing && follow}" in body("LensPanel")
     follow = body("PanelsFollow")
-    assert "the last process in focus" in follow and "These panels follow a process tab" in follow
+    assert "the last process in focus" in follow and "This panel follows a process tab" in follow
 
 
 def test_app_js_parses(tmp_path):
