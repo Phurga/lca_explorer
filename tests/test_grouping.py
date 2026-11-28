@@ -1090,6 +1090,25 @@ def test_used_by_lists_consumers_and_their_share_in_the_supply_chain(grouping_mo
     assert client.get("/api/activity/0/users").json()["count"] == 0
 
 
+def test_used_by_lists_the_users_of_a_process_outside_the_supply_chain(grouping_model):
+    # The Used by panel expands its rows with this endpoint, under the functional unit of the tab: a user outside
+    # its supply chain (German bread, in a tab of French bread) still has its users, with no flow in the chain. The
+    # panel kept only those with a flow, and so said "No activity uses it." of a process its own card shows used.
+    from fastapi.testclient import TestClient
+    from lca_viewer.server import create_app
+
+    client = TestClient(create_app(grouping_model))
+    under = client.get("/api/activity/5/users", params={"root": 1}).json()
+    assert under["count"] == 4 and under["in_supply_chain"] == 2
+    assert [u["index"] for u in under["users"]][:2] == [1, 4]  # those of the chain first
+    out = client.get("/api/activity/2/users", params={"root": 1}).json()
+    assert out["count"] == 1 and out["in_supply_chain"] == 0
+    assert [(u["index"], u["flow"]) for u in out["users"]] == [(0, 0.0)]
+    assert out["users"][0]["per_unit"] == pytest.approx(0.35)
+    alone = client.get("/api/activity/2/users").json()
+    assert [u["index"] for u in alone["users"]] == [0]
+
+
 def test_group_products_bundles_siblings_of_the_same_product(grouping_model):
     view = View(Tree(grouping_model, 0), group_products=True)
     view.expand("0")

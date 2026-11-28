@@ -9,6 +9,13 @@ version, `main` can be ahead of it with work in progress.
 
 Changes on `dev`, not released yet.
 
+- **Sections of a card's lists from the keyboard**: in *Exchanges* (and any list of a card with sections), the
+  section headers are stops of ↑/↓; → unfolds a section (unfolded: goes to its first row), ← folds it, Space or Enter
+  toggles it, ← on a row goes to its header. In the *Shortcuts* dialog.
+- **Used by, expanded several levels deep**: a row below another said "No activity uses it." of a process outside the
+  tab's supply chain (or reached by a flow under 1e-12) though its own card lists its users; every level now lists all
+  the users, as the first one does, those of the supply chain first.
+- **Alternatives**: the first column is headed *Processing {product}* (the product of the card) instead of *Process*.
 - **View options on each process**: the sliders icon of a process in the left panel's *Processes* panel opens the
   view options of that tab in a pop-up (*Display*, *Cut-off*, *Organise by*, *Group by*, *Color by*, *Rows*,
   with *Reset* and *Save ▾*); the tab is shown in its window first. Key **v** in View mode opens those of the tab in
