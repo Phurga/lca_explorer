@@ -825,6 +825,13 @@ table.factor-table td { font-size: 12px; padding: 2px 6px; }
 .add-report p { margin: 4px 0; }
 .project-form.add-report label.inline { flex-direction: row; gap: 6px; align-items: center; }
 .add-report .suffix-input { width: 90px; }
+.copy-progress { display: inline-flex; align-items: center; gap: 6px; }
+.copy-progress progress { width: 140px; }
+.method-row .coverage-note { flex: none; font-size: 11px; color: var(--bar-negative); font-variant-numeric: tabular-nums; }
+.library-coverage { font-size: 12px; margin: 6px 0; padding: 6px 8px; border: 1px solid var(--border); border-radius: 4px; }
+.library-coverage.lossy { border-color: var(--bar-negative); }
+.library-coverage p { margin: 0 0 4px; }
+.library-coverage .report-list { margin: 0; padding-left: 18px; max-height: 140px; overflow: auto; }
 /* Curate names: the library's names as a table of their parts, the bulk tools above it, the preview below */
 .curate-names h4 { display: flex; align-items: center; gap: 6px; }
 .curate-names h4 .close { margin-left: auto; font-size: 16px; }

@@ -133,6 +133,11 @@ class Library:
     def __init__(self, folder):
         self.folder = Path(folder)
         self.lock = threading.RLock()
+        # The files read, by name: (their stamp, the method). A library of hundreds of methods (all those of an
+        # ecoinvent release: 600 methods, 100 MB) is read once, then only the files changed since.
+        self._read: dict[str, tuple[tuple, dict | None]] = {}
+        self._memos: dict[tuple, object] = {}
+        self._reading = threading.Lock()  # not ``lock``: the list is read while a long copy adds methods
 
     def _path(self, id: str) -> Path:
         if not re.fullmatch(r"[0-9a-f]{6,32}", id or ""):
@@ -146,35 +151,93 @@ class Library:
         part = path.with_name(path.name + ".part")
         part.write_text(json.dumps(method, indent=1, ensure_ascii=False), encoding="utf-8")
         os.replace(part, path)
+        with self._reading:
+            self._read.pop(path.name, None)
         return method
 
     def all(self) -> list[dict]:
-        out = []
-        for path in sorted(self.folder.glob("*.json")):
-            try:
-                method = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                continue
-            if method.get("format") == FORMAT and method.get("id") == path.stem:
-                out.append(method)
+        """The methods, by name. They are those kept in memory: not to be changed (:meth:`get` gives a copy to change)."""
+        out, seen = [], set()
+        with self._reading:
+            for path in self.folder.glob("*.json"):
+                seen.add(path.name)
+                try:
+                    st = path.stat()
+                except OSError:
+                    continue
+                stamp = (st.st_mtime_ns, st.st_size)
+                cached = self._read.get(path.name)
+                if cached is None or cached[0] != stamp:
+                    try:
+                        method = json.loads(path.read_text(encoding="utf-8"))
+                    except (OSError, ValueError):
+                        method = None
+                    if not (isinstance(method, dict) and method.get("format") == FORMAT and method.get("id") == path.stem):
+                        method = None
+                    cached = self._read[path.name] = (stamp, method)
+                if cached[1] is not None:
+                    out.append(cached[1])
+            for gone in set(self._read) - seen:
+                del self._read[gone]
         return sorted(out, key=lambda m: [p.lower() for p in m["name"]])
 
     def get(self, id: str) -> dict:
+        """A method, read from its file: a copy of its own, to change."""
         try:
             method = json.loads(self._path(id).read_text(encoding="utf-8"))
         except (OSError, ValueError):
             raise KeyError(id) from None
         return method
 
+    def _memo(self, method: dict, what, compute):
+        """``compute()`` for a method of :meth:`all`, kept while its file is unchanged (``what``: of what)."""
+        name = f"{method.get('id')}.json"
+        with self._reading:
+            read = self._read.get(name)
+            key = (name, read[0], what) if read and read[1] is method else None  # else not one of all(): not kept
+            known = self._memos.get(key) if key else None
+        if known is None:
+            known = compute()
+            if key:
+                with self._reading:
+                    if len(self._memos) > 8 * len(self._read) + 64:  # those of files changed since
+                        self._memos.clear()
+                    self._memos[key] = known
+        return known
+
+    def digest(self, method: dict) -> str:
+        """:func:`digest` of a method of :meth:`all`, computed once while its file is unchanged."""
+        return self._memo(method, "digest", lambda: digest(method))
+
+    def coverage(self, method: dict, base, project: str) -> dict:
+        """``{"matched", "total"}`` of :func:`coverage` (no rows), kept while the file and the project's flows are
+        unchanged: the build form lists every method of the library with them."""
+        matcher = project_matcher(base, project)
+
+        def count() -> dict:
+            cover = coverage(method, base, project)
+            return {"matched": cover["matched"], "total": cover["total"]}
+        return self._memo(method, ("coverage", matcher.serial), count)
+
+    def finder(self):
+        """``find(name)`` of :meth:`find`, the library read once for many names."""
+        methods = self.all()
+        current = {tuple(model_name_of(m)): m for m in methods}
+        former: dict[tuple, dict] = {}
+        for m in methods:
+            for n in _former(m):
+                former.setdefault(tuple(n), m)
+
+        def find(name) -> dict | None:
+            name = [str(p) for p in name]
+            key = tuple(name if is_library(name) else model_name(name))
+            return current.get(key) or former.get(key)
+        return find
+
     def find(self, name) -> dict | None:
         """The method of a name in a model (``["library", ...]``, ``["library/<source>", ...]``) or in the library (of
         no source); also by a name it had before."""
-        name = [str(p) for p in name]
-        if not is_library(name):
-            name = model_name(name)
-        methods = self.all()
-        return (next((m for m in methods if model_name_of(m) == name), None)
-                or next((m for m in methods if name in _former(m)), None))
+        return self.finder()(name)
 
     def taken(self, but: str | None = None) -> set[tuple]:
         """The names in a model of the library's methods (but one)."""
@@ -261,6 +324,7 @@ class Library:
                 m = methods[id]
                 if (name, source, unit) == (m["name"], m.get("source") or "", m["unit"]):
                     continue
+                m = self.get(id)  # those of all() are not to be changed
                 self._rename(m, name, source)
                 m["unit"] = unit
                 changed.append(self._write(m))
@@ -295,18 +359,22 @@ class Library:
             if not path.exists():
                 raise KeyError(id)
             path.unlink()
+            with self._reading:
+                self._read.pop(path.name, None)
 
     def stale(self, info: dict | None) -> str | None:
         """What changed in the library since a project cache (``project.json``) was built with its methods, or None."""
         if not info:
             return None
+        find = None
         for entry in info.get("methods", []):
             if "library" not in entry:
                 continue
-            method = self.find(entry["name"])
+            find = find or self.finder()
+            method = find(entry["name"])
             if method is None:
                 return f"{' | '.join(entry['name'][1:])} is no longer in the methods library"
-            if model_name_of(method) != entry["name"] or digest(method) != entry["library"]:
+            if model_name_of(method) != entry["name"] or self.digest(method) != entry["library"]:
                 return "methods of the library changed since the model was built"
         return None
 
@@ -381,7 +449,10 @@ class Matcher:
     ecoinvent's biosphere keep their codes from one version to the next, under another database name); else by its
     name and compartments (unit checked)."""
 
+    _serials = itertools.count(1)
+
     def __init__(self, flows: list[dict]):
+        self.serial = next(Matcher._serials)  # tells one matcher from those made before (memos)
         self.by_key = {(f["database"], f["code"]): f for f in flows}
         self.by_code: dict[str, list[dict]] = {}
         self.by_name: dict[tuple, list[dict]] = {}
@@ -406,9 +477,24 @@ class Matcher:
         return fitting[0], "name"
 
 
+_matchers: dict[str, tuple[list, Matcher]] = {}
+
+
+def project_matcher(base, project: str) -> Matcher:
+    """The :class:`Matcher` of the flows of a project, made again when they are read again (the file changed)."""
+    from .sources import project_dir
+
+    flows = project_flows(base, project)
+    path = str(project_dir(base, project) / "lci" / "databases.db")
+    cached = _matchers.get(path)
+    if cached is None or cached[0] is not flows:
+        cached = _matchers[path] = (flows, Matcher(flows))
+    return cached[1]
+
+
 def coverage(method: dict, base, project: str) -> dict:
     """For each factor, the flow of ``project`` it applies to (its node id) or why none; counts."""
-    matcher = Matcher(project_flows(base, project))
+    matcher = project_matcher(base, project)
     rows = []
     for f in method["factors"]:
         flow, how = matcher.find(f["database"], f["code"], f["name"], f["categories"], f["unit"])
@@ -612,7 +698,7 @@ def parse_csv(text: str) -> tuple[list[dict], list[dict]]:
 
 def match_rows(rows: list[dict], base, project: str) -> tuple[list[dict], list[dict]]:
     """CSV rows matched to the flows of a project: the factors found, and the rows left (with the reason)."""
-    matcher = Matcher(project_flows(base, project))
+    matcher = project_matcher(base, project)
     found, left = [], []
     for r in rows:
         compartments = [c for c in (r["compartment"], *re.split(r"\s*[,/]\s*", r["subcompartment"])) if c]
@@ -718,26 +804,27 @@ def build_entries(library: Library, names, base, project: str) -> tuple[list[lis
     name (one renamed since) and those no longer in it left out, and the library methods as the build process takes
     them (:func:`register_file`): ``{"name", "unit", "digest", "data": [[node id, cf], ...]}``, the factors on flows
     of the project."""
-    out_names, entries, flows = [], [], None
+    out_names, entries, flows, find = [], [], None, None
     for name in names:
         if not is_library(name):
             out_names.append(list(name))
             continue
-        method = library.find(name)
+        find = find or library.finder()
+        method = find(name)
         if method is None:
             continue
         current = model_name_of(method)
         if current in out_names:
             continue
         if flows is None:
-            flows = Matcher(project_flows(base, project))
+            flows = project_matcher(base, project)
         data = {}
         for f in method["factors"]:
             flow, _ = flows.find(f["database"], f["code"], f["name"], f["categories"], f["unit"])
             if flow is not None:
                 data[flow["id"]] = data.get(flow["id"], 0.0) + float(f["cf"])
         out_names.append(current)
-        entries.append({"name": current, "unit": method["unit"], "digest": digest(method),
+        entries.append({"name": current, "unit": method["unit"], "digest": library.digest(method),
                         "data": [[k, v] for k, v in data.items()]})
     return out_names, entries
 

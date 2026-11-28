@@ -1185,9 +1185,32 @@ function MethodPicker({ methods, chosen, setChosen }) {
                 <input type="checkbox" checked=${chosen.has(methodKey(m.name))} onChange=${(e) => tick([m], e.target.checked)}
                   aria-label=${m.name.join(" | ")} />
                 <span class="name" title=${`${m.name.join(" | ")}${m.unit ? ` (${m.unit})` : ""}${m.library ? `\nMethods library: ${m.matched} of ${m.factors} factors on flows of the project` : ""}`} onClick=${() => tick([m], !chosen.has(methodKey(m.name)))}>${methodParts(m).main}${methodParts(m).qual && html` <span class="muted">${methodParts(m).qual}</span>`}</span>
+                ${m.library && m.matched < m.factors && html`<span class="coverage-note" title=${`${count(m.factors - m.matched)} of its ${count(m.factors)} factors find no elementary flow of the project: a build leaves them out`}>${count(m.matched)}/${count(m.factors)} factors</span>`}
               </div>`)}
           </div>`;
       })}
+    </div>`;
+}
+
+// The methods of the library ticked for a build: how many of their factors find an elementary flow of the project (by
+// flow code, else name and compartments), how many a build drops. ``biosphere``: the project's flow databases. A method
+// copied from another release of ecoinvent loses the factors of the flows that release added, renamed or split.
+function LibraryCoverage({ methods, chosen, biosphere }) {
+  const ticked = methods.filter((m) => m.library && chosen.has(methodKey(m.name)));
+  if (!ticked.length) return null;
+  const matched = ticked.reduce((a, m) => a + m.matched, 0);
+  const total = ticked.reduce((a, m) => a + m.factors, 0);
+  const lossy = ticked.filter((m) => m.matched < m.factors).sort((a, b) => (b.factors - b.matched) - (a.factors - a.matched));
+  const from = [...new Set(ticked.flatMap((m) => m.databases || []))].filter((d) => !(biosphere || []).includes(d));
+  return html`
+    <div class=${`library-coverage${lossy.length ? " lossy" : ""}`}>
+      <p><b>Methods library</b>: ${plural(ticked.length, "method")} ticked.
+        ${lossy.length ? html` ${count(matched)} of ${count(total)} factors find an elementary flow of the project; <b>${count(total - matched)} are dropped</b>${` (${plural(lossy.length, "method")}): `}flows its biosphere${biosphere?.length ? ` (${biosphere.join(", ")})` : ""} does not have, or names otherwise.`
+          : ` All their ${count(total)} factors find an elementary flow of the project.`}
+        ${from.length > 0 && html` <span class="muted">Their factors were read on ${from.join(", ")}: they are found here by flow code (the UUID ecoinvent keeps across releases), else by name and compartments.</span>`}
+        <${InfoTip} label="About methods of another release" text="A factor characterises one elementary flow. ecoinvent publishes its methods for each release, on that release's elementary flows. Flows keep their code (UUID) from one release to the next, so most factors are found; the flows a newer release added are not in an older biosphere (their factors are dropped and change nothing: no exchange of the database uses them), but flows renamed, split or replaced are lost too, and their impacts with them. For an older database, prefer the methods of its own release (those of the project), or copy them from a project of that release." /></p>
+      ${lossy.length > 0 && html`<ul class="report-list">${lossy.slice(0, 8).map((m) => html`<li key=${methodKey(m.name)}>${m.name.slice(1).join(" | ")}${" "}<span class="muted small">${count(m.matched)} of ${count(m.factors)} factors (${count(m.factors - m.matched)} dropped)</span></li>`)}
+        ${lossy.length > 8 && html`<li class="muted small">and ${plural(lossy.length - 8, "method")} more</li>`}</ul>`}
     </div>`;
 }
 
@@ -1222,7 +1245,8 @@ function BuildForm({ form, folder, onJob, actions }) {
           <button type="button" onClick=${() => setChosen(new Set())}>None</button>
           <span class="muted small">${listing.selected ? "Ticked: those of the project's databases built so far" : "Ticked: the family of the default method"}</span>
         </div>
-        <${MethodPicker} methods=${listing.methods} chosen=${chosen} setChosen=${setChosen} />`}
+        <${MethodPicker} methods=${listing.methods} chosen=${chosen} setChosen=${setChosen} />
+        <${LibraryCoverage} methods=${listing.methods} chosen=${chosen} biosphere=${listing.biosphere} />`}
       ${actions(`${verb} and open with ${names.length} ${names.length === 1 ? "method" : "methods"}`,
         !listing ? true : !names.length && "Choose at least one impact method")}
     </form>`;
@@ -2261,19 +2285,39 @@ function LibraryForm({ form, folder, projects, onCancel, onDone, onListed, onCur
     setBusy(true); setError(null);
     return serverRequest(url, body).finally(() => setBusy(false));
   };
+  // Methods of a project copied a few at a time (all those of an ecoinvent release: 600 methods, 20 s), with their
+  // progress; Stop keeps those copied so far
+  const [progress, setProgress] = useState(null);  // { done, total }
+  const stopped = useRef(false);
+  const copyInChunks = async (body, names) => {
+    setBusy(true); setError(null); stopped.current = false;
+    const out = { added: [], skipped: [] };
+    try {
+      for (let k = 0; k < names.length && !stopped.current; k += COPY_CHUNK) {
+        setProgress({ done: k, total: names.length });
+        const r = await serverRequest(`${LIBRARY_API}/copy`, { ...body, methods: names.slice(k, k + COPY_CHUNK) });
+        out.added.push(...r.added); out.skipped.push(...r.skipped);
+      }
+      out.stopped = stopped.current;
+      return out;
+    } catch (err) {
+      if (out.added.length) onListed();
+      throw new Error(`${err.message}${out.added.length ? ` (${plural(out.added.length, "method")} copied before it)` : ""}`);
+    } finally { setBusy(false); setProgress(null); }
+  };
   const name = cleanParts(parts);
   const picked = (source || []).filter((m) => chosen.has(methodKey(m.name))).map((m) => m.name);
   const copyBody = { folder, project };
   const importBody = { folder, project, paths: files.map((f) => f.path), names: files.map((f) => f.name), unit: unitText };
   const reported = (kind, body) => (r) => {
-    setReport({ kind, body, project, added: kind === "copy" ? r.added : r.methods, skipped: r.skipped, unmatched: r.unmatched || [] });
+    setReport({ kind, body, project, added: kind === "copy" ? r.added : r.methods, skipped: r.skipped, unmatched: r.unmatched || [], stopped: r.stopped });
     onListed();
   };
   const submit = (e) => {
     e.preventDefault();
     const failed = (err) => setError(err.message);
     if (form.kind === "new") send(LIBRARY_API, { name, unit: unitText, description }).then(onDone).catch(failed);
-    else if (form.kind === "copy") send(`${LIBRARY_API}/copy`, { ...copyBody, methods: picked }).then(reported("copy", copyBody)).catch(failed);
+    else if (form.kind === "copy") copyInChunks(copyBody, picked).then(reported("copy", copyBody)).catch(failed);
     else if (form.kind === "import") send(`${LIBRARY_API}/import`, importBody).then(reported("import", importBody)).catch(failed);
     else if (form.kind === "duplicate") send(`${LIBRARY_API}/${method.id}/duplicate`, { name }).then(onDone).catch(failed);
     else if (form.kind === "delete") send(`${LIBRARY_API}/${method.id}/delete`, {}).then(() => onDone()).catch(failed);
@@ -2281,9 +2325,9 @@ function LibraryForm({ form, folder, projects, onCancel, onDone, onListed, onCur
   // The methods skipped because the library has their names, added again with a suffix to their last part
   const rename = (suffix) => {
     const taken = report.skipped.filter((s) => s.taken);
-    const body = report.kind === "copy" ? { ...report.body, methods: taken.map((s) => s.method), on_conflict: "rename", suffix }
-      : { ...report.body, on_conflict: "rename", suffix, only: taken.map((s) => libraryModelName(s.name, s.source)) };
-    return send(`${LIBRARY_API}/${report.kind}`, body).then((r) => {
+    const done = report.kind === "copy" ? copyInChunks({ ...report.body, on_conflict: "rename", suffix }, taken.map((s) => s.method))
+      : send(`${LIBRARY_API}/import`, { ...report.body, on_conflict: "rename", suffix, only: taken.map((s) => libraryModelName(s.name, s.source)) });
+    return done.then((r) => {
       setReport({ ...report, added: [...report.added, ...(report.kind === "copy" ? r.added : r.methods)],
         skipped: [...report.skipped.filter((s) => !s.taken), ...r.skipped], renamed: true });
       onListed();
@@ -2292,11 +2336,12 @@ function LibraryForm({ form, folder, projects, onCancel, onDone, onListed, onCur
   const actions = (label, disabled, danger) => html`
     <div class="form-actions">
       <button type="submit" class=${danger ? "danger" : "primary"} disabled=${!!disabled || busy}>${busy ? "…" : label}</button>
-      <button type="button" onClick=${onCancel}>Cancel</button>
-      ${typeof disabled === "string" && html`<span class="muted small">${disabled}</span>`}
+      ${progress ? html`<${CopyProgress} progress=${progress} onStop=${() => { stopped.current = true; }} />`
+        : html`<button type="button" onClick=${onCancel}>Cancel</button>`}
+      ${!progress && typeof disabled === "string" && html`<span class="muted small">${disabled}</span>`}
     </div>`;
   const noName = !name.length && "Give the method a name";
-  if (report) return html`<${AddReport} report=${report} busy=${busy} error=${error} onRename=${rename}
+  if (report) return html`<${AddReport} report=${report} busy=${busy} progress=${progress} onStop=${() => { stopped.current = true; }} error=${error} onRename=${rename}
     onEdit=${(m) => onDone(m)} onCurate=${onCurate} onClose=${() => onDone()} />`;
   if (form.kind === "delete") return html`
     <form class="project-form danger" onSubmit=${submit}>
@@ -2335,14 +2380,14 @@ function LibraryForm({ form, folder, projects, onCancel, onDone, onListed, onCur
 
 // What a copy or an import added: the methods added (renamed ones with the name they wanted), those skipped (a name
 // the library has: added with a suffix, or left), the rows of no flow of the project
-function AddReport({ report, busy, error, onRename, onEdit, onCurate, onClose }) {
+function AddReport({ report, busy, progress, onStop, error, onRename, onEdit, onCurate, onClose }) {
   const [suffix, setSuffix] = useState(" (copy)");
   const taken = report.skipped.filter((s) => s.taken);
   const other = report.skipped.filter((s) => !s.taken);
   const named = (s) => [s.source, ...s.name].filter(Boolean).join(" | ");
   return html`
     <div class="project-form add-report">
-      <h4>${report.added.length ? `${plural(report.added.length, "method")} added to the library` : "No method added"}
+      <h4>${report.added.length ? `${plural(report.added.length, "method")} added to the library` : "No method added"}${report.stopped ? " (stopped)" : ""}
         ${report.kind === "import" && report.added.length > 0 && html` <span class="muted small">(factors matched to ${report.project})</span>`}</h4>
       ${report.added.length > 0 && html`<ul class="report-list">${report.added.map((m) => html`
         <li key=${m.id}>${[m.source, ...m.name].filter(Boolean).join(" | ")} <span class="muted small">${plural(m.factors, "factor")}${m.unit ? ` · ${unit(m.unit)}` : ""}${m.origin?.left_out ? ` · ${plural(m.origin.left_out, "factor")} on flows the project lacks, left out` : ""}</span>
@@ -2355,7 +2400,8 @@ function AddReport({ report, busy, error, onRename, onEdit, onCurate, onClose })
             <label class="inline">Suffix after the last part <input class="suffix-input" value=${suffix} onInput=${(e) => setSuffix(e.target.value)} /></label>
             <button class="primary" disabled=${busy} onClick=${() => onRename(suffix)}
               title="Add them under their names with the suffix after the last part (numbered if that one is taken too)">${busy ? "…" : `Add ${taken.length === 1 ? "it" : "them"} renamed`}</button>
-            <span class="muted small">or leave ${taken.length === 1 ? "it" : "them"} out (Close)</span>
+            ${progress ? html`<${CopyProgress} progress=${progress} onStop=${onStop} />`
+              : html`<span class="muted small">or leave ${taken.length === 1 ? "it" : "them"} out (Close)</span>`}
           </div>
         </div>`}
       ${other.length > 0 && html`
@@ -2372,6 +2418,14 @@ function AddReport({ report, busy, error, onRename, onEdit, onCurate, onClose })
         <button class=${report.added.length ? "" : "primary"} onClick=${onClose}>Close</button>
       </div>
     </div>`;
+}
+
+// The methods of a copy sent this many at a time: each request a second or two, its progress shown
+const COPY_CHUNK = 40;
+function CopyProgress({ progress, onStop }) {
+  return html`<span class="copy-progress"><progress max=${progress.total} value=${progress.done} />
+    <span class="muted small">${count(progress.done)} of ${count(progress.total)} copied</span>
+    <button type="button" onClick=${onStop} title="Stop after the methods being copied: those copied so far stay in the library">Stop</button></span>`;
 }
 
 function UnmatchedRows({ rows }) {
@@ -7234,10 +7288,11 @@ function AddMethods({ info, origin, onAdded }) {
   const [error, setError] = useState(null);
   const [chosen, setChosen] = useState(() => new Set());
   const [job, setJob] = useState(null);
+  const [biosphere, setBiosphere] = useState(null);
   useEffect(() => {
     if (!open) return;
     const q = new URLSearchParams({ folder: origin.folder, project: origin.project });
-    serverRequest(`/api/brightway/methods?${q}`).then((r) => setListing([...r.methods, ...(r.library || [])].filter((m) => methodNamed(info, m.name) < 0)))
+    serverRequest(`/api/brightway/methods?${q}`).then((r) => { setBiosphere(r.biosphere); setListing([...r.methods, ...(r.library || [])].filter((m) => methodNamed(info, m.name) < 0)); })
       .catch((e) => setError(e.message));
   }, [open, info]);
   useEffect(() => {
@@ -7265,6 +7320,7 @@ function AddMethods({ info, origin, onAdded }) {
     ${!listing ? !error && html`<${Waiting} text="Reading the impact methods of the project…" />`
       : !listing.length ? html`<p class="muted small">The database has all the impact methods of ${origin.project} and of the methods library.</p>` : html`
         <${MethodPicker} methods=${listing} chosen=${chosen} setChosen=${setChosen} />
+        <${LibraryCoverage} methods=${listing} chosen=${chosen} biosphere=${biosphere} />
         <div class="row">
           <button class="primary" disabled=${!names.length || running} onClick=${add}>
             ${running ? "Adding…" : `Add ${names.length || ""} ${names.length === 1 ? "method" : "methods"}`}</button>
