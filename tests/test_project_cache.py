@@ -180,3 +180,74 @@ def test_results_dropped_are_solved_again(project):
     project_cache.build("toy", "fg", None, cache)
     assert versions(cache) == before  # the same numbers: the basis of fg holds
     assert_same(project_cache.load(cache, "fg"), "fg")
+
+
+def snapshot(model):
+    """What a model is made of, to compare two builds: its matrices, results, tables and exchanges, by node id."""
+    order = np.argsort(model.activities["id"].to_numpy())
+    flows = model.flows["id"].to_numpy()
+    products = model.activities["id"].to_numpy()
+
+    def exchanges(j):
+        return [{**e, "row": int((flows if e["type"] == "biosphere" else products)[e["row"]])}
+                for e in model.exchange_details(int(j))]
+
+    return {"A": model.A[order][:, order].toarray(), "B": model.B[:, order].toarray(), "G": model.G[order],
+            "activities": model.activities.iloc[order].reset_index(drop=True),
+            "details": [model.activity_details(int(j)) for j in order], "exchanges": [exchanges(j) for j in order]}
+
+
+def test_exchanges_read_in_parallel_give_the_same_model(project, monkeypatch):
+    serial, parallel = project / "serial", project / "parallel"
+    monkeypatch.setattr(project_cache, "EXCHANGE_WORKERS", 0)
+    project_cache.build("toy", "fg", METHODS, serial)
+    monkeypatch.setattr(project_cache, "EXCHANGE_WORKERS", 2)
+    monkeypatch.setattr(project_cache, "PARALLEL_EXCHANGES", 0)  # the toy's few exchanges, in two processes
+    messages = []
+    project_cache.build("toy", "fg", METHODS, parallel, log=messages.append)
+    assert any("in 2 processes" in m for m in messages)
+    # The results first, the exchanges after
+    ready = next(k for k, m in enumerate(messages) if m.startswith(project_cache.READY))
+    assert ready < messages.index("Exchanges read")
+    info = project_cache.read_project(parallel)
+    record = next(r for r in info["segments"] if r["databases"] == ["bg"])
+    assert len(project_cache.exchange_parts(project_cache.folder(parallel, record), 3)) == 2
+    for database in ("fg", "bg"):
+        a, b = snapshot(project_cache.load(serial, database)), snapshot(project_cache.load(parallel, database))
+        for key in ("A", "B", "G"):
+            np.testing.assert_array_equal(a[key], b[key])  # the same numbers, not close ones
+        assert a["activities"].equals(b["activities"])
+        assert a["details"] == b["details"] and a["exchanges"] == b["exchanges"]
+    assert_same(project_cache.load(parallel, "fg"), "fg")
+
+
+def test_a_database_opened_before_its_exchanges_are_read(project):
+    cache = project / "cache"
+    project_cache.build("toy", "fg", METHODS, cache)
+    whole = snapshot(project_cache.load(cache, "fg"))
+    info = project_cache.read_project(cache)
+    for r in info["segments"]:  # as a build stopped after the results: the exchanges not read
+        (project_cache.folder(cache, r) / project_cache.EXCHANGES).unlink()
+    assert project_cache.status(cache, "fg")["exchanges"] is False
+    model = project_cache.load(cache, "fg")  # it opens: the results are there
+    assert not model.has_exchanges and model.exchange_details(0) == []
+    np.testing.assert_array_equal(snapshot(model)["G"], whole["G"])
+    before, messages = versions(cache), []
+    project_cache.build("toy", "fg", None, cache, log=messages.append)  # the exchanges alone are read
+    assert versions(cache) == before and not any(m.startswith(("Reading the matrices", "Solving")) for m in messages)
+    assert project_cache.status(cache, "fg")["exchanges"] is True
+    assert project_cache.attach_exchanges(model) and model.has_exchanges
+    assert snapshot(model)["exchanges"] == whole["exchanges"]
+
+
+def test_a_segment_with_its_exchanges_in_one_file(project):
+    """Segments built before the exchanges were read by runs of activities have one exchanges.sqlite."""
+    cache = project / "cache"
+    project_cache.build("toy", "fg", METHODS, cache)
+    whole = snapshot(project_cache.load(cache, "fg"))
+    for r in project_cache.read_project(cache)["segments"]:
+        path = project_cache.folder(cache, r)
+        assert [p.name for p in path.glob("exchanges-*.sqlite")] == ["exchanges-0.sqlite"]  # small: one run
+        (path / "exchanges-0.sqlite").rename(path / "exchanges.sqlite")
+        (path / project_cache.EXCHANGES).unlink()
+    assert snapshot(project_cache.load(cache, "fg"))["exchanges"] == whole["exchanges"]

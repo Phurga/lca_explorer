@@ -47,75 +47,10 @@ G_CHUNK = 12_500_000
 # The files of the model that ``G`` is made from: if one changes (the model was built again), the cached ``G`` is not used
 G_SOURCES = ("A.npz", "B.npz", "methods.pkl")
 
-# Exchange cache (SQLite): one column per common field, named as in Brightway, other fields in
-# ``extra`` (JSON). Comments repeat a lot (ecoinvent 3.9: 100 MB, 8 MB distinct), so are stored once;
-# pedigree scores in the usual order are stored as "2,3,5,5,1".
-EXCHANGE_COLUMNS = {
-    "amount": "REAL", "unit": "TEXT", "uncertainty type": "INTEGER", "loc": "REAL", "scale": "REAL",
-    "scale without pedigree": "REAL", "shape": "REAL", "minimum": "REAL", "maximum": "REAL",
-    "formula": "TEXT", "variable name": "TEXT",
-}
-PEDIGREE = ("reliability", "completeness", "temporal correlation", "geographical correlation",
-            "further technological correlation")
-
-
-def _write_exchanges(path, exchanges) -> None:
-    import json
-    import sqlite3
-    from contextlib import closing
-
-    comments: dict[str, int] = {}
-
-    def record(activity, kind, row, data):
-        data = dict(data)
-        comment = data.pop("comment", None)
-        pedigree = data.get("pedigree")
-        if isinstance(pedigree, dict) and set(pedigree) == set(PEDIGREE) and all(type(v) is int for v in pedigree.values()):
-            pedigree = ",".join(str(pedigree[k]) for k in PEDIGREE)
-            del data["pedigree"]
-        else:
-            pedigree = None
-        values = [data.pop(k, None) for k in EXCHANGE_COLUMNS]
-        comment_id = None if comment is None else comments.setdefault(comment, len(comments))
-        extra = json.dumps(data, default=str) if data else None
-        return (int(activity), kind, int(row), comment_id, pedigree, *values, extra)
-
-    columns = ", ".join(f'"{k}" {t}' for k, t in EXCHANGE_COLUMNS.items())
-    path.unlink(missing_ok=True)
-    with closing(sqlite3.connect(path)) as db:
-        db.execute(f"CREATE TABLE exchanges (activity INTEGER, type TEXT, row INTEGER, comment INTEGER, "
-                   f"pedigree TEXT, {columns}, extra TEXT)")
-        db.executemany(f"INSERT INTO exchanges VALUES ({', '.join('?' * (len(EXCHANGE_COLUMNS) + 6))})",
-                       (record(*e) for e in exchanges))
-        db.execute("CREATE TABLE comments (id INTEGER PRIMARY KEY, text TEXT)")
-        db.executemany("INSERT INTO comments VALUES (?, ?)", ((i, c) for c, i in comments.items()))
-        db.execute("CREATE INDEX by_activity ON exchanges (activity)")
-        db.commit()
-        db.execute("VACUUM")
-
-
-def _read_exchanges(path, activity: int) -> list[dict]:
-    import json
-    import sqlite3
-    from contextlib import closing
-
-    columns = ", ".join(f'e."{k}"' for k in EXCHANGE_COLUMNS)
-    with closing(sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)) as db:
-        rows = db.execute(
-            f"SELECT e.type, e.row, c.text, e.pedigree, {columns}, e.extra FROM exchanges e "
-            f"LEFT JOIN comments c ON c.id = e.comment WHERE e.activity = ? ORDER BY e.rowid", (activity,))
-        out = []
-        for kind, row, comment, pedigree, *values, extra in rows:
-            d = {"type": kind, "row": row}
-            d.update((k, v) for k, v in zip(EXCHANGE_COLUMNS, values) if v is not None)
-            if comment is not None:
-                d["comment"] = comment
-            if pedigree is not None:
-                d["pedigree"] = dict(zip(PEDIGREE, map(int, pedigree.split(","))))
-            if extra:
-                d.update(json.loads(extra))
-            out.append(d)
-        return out
+# Exchange cache (SQLite): see exchange_store
+from .exchange_store import EXCHANGE_COLUMNS, PEDIGREE  # noqa: E402,F401  (named here by the server and tests)
+from .exchange_store import read as _read_exchanges  # noqa: E402
+from .exchange_store import write as _write_exchanges  # noqa: E402
 
 
 @dataclass
@@ -173,10 +108,14 @@ class LCAModel:
         self._CF = None
         self._details_paths = []  # details.pkl files, one per segment of a project cache, read on first use
         self._exchanges_path = None
-        # A model put together from a project cache: (first activity, exchanges.sqlite) of each segment, whose rows
-        # are node ids, and the node ids of the model's products and flows (sorted) with their rows
+        # A model put together from a project cache: (first activity, end, SQLite file) of each run of activities whose
+        # exchanges are read (one or more per segment), whose rows are node ids, and the node ids of the model's
+        # products and flows (sorted) with their rows
         self._exchange_parts = None
         self._node_rows = None
+        # A model opened while its build still reads the exchanges: they come later (``project_cache.attach_exchanges``)
+        self.exchanges_pending = False
+        self.exchanges_error = None
 
     @property
     def size(self) -> int:
@@ -391,8 +330,10 @@ class LCAModel:
         if self._exchange_parts:
             import bisect
 
-            k = bisect.bisect_right([start for start, _ in self._exchange_parts], index) - 1
-            start, path = self._exchange_parts[k]
+            k = bisect.bisect_right([start for start, _, _ in self._exchange_parts], index) - 1
+            if k < 0 or index >= self._exchange_parts[k][1]:
+                return []  # in a segment whose exchanges are not read (yet)
+            start, _, path = self._exchange_parts[k]
             products, product_rows, flows, flow_rows = self._node_rows
             out = []
             for e in _read_exchanges(path, index - start):  # rows are node ids: those of the model's rows

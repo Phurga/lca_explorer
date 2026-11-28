@@ -40,27 +40,9 @@ def _details(data: dict) -> dict:
     return out
 
 
-EXCHANGE_FIELDS = [
-    "amount", "unit", "comment", "formula", "variable name", "uncertainty type", "loc", "scale",
-    "scale without pedigree", "shape", "minimum", "maximum", "pedigree",
-]
-
-
-def _exchange_data(data: dict) -> dict:
-    """Metadata of one exchange shown in the activity pop-up; the product properties (price,
-    carbon content, …) and production volume are kept for production exchanges only."""
-    fields = EXCHANGE_FIELDS + (["production volume", "properties"] if data.get("type") == "production" else [])
-    out = {}
-    for k in fields:
-        v = data.get(k)
-        if isinstance(v, np.ndarray):  # some imports (e.g. BAFU) store numpy values
-            v = v.tolist()
-        elif isinstance(v, np.generic):
-            v = v.item()
-        if v is None or (isinstance(v, (str, list, tuple, dict)) and not v) or (isinstance(v, float) and v != v):
-            continue  # empty, or NaN (not valid JSON)
-        out[k] = v
-    return out
+# What the activity pop-up shows of an exchange (see exchange_store)
+from .exchange_store import EXCHANGE_FIELDS  # noqa: E402,F401
+from .exchange_store import exchange_data as _exchange_data  # noqa: E402
 
 
 def _exchanges(lca, rows: np.ndarray, activity_ids: np.ndarray) -> list[tuple]:
