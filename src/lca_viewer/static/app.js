@@ -2987,7 +2987,8 @@ function EditPanel({ origin, dataset, pending, affected, locked, outdated, onFor
 
 // ---------------------------------------------------------------- tree
 // Right-click on the headers of the list: choose its columns (the process is always there)
-function ColumnMenu({ at, columns, onChange, onClose }) {
+// ``options``: the columns to choose from (the tree's by default; the Exchanges panel has its own)
+function ColumnMenu({ at, columns, onChange, onClose, options = COLUMNS }) {
   const box = useRef(null);
   useEffect(() => {
     const down = (e) => !box.current?.contains(e.target) && onClose();
@@ -2996,13 +2997,13 @@ function ColumnMenu({ at, columns, onChange, onClose }) {
     document.addEventListener("keydown", key, true);
     return () => { document.removeEventListener("mousedown", down); document.removeEventListener("keydown", key, true); };
   }, []);
-  const toggle = (id) => onChange(COLUMNS.map((c) => c.id).filter((x) => (x === id) !== columns.includes(x)));
+  const toggle = (id) => onChange(options.map((c) => c.id).filter((x) => (x === id) !== columns.includes(x)));
   const left = Math.max(4, Math.min(at.x, window.innerWidth - 220)), top = Math.max(4, Math.min(at.y, window.innerHeight - 290));
   return html`
     <div class="column-menu" ref=${box} style=${{ left: `${left}px`, top: `${top}px` }} role="menu" aria-label="Columns">
-      ${COLUMNS.map((c, i) => html`
+      ${options.map((c, i) => html`
         <${Fragment} key=${c.id}>
-          ${c.exchange && !COLUMNS[i - 1].exchange && html`<div class="column-menu-head">Exchange data</div>`}
+          ${c.exchange && !options[i - 1]?.exchange && html`<div class="column-menu-head">Exchange data</div>`}
           <label title=${c.hint}><input type="checkbox" checked=${columns.includes(c.id)} onChange=${() => toggle(c.id)} /> ${c.label}</label>
         <//>`)}
     </div>`;
@@ -4090,8 +4091,8 @@ function PopupWindow({ target, win, label, className = "", head, width = 560, me
 // panel, ↑/↓ move between the rows of the panel (``[data-nav]``, focusable; each row handles
 // its own Space, c, Enter and ←/→ — see ``ProcessRow`` — and ←/→ reach here only when a row
 // does not use them), or scroll a panel without rows; ↑ on the first row goes back to the
-// panels' tabs; Space or c with no row closes it.
-function popupKeys({ tabs, shown, setTab, body, onClose, exchange, explorerKeys }) {
+// panels' tabs (``toTabs``: a docked card, its active tab; else the pop-up itself); Space or c with no row closes it.
+function popupKeys({ tabs, shown, setTab, body, onClose, exchange, explorerKeys, toTabs }) {
   return (e) => {
     const box = e.currentTarget;
     const inTab = (e.ctrlKey || e.metaKey) && !e.altKey && e.key === "Enter";  // for the explorer's selected process
@@ -4106,7 +4107,7 @@ function popupKeys({ tabs, shown, setTab, body, onClose, exchange, explorerKeys 
       used();
       if (!rows.length) { body.current?.scrollBy(0, down ? 48 : -48); return; }
       const at = rows.indexOf(document.activeElement);
-      if (at === 0 && !down) { box.focus({ preventScroll: true }); body.current?.scrollTo(0, 0); return; }
+      if (at === 0 && !down) { if (toTabs) toTabs(); else box.focus({ preventScroll: true }); body.current?.scrollTo(0, 0); return; }
       const next = rows[at < 0 ? (down ? 0 : rows.length - 1) : at + (down ? 1 : -1)];
       next?.focus({ preventScroll: true });
       next?.scrollIntoView({ block: "nearest" });
@@ -4202,7 +4203,9 @@ function FlowHead({ info, kind = "Flow" }) {
 //   show the filter box (default: more than 8 rows); ``empty``: the text of an empty list; ``limit``: rows drawn before
 //   *Show all*; ``more``: a line under the list (e.g. *Show all n*: rows the server did not send); ``sections?(rows)``:
 //   [{ key, label, items, cells? }]: headers that fold, ``noun``: what a section counts; ``renderRow?(row)``: a row of its
-//   own (``ProcessRow``: rows that expand); ``tools``: beside the filter box; ``drag?(row)``: what a row drags.
+//   own (``ProcessRow``: rows that expand); ``tools``: beside the filter box; ``drag?(row)``: what a row drags;
+//   ``onHeaderMenu?(event)``: what a right-click on the headers does instead of the row of filter boxes (the Exchanges
+//   panel's columns menu). Enter: ``onUse(row)``, Ctrl/⌘+Enter: ``onUse(row, true)`` (in a new tab).
 const LIST_WIDTHS = { num: 84, unit: 84, share: 104 };
 function ShareBar({ value }) {
   const v = Math.max(-1, Math.min(1, value || 0));
@@ -4242,7 +4245,7 @@ const passesFilter = (c, r, text) => {
   return text.split(/\s+/).every((w) => String(v ?? "").toLowerCase().includes(w));
 };
 function PopupList({ columns, rows, rowKey, rowClass, pinned, match, query, setQuery, filter, empty = "Nothing to list.", limit = null,
-  more, sections, noun = "row", renderRow, onOpen, onInfo, hasInfo = () => true, onUse, tools, drag, initial, className = "" }) {
+  more, sections, noun = "row", renderRow, onOpen, onInfo, hasInfo = () => true, onUse, tools, drag, initial, className = "", onHeaderMenu }) {
   const [sort, setSort] = useState(initial || { key: null, desc: false });
   const [own, setOwn] = useState("");
   const [filters, setFilters] = useState(null);  // null: no row of filter boxes; else { key: text }
@@ -4285,11 +4288,12 @@ function PopupList({ columns, rows, rowKey, rowClass, pinned, match, query, setQ
   const click = (c) => c.sort !== false && setSort((s) => (s.key === c.key ? { key: c.key, desc: !s.desc } : { key: c.key, desc: c.kind === "num" || c.kind === "share" }));
   const [first, ...rest] = columns;
   const keys = (r) => (e) => {
-    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const inTab = (e.ctrlKey || e.metaKey) && !e.altKey && e.key === "Enter";  // Ctrl/⌘+Enter: ``onUse(row, true)``
+    if ((e.ctrlKey || e.metaKey || e.altKey) && !inTab) return;
     const used = () => { e.preventDefault(); e.stopPropagation(); };
     if (e.key === " " && onOpen) { used(); onOpen(r, e); }
     else if (e.key === "i" && onInfo && hasInfo(r)) { used(); onInfo(r, e); }
-    else if (e.key === "Enter" && onUse) { used(); onUse(r); }
+    else if (e.key === "Enter" && onUse) { used(); onUse(r, inTab); }
   };
   const plainRow = (r) => html`
     <tr key=${rowKey(r)} data-nav tabindex="-1" class=${`exchange ${rowClass?.(r) || ""}`} ...${drag?.(r) || {}} onKeyDown=${keys(r)}
@@ -4314,8 +4318,8 @@ function PopupList({ columns, rows, rowKey, rowClass, pinned, match, query, setQ
           <thead>
             <tr>${columns.map((c) => html`
               <th key=${c.key} class=${`${c === first ? "name" : c.kind || "text"} ${sort.key === c.key ? "sorted" : ""}`}
-                title=${`${c.title ? `${c.title}. ` : ""}${c.sort === false ? "" : "Click: sort. "}Right-click: filter by column.`}
-                onClick=${() => click(c)} onContextMenu=${(e) => { e.preventDefault(); setFilters((f) => (f ? null : {})); }}>
+                title=${`${c.title ? `${c.title}. ` : ""}${c.sort === false ? "" : "Click: sort. "}${onHeaderMenu ? "Right-click: choose the columns." : "Right-click: filter by column."}`}
+                onClick=${() => click(c)} onContextMenu=${(e) => { e.preventDefault(); if (onHeaderMenu) onHeaderMenu(e); else setFilters((f) => (f ? null : {})); }}>
                 ${c.label}${sort.key === c.key ? (sort.desc ? " ↓" : " ↑") : ""}</th>`)}</tr>
             ${filters && html`<tr class="filter-row">${columns.map((c, i) => html`
               <th key=${c.key}><input value=${filters[c.key] || ""} placeholder=${c.kind === "num" ? "> 0, < 10…" : "contains…"} aria-label=${`Filter by ${typeof c.label === "string" ? c.label : c.key}`}
@@ -4898,54 +4902,72 @@ function inputSection(e) {
   if (e.type === "production" || e.type === "generic production") return "product";  // a co-product
   return e.amount < 0 ? "avoided" : "technosphere";
 }
+// The columns of the Exchanges panel after the name (right-click their headers: ``ColumnMenu``; the choice is kept in the
+// browser, ``exchangeColumns``). ``place`` is the chip after the name (a process's location, a flow's compartment).
+const EXCHANGE_PANEL_COLUMNS = [
+  { id: "place", label: "Location / compartment", hint: "After the name: the location of a process, the compartment of a flow" },
+  { id: "amount", label: "Amount", hint: "As recorded in the dataset (waste and avoided products positive, as in the process form)" },
+  { id: "unit", label: "Unit" },
+  { id: "comment", label: "Comment", hint: "Comment on the exchange, on one line (hover it for all of it; i: the exchange pop-up)" },
+  { id: "uncertainty", label: "Uncertainty", hint: "Uncertainty distribution recorded on the exchange" },
+  { id: "pedigree", label: "Pedigree", hint: "Pedigree scores of the exchange: reliability, completeness, time, geography, technology" },
+  { id: "formula", label: "Formula", hint: "Formula of the amount, as recorded" },
+];
+const DEFAULT_EXCHANGE_COLUMNS = ["place", "amount", "unit", "comment"];
+function loadExchangeColumns() {
+  try {
+    const kept = JSON.parse(loadPreference("exchangeColumns", "null"));
+    if (Array.isArray(kept)) return kept.filter((id) => EXCHANGE_PANEL_COLUMNS.some((c) => c.id === id));
+  } catch { /* not kept, or not readable */ }
+  return DEFAULT_EXCHANGE_COLUMNS;
+}
+const oneLine = (text) => (text || "").replace(/\s+/g, " ").trim();
+const pedigreeText = (e) => (e?.pedigree ? PEDIGREE.map(([k]) => e.pedigree[k] ?? "–").join(",") : "");
+const pedigreeTip = (e) => (e?.pedigree ? PEDIGREE.map(([k, label]) => `${label} ${e.pedigree[k] ?? "–"}`).join(" · ") : undefined);
 // ``onOpen(row, e)``: the pop-up of its process or flow; ``onExchange(row, e)``: its exchange pop-up; ``onUse(row, inTab)``:
-// Enter on a process. Its tools: *Edit* (Edit mode for the whole app: a Brightway-built database), and in Edit mode
-// *Done editing* and *Edit process…*; amounts then change in place (staged, as in the exchange pop-up).
-function ProcessExchanges({ index, info, exchanges, locked, onOpen, onExchange, onUse }) {
-  const ctx = useContext(EditorContext);
+// Enter on a process (Ctrl/⌘+Enter: in a new tab). Its keys are those of the lists of the pop-ups (``popupKeys``, and in a
+// tab the docked card's). Nothing is edited here: Edit mode is the top bar's (the exchange pop-up edits an amount).
+function ProcessExchanges({ index, info, exchanges, onOpen, onExchange, onUse }) {
+  const [chosen, setChosen] = useState(loadExchangeColumns);
+  const [menu, setMenu] = useState(null);  // where the columns menu is open: { x, y }
+  const choose = (ids) => { setChosen(ids); savePreference("exchangeColumns", JSON.stringify(ids)); };
+  const has = (id) => chosen.includes(id);
   const positive = (section, amount) => (section === "waste" || section === "avoided" ? Math.abs(amount) : amount);
   const p = exchanges.production;
   const rows = [
     ...(p ? [{ key: "production", section: "product", kind: "process", own: true, index, name: info.reference_product || info.name,
-      place: info.location, amount: p.amount, unit: p.unit ?? info.unit, comment: p.comment }] : []),
+      place: info.location, amount: p.amount, unit: p.unit ?? info.unit, comment: p.comment, ex: p }] : []),
     ...exchanges.inputs.map((e, i) => {
       const section = inputSection(e);
       return { key: `p${i}`, section, kind: "process", index: e.index, name: section === "product" ? e.reference_product || e.name : e.name,
-        product: e.reference_product, place: e.location, amount: e.amount, unit: e.unit, comment: e.comment, input: e.input };
+        product: e.reference_product, place: e.location, amount: e.amount, unit: e.unit, comment: e.comment, ex: e };
     }),
     ...exchanges.flows.map((f, i) => ({ key: `f${i}`, section: fromNature(f.categories?.[0]) ? "resource" : "emission", kind: "flow",
-      index: f.index, name: f.name, place: (f.categories || []).join(" · "), amount: f.amount, unit: f.unit, comment: f.comment, input: f.input })),
+      index: f.index, name: f.name, place: (f.categories || []).join(" · "), amount: f.amount, unit: f.unit, comment: f.comment, ex: f })),
   ].map((r) => ({ ...r, shown: positive(r.section, r.amount ?? 0) }));
   const sections = (shown) => EXCHANGE_SECTIONS.map(([key, label]) => ({ key, label, items: shown.filter((r) => r.section === key) }))
     .filter((s) => s.items.length);
-  const change = (r) => (t) => quickEdit(ctx, info.database, info.code, patchExchange(r.input, r.amount, t));
-  const amountCell = (r) => (r.own || !ctx.editing ? fmtAmount(r.shown) : html`<${Editable} value=${r.shown} format=${fmtAmount}
-    disabled=${locked || !r.input} title=${r.input ? undefined : "Build this database again once, to edit amounts here"} onCommit=${change(r)} />`);
-  const editTitle = ctx.origin ? "Edit mode (e): change processes, staged then made together and the model built again"
-    : "Open a database of a Brightway project to edit it";
-  const tools = html`<span class="exchange-tools">
-    ${ctx.editing ? html`
-      <button onClick=${() => ctx.setMode?.("view")} title="Back to View mode (v): the staged changes are kept">Done editing</button>
-      <button disabled=${locked} onClick=${() => ctx.openForm({ edit: { database: info.database, code: info.code } })}
-        title=${locked ? "Its database is locked: unlock it in the Projects dialog" : "Open the form of this process: the change is staged, then applied with the others"}>Edit process…</button>
-      ${locked && html`<span class="muted">🔒 locked</span>`}`
-    : html`<button disabled=${!ctx.origin || !ctx.enterEdit} onClick=${() => ctx.enterEdit()} title=${editTitle}>Edit</button>`}
-  </span>`;
-  if (!exchanges.available) return html`${tools}<p class="muted">This model has no exchanges recorded: build it again to see them.</p>`;
+  if (!exchanges.available) return html`<p class="muted">This model has no exchanges recorded: build it again to see them.</p>`;
+  const columns = [
+    { key: "name", label: "Exchange", title: "Its process or flow: open it for its pop-up; (i): the exchange (comment, uncertainty, pedigree)",
+      value: (r) => r.name, tip: (r) => (r.product && r.product !== r.name ? `${r.name} · product: ${r.product}` : r.name),
+      chip: (r) => (!r.place || !has("place") ? "" : r.kind === "flow" ? html` <span class="muted small">${r.place}</span>` : html` <span class="loc-chip">${r.place}</span>`) },
+    has("amount") && { key: "amount", label: "Amount", kind: "num", format: fmtAmount, title: EXCHANGE_PANEL_COLUMNS[1].hint, value: (r) => r.shown },
+    has("unit") && { key: "unit", label: "Unit", kind: "unit", width: 60, value: (r) => unit(r.unit) },
+    has("comment") && { key: "comment", label: "Comment", width: 220, title: "Comment on the exchange (hover it for all of it)",
+      value: (r) => oneLine(r.comment), tip: (r) => r.comment?.trim() || undefined },
+    has("uncertainty") && { key: "uncertainty", label: "Uncertainty", width: 200, value: (r) => uncertaintyText(r.ex) || "" },
+    has("pedigree") && { key: "pedigree", label: "Pedigree", width: 90, title: EXCHANGE_PANEL_COLUMNS[5].hint, value: (r) => pedigreeText(r.ex), tip: (r) => pedigreeTip(r.ex) },
+    has("formula") && { key: "formula", label: "Formula", width: 140, value: (r) => r.ex?.formula || "" },
+  ].filter(Boolean);
   return html`
-    <${PopupList} key=${`dataset-${index}`} noun="exchange" rows=${rows} rowKey=${(r) => r.key} sections=${sections} tools=${tools}
+    <${PopupList} key=${`dataset-${index}`} noun="exchange" rows=${rows} rowKey=${(r) => r.key} sections=${sections}
       className="exchange-list" empty="The dataset records no exchange." match=${(r) => `${r.name} ${r.place || ""} ${r.comment || ""}`}
       onOpen=${onOpen} onInfo=${onExchange} hasInfo=${(r) => !r.own} onUse=${(r, inTab) => r.kind === "process" && onUse(r, inTab)}
-      columns=${[
-        { key: "name", label: "Exchange", title: "Its process or flow: open it for its pop-up; (i): the exchange (comment, uncertainty, pedigree)",
-          value: (r) => r.name, tip: (r) => (r.product && r.product !== r.name ? `${r.name} · product: ${r.product}` : r.name),
-          chip: (r) => (!r.place ? "" : r.kind === "flow" ? html` <span class="muted small">${r.place}</span>` : html` <span class="loc-chip">${r.place}</span>`) },
-        { key: "amount", label: "Amount", kind: "num", title: "As recorded in the dataset (waste and avoided products positive, as in the process form)",
-          value: (r) => r.shown, cell: amountCell },
-        { key: "unit", label: "Unit", kind: "unit", width: 60, value: (r) => unit(r.unit) },
-        { key: "comment", label: "", width: 26, sort: false, title: "Comment on the exchange (hover the mark)", value: (r) => r.comment || "",
-          cell: (r) => (r.comment ? html`<span class="comment-mark" aria-label="Comment">✎</span>` : "") },
-      ]} />`;
+      onHeaderMenu=${(e) => setMenu({ x: e.clientX, y: e.clientY })} columns=${columns} />
+    ${menu && html`<${PagePortal}>
+      <${ColumnMenu} at=${menu} columns=${chosen} options=${EXCHANGE_PANEL_COLUMNS} onChange=${choose} onClose=${() => setMenu(null)} />
+    <//>`}`;
 }
 
 // ``target.parents``: for a process opened from a bundle pop-up (no row of its own), the
@@ -4956,8 +4978,8 @@ function ProcessExchanges({ index, info, exchanges, locked, onOpen, onExchange, 
 // uncertainty of the input, ``target.exchange``). ``onFollow(target)`` opens another in place.
 // ``docked``: the same panels in a tab, under its first line: the tree (``treeSlot``) is the first panel, the pop-up's the
 // others; ``active``: the tab is the one shown (a hidden tab loads nothing)
-function DockedShell({ children }) {
-  return html`<div class="docked-panels">${children}</div>`;
+function DockedShell({ children, onKeyDown }) {
+  return html`<div class="docked-panels" onKeyDown=${onKeyDown}>${children}</div>`;
 }
 function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsById, onClose, onUseAsRoot, onOpenTab, root, amount, onFollow, onGoTo, onBack, docked, active, treeSlot, onDown }) {
   const idle = !!docked && !active;
@@ -5134,6 +5156,13 @@ function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsByI
   ].filter(Boolean) : [];
   const shown = exchange ? "tree" : tabs.some((t) => t.id === tab) ? tab : tabs[0]?.id;
   useEffect(() => { body.current?.scrollTo(0, 0); }, [shown]);
+  // A docked card (a tab): the keys of the pop-ups in the rows of its panels (↑ on the first row: back to its active
+  // panel tab); the tree has its own keys, and its tab bar ``tabKeys``
+  const tabsBar = useRef(null);
+  const dockedKeys = (e) => {
+    if (!body.current?.contains(e.target)) return;
+    popupKeys({ tabs, shown, setTab, body, onClose, toTabs: () => tabsBar.current?.querySelector("button.active")?.focus() })(e);
+  };
   useEffect(() => {
     if (shown !== "characterisation" || idle) return;
     let live = true;
@@ -5154,7 +5183,7 @@ function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsByI
           title: locked ? "Its database is locked: unlock it in the Projects dialog" : "Open the form of this process: the change is staged, then applied with the others",
           run: () => { ctx.openForm({ edit: { database: info.database, code: info.code } }); onClose(); } }] : []),
       ] : []}
-      onKeyDown=${popupKeys({ tabs, shown, setTab, body, onClose, exchange, explorerKeys })}
+      onKeyDown=${docked ? dockedKeys : popupKeys({ tabs, shown, setTab, body, onClose, exchange, explorerKeys })}
       head=${html`
         <div class="info-title">${target.direct ? "Direct emissions of " : ""}${(target.direct ? rowsById.get(row?.parent)?.custom : row?.custom)
           || (info ? info.name : "…")}${" "}
@@ -5166,8 +5195,13 @@ function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsByI
           : html`<div class="muted">${info.activity_type} · ${info.reference_product} · ${unit(info.unit)}</div>`)}`}>
       ${error && html`<div class="error">${error}</div>`}
       ${(info || docked) && html`
-        ${!exchange && html`<div class="tabs info-tabs" role="tablist" onKeyDown=${docked ? ((e) => {
-          if (e.key === "ArrowDown") { e.preventDefault(); e.stopPropagation(); onDown?.(); } else tabKeys(tabs.map((t) => t.id), shown, setTab)(e);
+        ${!exchange && html`<div class="tabs info-tabs" role="tablist" ref=${tabsBar} onKeyDown=${docked ? ((e) => {
+          if (e.key !== "ArrowDown") { tabKeys(tabs.map((t) => t.id), shown, setTab)(e); return; }
+          // ↓: into the panel, on its first row (the tree: ``onDown``)
+          e.preventDefault(); e.stopPropagation();
+          if (shown === "explore") { onDown?.(); return; }
+          const first = body.current?.querySelector("[data-nav]");
+          if (first) { first.focus({ preventScroll: true }); first.scrollIntoView({ block: "nearest" }); } else body.current?.scrollBy(0, 48);
         }) : undefined}>
           ${tabs.map((t) => html`
             <button role="tab" aria-selected=${t.id === shown} class=${t.id === shown ? "active" : ""}
@@ -5200,7 +5234,7 @@ function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsByI
               embedded=${{ method, onInfo: follow, onUse: useAsRoot, keys: explorerKeys }} onSave=${() => {}} onTitle=${() => {}} />`}
           ${shown === "exchanges" && info && exchanges && html`
             <section>
-              <${ProcessExchanges} index=${target.index} info=${info} exchanges=${exchanges} locked=${locked}
+              <${ProcessExchanges} index=${target.index} info=${info} exchanges=${exchanges}
                 onOpen=${(r, e) => (r.kind === "flow" ? follow({ flow: r.index }, e) : openActivity(r.index, e))}
                 onExchange=${(r, e) => (r.kind === "flow" ? follow({ flow: r.index, activities: [target.index], exchange: true }, e) : openExchange(r.index, base, e))}
                 onUse=${useAsRoot} />
@@ -7660,7 +7694,8 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
     if (embedded) return;
     const onKey = (e) => {
       // A pop-up that has the focus has its own keys
-      if (keyboardOwner !== id || e.target.closest?.("input, textarea, select, [contenteditable], .info-popup, .docked-panels > .info-tabs")) return;
+      // (and a row of a panel of the tab's card: the card's keys, ``dockedKeys``)
+      if (keyboardOwner !== id || e.target.closest?.("input, textarea, select, [contenteditable], .info-popup, .docked-panels > .info-tabs, .docked-panels > .info-body")) return;
       // A tree button clicked last (▸, a chip) would also react to Space
       if (document.activeElement?.tagName === "BUTTON" && treeSection.current?.contains(document.activeElement)) document.activeElement.blur();
       if (treeKey.current(e)) e.preventDefault();
@@ -8602,7 +8637,7 @@ const SHORTCUTS = [
   ["Anywhere", [
     ["Ctrl/⌘ + K", "Search a process in the top bar: Enter shows it in the tab, Ctrl/⌘ + Enter opens it in a new tab"],
     ["v", "View mode; when already in View mode, the view options of the tab in focus (as its sliders button in the Processes panel)"],
-    ["e", "Edit mode (a Brightway-built database; also the Edit button of a process's Exchanges panel); when already in Edit mode, open the form of the selected process, as below"],
+    ["e", "Edit mode (a Brightway-built database); when already in Edit mode, open the form of the selected process, as below"],
     ["c", "Compare mode"],
     ["s", "Search a process in the top bar (as Ctrl/⌘ + K)"],
     ["Ctrl/⌘ + ←  →", "Hide or show the left panel (processes, view, methods, groups) / the right panel"],
@@ -8910,10 +8945,7 @@ function App() {
       .catch(() => { /* not a Brightway process: nothing to edit */ });
     return () => { live = false; };
   }, [editing, origin?.folder, origin?.project, focusedRoot?.index, pendingView.locked.join("|")]);
-  // ``setMode`` and ``enterEdit``: the Edit button of a process card's Exchanges panel (Edit mode for the whole app, the
-  // side panel open as for the e key) and its Done editing (setMode("view"))
-  const editor = { editing, origin, pending, locked: pendingView.locked, stale, stage, openForm: setDatasetOpen, setMode,
-    enterEdit: () => { if (!origin) return; setMode("edit"); setSideOpen(true); } };
+  const editor = { editing, origin, pending, locked: pendingView.locked, stale, stage, openForm: setDatasetOpen };
   const persist = () => current.current.layout && saveWorkspace({ layout: current.current.layout, focus: current.current.focus, tabs: states.current });
   useEffect(persist, [layout, focus]);
 
@@ -9140,9 +9172,12 @@ function App() {
       ${databases && html`
         <span class="mode-switch" role="group" aria-label="Mode">
           <button class=${`has-key ${!editing && !comparing ? "primary" : ""}`} onClick=${() => setMode("view")}
-            title=${`View (v): explore the results of the model built from the database${editing ? "; leaves Edit mode (the staged changes are kept)" : ""}. Edit mode: the Edit button of a process's Exchanges panel, or e`}><${KeyedLabel} label="View" k="v" /></button>
+            title="View (v): explore the results of the model built from the database"><${KeyedLabel} label="View" k="v" /></button>
           <button class=${`has-key ${comparing ? "primary" : ""}`} onClick=${() => setMode("compare")}
             title="Compare (c): the processes of several tabs: contribution by group, difference, impact categories"><${KeyedLabel} label="Compare" k="c" /></button>
+          <button class=${`has-key ${editing ? "primary" : ""}`} disabled=${!origin} onClick=${() => { setMode("edit"); setSideOpen(true); }}
+            title=${origin ? "Edit (e): change processes, staged then made together and the model built again" : "Open a database of a Brightway project to edit it"}>
+            <${KeyedLabel} label="Edit" k="e" />${pending.length ? ` (${pending.length} staged)` : ""}</button>
         </span>`}
       </div>
     </header>

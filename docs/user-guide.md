@@ -37,6 +37,11 @@ create datasets, add Agribalyse, run it on a shared server, set it up by hand an
 - **Right-click** a process for its description, metadata and main emissions,
   and *Used by*: which activities use its product, and how much each takes
   in this supply chain.
+- **Exchanges** (a panel of a process, in its tab or its pop-up): its exchanges as the dataset records them, in the
+  sections of the process form, with their location or compartment, amount, unit and comment (hover a comment to read
+  all of it). Right-click the column headers to show or hide columns, uncertainty, pedigree and formula among them.
+  The arrows move between the rows; Space opens a row's process or flow, **i** the exchange, Enter makes a process
+  the process of the tab (Ctrl/⌘ + Enter: of a new tab).
 - **×** on a row (hover) moves it to *others*, out of the tree and the chart;
   click an *others* row to see what it contains and bring processes back
   (also the way to show processes hidden by the cut-off). Changing the
@@ -201,15 +206,13 @@ sittings. A dataset with co-products goes into a database made by this panel
 (Brightway's `multifunctional` backend); a single-output one can go into any
 database of the project.
 
-**View and Edit modes.** *View* is the explorer on the model built from the database: fast, precalculated.
-*Edit* is entered from a process: the **Edit** button of its *Exchanges* panel (in its tab or its pop-up; the key
-`e` does the same), and left with *Done editing* there or *View* in the top bar. The *Exchanges* panel lists the
-exchanges as the dataset records them, in the sections of the process form; in Edit mode its amounts change by
-double-click and *Edit process…* opens the form. *Edit* replaces the right panel with the edit panel for the project the open database
+**View and Edit modes.** The switch in the top bar sets what the right panel is.
+*View* is the explorer on the model built from the database: fast, precalculated.
+*Edit* replaces the right panel with the edit panel for the project the open database
 was built from. Nothing there writes to Brightway at once: each change is *staged*,
 and *Apply* makes them all in one transaction. *Apply and rebuild* then builds the open model
 again if the changes affect it (it keeps being served until the new one is ready) and goes back
-to View. Back in View, a line under the top bar says how many changes are staged; they are kept by the server
+to View. The number of staged changes shows on the Edit button; they are kept by the server
 (`data/pending`), so they survive a reload.
 
 - **Impacts that may be wrong are greyed out**: in Edit mode once staged changes affect the open
@@ -224,8 +227,7 @@ to View. Back in View, a line under the top bar says how many changes are staged
   its unit, an input's amount, the description…), in the tree or in a pop-up. It is staged
   like any other change. In the tree, the name is the process's own name (the label shown may
   be its product), and the amount is the input in the dataset of the process above, not the
-  amount of this supply chain. The pop-up has an **Edit…** entry (its ⋯ menu), and its *Exchanges* panel an *Edit
-  process…* button, for the whole form.
+  amount of this supply chain. The pop-up has an **Edit…** entry (its ⋯ menu) for the whole form.
 - **Lock a database** (*Projects*, in the *Options* of each database): nothing in it can be
   edited, deleted or added to, whichever database is open when one of its processes is reached.
   The lock is kept by the server (`data/locks.json`) and enforced when changes are staged and

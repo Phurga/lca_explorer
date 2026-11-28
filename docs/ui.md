@@ -100,10 +100,9 @@ API in `src/lca_viewer/server.py`.
   in the open database while entering a dataset.
   *Start from* (same form) copies any process of the project into it
   (`GET /api/brightway/dataset`, read from the SQLite file).
-- **Mode switch** (top bar, at the right: **View / Compare**; keys v, c). Edit mode is entered from a process card
-  (the **Edit** button of its *Exchanges* panel), with the **e** key, or from the staged-changes warning; **View**
-  leaves it. Decision: one edits a process, so the way into Edit mode is on the process, next to the exchanges it
-  changes, rather than a third mode button far from them; the EDIT MODE badge still says which mode is on.
+- **Mode switch** (top bar, at the right: **View / Compare / Edit**; keys v, c, e). Decision (tried and dropped): Edit
+  mode entered from a process card (an *Edit* button on its *Exchanges* panel, amounts edited there in place) instead
+  of the top bar; the mode is the whole app's, so its switch stays with the other modes, in the top bar.
 - **Compare mode** (the middle button): the workspace and the side
   panel give way to a comparison of the processes of the open tabs (the
   tabs stay mounted, so nothing is lost when going back). The tabs to
@@ -156,8 +155,7 @@ API in `src/lca_viewer/server.py`.
   a comparison is made of what is already open. Groups instead of tree rows so that
   tabs with different supply chains line up (`charts.md` has the same reasoning).
   The choices are kept while the page is open, not saved.
-- **View / Edit** (the *Edit* button of a process card's *Exchanges* panel, or **e**; *View* or *Done editing* goes
-  back). View is the explorer. Edit swaps the right
+- **View / Edit switch** (top bar). View is the explorer. Edit swaps the right
   panel for the *edit panel* (the side panel's tabs stay mounted, hidden): the
   focused tab's process with *Edit*, *Copy as new* and *Delete*, *+ New process*,
   the list of staged changes (*Open*, *Remove*), and *Apply and rebuild*. Decision:
@@ -176,9 +174,8 @@ API in `src/lca_viewer/server.py`.
   names (they stay in the tab, for View). Pins, cut-off and groups stay but act on impacts that may
   be stale (greyed: `.app.stale .impact`). Edit mode is plum (`.app.editing` redefines the accent,
   bar and background variables, an EDIT MODE badge and an underlined top bar), View mode green. In
-  View mode with changes staged, a warning under the top bar says how many and offers to review them in Edit mode
-  (`.staged-warning`). `App` passes `setMode` and `enterEdit` (Edit mode and the side panel open, as **e**) in the
-  editor object, for the card's buttons.
+  View mode with changes staged, the Edit button reads *Edit (n staged)* and a warning under the top
+  bar offers to review them (`.staged-warning`).
   `Editable` is a value that turns into an input on double-click (Enter or blur stages, Escape
   cancels); its `start` prop (a new object each time) opens it without a double-click; its `format` prop
   (`fmtAmount` for amounts) is how the value reads when not edited, the input has it in full;
@@ -426,7 +423,7 @@ API in `src/lca_viewer/server.py`.
   themselves carry no key hints (what a tab of the side panel shows is in a popup on its
   name). Four keys work anywhere (not while typing, in a
   pop-up or in a dialog): **v** goes to View mode, and in View mode
-  opens the view options of the tab in focus (their pop-up); **Ctrl/⌘ + ←** and **→** hide or show the left and the right panel; **e** goes to Edit mode (a Brightway-built database; as the *Edit* button of a process's *Exchanges* panel;
+  opens the view options of the tab in focus (their pop-up); **Ctrl/⌘ + ←** and **→** hide or show the left and the right panel; **e** goes to Edit mode (a Brightway-built database;
   once in Edit mode, **e** is the tree's, below); **c** goes to Compare mode; **s** goes to
   the search of the top bar (as Ctrl/⌘ + K). The key of the
   exchange pop-up is **i** (info), which was **c** before.
@@ -555,16 +552,22 @@ API in `src/lca_viewer/server.py`.
   *Waste to treatment*, *Avoided products*. An input is waste when its supplier is a waste treatment (`waste` in the API:
   its production is negative), an avoided product when it is a substitution or a negative input, as the tree reads
   it; both are shown positive, as in the form. A list of the pop-ups with sections (header and count, foldable): name
-  with its location (a flow: its compartment), amount (`fmtAmount`), unit and a mark when the exchange has a comment
-  (the comment in its tooltip). A row's name or right-click opens the pop-up of its process or flow (in a tab: a
-  pop-up; in a pop-up: in its place, ← comes back), its (i) the exchange pop-up, Enter makes a process the process of
-  the tab. Its **Edit** button (beside the filter; disabled unless the open database is Brightway-built,
-  `EditorContext.origin`) enters Edit mode for the whole app and opens the side panel; in Edit mode it gives way to
-  *Done editing* (back to View mode) and *Edit process…* (`DatasetForm`), and amounts are edited in place by
-  double-click (`Editable`, `quickEdit` + `patchExchange`, staged as in the exchange pop-up; not on a locked
-  database). Decision: *Explore* is the supply chain, computed; *Exchanges* is the dataset, recorded: one reads what
-  the process does, the other what was entered, and Edit mode starts where the values to change are. A model built
-  before exchanges were stored says to build it again.
+  with its location (a flow: its compartment) as a chip, amount (`fmtAmount`), unit and the **comment**, in a column
+  of its own on one line (`oneLine`; all of it in the cell's tooltip). Right-clicking the headers opens a **columns
+  menu** (`ColumnMenu` with `options=EXCHANGE_PANEL_COLUMNS`, as the tree's) to show or hide the location /
+  compartment, amount, unit, comment, uncertainty (`uncertaintyText`), pedigree (the five scores, their names in the
+  tooltip) and formula, all read from `/api/activity/{index}/exchanges`; the choice is kept in the browser
+  (`exchangeColumns`). There the right-click does not open the row of filter boxes of the other lists (`PopupList`'s
+  `onHeaderMenu`): the filter box above is enough for one dataset. A row's name or right-click opens the pop-up of
+  its process or flow (in a tab: a pop-up; in a pop-up: in its place, ← comes back), its (i) the exchange pop-up.
+  Its keys are those of the lists of the pop-ups, in a pop-up and in a tab: ↓ from the panel tabs enters it, ↑/↓ move
+  between the rows (↑ on the first goes back to the tabs), Space opens the row's pop-up, **i** its exchange, Enter
+  makes a process the process of the tab, Ctrl/⌘ + Enter of a new tab. In a tab, the card itself has these keys
+  (`dockedKeys`: `popupKeys` on its panels, `toTabs` for the way back) and the tree leaves them to it. Nothing is
+  edited here: amounts change in Edit mode, in the exchange pop-up or the process form. Decision: *Explore* is the
+  supply chain, computed; *Exchanges* is the dataset, recorded: one reads what the process does, the other what was
+  entered. Decision (tried and dropped): an *Edit* button on this panel entering Edit mode, with the amounts edited
+  in place; Edit mode stays in the top bar. A model built before exchanges were stored says to build it again.
   **Characterisation** (third, after *Exchanges*): the process's **total impacts** per unit of its product, one row
   per method — the main method (on top, "main") then the methods shown together (ticked in the *Methods* panel) —
   with its total (cumulative, `G`), its direct score (`U`), their unit and the direct share; a method's name or
@@ -667,7 +670,8 @@ API in `src/lca_viewer/server.py`.
   contained or `> 10`, `< 0.1` on numbers; Esc hides it), rows of one height whose name links to the pop-up of what
   they are, numbers at the right with their unit in a column of their own, shares as bars with their percentage,
   foldable sections, and under it the empty state, how many rows the filters leave, *Show all*. The keys are those of
-  the pop-ups' rows (↑/↓, Space: its pop-up, i: its exchange, Enter: the process of the tab). A list keeps a minimum
+  the pop-ups' rows (↑/↓, Space: its pop-up, i: its exchange, Enter: the process of the tab, Ctrl/⌘ + Enter: of a new
+  tab). The *Exchanges* panel replaces the filter row by a columns menu (`onHeaderMenu`). A list keeps a minimum
   width: in a narrow pane it scrolls rather than squeezing the names. Decision: the *Explore* panel stays the main
   view's own list (the tree), which the others follow in row height and number style.
 - **Flows, exchanges and inventory flows.** Decision: three words for three objects, used in titles, menus and

@@ -111,18 +111,66 @@ def test_the_exchanges_panel_follows_the_sections_of_the_process_form():
     panel = body("ProcessExchanges")
     assert "<${PopupList}" in panel and "sections=${sections}" in panel
     assert 'const EXCHANGE_SECTIONS = [["product", "Products"], ...DATASET_SECTIONS' in APP
-    # amounts editable in place in Edit mode, as in the exchange pop-up; Edit mode entered from here
-    assert "patchExchange(r.input, r.amount, t)" in panel and "ctx.enterEdit()" in panel
-    assert "Done editing" in panel and "Edit process…" in panel
 
 
-def test_edit_mode_is_entered_from_the_card_not_the_top_bar():
+def test_the_exchanges_panel_edits_nothing():
+    # Edit mode stays in the top bar: no Edit / Done editing / Edit process… here, no amount edited in place
+    panel = body("ProcessExchanges")
+    for gone in ("Done editing", "Edit process…", "enterEdit", "Editable", "patchExchange", "quickEdit", "EditorContext"):
+        assert gone not in panel
+
+
+def test_edit_mode_is_entered_from_the_top_bar():
     app = body("App")
     switch = app[app.index('<span class="mode-switch"'):]
     switch = switch[:switch.index("</span>")]
-    assert 'label="View"' in switch and 'label="Compare"' in switch and 'label="Edit"' not in switch
-    assert "openForm: setDatasetOpen, setMode," in app and "enterEdit: () =>" in app  # the card's buttons (EditorContext)
+    assert 'label="View"' in switch and 'label="Compare"' in switch and 'label="Edit"' in switch
+    assert '`has-key ${editing ? "primary" : ""}`' in switch and "disabled=${!origin}" in switch
+    assert "(${pending.length} staged)" in switch  # the count of staged changes, on the button
+    assert "const editor = { editing, origin, pending, locked: pendingView.locked, stale, stage, openForm: setDatasetOpen };" in app
+    assert "enterEdit" not in APP and "ctx.setMode" not in APP
     assert "Review and apply in Edit mode" in app  # the staged-changes warning still enters it
+
+
+def test_the_exchanges_panel_shows_comments_in_a_column():
+    panel = body("ProcessExchanges")
+    assert '{ key: "comment", label: "Comment"' in panel and "value: (r) => oneLine(r.comment)" in panel
+    assert "tip: (r) => r.comment?.trim()" in panel  # all of it in the tooltip
+    assert "comment-mark" not in panel
+    assert 'const DEFAULT_EXCHANGE_COLUMNS = ["place", "amount", "unit", "comment"];' in APP
+
+
+def test_the_exchanges_panel_has_a_columns_menu():
+    panel = body("ProcessExchanges")
+    assert "onHeaderMenu=${" in panel and "<${ColumnMenu}" in panel and "options=${EXCHANGE_PANEL_COLUMNS}" in panel
+    assert 'savePreference("exchangeColumns"' in panel and 'loadPreference("exchangeColumns"' in body("loadExchangeColumns")
+    columns = APP[APP.index("const EXCHANGE_PANEL_COLUMNS = ["):]
+    columns = columns[:columns.index("];")]
+    for id_ in ("place", "amount", "unit", "comment", "uncertainty", "pedigree", "formula"):
+        assert f'{{ id: "{id_}"' in columns
+    # the menu takes other columns than the tree's; the tree's stays the default
+    assert "function ColumnMenu({ at, columns, onChange, onClose, options = COLUMNS })" in APP
+
+
+def test_popup_list_header_menu_replaces_the_filter_row_only_when_asked():
+    plist = body("PopupList")
+    assert "if (onHeaderMenu) onHeaderMenu(e); else setFilters((f) => (f ? null : {}));" in plist
+    assert '"Right-click: filter by column."' in plist  # the default, elsewhere
+
+
+def test_the_exchanges_panel_has_the_keys_of_the_popup_lists():
+    plist = body("PopupList")
+    # Enter: the process of the tab; Ctrl/⌘+Enter: of a new tab
+    assert "onUse(r, inTab)" in plist and 'const inTab = (e.ctrlKey || e.metaKey) && !e.altKey && e.key === "Enter";' in plist
+    assert "onUse=${(r, inTab) => r.kind === \"process\" && onUse(r, inTab)}" in body("ProcessExchanges")
+    # in a tab (a docked card): the card has the keys of the pop-ups on its panels, ↑ on the first row goes back to the
+    # active panel tab, ↓ on the tabs enters the panel, and the tree leaves those keys to the card
+    info = body("InfoPopup")
+    assert "onKeyDown=${docked ? dockedKeys : popupKeys(" in info and "toTabs: () => tabsBar.current" in info
+    assert 'const first = body.current?.querySelector("[data-nav]");' in info
+    assert "if (toTabs) toTabs(); else box.focus(" in body("popupKeys")
+    assert '<div class="docked-panels" onKeyDown=${onKeyDown}>' in body("DockedShell")
+    assert ".docked-panels > .info-body" in body("FUView")
 
 
 def test_information_names_the_unit_and_the_location():
