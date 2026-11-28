@@ -134,7 +134,7 @@ API in `src/lca_viewer/server.py`.
   bars the same way, chosen with the switch **By groups / By tree / By flows** (shared
   by both):
   - *By groups*: the named rules of the workspace's rule set (process rules as groups,
-    flow rules as flow groups, as in the side panel's *Rules*), and the attribution (*own
+    flow rules as flow groups, as in the *Rules* of a card's *Contribution* panel), and the attribution (*own
     emissions of each group*, or *whole supply chain below the first match*, see
     [grouping.md](grouping.md)). The rules are edited in the *Rules* panel on the left (link under
     the groups): the same rule set as in the tabs that follow it, so a change there is seen in
@@ -168,13 +168,13 @@ API in `src/lca_viewer/server.py`.
     active method is the one of *Compare contributions* and *Cascade*. Each cell is the change against the baseline
     (the colour stops at ±100 %; values in the tooltip), optionally with the largest
     difference first.
-  Decision: a mode of its own, not a panel of the side panel: the side panel shows
+  Decision: a mode of its own, not a panel of a card: a card shows
   one tab, and a comparison needs several. Tabs, not a new kind of object, so that
   a comparison is made of what is already open. Groups instead of tree rows so that
   tabs with different supply chains line up (`charts.md` has the same reasoning).
   The choices are kept while the page is open, not saved.
-- **View / Edit switch** (top bar). View is the explorer. Edit swaps the right
-  panel for the *edit panel* (the side panel's tabs stay mounted, hidden): the
+- **View / Edit switch** (top bar). View is the explorer. Edit opens the right
+  panel, the *edit panel* (View mode has no right panel: see **Panels of a process card**): the
   focused tab's process with *Edit*, *Copy as new* and *Delete*, *+ New process*,
   the list of staged changes (*Open*, *Remove*), and *Apply and rebuild*. Decision:
   the results shown never change under the user's hands; edits are collected,
@@ -224,27 +224,25 @@ API in `src/lca_viewer/server.py`.
   pop-up opens a process as the process of a new tab. A tab is a pop-up kept in the grid: the first
   line of a tab shows the **panels of the pop-up** (*Explore*, the tree; *Exchanges*; *Characterisation*; *Used by*; *Alternatives*;
   *Description*; *Metadata*), and dragging a pop-up by its header onto the grid makes it a tab.
-  Decision: one shared **side panel** on the right (process and flow
-  contribution, group rules, group contributions), showing the active tab of the pane clicked
-  last, as in Obsidian's sidebars, rather than one per pane: panes stay wide
-  enough for the tree. It is hidden with the side-panel icon at the end of its tab bar
-  (a window with a filled panel on the right, as in VS Code and Obsidian; the edit panel
-  has it in its title), shown again with the same icon, empty, on the right edge of the
-  page, and resized by dragging its left edge. Each tab
-  renders its panels into its own slot of the side panel (a small portal), so
-  a tab keeps its panel state (current tab, chart choices) when hidden.
-  The two side panels are **fitted to the window** (`leftWidthFor`, `sideWidthFor`): the workspace between them
+  Decision: **no right panel in View mode**: what the shared side panel showed for the tab in focus (the chart of
+  the tree's rows, the process, flow, uncharacterised and rules contributions) is in each process tab's **card**
+  (see **Panels of a process card**), so a split shows them for every pane at once and the panes keep the width
+  the side panel took. It was one shared side panel on the right, showing the active tab of the pane clicked last,
+  as in Obsidian's sidebars. The right panel is now **Edit mode's**: the *edit panel*, hidden with the side-panel
+  icon in its title (a window with a filled panel on the right, as in VS Code and Obsidian), shown again with the
+  same icon, empty, on the right edge of the page (Ctrl/⌘ + →, in Edit mode only), and resized by dragging its left
+  edge. The left and the right panels are **fitted to the window** (`leftWidthFor`, `sideWidthFor`): the workspace between them
   keeps `WORKSPACE_MIN` (360 px), the left panel is fitted first (leaving the side panel its minimum), and the side
   panel takes at most what is left, when dragged, when the other one opens and when the window is resized; dragging
   one does not shrink the other. A width dragged is kept and shown fitted. A window too small for both minimums
   squeezes the workspace, and `.body` clips (`overflow-x: clip`) rather than make the page wider than the window.
   Decision: a first version clamped each panel to the window alone, so the side panel dragged wide with the left
   panel open pushed the page past the window's right edge.
-  Only process tabs fill the side panel and the left panel's *Rules* (slots `side-<id>`, `groups-<id>`): while a
-  **flow or model tab** is in focus they show those of the **process tab last in focus** (`App` keeps them, last
+  Only process tabs fill the left panel's *Rules* (slots `groups-<id>`, a small portal per tab): while a
+  **flow or model tab** is in focus it shows those of the **process tab last in focus** (`App` keeps them, last
   first, in `processFocus`; else the first process tab open), under a muted line *Showing ‹process›, the last process
-  in focus* (`PanelsFollow`); with no process tab open, a note that they follow a process tab. Decision: rather than
-  blank panels (a first version left them empty), or panels of their own for flow tabs, which have their pop-up's.
+  in focus* (`PanelsFollow`); with no process tab open, a note that it follows a process tab. Decision: rather than
+  a blank panel (a first version left it empty), or panels of their own for flow tabs, which have their pop-up's.
 - **Top bar**: in the middle, the **search** of a process, like a command palette
   (Ctrl/⌘ + K focuses it; Enter makes the result the process of the tab in
   focus, Ctrl/⌘ + Enter opens it in a new tab); the mode switch is at the right. At the left, the title, the
@@ -265,8 +263,7 @@ API in `src/lca_viewer/server.py`.
   then *Rows*; *Reset* and *Save* are icons at the top right of the pop-up (Save's arrow: Load, Copy, Default
   settings). The pop-up is drawn by the tab itself, on the page, so it stays open (pinned) while the tab is hidden;
   flow tabs have no view options. Decision: the options were the top of the side panel's first panel, which showed
-  those of the tab in focus only; on each process of the *Processes* panel, which tab they change is plain, and the
-  side panel keeps its room for the chart. *Group by*: *Rules*, a switch that
+  those of the tab in focus only; on each process of the *Processes* panel, which tab they change is plain. *Group by*: *Rules*, a switch that
   applies or not the rules of the Rules panel to the tree, which keep their place in the panel (adding a rule,
   or grouping rows, while it is off switches it on, since the group would not show); group by
   product, …: one grouping of the processes and one of the flows, since the first leaves nothing for the next), *Organise
@@ -282,12 +279,13 @@ API in `src/lca_viewer/server.py`.
   left panel; the status bar has no icon of its own for it any more (the edge of the page and Ctrl/⌘ + ← do it).
 - **First start** (nothing kept in the browser): the plain reading first, complexity when asked for. A tab is a list
   with *Amount*, *Impact* and *Share*, no cut-off, nothing grouped, the direct emissions organised by compartment, processes named by their product, no colours; the left
-  panel is closed, the side panel open on *Explore* (the chart; the view options are in their pop-up, closed). Widths follow the window until dragged
-  (side panel 42 % of it, leaving the tree 720 px). Constants `DEFAULT_VIEW`, `DEFAULT_CUTOFF` and `FIRST_PANELS` in
+  panel is closed, a tab's card on *Explore* (the tree; the view options are in their pop-up, closed), no right panel
+  (Edit mode's). Widths follow the window until dragged (the left panel 340 px; the edit panel 42 % of it, leaving the
+  tree 720 px). Constants `DEFAULT_VIEW`, `DEFAULT_CUTOFF` and `FIRST_PANELS` in
   `app.js`. Decision: a preference is written when the user changes it, not at the first render, so a default never
   chosen can still change in a later version; *Default settings* (save menu) restores all of it, panels included.
 - **Left panel: Processes, Methods and Rules** (hidden and shown with its icon, the
-  edge of the page or Ctrl/⌘ + ←; the right panel with Ctrl/⌘ + →;
+  edge of the page or Ctrl/⌘ + ←; in Edit mode the right panel, the edit panel, with Ctrl/⌘ + →;
   resizable, in every mode). *Processes* lists the tabs open: one box for Compare mode, clicked in turn as a
   method's box (`CompareMark`, the same `.method-mark`): **✓** compared, then **★** the baseline (the one before stays
   ✓), then unticked (if it was the baseline, the first other compared tab becomes the baseline; the baseline alone
@@ -305,7 +303,7 @@ API in `src/lca_viewer/server.py`.
   tab. Closing a tab or a window shows a notice with *Undo*, and the panel has an *Open history* menu at the top (what was closed, the last first: pick one to bring it back). Decision: the impact
   methods and the group rules are chosen once for the workspace and **shared by all
   tabs**, not per tab and per panel as before (a method list in the header, another in the
-  side panel's *Process* panel and a third in Compare mode; rules copied from tab to tab,
+  side panel's *Process* panel (now a card's *Contribution*) and a third in Compare mode; rules copied from tab to tab,
   which then drifted apart). A first version let a tab have its own (a link in its header);
   it is dropped for now, which keeps the page simpler, and can come back. *Methods* is one
   list nested by family (fold, filter box); the coverage of a method over the whole model (its factors on flows of the model
@@ -460,10 +458,11 @@ API in `src/lca_viewer/server.py`.
 - **Keyboard** (the tree clicked last; not while typing in a field). The
   **Shortcuts** icon of the status bar lists these keys, those of the pop-ups
   and those of the search fields (`SHORTCUTS` in `app.js`); the panels
-  themselves carry no key hints (what a tab of the side panel shows is in a popup on its
+  themselves carry no key hints (what a sub-panel of *Contribution* shows is in a popup on its
   name). Four keys work anywhere (not while typing, in a
   pop-up or in a dialog): **v** goes to View mode, and in View mode
-  opens the view options of the tab in focus (their pop-up); **Ctrl/⌘ + ←** and **→** hide or show the left and the right panel; **e** goes to Edit mode (a Brightway-built database;
+  opens the view options of the tab in focus (their pop-up); **Ctrl/⌘ + ←** hides or shows the left panel and, in Edit mode, **Ctrl/⌘ + →** the right one (the edit panel;
+  in View mode it does nothing: there is no right panel); **e** goes to Edit mode (a Brightway-built database;
   once in Edit mode, **e** is the tree's, below); **c** goes to Compare mode; **s** goes to
   the search of the top bar (as Ctrl/⌘ + K). The key of the
   exchange pop-up is **i** (info), which was **c** before.
@@ -620,6 +619,13 @@ API in `src/lca_viewer/server.py`.
   models. API: `GET /api/activity/{index}/characterisation?method=&limit=` (`totals`: `{direct, cumulative}`, one value
   per method of the model, in their order; also `direct`, `cumulative`, `count`, `uncharacterised` and `flows`, its
   exchanges with nature in `method`, which the panel no longer shows).
+  In a **tab's card**, under the totals: the **multi indicator** chart and table of the tree's rows (`MultiIndicator`;
+  it was the side panel's *Explore*, *Multi indicator*): the methods shown together, each as 100 % stacked bars, the
+  largest 11 rows and the rest in one; the table gives each row's share per method (its value in the method's unit in
+  the tooltip) and each method's total at its foot. The button *n methods shown together* opens the *Methods* panel;
+  the export (↓) gives the chart as PNG or the table as CSV (`multi-indicator.csv`: value and share per method).
+  Decision: here rather than in *Explore*, since the panel is already about the process in several methods; not in a
+  pop-up's *Characterisation*, which has no tree.
   Descriptions are stored in the cached model (`details.pkl`, 77 MB for
   ecoinvent, loaded on first use).
   **Explore** (in a pop-up) is an instance of the main view's left panel (header, list, bars
@@ -748,7 +754,7 @@ API in `src/lca_viewer/server.py`.
   **i** its **exchange** only, in the dataset of the process emitting it: header *Exchange of ‹flow› in ‹process›* (the
   flow's name links to the flow), amount, comment, uncertainty, pedigree, formula; under a merged or grouped emitter, one
   exchange per member process; for a substance row over several compartments, one per flow. A right-click opens the
-  flow pop-up, as on a process row (the exchange: its (i)). On a substance or flow of the side panel's *Flow* tab, which is summed over the
+  flow pop-up, as on a process row (the exchange: its (i)). On a substance or flow of the *Contribution* panel's *Flow*, which is summed over the
   supply chain and has no single exchange, the right-click offers *Flow…* and *Emitted by…* (the flow pop-up on its
   *Emitted by* panel, in the scope of the tab); in its list of emitters, *Exchange…* is the exchange of that process.
   A flow of the *Uncharacterised* tab or of the model pop-up opens the same flow pop-up (from the model pop-up, with
@@ -789,16 +795,28 @@ API in `src/lca_viewer/server.py`.
   without the tick and baseline of Compare mode (flows are not compared); the search of the top bar, Enter on a flow
   tab, opens the process in a new tab. Decision: one shell for both kinds of tabs (a tab's saved state holds `root` for a
   process, `flow` for a flow), so saving, closing, *Undo* and the open history work for both.
-- **Side panel — tabs** (what each shows is explained in a popup on its name, not in the panel): *Explore*,
-  *Process*, *Flow*, *Uncharacterised*, *Rules* (`SIDE_PANELS`). Decision: short names, the side panel's place saying
-  that they are contributions (they were *Explore view*, *Process contribution*, *Flow contribution*, *Rules
-  contributions*). When the panel is too narrow for the names, the bar shows **icons** instead (`SidePanelTabs`: a
-  chart, a factory, a drop, a question mark, a funnel), each with its name as `aria-label` and at the head of its
-  popup. A `ResizeObserver` measures the bar: names that overflow it switch to icons, and the width they took is kept
-  to switch back once the bar is that wide again (no flicker at the threshold).
-  - *Explore* (formerly *Explore view*): the chart of the tree's rows (the view options are in their pop-up, above): **single indicator**, the
-    bars of the main method, or **multi indicator**, the methods ticked in the Methods panel as 100 % stacked
-    bars; CSV export.
+- **Panels of a process card** (a process tab; View mode has no right panel any more): *Explore* (the tree),
+  *Exchanges*, *Characterisation*, **Contribution**, *Used by*, *Alternatives*, *Information*. What the side panel of
+  View mode held is there now:
+  - the export of its *Explore* chart is on the card's **Explore**, at the right of the tree's foot (by *Total*;
+    `TreeExport`): the tree's rows as CSV (`contributions.csv`, every method of the rows) and the **single indicator
+    chart** as PNG, drawn off the page for the image (`offscreenImage`: the chart itself is not shown any more; the
+    tree is the same rows). Its menu opens upward when the window has no room below it (`PopupMenu`).
+  - its *Multi indicator* chart, with a table of the same shares and their export, is in **Characterisation**
+    (above, under *Characterisation*).
+  - its *Process*, *Flow*, *Uncharacterised* and *Rules* are the sub-panels of **Contribution**
+    (`CONTRIBUTION_PANELS`, `ContributionPanels`; what each shows is explained in a popup on its name), with the same
+    computation, of the tab's process and amount. The sub-panel chosen is kept by the tab (as the side panel's tab
+    was), *Process* at first; ← → on the sub-panels' bar switch them (on the card's bar: the card's panels).
+  Decision: one *Contribution* panel with sub-panels rather than four more panels in the card's bar, which already has
+  seven and scrolls in a narrow pane; after *Characterisation*, since both read the process's score (what it is, then
+  what makes it), and before *Used by* and *Alternatives*, which are about other processes. The side panel's
+  *Explore* chart is dropped (the tree is its rows), only its export kept. The first column of the tree is
+  **Product** (it was *Supply chain*): the rows are named by their product by default (*Name display*).
+  Decision: a **pop-up**'s process card has no *Contribution* (tabs only): its sub-panels need a tree and a functional
+  unit (a cut-off, rules, *Go to in tree*), which a pop-up does not have; its *Characterisation* keeps the totals only.
+  Before: the side panel's tabs were *Explore*, *Process*, *Flow*, *Uncharacterised*, *Rules* (`SIDE_PANELS`, icons
+  in a narrow panel), once *Explore view*, *Process contribution*, *Flow contribution*, *Rules contributions*.
   - *Process* (formerly *Process contribution*): what each process contributes by its own emissions (direct contributions, wherever
     it is in the supply chain), as a chart and as the table of the same rows, largest first; a click on a bar or a row chooses
     it in both; the filter (*Top* n, *Cut-off* %, *Cumulative* %: click its name to change the type) leaves the rest in one row
@@ -832,7 +850,7 @@ API in `src/lca_viewer/server.py`.
     own rather than a switch in *Flow* (first version), as it answers another question (what the
     score leaves out, not what makes it); a reference among the ticked methods, which keeps the list short, and
     chosen by the user rather than matched by category name, which differs between method families.
-  - *Rules* (in the **left panel**, *Rules*, not in the side panel): active rules (reorder, **edit** — the form below is filled in with
+  - *Rules* (in the **left panel**, *Rules*, not in the card): active rules (reorder, **edit** — the form below is filled in with
     the rule, with *Save rule* and *Cancel*; a group made from selected rows or a nested
     query can only be renamed —, remove; the eye switches a rule off and on without losing
     it, crossed out while it is off; what rules do is in the **(i)** next to *Active rules*;
@@ -849,7 +867,7 @@ API in `src/lca_viewer/server.py`.
     the selected row. *Group elementary flows* makes the same kinds of rules
     on flows (substance, compartment, subcompartment, unit), which group the
     flows under direct emissions and split what the process groups leave in
-    the side panel's *Rules*; "product / waste" (`flow_type`) is a field of
+    the *Rules* of a card's *Contribution*; "product / waste" (`flow_type`) is a field of
     processes, not of flows. The colours are settings of the workspace, the same in every tab, chart
     and comparison: the **Settings** pop-up (the palette icon of the status bar, or *Colours…* under *Color by*) picks
     one palette for every mode (automatic hues, categorical, colour-blind safe, vivid, soft, earth), given in the order
@@ -858,10 +876,10 @@ API in `src/lca_viewer/server.py`.
     another one (*reset* goes back to the palette's; choosing a palette clears them; kept in the lens's `ruleColors`,
     `type:…`, `location:…` for the others). Each rule
     of the Rules panel has its swatch too: click it to pick a colour, right-click resets it. They are kept with the
-    rule sets (`lens.ruleColors`), not in the views. A group of the analyses (the side panel's *Rules*, Compare) and a
+    rule sets (`lens.ruleColors`), not in the views. A group of the analyses (*Contribution* › *Rules*, Compare) and a
     bar of a tab's tree in Compare take the colour of their rule (`namedGroups(…).ruleOf`, the `rule` of the rows),
     whatever their name. A quick group in use is filled with its colour. The groups of a rule carry it in
-    the tree, graph and Sankey, and the bars of the side panel's *Process*,
+    the tree, graph and Sankey, and the bars of the *Contribution* panel's *Process*,
     *Flow* (a substance in a named flow group) and *Rules* charts; *No colours* in the view bar switches all colours off. *Flow type
     colours* colour the rows (list, tree view, Sankey and charts) by the kind of exchange instead:
     product (the root), technosphere input, waste (output to treatment),

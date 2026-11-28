@@ -16,9 +16,9 @@ create datasets, add Agribalyse, run it on a shared server, set it up by hand an
 
 - **Tabs**: one process per tab (**+** for a new one). Drag a tab
   onto the edge of a pane to compare side by side or one above the other,
-  or use the split buttons at the right of the tab bar; the side panel
-  (charts, grouping) follows the pane clicked last and is hidden and shown with
-  the side-panel icon (the last button of its tab bar).
+  or use the split buttons at the right of the tab bar. Each tab's card has its
+  panels: *Explore* (the tree), *Exchanges*, *Characterisation*, *Contribution*,
+  *Used by*, *Alternatives*, *Information*. The panel on the right is Edit mode's.
 - **Search** a process at the top of the page (what you type fills a first filter, *activity name contains*;
   add filters for the location, product or classification under the box; the **(i)** of a
   filter lists its values and what codes stand for); ↑/↓ and Enter to choose.
@@ -53,12 +53,16 @@ create datasets, add Agribalyse, run it on a shared server, set it up by hand an
   one setting for every tab, card and chart.
 - **Save ▾**: download the view as a file; the arrow menu loads a saved view
   back (or copies it as JSON).
-- The *Explore* chart of the side panel shows exactly the rows visible in the tree:
-  expand, collapse or group to change it. Export as PNG or CSV.
+- The export (↓) at the foot of *Explore* saves the rows visible in the tree as CSV, or
+  their chart (main method) as PNG: expand, collapse or group to change them.
+  *Characterisation* charts the same rows in the methods shown together (100 % bars,
+  with their table and export).
+- *Contribution* has four sub-panels: *Process* (what each process adds by its own
+  emissions), *Flow*, *Uncharacterised* and *Rules*.
 - *Flow* splits the score by elementary flow (substance, or
   substance and compartment) over the whole supply chain; click one to list
   the processes emitting it.
-- *Rules* (of the side panel) answers "how much electricity / transport / … anywhere
+- *Rules* (of *Contribution*) answers "how much electricity / transport / … anywhere
   upstream?" using the named groups, and "how much N2O outside them?" with
   flow groups (*Add as a group* on a substance in *Flow*). Click a group (e.g. *other*) to list
   the processes it is made of; right-click one and *Go to in tree* to open

@@ -106,7 +106,7 @@ select.database { max-width: 220px; font-weight: 600; }
 .app.editing .top-bar { border-bottom: 3px solid var(--accent); }
 .mode-badge { padding: 2px 10px; border-radius: 10px; background: var(--accent); color: var(--panel); font-size: 11px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; }
 
-/* Workspace: panes of tabs (split left/right or top/bottom) and one side panel */
+/* Workspace: panes of tabs (split left/right or top/bottom), the left panel, and in Edit mode the Edit panel on the right */
 .top-bar { padding: 6px 16px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 560px) minmax(0, 1fr); gap: 12px; align-items: center; }
 .top-bar .spacer { flex: 1; }
 .top-left, .top-right { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; min-width: 0; }
@@ -165,8 +165,6 @@ select.database { max-width: 220px; font-weight: 600; }
 .fu-view .view-bar { padding: 2px 10px; }
 .tree-section { flex: 1; border-right: none; }
 .sidebar { flex: none; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--panel); }
-.side-slot { display: flex; flex-direction: column; flex: 1; min-height: 0; }
-.side-slot > .side { flex: 1; }
 .side-resizer { flex: none; width: 4px; cursor: col-resize; background: var(--border); }
 .side-resizer:hover { background: var(--accent); }
 .side-reopen { flex: none; display: flex; align-items: flex-start; border: none; border-left: 1px solid var(--border); border-radius: 0; padding: 8px 6px; color: var(--muted); }
@@ -249,15 +247,10 @@ section { display: flex; flex-direction: column; min-height: 0; border-right: 1p
 .share .fill.neg { background: var(--bar-negative); }
 .share span { width: 52px; text-align: right; font-family: var(--mono); font-size: 12px; }
 
-.side { border-right: none; }
 .tabs { display: flex; gap: 2px; padding: 8px 12px 0; background: var(--panel); border-bottom: 1px solid var(--border); }
 .tabs button { border: none; border-bottom: 2px solid transparent; border-radius: 0; background: none; padding: 6px 12px; }
 .tabs button.active { border-bottom-color: var(--accent); color: var(--accent); font-weight: 500; }
-/* The side panel's tab bar: names on one line; icons instead when they do not fit (SidePanelTabs) */
-.side-tabs { overflow: hidden; }
-.side-tabs button { flex: none; white-space: nowrap; }
-.side-tabs.compact button:not(.collapse-side) { display: inline-flex; align-items: center; padding: 6px 10px; }
-/* A flow or model tab in focus: the side and Rules panels show the last process tab (PanelsFollow) */
+/* A flow or model tab in focus: the Rules panel shows the last process tab (PanelsFollow) */
 .panels-follow { margin: 0; padding: 6px 12px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--border); background: var(--panel); }
 .panels-follow-empty { padding: 16px 12px; color: var(--muted); }
 .panel { overflow: auto; flex: 1; padding: 12px 16px; background: var(--panel); }
@@ -1034,6 +1027,20 @@ textarea.editing { width: 100%; box-sizing: border-box; }
 .docked-panels > .info-tabs button { white-space: nowrap; flex: none; }
 .docked-panels > .docked-tree { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
 .docked-panels > .info-body { flex: 1; min-height: 0; }
+/* A process tab's card: the Explore panel's export at the foot of the tree, the Contribution panel's sub-panels
+   (the side panel's of before, their own .panel without its padding and scroll), the multi indicator chart and table */
+.card-tools { display: inline-flex; align-items: center; flex: none; padding: 0 4px; }
+.card-contribution { margin-top: 4px; }
+.tabs.contribution-tabs { padding: 0; background: none; flex-wrap: wrap; }
+.tabs.contribution-tabs button { padding: 5px 10px; font-size: 12px; }
+.card-contribution > .panel { padding: 8px 0 0; overflow: visible; background: none; }
+.card-multi { margin-top: 16px; }
+.multi-table-box { overflow-x: auto; }
+.info-body table.multi-table { width: auto; min-width: 100%; }
+.info-body table.multi-table th, .info-body table.multi-table td { padding: 3px 8px; white-space: nowrap; }
+.info-body table.multi-table td:first-child { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
+.info-body table.multi-table thead th { font-family: inherit; font-size: 12px; font-weight: 400; color: var(--muted); text-align: right; }
+.info-body table.multi-table thead th:first-child { text-align: left; }
 
 .palette-form { gap: 4px; }
 .palette-form input:not([type=color]) { width: 110px; }

@@ -280,7 +280,7 @@ const DEFAULT_COLUMNS = ["amount", "impact", "share"];
 // First start (nothing kept in the browser yet): the plain reading of a supply chain, and anything more complex one click
 // away for whoever wants it. A tab shows a list with three columns (Comment, Uncertainty… in the columns menu), the rows
 // all shown (no cut-off), nothing grouped, full names, no colours, the direct emissions organised by compartment. The page: the left panel (processes,
-// methods, rules) closed, the side panel open on the chart with its options folded (see FIRST_PANELS). Once the user
+// methods, rules) closed, a tab's card on its Explore panel (see FIRST_PANELS). Once the user
 // changes one of them, theirs is kept instead.
 const DEFAULT_VIEW_COLUMNS = DEFAULT_COLUMNS;
 const DEFAULT_CUTOFF = 0;
@@ -3322,7 +3322,7 @@ function Tree({ rows, rootImpact, shareBasis, selection, onToggle, onSelect, onU
     <div class="tree" ref=${box}>
       <table style=${{ minWidth: `${Math.max(460, 300 + COLUMNS.filter((c) => shown.has(c.id)).reduce((sum, c) => sum + c.width, 0))}px` }}>
         <colgroup><col />${COLUMNS.filter((c) => shown.has(c.id)).map((c) => html`<col key=${c.id} style=${{ width: `${c.width}px` }} />`)}</colgroup>
-        <thead title="Right-click to choose the columns" onContextMenu=${(e) => { e.preventDefault(); setColumnMenu({ x: e.clientX, y: e.clientY }); }}><tr><th>Supply chain</th>
+        <thead title="Right-click to choose the columns" onContextMenu=${(e) => { e.preventDefault(); setColumnMenu({ x: e.clientX, y: e.clientY }); }}><tr><th>Product</th>
           ${shown.has("amount") && html`<th class="num">Amount</th>`}${shown.has("impact") && html`<th class="num">Impact</th>`}
           ${shown.has("share") && html`<th title="Switched with the cut-off basis (total | parent)">Share of ${shareBasis === "parent" ? "parent" : "total"}</th>`}
           ${extra.map((c) => html`<th key=${c.id} title=${c.hint}>${c.label}</th>`)}</tr></thead>
@@ -4284,14 +4284,17 @@ function PopupMenu({ items, label = "⋯", title = "Actions of this pop-up", cla
     document.addEventListener("mousedown", away);
     return () => document.removeEventListener("mousedown", away);
   }, [at]);
+  // Below the button, or above it when the window has no room for the items below (a button at the foot of a panel)
   const open = (e) => {
     const r = e.currentTarget.getBoundingClientRect();
-    setAt(at ? null : { top: r.bottom + 4, left: Math.max(8, r.right - 190) });
+    const up = window.innerHeight - r.bottom < items.length * 32 + 16 && r.top > window.innerHeight - r.bottom;
+    setAt(at ? null : { ...(up ? { bottom: window.innerHeight - r.top + 4 } : { top: r.bottom + 4 }), left: Math.max(8, r.right - 190) });
   };
   return html`
     <span class="popup-menu" ref=${box}>
       <button class=${className} onClick=${open} aria-label=${title} aria-expanded=${!!at} title=${title}>${label}</button>
-      ${at && html`<div class="menu" role="menu" style=${{ position: "fixed", top: `${at.top}px`, left: `${at.left}px`, right: "auto", minWidth: "190px" }}>
+      ${at && html`<div class="menu" role="menu" style=${{ position: "fixed", ...(at.bottom !== undefined ? { top: "auto", bottom: `${at.bottom}px` } : { top: `${at.top}px` }),
+        left: `${at.left}px`, right: "auto", minWidth: "190px" }}>
         ${items.map((it) => html`<button role="menuitem" key=${it.key ?? it.label} class=${it.danger ? "danger" : ""} disabled=${it.disabled} title=${it.title}
           onClick=${() => { setAt(null); it.run(); }}>${it.label}</button>`)}
       </div>`}
@@ -5301,11 +5304,13 @@ function ProcessExchanges({ index, info, exchanges, onOpen, onExchange, onUse })
 // description, metadata) and the exchange's (i, (i): the amount in this tree and the comment and
 // uncertainty of the input, ``target.exchange``). ``onFollow(target)`` opens another in place.
 // ``docked``: the same panels in a tab, under its first line: the tree (``treeSlot``) is the first panel, the pop-up's the
-// others; ``active``: the tab is the one shown (a hidden tab loads nothing)
+// others; ``active``: the tab is the one shown (a hidden tab loads nothing). ``card``: what a tab's card has more than a
+// pop-up, from its tree: { characterisation: the multi indicator chart and table under the totals, contribution: the
+// Contribution panel (its sub-panels) }
 function DockedShell({ children, onKeyDown }) {
   return html`<div class="docked-panels" onKeyDown=${onKeyDown}>${children}</div>`;
 }
-function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsById, onClose, onUseAsRoot, onOpenTab, root, amount, onFollow, onGoTo, onBack, docked, active, treeSlot, onDown }) {
+function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsById, onClose, onUseAsRoot, onOpenTab, root, amount, onFollow, onGoTo, onBack, docked, active, treeSlot, onDown, card }) {
   const idle = !!docked && !active;
   const exchange = !!target.exchange;
   const use = useContext(TabUseContext);  // a double-click (Enter) on a flow or a model of its lists
@@ -5469,12 +5474,14 @@ function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsByI
   const chartMethods = useContext(LensContext)?.chartMethods || [];
   const totalMethods = [method, ...chartMethods.filter((k) => k !== method)].filter((k) => model.methods[k]);
   // The exchange pop-up is its one panel; the activity's: Explore first (the tree of a tab; the explorer of a pop-up: a
-  // direct emissions row opens on its emissions), then its exchanges as the dataset records them, its impacts, users,
-  // alternatives, information (what the process is, and its description)
+  // direct emissions row opens on its emissions), then its exchanges as the dataset records them, its impacts, what
+  // makes its score (a tab's card only: the Contribution panel, of the tab's process and amount), users, alternatives,
+  // information (what the process is, and its description)
   const tabs = (info || docked) && !exchange ? [
     docked ? { id: "explore", label: "Explore" } : exchanges?.available && { id: "explore", label: "Explore" },
     info && exchanges && { id: "exchanges", label: exchanges.available ? `Exchanges · ${(production ? 1 : 0) + exchanges.inputs.length + exchanges.flows.length}` : "Exchanges" },
     info && { id: "characterisation", label: `Characterisation · ${totalMethods.length}` },
+    card?.contribution && { id: "contribution", label: "Contribution" },
     info && { id: "users", label: `${users?.waste ? "Treats" : "Used by"}${users ? ` · ${users.count}` : ""}` },
     alternatives && !target.direct && { id: "alternatives", label: `Alternatives · ${alternatives.count}` },
     info && { id: "information", label: "Information" },
@@ -5582,7 +5589,9 @@ function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsByI
                     { key: "unit", label: "Unit", kind: "unit", width: 150, value: (t) => `${model.methods[t.method].unit} / ${unit(info.unit)}` },
                     { key: "share", label: "Direct share", kind: "share", title: "Share of the total that is direct", value: (t) => (t.cumulative ? t.direct / t.cumulative : null) },
                   ]} />`}
-            </section>`}
+            </section>
+            ${!idle && card?.characterisation}`}
+          ${shown === "contribution" && !idle && card?.contribution}
           ${shown === "users" && users && info && html`
             <section>
               <${PopupList} key=${`users-${target.index}`} noun="process" rows=${users.users} rowKey=${(u) => u.index} columns=${usersPanel.columns}
@@ -5926,10 +5935,9 @@ function RecipeEditor({ recipe, setRecipe, example, kinds = ["process", "flow"] 
     </div>`;
 }
 
-// ---------------------------------------------------------------- chart panel
-// What each tab of the side panel shows, in a popup on its name
+// ---------------------------------------------------------------- panels of a process card: charts and contributions
+// What each panel shows, in a popup on its name (the Contribution panel's sub-panels, the left panel's tabs)
 const PANEL_TIPS = {
-  view: "The chart of the tree's rows as your view shows them: single indicator, or the methods shown together. The view options (display, cut-off, rows) are on each process of the Processes panel (v).",
   chart: "What each process of the supply chain adds by its own emissions, wherever it is in the tree.",
   flows: "Which substances drive the score, and which processes emit them.",
   missing: "The flows of the inventory that the active method has no factor for: what the score leaves out, and which another method characterises.",
@@ -5938,118 +5946,110 @@ const PANEL_TIPS = {
   methods: "The indicator of the tree and charts, and the ones to show together.",
   global: "The score split by your rules over the whole supply chain, to see what each rule weighs.",
 };
-// The panels of the side panel of a process tab, in the order of its tab bar
-const SIDE_PANELS = [["view", "Explore"], ["chart", "Process"], ["flows", "Flow"], ["missing", "Uncharacterised"], ["global", "Rules"]];
-// The icon of a side panel's tab, when the panel is too narrow for their names
-const SIDE_PANEL_ICONS = {
-  view: "M2.5 13.5h11M4 13.5v-4M7 13.5V4.5M10 13.5v-6M13 13.5v-8",  // bars: the chart of the tree's rows
-  chart: "M2.5 13.5V7l3.5 2.2V7l3.5 2.2V4.5h4v9Z",  // a factory: what each process adds
-  flows: "M8 2.2c2.4 3 3.9 5.2 3.9 7.2a3.9 3.9 0 0 1-7.8 0c0-2 1.5-4.2 3.9-7.2Z",  // a drop: the elementary flows
-  missing: "M8 14.2a6.2 6.2 0 1 0 0-12.4 6.2 6.2 0 0 0 0 12.4ZM6.2 6.3a1.9 1.9 0 1 1 2.6 1.8c-.5.2-.8.6-.8 1.1v.5M8 11.6h.01",  // ?
-  global: "M2.5 3.5h11l-4.2 5v4.3l-2.6 1.2V8.5Z",  // a funnel: the rules
-};
-function SidePanelTabIcon({ panel }) {
+// The sub-panels of the Contribution panel of a process tab's card, in the order of its tab bar (they were the side
+// panel's, before the side panel left View mode)
+const CONTRIBUTION_PANELS = [["chart", "Process"], ["flows", "Flow"], ["missing", "Uncharacterised"], ["global", "Rules"]];
+// The Contribution panel: its sub-panels' tab bar (← → switch them, the focus staying on the bar) and the one chosen.
+// ``panel``: the node of the sub-panel shown
+function ContributionPanels({ tab, setTab, panel }) {
   return html`
-    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3"
-      stroke-linecap="round" stroke-linejoin="round"><path d=${SIDE_PANEL_ICONS[panel]} /></svg>`;
-}
-// The tab bar of a process tab's side panel: the panels' names, or their icons (the name in the tooltip and as the
-// label) when the bar is too narrow for the names. The width the names take is measured while they are shown, and
-// they come back once the bar is that wide again.
-function SidePanelTabs({ tab, setTab, onCollapse }) {
-  const bar = useRef(null);
-  const needed = useRef(0);
-  const [compact, setCompact] = useState(false);
-  useEffect(() => {
-    const el = bar.current;
-    if (!el || typeof ResizeObserver === "undefined") return;
-    const fit = () => {
-      if (!el.clientWidth) return;  // hidden (another tab's panel, or the panel closed)
-      if (!el.classList.contains("compact")) {
-        if (el.scrollWidth > el.clientWidth + 1) { needed.current = el.scrollWidth; setCompact(true); }
-      } else if (el.clientWidth >= needed.current) setCompact(false);
-    };
-    const observer = new ResizeObserver(fit);
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
-  return html`
-    <div ref=${bar} class=${`tabs side-tabs ${compact ? "compact" : ""}`} role="tablist" onKeyDown=${tabKeys(SIDE_PANELS.map(([key]) => key), tab, setTab)}>
-      ${SIDE_PANELS.map(([key, label]) => html`
-        <${TabButton} key=${key} role="tab" class=${tab === key ? "active" : ""} aria-selected=${tab === key} onClick=${() => setTab(key)}
-          aria-label=${compact ? label : undefined} tip=${compact ? html`<strong>${label}</strong>: ${PANEL_TIPS[key]}` : PANEL_TIPS[key]}>
-          ${compact ? html`<${SidePanelTabIcon} panel=${key} />` : label}<//>`)}
-      <span class="spacer"></span>
-      <button class="collapse-side" onClick=${onCollapse} title="Hide the side panel (Ctrl/⌘ + →)" aria-label="Hide the side panel"><${SidePanelIcon} open /></button>
-    </div>`;
+    <section class="card-contribution">
+      <div class="tabs contribution-tabs" role="tablist" onKeyDown=${tabKeys(CONTRIBUTION_PANELS.map(([key]) => key), tab, setTab)}>
+        ${CONTRIBUTION_PANELS.map(([key, label]) => html`
+          <${TabButton} key=${key} role="tab" class=${tab === key ? "active" : ""} aria-selected=${tab === key} onClick=${() => setTab(key)}
+            tip=${PANEL_TIPS[key]}>${label}<//>`)}
+      </div>
+      ${panel}
+    </section>`;
 }
 
-function ChartPanel({ data, info, method, chartMethods, onPickMethods, view, header }) {
-  const { naming, recipe } = view;
-  const chartRef = useRef(null);
-  const [mode, setMode] = useState("single");
-
+// The rows of the tree as its charts and exports read them: its frontier (chartItems), named by the name display
+function useTreeParts(data, view) {
   const byId = useMemo(() => new Map(data.rows.map((r) => [r.id, r])), [data]);
   const parts = useMemo(
-    () => nameItems(chartItems(data.rows, byId), naming, recipe, byId, view.organize === "type"),
-    [data, byId, naming, recipe, view.organize],
+    () => nameItems(chartItems(data.rows, byId), view.naming, view.recipe, byId, view.organize === "type"),
+    [data, byId, view.naming, view.recipe, view.organize, nameStamp],
   );
+  return { byId, parts };
+}
+// The single indicator chart of the tree's rows (the main method, a bar per row, coloured by its rule): { option, height }
+function singleChartOption({ parts, byId, data, info, method, view }) {
   const unit = info.methods[method].unit;
   const total = parts.reduce((s, p) => s + p.impacts[0], 0);
-  // Bars of rows in a group (or of the group) take the colour of its rule
-  const colors = useMemo(() => groupColors(data.rows, view), [data, view.groupColors, view.colorBy, paletteStamp]);
-
-  let legendKeys = [];
-  const singleOption = useMemo(() => {
-    const o = baseOption();
-    const items = [...parts].reverse();
-    const shown = items.map((p) => fitLabel(p.main, p.qual, LABEL_WIDTH));
-    o.grid = { ...o.grid, containLabel: false, top: 36, bottom: 28,
-      left: Math.max(...shown.map(([m, q]) => textWidth(q ? `${m} ${q}` : m))) + 16 };
-    o.title = { text: methodTitle(info.methods[method]), textStyle: { fontSize: 12, color: cssVar("--muted") } };
-    // The legend of the colours: the rules (or the flow types) of the bars, wrapped on as many lines as it needs, in the image too
-    legendKeys = legendOf(items, colors, byId, view);
-    if (legendKeys.length) {
-      const lines = Math.max(1, Math.ceil(legendKeys.reduce((w, k) => w + textWidth(k.name) + 34, 0) / 460));
-      o.legend = { type: "plain", bottom: 4, left: "center", width: "92%", selectedMode: false, itemWidth: 12, itemHeight: 12, itemGap: 14,
-        icon: "roundRect", textStyle: { color: cssVar("--text"), fontSize: 11 }, data: legendKeys.map((k) => ({ name: k.name, itemStyle: { color: k.color } })) };
-      o.grid = { ...o.grid, bottom: 28 + lines * 20 };
-    }
-    o.yAxis = {
-      ...o.yAxis, type: "category", data: items.map((_, i) => String(i)),
-      axisLabel: {
-        formatter: (v) => {
-          const [m, q] = shown[Number(v)];
-          return `{m|${richSafe(m)}}${q ? ` {q|${richSafe(q)}}` : ""}`;
-        },
-        rich: { m: { color: cssVar("--text") }, q: { color: cssVar("--muted") } },
+  const colors = groupColors(data.rows, view);  // bars of rows in a group (or of the group) take the colour of its rule
+  const o = baseOption();
+  const items = [...parts].reverse();
+  const shown = items.map((p) => fitLabel(p.main, p.qual, LABEL_WIDTH));
+  o.grid = { ...o.grid, containLabel: false, top: 36, bottom: 28,
+    left: Math.max(...shown.map(([m, q]) => textWidth(q ? `${m} ${q}` : m))) + 16 };
+  o.title = { text: methodTitle(info.methods[method]), textStyle: { fontSize: 12, color: cssVar("--muted") } };
+  // The legend of the colours: the rules (or the flow types) of the bars, wrapped on as many lines as it needs, in the image too
+  const legendKeys = legendOf(items, colors, byId, view);
+  let lines = 0;
+  if (legendKeys.length) {
+    lines = Math.max(1, Math.ceil(legendKeys.reduce((w, k) => w + textWidth(k.name) + 34, 0) / 460));
+    o.legend = { type: "plain", bottom: 4, left: "center", width: "92%", selectedMode: false, itemWidth: 12, itemHeight: 12, itemGap: 14,
+      icon: "roundRect", textStyle: { color: cssVar("--text"), fontSize: 11 }, data: legendKeys.map((k) => ({ name: k.name, itemStyle: { color: k.color } })) };
+    o.grid = { ...o.grid, bottom: 28 + lines * 20 };
+  }
+  o.yAxis = {
+    ...o.yAxis, type: "category", data: items.map((_, i) => String(i)),
+    axisLabel: {
+      formatter: (v) => {
+        const [m, q] = shown[Number(v)];
+        return `{m|${richSafe(m)}}${q ? ` {q|${richSafe(q)}}` : ""}`;
       },
-    };
-    o.xAxis = { ...o.xAxis, type: "value", name: unit };
-    o.tooltip.formatter = (d) => {
-      const p = items[d.dataIndex];
-      return `${p.label}<br/><b>${fmt(p.impacts[0])} ${unit}</b> (${pct(total ? p.impacts[0] / total : 0)})${p.rows.length > 1 ? `<br/>${p.rows.length} rows merged` : ""}`;
-    };
-    o.series = [{
-      type: "bar", data: items.map((p) => ({
-        value: p.impacts[0],
-        itemStyle: { color: colors.get(p.rows[0].id) || (p.impacts[0] < 0 ? cssVar("--bar-negative") : cssVar("--bar")) },
-      })),
-      label: { show: true, position: "right", formatter: (d) => fmt(d.value), color: cssVar("--muted") },
-    }, ...legendKeys.map((k) => ({ type: "scatter", name: k.name, data: [], silent: true, itemStyle: { color: k.color } }))];  // the keys of the legend, with no bar to share the width
-    return o;
-  }, [parts, method, colors, nameStamp]);
-
-  const multiOption = useMemo(() => {
-    const o = baseOption();
-    const positions = chartMethods.map((m) => data.methods.indexOf(m)).filter((i) => i >= 0);
+      rich: { m: { color: cssVar("--text") }, q: { color: cssVar("--muted") } },
+    },
+  };
+  o.xAxis = { ...o.xAxis, type: "value", name: unit };
+  o.series = [{
+    type: "bar", data: items.map((p) => ({
+      value: p.impacts[0],
+      itemStyle: { color: colors.get(p.rows[0].id) || (p.impacts[0] < 0 ? cssVar("--bar-negative") : cssVar("--bar")) },
+    })),
+    label: { show: true, position: "right", formatter: (d) => fmt(d.value), color: cssVar("--muted") },
+  }, ...legendKeys.map((k) => ({ type: "scatter", name: k.name, data: [], silent: true, itemStyle: { color: k.color } }))];  // the keys of the legend, with no bar to share the width
+  return { option: o, height: Math.max(260, parts.length * 26 + 60) + 24 * lines };
+}
+// A chart drawn off the page, for its image only (``opts``: those of getDataURL)
+function offscreenImage({ option, height }, opts, width = 800) {
+  const box = document.createElement("div");
+  box.style.cssText = `position: fixed; left: -10000px; top: 0; width: ${width}px; height: ${height}px`;
+  document.body.appendChild(box);
+  const chart = echarts.init(box);
+  try {
+    chart.setOption({ ...option, animation: false });
+    return chart.getDataURL(opts);
+  } finally { chart.dispose(); box.remove(); }
+}
+// The export of the Explore panel (at the right of the tree's foot, by its total): the tree's rows as a CSV file
+// (every method of the rows), and the single indicator chart of them as an image, drawn for it (the chart is not on the
+// page any more: it was the side panel's)
+function TreeExport({ data, info, method, view }) {
+  const { byId, parts } = useTreeParts(data, view);
+  const image = { get current() { return { getDataURL: (opts) => offscreenImage(singleChartOption({ parts, byId, data, info, method, view }), opts) }; } };
+  const csv = () => downloadCsv("contributions.csv", ["row", "kind", "merged rows", ...data.methods.map((m) => methodTitle(info.methods[m]))],
+    parts.map((p) => [p.label, p.kind, p.rows.length, ...p.impacts]));
+  return html`<span class="card-tools"><${ExportMenu} chart=${image} csv=${csv} name="contributions" /></span>`;
+}
+// The tree's rows in the methods shown together (the Methods panel), each method as 100 %: the chart, the table of the
+// same shares (the total of each method in its unit at the foot) and their export. In the Characterisation panel of a
+// process tab's card. The largest 11 rows, the rest in one.
+function MultiIndicator({ data, info, chartMethods, view, onPickMethods }) {
+  const chartRef = useRef(null);
+  const { parts } = useTreeParts(data, view);
+  const positions = chartMethods.map((m) => data.methods.indexOf(m)).filter((i) => i >= 0);
+  const { segments, totals } = useMemo(() => {
     const top = parts.slice(0, 11);
     const rest = parts.slice(11);
-    const segments = top.map((p) => ({ name: truncate(p.label, 60), impacts: p.impacts }));
-    if (rest.length) {
-      segments.push({ name: `${rest.length} more rows`, impacts: data.methods.map((_, k) => rest.reduce((s, p) => s + p.impacts[k], 0)) });
-    }
-    const totals = positions.map((k) => parts.reduce((s, p) => s + p.impacts[k], 0));
+    const list = top.map((p) => ({ name: truncate(p.label, 60), label: p.label, impacts: p.impacts }));
+    if (rest.length) list.push({ name: `${rest.length} more rows`, label: `${rest.length} more rows`, impacts: data.methods.map((_, k) => rest.reduce((s, p) => s + p.impacts[k], 0)) });
+    return { segments: list, totals: data.methods.map((_, k) => parts.reduce((s, p) => s + p.impacts[k], 0)) };
+  }, [parts, data]);
+  const share = (s, k) => (totals[k] ? s.impacts[k] / totals[k] : 0);
+  const option = useMemo(() => {
+    const o = baseOption();
     const categories = positions.map((k) => truncate(methodRow(info.methods[data.methods[k]]), 50));
     const lines = Math.max(1, Math.ceil(segments.reduce((w, k) => w + textWidth(k.name) + 34, 0) / 460));
     o.legend = { type: "plain", bottom: 4, left: "center", width: "92%", selectedMode: false, itemWidth: 12, itemHeight: 12, itemGap: 14,
@@ -6058,40 +6058,38 @@ function ChartPanel({ data, info, method, chartMethods, onPickMethods, view, hea
     o.yAxis = { ...o.yAxis, type: "category", data: categories, inverse: true };
     o.xAxis = { ...o.xAxis, type: "value", axisLabel: { color: cssVar("--muted"), formatter: (v) => `${v}%` } };
     o.tooltip.valueFormatter = (v) => `${v.toFixed(1)}%`;
-    o.series = segments.map((s) => ({
-      type: "bar", stack: "total", name: s.name,
-      data: positions.map((k, i) => (totals[i] ? (100 * s.impacts[k]) / totals[i] : 0)),
-    }));
+    o.series = segments.map((s) => ({ type: "bar", stack: "total", name: s.name, data: positions.map((k) => 100 * share(s, k)) }));
     return o;
-  }, [parts, chartMethods, data, nameStamp]);
-
+  }, [segments, totals, chartMethods, data, nameStamp]);
+  const title = (k) => methodTitle(info.methods[data.methods[k]]);
+  const unitOf = (k) => info.methods[data.methods[k]].unit;
   function exportCsv() {
-    downloadCsv("contributions.csv", ["row", "kind", "merged rows", ...data.methods.map((m) => methodTitle(info.methods[m]))],
-      parts.map((p) => [p.label, p.kind, p.rows.length, ...p.impacts]));
+    downloadCsv("multi-indicator.csv", ["row", ...positions.flatMap((k) => [`${title(k)} [${unitOf(k)}]`, `${title(k)} share`])],
+      [...segments.map((s) => [s.label, ...positions.flatMap((k) => [s.impacts[k], share(s, k)])]),
+        ["total", ...positions.flatMap((k) => [totals[k], 1])]]);
   }
-
   return html`
-    <div class="panel">
-      ${header}
+    <section class="card-multi">
+      <h4>Multi indicator <span class="muted">· the tree's rows in the methods shown together</span></h4>
       <div class="row">
-        <button class=${mode === "single" ? "primary" : ""} onClick=${() => setMode("single")}
-          title="Main method, by row">Single indicator</button>
-        <button class=${mode === "multi" ? "primary" : ""} onClick=${() => setMode("multi")}
-          title="Methods ticked, as 100 %">Multi indicator</button>
+        <button onClick=${onPickMethods} title="Tick the methods in the Methods panel">${chartMethods.length} ${chartMethods.length === 1 ? "method" : "methods"} shown together</button>
         <span class="spacer" style="flex:1"></span>
-        <${ExportMenu} chart=${chartRef} csv=${exportCsv} name="contributions" />
+        ${positions.length > 0 && segments.length > 0 && html`<${ExportMenu} chart=${chartRef} csv=${exportCsv} name="multi-indicator" />`}
       </div>
-      ${mode === "single"
-        ? html`
-          <${Chart} exportRef=${chartRef} option=${singleOption} height=${Math.max(260, parts.length * 26 + 60) + (singleOption.legend ? 24 * Math.max(0, (singleOption.grid.bottom - 28) / 20) : 0)} />`
+      ${!positions.length ? html`<div class="empty">Select methods to compare (tick them in the Methods panel).</div>`
+        : !segments.length ? html`<div class="empty">The chart of the tree's rows, once a process is shown.</div>`
         : html`
-          <div class="row">
-            <button onClick=${onPickMethods} title="Tick the methods in the Methods panel">${chartMethods.length} ${chartMethods.length === 1 ? "method" : "methods"} shown together</button>
-          </div>
-          ${chartMethods.length === 0
-            ? html`<div class="empty">Select methods to compare.</div>`
-            : html`<${Chart} exportRef=${chartRef} option=${multiOption} height=${Math.max(300, chartMethods.length * 28 + 120) + Math.max(0, multiOption.grid.bottom - 40)} />`}`}
-    </div>`;
+          <${Chart} exportRef=${chartRef} option=${option} height=${Math.max(300, chartMethods.length * 28 + 120) + Math.max(0, option.grid.bottom - 40)} />
+          <div class="multi-table-box">
+            <table class="results multi-table">
+              <thead><tr><th>Row</th>${positions.map((k) => html`<th class="num" key=${k} title=${`${methodLabel(info.methods[data.methods[k]])}: each row's share of the total`}>${truncate(title(k), 28)}</th>`)}</tr></thead>
+              <tbody>${segments.map((s) => html`
+                <tr key=${s.label}><td title=${s.label}>${s.name}</td>${positions.map((k) => html`<td class="num" key=${k} title=${`${fmt(s.impacts[k])} ${unitOf(k)}`}>${pct(share(s, k))}</td>`)}</tr>`)}
+              </tbody>
+              <tfoot><tr><th>Total</th>${positions.map((k) => html`<th class="num" key=${k}>${fmt(totals[k])} <span class="muted">${unitOf(k)}</span></th>`)}</tr></tfoot>
+            </table>
+          </div>`}
+    </section>`;
 }
 
 // The filters of a flat list of rows, the cut-offs of the view options that make sense for it (the server cuts the list as
@@ -6458,7 +6456,7 @@ function GroupPanel({ info, rules, setRules, selectedRow, view, setView, shared,
             </div>`
           : html`<div class="row"><button onClick=${() => setOwnerQuery(emptyQuery("name", "contains"))} title="Only the emissions of some processes">+ Owning process</button></div>`)}
         ${preview && !queryLocked && html`<p class="note" title=${preview.results.slice(0, 3).map((r) => `${r.name} (${r.location})`).join("; ") + (preview.total > 3 ? "…" : "")}>${usesExchange(predicate)
-          ? `Matches ${preview.total} ${flows ? "flows" : "processes"}, where their exchange matches. In the side panel's Rules tab it takes what goes through the exchanges it matches.`
+          ? `Matches ${preview.total} ${flows ? "flows" : "processes"}, where their exchange matches. In the Rules contribution (a tab's Contribution panel) it takes what goes through the exchanges it matches.`
           : `Matches ${preview.total} ${flows ? "flows" : "processes"}`}</p>`}
       ` : html`
         <div class="row"><select value=${by} onChange=${(e) => setBy(e.target.value)} aria-label="Group by field">
@@ -6474,7 +6472,7 @@ function GroupPanel({ info, rules, setRules, selectedRow, view, setView, shared,
 }
 
 // ---------------------------------------------------------------- global grouping panel
-// Right-click menu of a process listed in the side panel: go to it in the tree, or its details
+// Right-click menu of a process listed in a contribution panel: go to it in the tree, or its details
 // A small right-click menu: ``open(e, items)``, items { label, run, title? }; ``element`` to render
 function useContextMenu() {
   const [menu, setMenu] = useState(null);
@@ -6651,7 +6649,7 @@ function AttributionHelp() {
       </div>`}`;
 }
 
-// How the impacts go to the rules, one choice for the side panel's Rules tab and for Compare (``rule``: "first_match" or "direct")
+// How the impacts go to the rules, one choice for the Rules contribution (a tab's Contribution panel) and for Compare (``rule``: "first_match" or "direct")
 function AttributionSwitch({ rule, setRule }) {
   return html`
     <div class="view-group" role="group" aria-label="Attribution">
@@ -7043,7 +7041,7 @@ function FlowContribution({ info, root, amount, method, onLocate, onInfo, onFlow
                 : { name: `${flow.name} (${flow.compartment})`, predicate: { flows: flow.flows }, target: "flows", scope: "*" };
               const exists = rules.some((r) => r.name === rule.name && r.target === "flows");
               return html`<button disabled=${exists} onClick=${() => setRules([...rules, rule])}
-                title="A flow group: in the side panel's Rules tab it takes these flows from what the process groups leave; in the tree it bundles them under direct emissions">
+                title="A flow group: in the Rules contribution (a tab's Contribution panel) it takes these flows from what the process groups leave; in the tree it bundles them under direct emissions">
                 ${exists ? "In groups" : "Add as a group"}</button>`;
             })()}
             <button onClick=${() => setFlow(null)} aria-label="Close">×</button>
@@ -7092,19 +7090,17 @@ function Portal({ slot, children }) {
   return null;
 }
 
-// Over the side panel and the Rules panel while a flow or model tab is in focus: they are those of a process tab, the
-// one last in focus (``title``: its title, null for a tab with no process yet), or, with no process tab open
-// (``title`` undefined), what they are for. ``onCollapse``: the side panel's hide button, which the empty state has too.
-function PanelsFollow({ title, onCollapse }) {
+// Over the Rules panel while a flow or model tab is in focus: its rules are those of a process tab, the one last in
+// focus (``title``: its title, null for a tab with no process yet), or, with no process tab open (``title``
+// undefined), what it is for
+function PanelsFollow({ title }) {
   if (title === undefined) return html`
-    ${onCollapse && html`<div class="tabs"><span class="spacer"></span>
-      <button class="collapse-side" onClick=${onCollapse} title="Hide the side panel (Ctrl/⌘ + →)" aria-label="Hide the side panel"><${SidePanelIcon} open /></button></div>`}
     <div class="panels-follow-empty" role="note">
-      <p>These panels follow a process tab: its charts, contributions and rules. A flow or model tab has none.</p>
+      <p>This panel follows a process tab: the rules of its tree. A flow or model tab has none.</p>
       <p>Open a process in a tab (the search of the top bar, or <em>Open in new tab</em> on a process) to see them here.</p>
     </div>`;
   const name = title ? `${title.name}${title.location ? ` (${title.location})` : ""}` : "an empty tab";
-  return html`<p class="panels-follow" role="note" title="A flow or model tab is in focus: these panels are those of a process tab">
+  return html`<p class="panels-follow" role="note" title="A flow or model tab is in focus: this panel is that of a process tab">
     Showing <strong>${name}</strong>, the last process in focus</p>`;
 }
 
@@ -7162,7 +7158,7 @@ function initLens(info, seed) {
   const sets = stored?.sets && Object.keys(stored.sets).length ? stored.sets : { Default: seeded_rules.length ? seeded_rules : defaultRules() };
   return {
     method, chartMethods: chart ? chart.filter((k) => k >= 0) : familyOf(info, method), sets, set: stored?.set in sets ? stored.set : Object.keys(sets)[0],
-    attribution: stored?.attribution === "direct" ? "direct" : "first_match",  // of the impacts to the rules: the side panel's Rules tab and Compare
+    attribution: stored?.attribution === "direct" ? "direct" : "first_match",  // of the impacts to the rules: the Rules contribution and Compare
     nameFormat: { ...DEFAULT_NAME_FORMAT, ...(stored?.nameFormat || {}) },
     naming: namingOf(stored?.naming),  // the Name display of processes and flows (the Processes panel)
     palettes: stored?.palettes && typeof stored.palettes === "object" ? stored.palettes : {},  // the user's own: name -> colours
@@ -7392,7 +7388,7 @@ const VIEW_OPTIONS_OPENERS = {};  // process tab id -> the function that opens t
 // ``embedded``: the left panel alone (header, list and bars, without the side panel), inside the Exchanges tab of a
 // process pop-up, rooted at that process and with a state of its own: { onInfo(target): a process or flow opened from
 // a row replaces the content of the pop-up, onUse(meta): Enter on a process, keys: ref the pop-up asks first for its keys }
-function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewTab, onCloseTab, onCollapseSide, embedded }) {
+function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewTab, onCloseTab, embedded }) {
   // Edit mode: merges, custom names and replaced suppliers only change how the view looks, not the data: they are
   // left out (and kept in the tab, for the view mode); pins, cut-off and groups stay
   const editor = useContext(EditorContext);
@@ -7485,7 +7481,8 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
   const data = useMemo(() => (view.hideOthers ? { ...allData, rows: withoutOthers(allData.rows) } : allData),
     [allData, view.hideOthers]);
   const [error, setError] = useState(null);
-  const [tab, setTab] = useState("view");
+  // The sub-panel of the card's Contribution panel (Process, Flow, Uncharacterised, Rules), kept by the tab
+  const [contributionTab, setContributionTab] = useState("chart");
   // The pop-up of the view options (the Processes panel's button, key v): { x, y, rect, pinned }, or null
   const [optionsPop, setOptionsPop] = useState(null);
   const openViewOptions = (x, y) => setOptionsPop((p) => ({ x, y, rect: p?.rect ?? null, pinned: p?.pinned ?? false }));
@@ -8224,8 +8221,30 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
               <span class="hint selected-total" title="Selected processes, merged processes and groups of processes: a row inside another selected one is not counted again">
                 Selected (${selectedTotals.count} ${selectedTotals.count === 1 ? "process" : "processes"}): ${selectedTotals.amounts} · impact ${fmt(selectedTotals.impact)} ${methodInfo.unit}
               </span>`}
+            ${!embedded && allData.rows.length > 0 && html`
+              <span class="spacer"></span>
+              <${TreeExport} data=${allData} info=${info} method=${method} view=${view} />`}
           </div>
         </section>`;
+  // What the card of the tab has more than a pop-up (see InfoPopup's ``card``; the tree's export is at the foot of its
+  // Explore panel, above): the multi indicator chart and table in Characterisation, and the Contribution panel (what
+  // the side panel of View mode held: the process, flow, uncharacterised and rules contributions of the tab's process
+  // and amount)
+  const openProcessInfo = (index, x, y) => openInfo({ index, row: null, x, y });
+  const contributionPanel = root && {
+    chart: () => html`<${ProcessContributions} info=${info} root=${root} amount=${amount} method=${method} onInfo=${openProcessInfo} />`,
+    flows: () => html`<${FlowContribution} info=${info} root=${root} amount=${amount} method=${method}
+      onLocate=${goTo} onInfo=${openProcessInfo} onFlowInfo=${showFlowInfo} rules=${rules} setRules=${setRules} />`,
+    missing: () => html`<${UncharacterisedPanel} info=${info} root=${root} amount=${amount} method=${method}
+      chartMethods=${chartMethods} onFlowInfo=${showFlowInfo} />`,
+    global: () => html`<${GlobalPanel} info=${info} root=${root} amount=${amount} method=${method} rules=${rules} view=${view}
+      rule=${lens.attribution} setRule=${lens.setAttribution} onLocate=${goTo} onInfo=${openProcessInfo} />`,
+  }[contributionTab];
+  const cardPanels = !embedded && {
+    characterisation: html`<${MultiIndicator} key=${editing ? "edit" : "view"} data=${allData} info=${info} chartMethods=${chartMethods}
+      view=${view} onPickMethods=${() => lens.show("methods")} />`,
+    contribution: contributionPanel && html`<${ContributionPanels} tab=${contributionTab} setTab=${setContributionTab} panel=${contributionPanel()} />`,
+  };
   return html`
     <${TabUseContext.Provider} value=${tabUse}>
     <div class=${`fu-view ${embedded ? "embedded" : ""}`} ref=${box} style=${{ display: visible ? "" : "none" }}>
@@ -8239,7 +8258,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
               document.activeElement?.blur();
               const top = data.rows[0];
               if (top) { cursor.current = { id: top.id, index: 0 }; anchor.current = top.id; setSelection(new Set([top.id])); }
-            }} />`
+            }} card=${cardPanels} />`
         : treeNode}
       ${popups.map(renderPopup)}
       ${!embedded && optionsPop && html`<${PagePortal}>
@@ -8247,25 +8266,6 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
           win=${{ rect: optionsPop.rect, pinned: optionsPop.pinned,
             onPin: () => setOptionsPop((p) => p && { ...p, pinned: !p.pinned }), onRect: (rect) => setOptionsPop((p) => p && { ...p, rect }) }}
           actions=${viewOptionsActions} onClose=${() => setOptionsPop(null)}>${viewOptions}<//>
-      <//>`}
-      ${!embedded && html`<${Portal} slot=${`side-${id}`}>
-        <section class="side">
-          <${SidePanelTabs} tab=${tab} setTab=${setTab} onCollapse=${onCollapseSide} />
-          ${tab === "view" && (allData.rows.length > 0
-            ? html`<${ChartPanel} key=${editing ? "edit" : "view"} data=${allData} info=${info} method=${method}
-                chartMethods=${chartMethods} onPickMethods=${() => lens.show("methods")} view=${view} />`
-            : html`<div class="panel"><p class="muted">The chart of the tree's rows, once a process is shown.</p></div>`)}
-          ${tab === "chart" && root && html`<${ProcessContributions} info=${info} root=${root} amount=${amount} method=${method}
-              onInfo=${(index, x, y) => openInfo({ index, row: null, x, y })} />`}
-          ${tab === "missing" && root && html`<${UncharacterisedPanel} info=${info} root=${root} amount=${amount} method=${method}
-              chartMethods=${chartMethods} onFlowInfo=${showFlowInfo} />`}
-          ${tab === "flows" && root && html`<${FlowContribution} info=${info} root=${root} amount=${amount} method=${method}
-              onLocate=${goTo} onInfo=${(index, x, y) => openInfo({ index, row: null, x, y })} onFlowInfo=${showFlowInfo}
-              rules=${rules} setRules=${setRules} />`}
-          ${tab === "global" && html`<${GlobalPanel} info=${info} root=${root} amount=${amount} method=${method} rules=${rules} view=${view}
-              rule=${lens.attribution} setRule=${lens.setAttribution}
-              onLocate=${goTo} onInfo=${(index, x, y) => openInfo({ index, row: null, x, y })} />`}
-        </section>
       <//>`}
       ${!embedded && html`<${Portal} slot=${`groups-${id}`}>
         <${GroupPanel} info=${info} rules=${rules} setRules=${setRules} view=${view} setView=${setView}
@@ -8849,7 +8849,7 @@ function ComparisonView({ info, tabs, compare, setCompare }) {
   const panel = compare.panel || "groups";
 
   // The groups of the comparison: the rule set of the workspace (named rules on processes, and on elementary flows
-  // as flow groups, as in the side panel's Rules tab); they are changed in the Rules panel
+  // as flow groups, as in the Rules contribution); they are changed in the Rules panel
   const rules = lens.rules;
   const { groups, flowGroups, flowOwners, order, ruleOf } = useMemo(() => namedGroups(rules), [rules]);
   // The methods of the heat map: those shown together
@@ -8938,8 +8938,8 @@ const dragProcess = (index) => (index == null ? {} : {
 
 // ---------------------------------------------------------------- workspace: tabs and split panes
 // Like a notes app: each tab is one process; panes hold tabs and can be split
-// left/right or top/bottom by dragging a tab onto a pane's edge. One side panel (chart,
-// grouping, whole supply chain) shows the active tab of the pane used last.
+// left/right or top/bottom by dragging a tab onto a pane's edge. The Rules panel (left) shows the rules of the active
+// tab of the pane used last; a process tab's charts and contributions are panels of its own card.
 const WORKSPACE_KEY = `${STORAGE_KEY}.workspace`;
 let idCounter = 0;
 const newId = (prefix) => `${prefix}${Date.now().toString(36)}${(idCounter++).toString(36)}`;
@@ -9122,7 +9122,7 @@ const SHORTCUTS = [
     ["e", "Edit mode (a Brightway-built database); when already in Edit mode, open the form of the selected process, as below"],
     ["c", "Compare mode"],
     ["s", "Search a process in the top bar (as Ctrl/⌘ + K)"],
-    ["Ctrl/⌘ + ←  →", "Hide or show the left panel (processes, view, methods, groups) / the right panel"],
+    ["Ctrl/⌘ + ←  →", "Hide or show the left panel (processes, methods, rules) / in Edit mode, the Edit panel on the right"],
   ]],
   ["Lists and trees (the one clicked last)", [
     ["↓ ↑", "Select the row below / above"],
@@ -9234,10 +9234,11 @@ function SettingsDialog({ lens, onClose }) {
     <//>`;
 }
 
-// The panels at a first start (see DEFAULT_VIEW_COLUMNS): the tree and its chart. The left panel (processes, methods, rules)
-// opens with its icon, the method or rule set of the status bar, or Ctrl/⌘ + ←. Until a panel is resized by hand its width
-// follows the window: the side panel 42 % of it, leaving the tree at least 720 px (its three columns and names); a width
-// dragged is kept, and fitted to a smaller window.
+// The panels at a first start (see DEFAULT_VIEW_COLUMNS): the tabs alone. The left panel (processes, methods, rules)
+// opens with its icon, the method or rule set of the status bar, or Ctrl/⌘ + ←. The side panel on the right is Edit
+// mode's (the Edit panel), open when Edit mode starts; Ctrl/⌘ + → hides or shows it there. Until a panel is resized by
+// hand its width follows the window: the side panel 42 % of it, leaving the tree at least 720 px (its three columns and
+// names); a width dragged is kept, and fitted to a smaller window.
 const FIRST_PANELS = { leftOpen: false, sideOpen: true, leftWidth: 340 };
 const PANEL_MIN = { left: 260, side: 280 };
 // The panels never push the page wider than the window: the workspace between them keeps WORKSPACE_MIN, the rest
@@ -9345,7 +9346,7 @@ function App() {
     if (!was.mounted) return;
     const focusOn = (selector) => setTimeout(() => document.querySelector(selector)?.focus({ preventScroll: true }), 40);
     if (leftOpen && !was.left) focusOn(".leftbar .tabs button.active");
-    if (sideOpen && !was.side) focusOn(".sidebar .side-slot:not([style*=\"none\"]) .tabs button.active, .sidebar .edit-title button");
+    if (sideOpen && !was.side) focusOn(".sidebar .edit-title button");
   }, [leftOpen, sideOpen]);
   const processFocus = useRef([]);  // the process tabs, last in focus first (what the side and Rules panels show for a flow or model tab)
   const states = useRef({});  // tab id → its saved view (what a remounted tab starts from)
@@ -9385,11 +9386,15 @@ function App() {
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [mode, editing, !!origin]);
-  // Ctrl/⌘ + ← and →: hide or show the left and the right panel (not while typing: there they move by word)
+  // Ctrl/⌘ + ← and →: hide or show the left panel and, in Edit mode, the right one (the Edit panel; View mode has none)
+  // (not while typing: there they move by word)
+  const editingRef = useRef(false);
+  editingRef.current = editing;
   useEffect(() => {
     const onKey = (e) => {
       if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || e.defaultPrevented || (e.key !== "ArrowLeft" && e.key !== "ArrowRight")) return;
       if (e.target.closest?.("input, textarea, select, [contenteditable]") || document.querySelector(".modal-backdrop")) return;
+      if (e.key === "ArrowRight" && !editingRef.current) return;
       e.preventDefault();
       if (e.key === "ArrowLeft") setLeftOpen((open) => !open); else setSideOpen((open) => !open);
     };
@@ -9691,17 +9696,18 @@ function App() {
   const showStaged = !editing && !!origin && pending.length > 0;
   const focusedTab = activeTabOf(focus);
   const compareTabs = allTabs.filter((id) => states.current[id]?.root).map((id) => ({ id, state: states.current[id], title: titles[id] }));
-  const sideVisible = sideOpen && !comparing;
+  // The right panel is Edit mode's alone (the Edit panel): in View mode a process tab's card has what it held
+  const sideVisible = sideOpen && editing;
   const leftShown = leftWidthFor(leftWidth, sideVisible), sideShown = sideWidthFor(sideWidth, leftOpen ? leftShown : 0);
   // The Processes panel lists the flow and model tabs too (with their icon; they are not compared)
   const flowTabs = allTabs.filter(treeless).map((id) => ({ id, flow: flowOf(id), model: modelOf(id), title: titles[id] }));
-  // The side panel and the Rules panel are filled by process tabs (their slots side-<id>, groups-<id>): with a flow or
-  // model tab in focus they show the process tab last in focus (else the first open one), and say so (PanelsFollow)
+  // The Rules panel is filled by process tabs (their slots groups-<id>): with a flow or model tab in focus it shows the
+  // process tab last in focus (else the first open one), and says so (PanelsFollow)
   const panelsFollow = !!focusedTab && treeless(focusedTab);
   if (focusedTab && !panelsFollow) processFocus.current = [focusedTab, ...processFocus.current.filter((id) => id !== focusedTab)];
   processFocus.current = processFocus.current.filter((id) => allTabs.includes(id));
   const panelTab = !panelsFollow ? focusedTab : processFocus.current[0] ?? allTabs.find((id) => !treeless(id)) ?? null;
-  const followNote = (onCollapse) => panelsFollow && html`<${PanelsFollow} title=${panelTab ? titles[panelTab] ?? null : undefined} onCollapse=${onCollapse} />`;
+  const followNote = panelsFollow && html`<${PanelsFollow} title=${panelTab ? titles[panelTab] ?? null : undefined} />`;
   function startSideResize(e) {
     e.preventDefault();
     const start = e.clientX, width = sideShown;
@@ -9734,7 +9740,7 @@ function App() {
         <${ModelTab} key=${id} id=${id} info=${info} initial=${initialOf(id)} visible=${id === pane.active} onSave=${onSave} onTitle=${onTitle}
           onOpenTab=${(from, root, place) => openTab(place?.pane ?? paneOfTab(layout, from).id, startFrom(from, root), place?.zone)} />` : html`
         <${FUView} key=${id} id=${id} info=${info} initial=${initialOf(id)} visible=${id === pane.active}
-          onSave=${onSave} onTitle=${onTitle} onCollapseSide=${() => setSideOpen(false)}
+          onSave=${onSave} onTitle=${onTitle}
           onNewTab=${(from) => actions.add(paneOfTab(layout, from).id)} onCloseTab=${(from) => actions.close(from)}
           onOpenTab=${(from, root, place) => openTab(place?.pane ?? paneOfTab(layout, from).id, startFrom(from, root), place?.zone)} />`)}
     <//>`;
@@ -9751,7 +9757,7 @@ function App() {
       <div class="body">
         ${!leftOpen && html`<button class="side-reopen left" onClick=${() => setLeftOpen(true)} title="Show the Processes, Methods and Rules panel (Ctrl/⌘ + ←)" aria-label="Show the Processes, Methods and Rules panel"><${SidePanelIcon} left /></button>`}
         <aside class="leftbar" style=${{ width: `${leftShown}px`, display: leftOpen ? "" : "none" }}>
-          <${LensPanel} info=${info} lens=${lensApi} tab=${leftTab} setTab=${setLeftTab} tabs=${allTabs} focusedTab=${panelTab} follow=${followNote(null)} comparing=${comparing}
+          <${LensPanel} info=${info} lens=${lensApi} tab=${leftTab} setTab=${setLeftTab} tabs=${allTabs} focusedTab=${panelTab} follow=${followNote} comparing=${comparing}
             view=${TAB_API[focusedTab] || Object.values(TAB_API)[0]} compareTabs=${compareTabs} flowTabs=${flowTabs} compare=${compare} setCompare=${setCompare} onCollapse=${() => setLeftOpen(false)}
             adder=${origin && DATABASE ? { origin, onAdded: () => request("/api/info").then((i) => { clearAnswers(); setInfo(i); }).catch((e) => setError(e.message)) } : null}
             onCategory=${(category, x, y) => CATEGORY_OPENERS[focusedTab]?.(category, x, y)}
@@ -9768,16 +9774,14 @@ function App() {
           onResize=${(id, sizes) => setLayout((l) => resizeSplit(l, id, sizes))} /></div>
         ${comparing && html`<${ComparisonView} info=${info} compare=${compare} setCompare=${setCompare}
           tabs=${compareTabs} />`}
-        ${!comparing && (sideOpen
+        ${editing && (sideOpen
           ? html`<div class="side-resizer" onPointerDown=${startSideResize} title="Drag to resize"></div>`
-          : html`<button class="side-reopen" onClick=${() => setSideOpen(true)} title="Show the side panel (Ctrl/⌘ + →)" aria-label="Show the side panel"><${SidePanelIcon} /></button>`)}
-        <aside class="sidebar" style=${{ width: `${sideShown}px`, display: sideOpen && !comparing ? "" : "none" }}>
-          ${!editing && followNote(() => setSideOpen(false))}
-          ${allTabs.map((id) => html`<div key=${id} id=${`side-${id}`} class="side-slot" style=${{ display: id === panelTab && !editing ? "" : "none" }}></div>`)}
-          ${editing && html`<${EditPanel} origin=${origin} dataset=${dataset} pending=${pending} affected=${pendingView.affected}
+          : html`<button class="side-reopen" onClick=${() => setSideOpen(true)} title="Show the Edit panel (Ctrl/⌘ + →)" aria-label="Show the Edit panel"><${SidePanelIcon} /></button>`)}
+        ${editing && html`<aside class="sidebar" style=${{ width: `${sideShown}px`, display: sideOpen ? "" : "none" }}>
+          <${EditPanel} origin=${origin} dataset=${dataset} pending=${pending} affected=${pendingView.affected}
             locked=${pendingView.locked} outdated=${outdated} onForm=${setDatasetOpen} stage=${stage} unstage=${unstage} unstageAll=${unstageAll}
-            onApplied=${() => { refreshEditor(); refreshDatabases(); }} onRebuild=${rebuild} onCollapse=${() => setSideOpen(false)} />`}
-        </aside>
+            onApplied=${() => { refreshEditor(); refreshDatabases(); }} onRebuild=${rebuild} onCollapse=${() => setSideOpen(false)} />
+        </aside>`}
       </div>
       <div class="bottom">
       ${toast && html`<div class="toast" role="status">
