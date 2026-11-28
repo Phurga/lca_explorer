@@ -300,6 +300,36 @@ def test_names_of_older_files_and_sources():
     assert methods_library.is_library(["library/ecoinvent-3.12", "EF v3.1"]) and not methods_library.is_library(["libraryx", "a"])
 
 
+def test_the_library_is_read_once_then_follows_its_files(tmp_path):
+    """A library of hundreds of methods (all those of an ecoinvent release, 100 MB) is not read again for each request:
+    the methods are kept while their files are unchanged; a file changed, added or removed is seen."""
+    library = methods_library.Library(tmp_path)
+    a = library.create(["A", "x"], "kg", factors=[{"database": "bio", "code": "co2", "cf": 1}])
+    library.create(["B", "y"], "kg")
+    first = library.all()
+    assert [m["name"] for m in first] == [["A", "x"], ["B", "y"]]
+    assert library.all()[0] is first[0]  # kept
+    copy = library.get(a["id"])
+    assert copy is not first[0] and copy == first[0]  # get(): a copy to change
+    assert library.digest(first[0]) == methods_library.digest(first[0])
+
+    library.set_factors(a["id"], [{"database": "bio", "code": "co2", "cf": 2}])  # written by the library
+    assert library.all()[0]["factors"][0]["cf"] == 2.0
+    assert library.digest(library.all()[0]) != library.digest(first[0])
+    library.rename_many([{"id": a["id"], "name": ["A", "renamed"]}])
+    assert first[0]["name"] == ["A", "x"]  # the method kept is not changed in place
+    assert library.find(["library", "A", "x"])["name"] == ["A", "renamed"]  # found by its former name
+
+    path = tmp_path / f"{a['id']}.json"  # changed outside the app
+    import json
+    edited = json.loads(path.read_text(encoding="utf-8"))
+    edited["unit"] = "t, edited outside"
+    path.write_text(json.dumps(edited), encoding="utf-8")
+    assert next(m for m in library.all() if m["id"] == a["id"])["unit"] == "t, edited outside"
+    path.unlink()
+    assert [m["name"] for m in library.all()] == [["B", "y"]]
+
+
 def test_flows_found_by_code_in_another_biosphere():
     flows = [{"id": 7, "database": "ecoinvent-3.10-biosphere", "code": "349b", "name": "Carbon dioxide, fossil",
               "categories": ["air"], "unit": "kilogram", "type": "emission"}]
@@ -322,6 +352,8 @@ def test_a_build_and_an_addition_with_library_methods(project, client):
     listed = client.get("/api/brightway/methods", params=params).json()
     assert [m["name"] for m in listed["library"]] == [["library", "Mine", "co2 three times"], ["library", "Mine", "methane"]]
     assert listed["library"][0]["matched"] == 1 and listed["library"][0]["factors"] == 1
+    # the build form tells the factors a build drops: the project's flow databases, those of the factors
+    assert listed["biosphere"] == ["bio"] and listed["library"][0]["databases"] == ["bio"]
 
     body = {"brightway": folder, "project": "toy", "database": "bg"}
     job = wait(client, client.post("/api/load", json={**body, "methods": [list(GWP), ["library", "Mine", "co2 three times"]]}).json())

@@ -825,6 +825,13 @@ table.factor-table td { font-size: 12px; padding: 2px 6px; }
 .add-report p { margin: 4px 0; }
 .project-form.add-report label.inline { flex-direction: row; gap: 6px; align-items: center; }
 .add-report .suffix-input { width: 90px; }
+.copy-progress { display: inline-flex; align-items: center; gap: 6px; }
+.copy-progress progress { width: 140px; }
+.method-row .coverage-note { flex: none; font-size: 11px; color: var(--bar-negative); font-variant-numeric: tabular-nums; }
+.library-coverage { font-size: 12px; margin: 6px 0; padding: 6px 8px; border: 1px solid var(--border); border-radius: 4px; }
+.library-coverage.lossy { border-color: var(--bar-negative); }
+.library-coverage p { margin: 0 0 4px; }
+.library-coverage .report-list { margin: 0; padding-left: 18px; max-height: 140px; overflow: auto; }
 /* Curate names: the library's names as a table of their parts, the bulk tools above it, the preview below */
 .curate-names h4 { display: flex; align-items: center; gap: 6px; }
 .curate-names h4 .close { margin-left: auto; font-size: 16px; }
@@ -1132,6 +1139,9 @@ textarea.editing { width: 100%; box-sizing: border-box; }
 .name-display .recipe-field { min-width: 0; flex-basis: 100%; }
 .name-display .recipe .recipe-kind { width: auto; flex-basis: 100%; }
 .name-display .example-main { color: var(--text); }
+.name-display .name-display-foot { justify-content: space-between; align-items: baseline; flex-wrap: nowrap; }
+.name-display .name-display-foot .note { margin: 0; min-width: 0; }
+.name-display .name-display-foot button { flex: none; }
 /* The compare mark of a tab: a method's box (.method-mark), ✓ compared, ★ the baseline */
 .compare-tab .compare-mark { margin-right: 1px; }
 /* What a database opened before its build ended does not have yet (its exchanges) */

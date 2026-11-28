@@ -105,6 +105,14 @@ API in `src/lca_viewer/server.py`.
   library: an import or a copy of many methods should not ask for each name, and the same fix (a family, a
   separator) is usually needed on many methods at once. Decision: a renamed method keeps its former names; a
   database built with it finds it under them and is shown as to rebuild, as for an edit of its factors.
+  A copy of many methods (*All 633*) goes 40 at a time (`copyInChunks`), a bar and *n of N copied* replacing
+  *Cancel*, with *Stop* (those copied so far stay). At a build (`BuildForm`, and *Add impact methods*),
+  `LibraryCoverage` under the picker sums the library methods ticked: factors that find an elementary flow of the
+  project, those dropped and the methods that lose some (also *412/430 factors* on such a row of the picker), with a
+  tip on methods of another ecoinvent release. Decision: a copy in requests of a few methods rather than one job: the
+  page shows progress and can stop, and no request holds the library for long. Decision: the coverage said at build,
+  where the release mismatch matters, not only in a row's tooltip: most factors dropped on an older biosphere are of
+  flows it lacks (harmless), but those of flows renamed or removed since are impacts lost.
 - **Process form** (opened from the edit panel): a wide dialog to enter
   a process as in SimaPro: target (folder, project, database or new one),
   process and documentation, products (co-products with allocation %, their
@@ -338,20 +346,24 @@ API in `src/lca_viewer/server.py`.
   applies its tree, not its method or its set of rules (a notice says so). The explorer
   inside a pop-up takes the method of its tab, with rules of its own.
   **Name display of processes and flows** (a fold at the top of the *Processes* panel, as the Methods panel has for
-  methods): one setting of the workspace, kept in the lens (`naming`: `{ process, flow, recipe }`), not per tab. A
-  **process** format, *Product* (default: the reference product, the location in grey), *Activity* (the activity
-  name, the location in grey: the *Full* names of before) or *Custom* (a recipe with the tokens `{product}`,
-  `{name}`, `{location}`, `{unit}`, `{type}`, `{isic}`, `{cpc}`, `{database}`), and a **flow** format, *Full* (the
-  substance, its compartment in grey), *Substance* or *Custom* (`{substance}`, `{compartment}`,
-  `{subcompartment}`). The tree, the Sankey, the charts, the pop-ups, the members pop-ups, the tab titles, the rows
+  methods): one setting of the workspace, kept in the lens (`naming`: `{ recipe }`), not per tab. A builder
+  (`RecipeEditor`), always shown: for **processes** a main part and a grey part made of the tokens `{product}`,
+  `{name}`, `{location}`, `{unit}`, `{type}`, `{isic}`, `{cpc}`, `{database}`, for **flows** the same with
+  `{substance}`, `{compartment}`, `{subcompartment}`; a token is inserted in the field last focused. An example line
+  (the first tab's process, a sample flow) and **Default** (`DEFAULT_RECIPE`: `{product}` + `{location}`,
+  `{substance}` + `{compartment}, {subcompartment}`; greyed when already so) end it. Decision: the builder alone, no
+  preset buttons (*Product / Activity / Custom*, *Full / Substance / Custom*): the presets were recipes the builder
+  writes in a few clicks, and two rows of buttons above it made one setting look like three; Default gives back the
+  decided names. A lens saved with the buttons (`{ process, flow, recipe }`) takes their recipe (`namingOf`:
+  *Product*, *Activity*, *Full*, *Substance* as their parts, *Custom* its own recipe). The tree, the Sankey, the charts, the pop-ups, the members pop-ups, the tab titles, the rows
   of this panel and the labels of Compare mode follow it, and so do the titles of the process and flow cards (the
   pop-up or docked card's header, `processTitle`; `FlowHead`); a name given to a row (✎) still wins where it did.
-  The tabs' views get it as `view.naming` / `view.recipe` (`viewNaming`: *Activity* with *Full* flows is the
-  `full` naming of before, the rest a recipe), so the readers did not change. Decision: the names were a line of
+  The tabs' views get it as `view.naming` / `view.recipe` (`viewNaming`: the recipe of activity names with full
+  flows is the `full` naming of before, the rest a recipe), so the readers did not change. Decision: the names were a line of
   each tab's view options (*Full / Short / Custom*), so two tabs could name the same process two ways and the titles
   of tabs and cards did not follow; the product, more than the activity name, tells what a process makes. The old
-  preference is read once: *Short* becomes *Product* with *Substance* flows, *Custom* keeps its recipe, *Full* (the
-  default then) takes the new default.
+  preference is read once: *Short* becomes the product with substance-only flows, *Custom* keeps its recipe, *Full*
+  (the default then) takes the new default.
   *Name display* (a section of the Methods panel) sets how a method is named in the titles, the files, the
   several-methods chart and the matrix: parts (source, family, category, indicator, unit) or a
   custom format with the tokens `{source}`, `{family}`, `{category}`, `{indicator}` and `{unit}`. A method name is

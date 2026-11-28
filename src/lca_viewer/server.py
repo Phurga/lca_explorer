@@ -2004,18 +2004,24 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
             family = _method_family(methods[_default_index([m["name"] for m in methods])]["name"])
             default = [m["name"] for m in methods if _method_family(m["name"]) == family]
         # The methods of the app's library, under the names they take in a model, with how many of their factors are
-        # on flows of the project; those chosen before, under their current names
+        # on flows of the project (the others are dropped by a build: the flows of another biosphere, e.g. of another
+        # ecoinvent release); those chosen before, under their current names
         offered = []
         for m in library.all():
             try:
-                cover = methods_library.coverage(m, folder, project)
+                cover = library.coverage(m, folder, project)
             except (FileNotFoundError, ValueError):
                 cover = {"matched": 0, "total": len(m["factors"])}
             offered.append({"name": methods_library.model_name_of(m), "unit": m["unit"], "library": m["id"],
-                            "matched": cover["matched"], "factors": cover["total"]})
+                            "matched": cover["matched"], "factors": cover["total"],
+                            "databases": sorted({f["database"] for f in m["factors"]})})
         if selected and any(methods_library.is_library(n) for n in selected):
             selected = methods_library.build_entries(library, selected, folder, project)[0]
-        return {"methods": methods, "selected": selected, "default": default, "library": offered}
+        try:  # the databases of the project's elementary flows, which the library's factors are matched to
+            biosphere = sorted({f["database"] for f in methods_library.project_flows(folder, project)})
+        except (OSError, ValueError, sqlite3.Error):
+            biosphere = []
+        return {"methods": methods, "selected": selected, "default": default, "library": offered, "biosphere": biosphere}
 
     def add_methods_job(job: dict, key: str, names: list[list[str]]) -> dict:
         m = loaded.get(key)

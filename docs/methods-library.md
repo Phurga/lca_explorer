@@ -63,7 +63,34 @@ another method later given a former name wins (`find` looks at current names fir
    writes it), the unit checked (`kg` = `kilogram`, `m3` = `cubic meter`…).
 
 A factor of no flow of the project is left out of a build of that project. The editor greys it out for the project
-chosen, and the build's method picker gives the count (*2 of 3 factors on flows of the project*).
+chosen; the build's method picker gives the count on each method that loses some (*412/430 factors*), and under it
+`LibraryCoverage` sums the library methods ticked: the factors that find a flow, those dropped, the methods that lose
+some, the project's flow databases and those the factors were read on.
+
+**Methods of another release.** ecoinvent's methods (bw2io's import of each release's *LCIA implementation*) are
+written on that release's elementary flows; the flows keep their codes (UUIDs) from release to release, but some are
+added, renamed or removed. Measured with the 633 methods of ecoinvent 3.12 copied to the library and matched to the
+biospheres of other projects:
+
+| biosphere | flows | factors matched | factors of the release's own method on its flows, none in the 3.12 copy |
+|---|---|---|---|
+| ecoinvent 3.12 | 9,850 | all (by key) | — |
+| ecoinvent 3.11 | 9,795 | 99.6% (by code; the rest: flows new in 3.12) | none (526 of 633 methods identical; 407 values differ) |
+| ecoinvent 3.10.1 | 4,362 | 47% (42% by code) | 90 of 185,739 |
+| ecoinvent 3.9.1 | 4,709 | 41% | 18,146 of 183,413 (341 of 496 methods) |
+| ecoinvent 3.8 | 4,421 | 38% | 1,867 of 17,565 (45 of 58 methods) |
+
+Most factors dropped are of flows the older biosphere does not have, which change nothing (no exchange uses them).
+What is lost is the flows changed: 3.10 removed the air compartment *lower stratosphere + upper troposphere* (310
+flows of 3.9.1) and renamed the ore-grade resource flows (103), so on a 3.9.1 or 3.8 database a 3.12 method leaves
+those exchanges uncharacterised. The page says so at build (`LibraryCoverage`'s tip; the user guide explains it).
+
+**Large libraries.** `Library.all` keeps the methods read, by file, while their stamp (mtime, size) is unchanged: a
+library of a whole release (600 methods, about 100 MB of JSON) is read once, then each request only lists the folder.
+They are shared, not to be changed: `Library.get` reads a copy to change. `Library.finder` resolves many names in one
+pass (`stale`, `build_entries`); `project_matcher` keeps a project's `Matcher` while its flows are unchanged, and
+`Library.digest` / `Library.coverage` are kept per file stamp (and matcher), so the build form's list of a 600-method
+library takes a fraction of a second once warm (it took a minute).
 
 ## Adding methods
 
@@ -72,7 +99,8 @@ name structure, which is curated afterwards (below). When the library has a meth
 the method is skipped (`on_conflict: "skip"`, the default), and the page offers to add the skipped ones again with
 `on_conflict: "rename"`: a `suffix` (" (copy)" by default) after the last part, numbered while taken ("GWP100 (copy)",
 "GWP100 (copy) 2"; with no suffix, "GWP100 (2)"). `AddReport` lists the methods added (a renamed one with the name it
-wanted), skipped (and why) and the rows of no flow.
+wanted), skipped (and why) and the rows of no flow. The page sends a copy of many methods 40 at a time (`COPY_CHUNK`,
+`copyInChunks`): a bar shows the progress, and *Stop* ends it after the request under way, those copied so far kept.
 
 - **Copy methods of a project** (`POST /api/library/methods/copy`, `methods`: a list of names; `copy_methods`), picked
   in `MethodPicker` (filter, folding families, a family ticked at once): their factors are read from the project's
@@ -128,8 +156,9 @@ and nothing is built from it until a build is asked for.
 
 ## Builds
 
-`/api/brightway/methods` lists the library's methods under `library`, with their names in a model and how many of
-their factors are on flows of the project; `BuildForm` and `AddMethods` put them after the project's methods in the
+`/api/brightway/methods` lists the library's methods under `library`, with their names in a model, how many of
+their factors are on flows of the project (`matched`, `factors`) and the flow databases of their factors
+(`databases`), and the project's flow databases (`biosphere`); `BuildForm` and `AddMethods` put them after the project's methods in the
 picker. The chosen names go to the build as before (`--methods-file`); for those of the library the server writes
 their factors on the project's node ids (`build_entries`, matched as above) to a second file, `--library-file`, which
 the build process registers (`methods_library.register_file`). `brightway.method_factors` and `_unlinked_factors`

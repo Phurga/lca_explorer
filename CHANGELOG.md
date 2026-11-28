@@ -27,6 +27,19 @@ Changes on `dev`, not released yet.
 - **Fixed**: dragging the side panel wider (above all with the left panel open) made the page wider than the window
   and pushed the panel past its right edge. The two panels are now fitted to the window, leaving the workspace
   360 px, when dragged, when the other panel opens and when the window is resized.
+- **Name display as a builder**: the *Name display* fold shows the name recipe for processes and for flows at all
+  times (a main part and a grey part, with tokens), without the *Product / Activity / Custom* and *Full / Substance /
+  Custom* buttons; **Default** sets processes to their reference product with the location in grey and flows to their
+  substance with the compartments in grey. A workspace saved with the buttons keeps the names it had.
+- **Methods library, copying all methods of a project**: with a library of hundreds of methods (all those of an
+  ecoinvent release), the build form, *Add impact methods* and the copy form took a minute or more to list the
+  methods (the library was read again, and the project's flows indexed again, for every method). The library is now
+  read once and the flows indexed once: a fraction of a second. A copy of many methods shows its progress (*n of N
+  copied*) and can be stopped.
+- **Library methods of another ecoinvent release**: the build form (and *Add impact methods*) says, for the library
+  methods ticked, how many factors find an elementary flow of the project and how many are dropped, and which methods
+  lose some; the user guide explains when a method of one release is fine on a database of another (3.10 to 3.12) and
+  when it loses impacts (3.9 and older).
 - **Name display of processes and flows**, one setting for the workspace: a fold at the top of the *Processes*
   panel, as *Methods* has for method names, with a process format (*Product*, *Activity* or *Custom*) and a flow
   format (*Full*, *Substance* or *Custom*), the custom ones a recipe with tokens (`{product}`, `{name}`,
