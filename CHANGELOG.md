@@ -9,6 +9,10 @@ version, `main` can be ahead of it with work in progress.
 
 Changes on `dev`, not released yet.
 
+- **Databases open sooner**: a first build of ecoinvent 3.12 opens in about 14 s (it took 79 s), Agribalyse 3.1 in
+  about 12 s (191 s). The tree and the impacts come first; the comments, uncertainty and pedigree of the exchanges
+  are read meanwhile by several processes (*Reading exchanges…* in the top bar) and show in place when read (15 s and
+  28 s for the whole build). Opening a database already built takes 0.4 to 0.7 s (1.7 to 1.9 s).
 - **View options on each process**: the sliders icon of a process in the left panel's *Processes* panel opens the
   view options of that tab in a pop-up (*Display*, *Cut-off*, *Organise by*, *Group by*, *Color by*, *Rows*,
   with *Reset* and *Save ▾*); the tab is shown in its window first. Key **v** in View mode opens those of the tab in

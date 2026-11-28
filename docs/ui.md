@@ -30,8 +30,8 @@ API in `src/lca_viewer/server.py`.
   imports into and manages; a **database** is one dataset of a project (ecoinvent, BAFU…), the unit the app
   opens. The dialog used to list loaded databases, built models and projects apart, each with its own buttons;
   a database now has one state and two buttons. **Open** (*Shown* for the one on screen; *Build and open* the
-  first time and *Rebuild and open* when the project changed since the build, about a minute for
-  ecoinvent, kept in `data/cache`), and **Options ▾**: *Close (free its memory)* for one that is open,
+  first time and *Rebuild and open* when the project changed since the build, about 15 s for
+  ecoinvent before it opens, kept in `data/cache`), and **Options ▾**: *Close (free its memory)* for one that is open,
   *Open the old build* when a rebuild is due, *Rebuild and open* when none is (for what a newer version of the
   app records, as the method factors on flows outside the model), *Lock* / *Unlock*, *Rename…*, *Add database…* and *Remove…*. A project
   has *Options ▾* too: *Add database…* and *Delete project…*. The projects are listed with the last one opened first
@@ -208,6 +208,14 @@ API in `src/lca_viewer/server.py`.
   panel of its pop-up, which stages that replacement in the dataset(s) of the process(es) above it.
 - **Rebuild required**: `/api/databases` gives each Brightway-built model's `outdated` (what
   changed in the project since: `sources.changes`); the top bar shows the button when it is set.
+- **Reading exchanges…**: a database opens once its impacts are computed, while its build still reads the
+  exchanges' comments, uncertainty and pedigree (`/api/info`'s `pending`; see
+  [project-cache.md](project-cache.md#decision-opening-before-the-exchanges)). The top bar shows it with a spinner
+  and asks `/api/info` again every 1.5 s; once read, the tabs ask their rows again and the Exchanges panel its
+  exchanges (`exchangesStamp`). Until then the Exchanges panel and a flow's exchanges say they are being read, not
+  that the model has none; *Exchanges not read* (the reason in its tooltip) when the build failed after opening.
+  Decision: the jobs that build a database (*Build and open*, *Rebuild required*, *Apply* in Edit mode) open it at
+  `ready`, not when the job ends: the tree is there seconds earlier, the rest arrives in place.
 - **Locks**: *Lock* in *Projects* (`POST /api/brightway/lock`, kept in `data/locks.json`);
   `/api/brightway` lists `locked` per database and `/api/brightway/dataset` says whether a process is
   locked, which disables its fields, Edit and Delete.
