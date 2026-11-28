@@ -254,7 +254,7 @@ API in `src/lca_viewer/server.py`.
 - **Status bar** (bottom of the page): at the left the **focused card**, the object of the active tab of the
   window in focus (*Process · name (location)*, *Flow · name (compartment)*, *Model · method*; read from the
   tab's title, `focusedCardLabel`, the name as the tab has it by the *Name display*, `tabTitleNames`; a long name ends in an ellipsis) as plain text (no click, no pointer), then the
-  active method and the rule set; at the right the **Settings** icon (the colours of every *Color by* mode), the **Shortcuts** icon and the
+  active method and the rule set, each a grey field with its label, set apart by dividers (see *Look*); at the right the **Settings** icon (the colours of every *Color by* mode), the **Shortcuts** icon and the
   **Source** icon (`</>`, the source code: `SOURCE_URL`, as the AGPL asks; it was a link of the top bar).
   Decision: the focused card's name is a label, not a button (it opened the card's pop-up): it says what the tab in
   focus shows, and the pop-up of a tab opens from its row of the *Processes* panel (a right-click).
@@ -592,7 +592,7 @@ API in `src/lca_viewer/server.py`.
   *Products* (the reference product, co-products), *Inputs from technosphere*, *Inputs from nature*, *Emissions*,
   *Waste to treatment*, *Avoided products*. An input is waste when its supplier is a waste treatment (`waste` in the API:
   its production is negative), an avoided product when it is a substitution or a negative input, as the tree reads
-  it; both are shown positive, as in the form. A list of the pop-ups with sections (header and count, foldable): name
+  it; both are shown positive, as in the form. A list of the pop-ups with sections (header, foldable, the count while folded): name
   by the *Name display* (`processNames`, `flowTitleNames`: by default the product, the activity in the tooltip) with
   its grey part (the location; a flow: its compartment) as a chip, amount (`fmtAmount`), unit and the **comment**, in a column
   of its own on one line (`oneLine`; all of it in the cell's tooltip). Right-clicking the headers opens a **columns
@@ -650,7 +650,8 @@ API in `src/lca_viewer/server.py`.
   from outside, or closing it, starts a new history.
 - **Pop-up windows** (all kinds). Drag the header to move a pop-up and any
   edge or corner to resize it. The **pin** icon of its header, beside × (and ←, and the ⋯ menu when it has
-  actions), pins and unpins it (an outline, filled while pinned: `PinButton`). Decision: *Pin* was an item of the ⋯
+  actions), pins and unpins it (an outline, filled and bordered in the pop-up's kind colour while pinned: `PinButton`; the
+  pop-up itself has no pinned border, see *Look*). Decision: *Pin* was an item of the ⋯
   menu with a mark in the header once pinned; one icon that is both the switch and the state is quicker and says
   what it does. Pinned, a pop-up stays open, so that several
   can be side by side: a pinned pop-up ignores clicks outside and opening
@@ -687,7 +688,7 @@ API in `src/lca_viewer/server.py`.
   differ (EF acidification in mol H+-Eq, CML in kg SO2-Eq), the unit of comp. and that of the ratio are flagged. A flow's
   right-click (or Space) opens its pop-up, with the factor of this model in its header, and ← comes back; its
   double-click (or Enter) opens it in a flow tab. The pop-up
-  has the amber colour of impact categories (a top border and the list icon), apart from processes. **Factors on flows
+  has the amber colour of models (`--kind-model`: a top border and the list icon), apart from processes. **Factors on flows
   not in the model**, folded under the table: the factors of the method (and of comp.) that the calculation drops,
   recorded when the model is built (a model built before that has none: rebuild it), the largest first, each with
   what the model has under that name (*same flow*, *same name* and its compartment, or –). API: `POST /api/category`
@@ -742,7 +743,7 @@ API in `src/lca_viewer/server.py`.
   factors), with no quantity. An **exchange** is a flow in one dataset: the amount per unit of a process, with its
   comment, uncertainty, pedigree and formula. An **inventory flow** is a flow in a supply chain (B·s): not an object of
   its own, but a flow opened from a process tab, whose *Emitted by* panel then adds that supply chain's amounts (no
-  line or chip says so: the columns do). Flows have an icon (a drop) in the colour of their flow type (resource green, emission red) on their pop-up
+  line or chip says so: the columns do). Flows have an icon (a drop) in the one colour of flows (`--kind-flow`; the type in its tooltip) on their pop-up
   header, their tab and their row of the *Processes* panel.
 - **Keys on a flow row** (the tree, an others or group panel), as on a process row: **Space** opens the **flow pop-up**,
   **i** its **exchange** only, in the dataset of the process emitting it: header *Exchange of ‹flow› in ‹process›* (the
@@ -882,6 +883,34 @@ API in `src/lca_viewer/server.py`.
     largest supply path) or *Details*. Each group has the colour of its rule
     in *Rules* (a swatch next to the rule), and its rows carry the same
     colour in the tree.
+
+## Look: kinds, folds, focus
+
+- **One colour per kind of object** (`--kind-process`, `--kind-flow`, `--kind-model` of `style.css`, light and dark):
+  processes and products green, flows blue, methods and models (impact categories, model cards) amber. A card's kind
+  (`--kind`, set by `.kind-process` / `.kind-flow` / `.kind-model` and the pop-up classes `flow-popup`,
+  `category-popup`) colours the line on top of its tab (`kindOfTitle`), the top border of its pop-up, its pin while
+  pinned and its frame while in focus; the flow icon (a drop) and the model mark take their kind's colour too.
+  `--category` is the kind of models. Decision: every flow has the one colour of flows, whatever its type (a
+  resource or an emission is said in its subtitle and in the icon's tooltip), and the kinds keep their colour in
+  edit mode (the accent turns plum, a process stays green): the colour says what a card is, nothing else.
+- **One disclosure style** for every section that folds (`Fold`, the sections of `PopupList`, the *Factors on
+  flows not in the model* of a model card, and the fold buttons `.fold-caret` of the method families, the projects
+  and the *Methods library*): the header is a bar like a button (a light fill `--btn-bg`, a border `--btn-border`,
+  darker on hover), its **title first, then a chevron** (`Chevron`: down while open, right while folded; the fold
+  buttons draw it from their `aria-expanded`), and the open content sits in a box joined to the bar (`.fold-body`;
+  in a list, the section's rows are framed under its header). A section of a list shows its count only while
+  folded (open, its rows count themselves). Decision: "▸ Header" did not read as a button that opens below; a
+  GitHub-like bar with the arrow after the title does, and the box shows what belongs to it.
+- **The focused card** is framed in its kind's colour: the active tab of the window in focus (`card-focus` of
+  `PaneView`: its tab outlined and the card under it framed), or the pop-up that has the focus (`:focus-within`; a
+  pop-up takes the focus when it opens or is clicked), in which case the window's frame goes. The active tab of the
+  window in focus shows its title in full (it wraps rather than ending in an ellipsis; the other tabs shrink first).
+  A pinned pop-up has no frame of its own: only its pin says it (filled, bordered in its kind's colour). Decision:
+  the frame is the kind's colour rather than the accent, so that it also says what the focused card is; a pinned
+  pop-up is not the focused one, so a green border on it said two things at once.
+- **Status bar fields**: the focused card, the method and the rules are grey, each with its label (*Process* /
+  *Flow* / *Model*, *Method*, *Rules*) and set apart by a divider (`status-field`, `status-label`).
 
 ## Tree graph layout
 
