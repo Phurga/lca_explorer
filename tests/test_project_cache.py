@@ -251,3 +251,45 @@ def test_a_segment_with_its_exchanges_in_one_file(project):
         (path / "exchanges-0.sqlite").rename(path / "exchanges.sqlite")
         (path / project_cache.EXCHANGES).unlink()
     assert snapshot(project_cache.load(cache, "fg"))["exchanges"] == whole["exchanges"]
+
+
+def test_the_app_opens_a_database_when_its_results_are_ready(project, tmp_path):
+    """Through the page's requests: the build's job gets the database's key once its results are solved (the page
+    opens it then), and the model gets its exchanges when the build has read them."""
+    import time
+
+    from fastapi.testclient import TestClient
+
+    from lca_viewer.server import create_library
+
+    client = TestClient(create_library(tmp_path / "data"))
+
+    def wait(job):
+        for _ in range(600):
+            if job["status"] != "running":
+                return job
+            time.sleep(0.1)
+            job = client.get(f"/api/jobs/{job['id']}").json()
+        raise AssertionError("job still running")
+
+    body = {"brightway": str(project), "project": "toy", "database": "fg", "methods": [list(m) for m in METHODS]}
+    job = wait(client.post("/api/load", json=body).json())
+    assert job["status"] == "done" and job["ready"], job
+    assert any(line.startswith(project_cache.READY) for line in job["log"])
+    assert job["log"].index("Exchanges read") > next(k for k, line in enumerate(job["log"]) if line.startswith(project_cache.READY))
+    key = job["key"]
+    assert client.get(f"/db/{key}/api/info").json()["pending"] == []
+    farm = next(r for r in client.post(f"/db/{key}/api/search", json={"text": "farm"}).json()["results"] if r["name"] == "farm")
+    exchanges = client.get(f"/db/{key}/api/activity/{farm['index']}/exchanges").json()
+    assert exchanges["available"] and not exchanges["pending"] and len(exchanges["inputs"]) == 2
+
+    # A build stopped before the exchanges: the database opens, and its exchanges alone are read
+    client.post("/api/unload", json={"key": key})
+    cache = next((tmp_path / "data" / "cache").glob("project-*"))
+    for r in project_cache.read_project(cache)["segments"]:
+        (project_cache.folder(cache, r) / project_cache.EXCHANGES).unlink()
+    job = wait(client.post("/api/load", json={k: v for k, v in body.items() if k != "methods"}).json())
+    assert job["status"] == "done", job
+    assert not any(line.startswith(("Reading the matrices", "Solving")) for line in job["log"])
+    exchanges = client.get(f"/db/{job['key']}/api/activity/{farm['index']}/exchanges").json()
+    assert exchanges["available"] and len(exchanges["inputs"]) == 2

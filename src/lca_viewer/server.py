@@ -392,6 +392,10 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
             "rule_flow_query_fields": RULE_FLOW_FIELDS,
             "default_root": describe(root) if root is not None else None,
             "default_method": default_method,
+            # What is not there yet: the exchanges (comments, uncertainty, pedigree), read by the build that opened
+            # the model while the tree and the impacts are shown (docs/project-cache.md, *Opening before the exchanges*)
+            "pending": ["exchanges"] if model.exchanges_pending else [],
+            "pending_error": model.exchanges_error,
         }
 
     @app.post("/api/search")
@@ -602,7 +606,8 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
         inputs.sort(key=lambda x: -abs(x["impact"]))
         emissions.sort(key=lambda x: -abs(x["impact"]))
         return {
-            "available": model.has_exchanges, "method": k,
+            # ``pending``: the build that opened the model still reads them (they show in a moment)
+            "available": model.has_exchanges, "pending": model.exchanges_pending, "method": k,
             "production": production[0] if production else None, "inputs": inputs, "flows": emissions,
         }
 
@@ -643,7 +648,8 @@ def create_app(model: LCAModel, title: str = "", default_root: str | None = None
             "resource": is_resource(index), "method": k, "cf": float(model.methods[k].cfs[index]), "factors": factors,
             "location": description.pop("location", None), "description": description, "name_parts": name_parts(f["name"]),
             "emitters": int(B[index].nnz), "same_substance": int(len(siblings) - 1),
-            "exchanges_available": model.has_exchanges, "exchanges": exchanges,
+            "exchanges_available": model.has_exchanges, "exchanges_pending": model.exchanges_pending,
+            "exchanges": exchanges,
         }
 
     # ------------------------------------------------ a flow (abstract: no quantity), its panels
@@ -1573,13 +1579,16 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
             return build_locks.setdefault(str(cache), threading.Lock())
 
     def build(job: dict, folder: str, project: str, database: str, rebuild: bool, reopen: bool = False,
-              methods: list[list[str]] | None = None) -> dict:
+              methods: list[list[str]] | None = None, on_ready=None) -> dict:
         """The entry of a Brightway database, built (in a separate process) in its project cache if it is not yet,
         or its results are to be solved again, or again with ``rebuild`` (the page asks for it when the project
         changed since): the segments it needs that are missing or changed are read, the others kept. A database
         that is open is not rebuilt, unless ``reopen``: it keeps being served while the build is made (from other
         folders), then it is closed (the caller opens it again). ``methods``: the impact methods of the project
-        cache; None: those it has, else all of the project's."""
+        cache; None: those it has, else all of the project's. ``on_ready(entry)``: called once the database can be
+        opened (its results solved), while the build goes on reading the exchanges; a database open being rebuilt
+        is closed then (with ``reopen``), not at the end. A database built whose exchanges are not read (a build
+        stopped before) is built again for them alone, even when open."""
         import importlib.util
 
         folder = str(Path(folder).expanduser().resolve())
@@ -1587,15 +1596,18 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
         entry = bw_entry(folder, project, database)
         cache = Path(entry["cache"])
         state = project_cache.status(cache, database, p)
-        if state["built"] and not rebuild and not state["solve"] and not library.stale(project_cache.read_project(cache)):
+        current = (state["built"] and not rebuild and not state["solve"]
+                   and not library.stale(project_cache.read_project(cache)))
+        if current and state["exchanges"]:
             return entry
-        if loaded_key(entry["path"]) and not reopen:
+        if loaded_key(entry["path"]) and not reopen and not current:
             raise ValueError(f"{database} is open: close it first (Close, in the list of loaded databases), then rebuild it")
         if importlib.util.find_spec("bw2data") is None:
             raise ValueError("Brightway is not installed in the Python environment running lca_viewer: "
                              "run pip install -e \".[brightway]\" in it, then restart the app")
-        building = (f"Building {database} (the databases it uses once for the project: one or two minutes for "
-                    f"ecoinvent)" if not state["built"] else f"Building {database} again")
+        building = (f"Building {database} (the databases it uses once for the project: about 15 s for ecoinvent "
+                    f"before it opens)" if not state["built"]
+                    else f"Reading the exchanges of {database}" if current else f"Building {database} again")
         job["message"] = building
         if methods is None:
             methods = project_cache.method_names(cache) or None  # the project's methods, as chosen before
@@ -1613,20 +1625,35 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
                 chosen.parent.mkdir(parents=True, exist_ok=True)
                 chosen.write_text(json.dumps(methods), encoding="utf-8")
                 args += ["--methods-file", str(chosen)]
+            ready = []
+
+            def close_former() -> None:
+                with lock:
+                    key = loaded_key(entry["path"])
+                    if key and reopen and not current:  # served until now, from the folders of its former build
+                        closed = loaded.pop(key)
+                        app.router.routes.remove(closed["route"])
+
+            def message(line: str):
+                if line.startswith(project_cache.READY) and not ready:
+                    ready.append(True)  # the results are there: opened now, while the exchanges are read
+                    close_former()
+                    if on_ready:
+                        on_ready(entry)
+                    return None
+                # The steps of project_cache.build, not Brightway's own messages (once open, the job says so)
+                return (not ready and line.startswith(("Reading", "Solving"))
+                        and f"{building}: {line[0].lower()}{line[1:]}")
+
             try:
-                # The steps of project_cache.build, not Brightway's own messages
-                cli(job, folder, args, lambda line: line.startswith(("Reading", "Solving")) and
-                    f"{building}: {line[0].lower()}{line[1:]}")
+                cli(job, folder, args, message)
             except ValueError as e:
                 raise ValueError(f"The build failed: {e}") from None
             finally:
                 chosen.unlink(missing_ok=True)
                 chosen.with_suffix(".library.json").unlink(missing_ok=True)
-        with lock:
-            key = loaded_key(entry["path"])
-            if key and reopen:  # served until now, from the folders of its former build: opened again by the caller
-                closed = loaded.pop(key)
-                app.router.routes.remove(closed["route"])
+        if not ready:
+            close_former()
         gc.collect()
         clean(cache)
         return entry
@@ -1643,22 +1670,52 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
             args += ["--library-file", str(path)]
         return names
 
-    def run(job: dict, req: LoadRequest) -> dict:
-        if req.brightway:
-            entry = build(job, req.brightway, req.project, req.database, req.rebuild, req.reopen, req.methods)
-        else:
-            entry = next((m for m in entries() if Path(m["path"]) == Path(req.path).resolve()), None)
-            if entry is None:
-                raise ValueError(f"{req.path} is not in {data / 'models.json'}")
-        if not req.open:
-            return {"message": f"{entry['title']} is built"}
+    def open_entry(job: dict, entry: dict) -> str:
+        """The key of a built database, opened if it is not yet."""
         key = loaded_key(entry["path"])
         if key is None:
             if not is_built(entry):
                 raise ValueError(f"No model in {entry['path']}: build it again")
-            job["message"] = f"Loading {entry['title']} and factorising its matrix"
+            job["message"] = f"Loading {entry['title']}"
             key = mount(entry["path"], entry["title"], entry.get("default_root"), entry)
-        return {"key": key, "message": f"{entry['title']} is ready"}
+        return key
+
+    def run(job: dict, req: LoadRequest) -> dict:
+        if not req.brightway:
+            entry = next((m for m in entries() if Path(m["path"]) == Path(req.path).resolve()), None)
+            if entry is None:
+                raise ValueError(f"{req.path} is not in {data / 'models.json'}")
+        else:
+            early: dict = {}
+
+            def ready(entry: dict) -> None:
+                """The results are solved: the database is opened (the job gets its ``key`` and ``ready``, and the
+                page opens it) while the build reads the exchanges, which the model gets when the build ends."""
+                if not req.open:
+                    return
+                key = open_entry(job, entry)
+                model = loaded[key]["model"]
+                model.exchanges_pending = (getattr(model, "project_cache", None) is not None
+                                           and not project_cache.attach_exchanges(model))
+                model.exchanges_error = None
+                early.update(key=key, model=model)
+                job.update(key=key, ready=True, message=f"{entry['title']} is open: reading the exchanges of its "
+                                                        f"processes (comments, uncertainty)")
+
+            try:
+                entry = build(job, req.brightway, req.project, req.database, req.rebuild, req.reopen, req.methods,
+                              on_ready=ready)
+            except Exception as e:
+                if early:  # open without its exchanges: the page says why
+                    early["model"].exchanges_pending, early["model"].exchanges_error = False, str(e)
+                raise
+            if early:
+                project_cache.attach_exchanges(early["model"])
+                early["model"].exchanges_pending = False
+                return {"key": early["key"], "message": f"{entry['title']} is ready"}
+        if not req.open:
+            return {"message": f"{entry['title']} is built"}
+        return {"key": open_entry(job, entry), "message": f"{entry['title']} is ready"}
 
     def public(job: dict) -> dict:
         out = {k: v for k, v in job.items() if not k.startswith("_")}
