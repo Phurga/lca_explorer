@@ -201,17 +201,25 @@ def _methods_stamp(project_dir: Path) -> str | None:
     except (OSError, ValueError):
         return None
     digest = hashlib.sha1(text)
+    # One listing of the folder, not a stat per method: 5,000 methods in 10 projects took 0.6 s, at each opening
+    files = {}
+    try:
+        with os.scandir(project_dir / "processed") as entries:
+            for entry in entries:
+                try:
+                    stat = entry.stat()
+                except OSError:
+                    continue
+                files[entry.name] = (stat.st_mtime_ns, stat.st_size)
+    except OSError:
+        pass
     # bw2data writes [[name, metadata], ...]; older versions {"(name)": metadata}
     metadata = methods.values() if isinstance(methods, dict) else [m[1] for m in methods if isinstance(m, list) and len(m) == 2]
     for meta in metadata:
         abbreviation = meta.get("abbreviation") if isinstance(meta, dict) else None
-        if not abbreviation:
-            continue
-        try:
-            stat = (project_dir / "processed" / f"{abbreviation}.zip").stat()
-        except OSError:
-            continue
-        digest.update(f"{abbreviation} {stat.st_mtime_ns} {stat.st_size}".encode())
+        found = files.get(f"{abbreviation}.zip") if abbreviation else None
+        if found:
+            digest.update(f"{abbreviation} {found[0]} {found[1]}".encode())
     return digest.hexdigest()[:16]
 
 
