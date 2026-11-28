@@ -50,7 +50,7 @@ def test_the_status_bar_names_the_focused_card_and_has_no_left_panel_button():
     assert "<${FocusedCard}" in status_bar() and "POPUP_OPENERS[focusedTab]" not in status_bar()
     assert "SidePanelIcon" not in status_bar()
     label = body("focusedCardLabel")
-    for kind in ["Model ·", "methodTitle(method)", '"Flow"', '"Process"']:
+    for kind in ["Model ·", "methodTitle(method)", '"Flow"', '"Process"', "tabTitleNames(title)"]:  # named as the tab is
         assert kind in label, kind
 
 
@@ -59,9 +59,11 @@ def test_focused_card_labels(tmp_path):
     script = tmp_path / "label.mjs"
     script.write_text(body("focusedCardLabel") + """
 const methodTitle = (m) => m.name.join(" | ");
+// the Name display's default: a process by its product, a flow by its substance, the location or compartment in grey
+const tabTitleNames = (t) => ({ main: t.flow === undefined ? t.reference_product || t.name : t.name, qual: t.location || "" });
 const info = { methods: [{ name: ["EF v3.1", "climate change"] }] };
 console.log(JSON.stringify([
-  focusedCardLabel(info, { name: "steel", location: "GLO", index: 3 }),
+  focusedCardLabel(info, { name: "steel production, converter", reference_product: "steel", location: "GLO", index: 3 }),
   focusedCardLabel(info, { name: "Carbon dioxide", location: "air", flow: 7 }),
   focusedCardLabel(info, { model: 0 }),
   focusedCardLabel(info, null),

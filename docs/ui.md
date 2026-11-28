@@ -253,7 +253,7 @@ API in `src/lca_viewer/server.py`.
   Decision: one way to stop it, the one every browser user knows; a button did the same as closing the tab.
 - **Status bar** (bottom of the page): at the left the **focused card**, the object of the active tab of the
   window in focus (*Process · name (location)*, *Flow · name (compartment)*, *Model · method*; read from the
-  tab's title, `focusedCardLabel`; a long name ends in an ellipsis) as plain text (no click, no pointer), then the
+  tab's title, `focusedCardLabel`, the name as the tab has it by the *Name display*, `tabTitleNames`; a long name ends in an ellipsis) as plain text (no click, no pointer), then the
   active method and the rule set; at the right the **Settings** icon (the colours of every *Color by* mode), the **Shortcuts** icon and the
   **Source** icon (`</>`, the source code: `SOURCE_URL`, as the AGPL asks; it was a link of the top bar).
   Decision: the focused card's name is a label, not a button (it opened the card's pop-up): it says what the tab in
@@ -593,7 +593,8 @@ API in `src/lca_viewer/server.py`.
   *Waste to treatment*, *Avoided products*. An input is waste when its supplier is a waste treatment (`waste` in the API:
   its production is negative), an avoided product when it is a substitution or a negative input, as the tree reads
   it; both are shown positive, as in the form. A list of the pop-ups with sections (header and count, foldable): name
-  with its location (a flow: its compartment) as a chip, amount (`fmtAmount`), unit and the **comment**, in a column
+  by the *Name display* (`processNames`, `flowTitleNames`: by default the product, the activity in the tooltip) with
+  its grey part (the location; a flow: its compartment) as a chip, amount (`fmtAmount`), unit and the **comment**, in a column
   of its own on one line (`oneLine`; all of it in the cell's tooltip). Right-clicking the headers opens a **columns
   menu** (`ColumnMenu` with `options=EXCHANGE_PANEL_COLUMNS`, as the tree's) to show or hide the location /
   compartment, amount, unit, comment, uncertainty (`uncertaintyText`), pedigree (the five scores, their names in the

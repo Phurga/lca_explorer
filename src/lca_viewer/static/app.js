@@ -3150,15 +3150,16 @@ function StorageIcon() {
 }
 
 // What the status bar says of the focused card, the object of the active tab of the focused window, from its title:
-// a process (``index``), a flow (``flow``) or a model (``model``, the index of its method)
+// a process (``index``), a flow (``flow``) or a model (``model``, the index of its method). Processes and flows are
+// named as the tab is, by the *Name display* (``tabTitleNames``), the grey part in brackets
 function focusedCardLabel(info, title) {
   if (!title) return null;
   if (title.model !== undefined) {
     const method = info.methods[title.model];
     return method ? `Model · ${methodTitle(method)}` : null;
   }
-  const place = title.location ? ` (${title.location})` : "";
-  return `${title.flow !== undefined ? "Flow" : "Process"} · ${title.name}${place}`;
+  const { main, qual } = tabTitleNames(title);
+  return `${title.flow !== undefined ? "Flow" : "Process"} · ${main}${qual ? ` (${qual})` : ""}`;
 }
 
 // The focused card in the status bar: plain text, what the tab in focus shows (its pop-up opens from its row of the
@@ -5250,24 +5251,30 @@ function ProcessExchanges({ index, info, exchanges, onOpen, onExchange, onUse })
   const choose = (ids) => { setChosen(ids); savePreference("exchangeColumns", JSON.stringify(ids)); };
   const has = (id) => chosen.includes(id);
   const positive = (section, amount) => (section === "waste" || section === "avoided" ? Math.abs(amount) : amount);
+  // A process named by the *Name display* (``processNames``: by default its product, the location as the chip); its
+  // tooltip gives the activity and the product
+  const named = (m) => {
+    const n = processNames(m);
+    return { name: n.main, place: n.qual, full: [m.name, m.reference_product && m.reference_product !== m.name && `product: ${m.reference_product}`, m.location].filter(Boolean).join(" · ") };
+  };
   const p = exchanges.production;
   const rows = [
-    ...(p ? [{ key: "production", section: "product", kind: "process", own: true, index, name: info.reference_product || info.name,
-      place: info.location, amount: p.amount, unit: p.unit ?? info.unit, comment: p.comment, ex: p }] : []),
-    ...exchanges.inputs.map((e, i) => {
-      const section = inputSection(e);
-      return { key: `p${i}`, section, kind: "process", index: e.index, name: section === "product" ? e.reference_product || e.name : e.name,
-        product: e.reference_product, place: e.location, amount: e.amount, unit: e.unit, comment: e.comment, ex: e };
+    ...(p ? [{ key: "production", section: "product", kind: "process", own: true, index, ...named(info),
+      amount: p.amount, unit: p.unit ?? info.unit, comment: p.comment, ex: p }] : []),
+    ...exchanges.inputs.map((e, i) => ({ key: `p${i}`, section: inputSection(e), kind: "process", index: e.index, ...named(e),
+      amount: e.amount, unit: e.unit, comment: e.comment, ex: e })),
+    ...exchanges.flows.map((f, i) => {
+      const n = flowTitleNames({ name: f.name, place: (f.categories || []).join(", ") });
+      return { key: `f${i}`, section: fromNature(f.categories?.[0]) ? "resource" : "emission", kind: "flow", index: f.index,
+        name: n.main, place: n.qual, full: [f.name, ...(f.categories || [])].join(" · "), amount: f.amount, unit: f.unit, comment: f.comment, ex: f };
     }),
-    ...exchanges.flows.map((f, i) => ({ key: `f${i}`, section: fromNature(f.categories?.[0]) ? "resource" : "emission", kind: "flow",
-      index: f.index, name: f.name, place: (f.categories || []).join(" · "), amount: f.amount, unit: f.unit, comment: f.comment, ex: f })),
   ].map((r) => ({ ...r, shown: positive(r.section, r.amount ?? 0) }));
   const sections = (shown) => EXCHANGE_SECTIONS.map(([key, label]) => ({ key, label, items: shown.filter((r) => r.section === key) }))
     .filter((s) => s.items.length);
   if (!exchanges.available) return html`<p class="muted">This model has no exchanges recorded: build it again to see them.</p>`;
   const columns = [
     { key: "name", label: "Exchange", title: "Its process or flow: right-click for its pop-up, double-click to use it in the tab; (i): the exchange (comment, uncertainty, pedigree)",
-      value: (r) => r.name, tip: (r) => (r.product && r.product !== r.name ? `${r.name} · product: ${r.product}` : r.name),
+      value: (r) => r.name, tip: (r) => r.full,
       chip: (r) => (!r.place || !has("place") ? "" : r.kind === "flow" ? html` <span class="muted small">${r.place}</span>` : html` <span class="loc-chip">${r.place}</span>`) },
     has("amount") && { key: "amount", label: "Amount", kind: "num", format: fmtAmount, title: EXCHANGE_PANEL_COLUMNS[1].hint, value: (r) => r.shown },
     has("unit") && { key: "unit", label: "Unit", kind: "unit", width: 60, value: (r) => unit(r.unit) },
@@ -5279,7 +5286,7 @@ function ProcessExchanges({ index, info, exchanges, onOpen, onExchange, onUse })
   ].filter(Boolean);
   return html`
     <${PopupList} key=${`dataset-${index}`} noun="exchange" rows=${rows} rowKey=${(r) => r.key} sections=${sections}
-      className="exchange-list" empty="The dataset records no exchange." match=${(r) => `${r.name} ${r.place || ""} ${r.comment || ""}`}
+      className="exchange-list" empty="The dataset records no exchange." match=${(r) => `${r.name} ${r.full} ${r.comment || ""}`}
       onOpen=${onOpen} onInfo=${onExchange} hasInfo=${(r) => !r.own} onUse=${onUse}
       onHeaderMenu=${(e) => setMenu({ x: e.clientX, y: e.clientY })} columns=${columns} />
     ${menu && html`<${PagePortal}>

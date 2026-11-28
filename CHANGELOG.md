@@ -28,7 +28,7 @@ Changes on `dev`, not released yet.
   format (*Full*, *Substance* or *Custom*), the custom ones a recipe with tokens (`{product}`, `{name}`,
   `{location}`…, `{substance}`, `{compartment}`…). Processes are now named by their **reference product**, the
   location in grey, by default. The tree, the Sankey, the charts, the pop-ups, the tab titles, the *Processes* panel,
-  Compare mode and the headers of process and flow cards follow it; a row's own name (✎) still wins. *Names* left the
+  Compare mode, the headers of process and flow cards, the rows of the *Exchanges* panel and the focused card of the status bar follow it; a row's own name (✎) still wins. *Names* left the
   view options of each tab; the old choice is carried over once (*Short* → *Product* with *Substance* flows, *Custom*
   keeps its recipe, *Full* takes the new default).
 - **Compare and baseline in one box**: in the *Processes* panel, each tab has one box clicked in turn, as the methods
