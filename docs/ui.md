@@ -236,10 +236,11 @@ API in `src/lca_viewer/server.py`.
   Decision: one way to stop it, the one every browser user knows; a button did the same as closing the tab.
 - **Status bar** (bottom of the page): at the left the **focused card**, the object of the active tab of the
   window in focus (*Process · name (location)*, *Flow · name (compartment)*, *Model · method*; read from the
-  tab's title, `focusedCardLabel`; a long name ends in an ellipsis), whose click opens its pop-up
-  (`POPUP_OPENERS`; in Compare mode View mode first, the tab being hidden), then the active method and the rule
-  set; at the right the **Settings** icon (the colours of every *Color by* mode), the **Shortcuts** icon and the
+  tab's title, `focusedCardLabel`; a long name ends in an ellipsis) as plain text (no click, no pointer), then the
+  active method and the rule set; at the right the **Settings** icon (the colours of every *Color by* mode), the **Shortcuts** icon and the
   **Source** icon (`</>`, the source code: `SOURCE_URL`, as the AGPL asks; it was a link of the top bar).
+  Decision: the focused card's name is a label, not a button (it opened the card's pop-up): it says what the tab in
+  focus shows, and the pop-up of a tab opens from its row of the *Processes* panel (a right-click).
   The **view options** belong to each process tab: the sliders icon of its row in the
   left panel's *Processes* panel opens them in a pop-up (the tab is shown in its window first, as a click on its name),
   and key v in View mode opens those of **the tab in focus**, the one of the window (split pane) used last. One line
@@ -298,7 +299,8 @@ API in `src/lca_viewer/server.py`.
   one box, clicked in turn: **✓** shown together (the *Several methods* chart, the *Multi indicator
   matrix*; default: the family of the method), then **★** (orange) the **active method** (tree, charts,
   totals, comparison; the one before stays ✓), then unticked (the first other ticked method becomes the active
-  one; the active method alone cannot be unticked). A click on the name does the same; the family box ticks or
+  one; the active method alone cannot be unticked). A click on the name does the same; a right-click on a method opens
+  its model pop-up, as the list icon at its right does; the family box ticks or
   unticks the family but the active method. Decision: one control in place of a tick and a radio at
   the right of the row, as the active method is always one of those shown. *Rules* lists the **rule sets** (*New*, *Copy*, *Rename*,
   *Delete*); one is in use, and its rules are built below the list (the form that was in
@@ -415,6 +417,8 @@ API in `src/lca_viewer/server.py`.
   (a process into its inputs, direct emissions into flows, a group into its
   members, a merged process into the union of its inputs, others into the
   rows it bundles — which then also replace it in the chart); click selects;
+  a double-click or Enter uses a process or a flow (see *Row clicks*: a process becomes the process of the tab, a flow
+  opens in a flow tab; Ctrl/⌘ + double-click or Ctrl/⌘+Enter in a new tab);
   right-click or Space opens its **pop-up** — the **(i)** shown on the hovered
   row, or **i**, opens the pop-up of its *exchange* (comment and uncertainty)
   — whatever the kind: the activity pop-up below for a process or direct
@@ -460,10 +464,10 @@ API in `src/lca_viewer/server.py`.
   | m | merge the selection, or unmerge a selected merged row |
   | g | one group: ungroup it (a "group by product" becomes an exception, put back by its regroup chip or by g on one of its processes); one process: put back its ungrouped product group, else group its same-named siblings under the product name, else nothing; several rows: group them (named after the product when they all deliver one, else "group N") |
   | r | rename the selected row (display name only) |
-  | Enter | make the selected process the process of the tab |
+  | Enter | make the selected process the process of the tab (a flow: open it in a flow tab); also a double-click |
   | e | in Edit mode: open the form of the selected process (outside Edit mode: switch to it, see below) |
   | t / w | open a new tab like this one / close this tab |
-  | Ctrl/⌘ + Enter | open the selected process as the process of a new tab |
+  | Ctrl/⌘ + Enter | open the selected process as the process of a new tab (a flow: a flow tab); also Ctrl/⌘ + double-click |
   | Ctrl/⌘ + Z | undo the last change to the tree |
   | Esc | clear the selection |
   | Backspace | in a pop-up: back to the previous one |
@@ -476,9 +480,10 @@ API in `src/lca_viewer/server.py`.
   selection, groups — the chart follows either). Root on the left (→) or on
   top (↓, SimaPro-like). Each box shows name, location, amount and a share
   bar; edge thickness ∝ share of the total, so the main supply paths stand
-  out. ± handle or double-click to expand, Ctrl/⌘-click to select, drag to
-  pan, wheel to zoom, "Fit" for the whole tree. See below for the layout
-  choice.
+  out. ± handle to expand, click or Ctrl/⌘-click to select, right-click for the pop-up, double-click as Enter
+  (Ctrl/⌘ + double-click: in a new tab), drag to pan, wheel to zoom, "Fit" for the whole tree. See below for the
+  layout choice. Decision: a double-click on a box expanded it, unlike a double-click on any other row (Enter: use it
+  in the tab); the ± handle expands, and the double-click is Enter everywhere (the Sankey too).
   **Cycles** (toggle in the graph controls) draws the supply chain as a
   graph rather than a tree: a process used in several places is one node
   with an edge from each place (edges between the same two nodes are
@@ -499,8 +504,8 @@ API in `src/lca_viewer/server.py`.
   are the widest. Bars and bands take the colour of the list's colour mode (see the view bar), else
   groups are purple, merged processes blue, direct emissions and others grey; the label beside
   each bar gives the name, qualifier, amount and share (of the total or of
-  the parent, as in the other views). ▸ or double-click expands, click and
-  Ctrl/⌘-click select, right-click opens the pop-up, drag pans, wheel zooms;
+  the parent, as in the other views). ▸ expands, click and
+  Ctrl/⌘-click select, right-click opens the pop-up, double-click as Enter, drag pans, wheel zooms;
   row actions are in the selection bar and the pop-ups. Always a tree drawn
   left to right: the Cycles and orientation controls are hidden here.
 - **View bar** (the *Rows* of the view options): *Group by rules* (on by default), *Group by product*, *Split by flow type* (below each
@@ -557,8 +562,9 @@ API in `src/lca_viewer/server.py`.
   to open the tree at it), the ecoinvent description, included activities, time period, classifications,
   authors and file. *Used by* has the amount per unit and its unit and, in a process of the tab's supply chain,
   the amount it takes in that chain, its unit and its share; its rows, like those of *Alternatives*, open with
-  their name, Space or a right-click. The actions of the pop-up ("Use in this tab", "Open in new tab", and *Edit…* in Edit mode)
-  and *Pin* are in the **⋯** menu at the top right of the pop-up, not at its foot. The explorer of the
+  Space or a right-click and are used with Enter or a double-click (*Row clicks*). The actions of the pop-up ("Use in
+  this tab", "Open in new tab", and *Edit…* in Edit mode) are in the **⋯** menu at the top right of the pop-up, not at
+  its foot; *Pin* is an icon of its own beside it (see *Pop-up windows*). The explorer of the
   *Explore* panel shows the plain tree, whatever the options of the view are: no options of its own,
   no cut-off, no grouping.
   **Alternatives** lists the other activities producing the same product
@@ -576,11 +582,12 @@ API in `src/lca_viewer/server.py`.
   compartment, amount, unit, comment, uncertainty (`uncertaintyText`), pedigree (the five scores, their names in the
   tooltip) and formula, all read from `/api/activity/{index}/exchanges`; the choice is kept in the browser
   (`exchangeColumns`). There the right-click does not open the row of filter boxes of the other lists (`PopupList`'s
-  `onHeaderMenu`): the filter box above is enough for one dataset. A row's name or right-click opens the pop-up of
-  its process or flow (in a tab: a pop-up; in a pop-up: in its place, ← comes back), its (i) the exchange pop-up.
+  `onHeaderMenu`): the filter box above is enough for one dataset. A row's right-click (or Space) opens the pop-up of
+  its process or flow (in a tab: a pop-up; in a pop-up: in its place, ← comes back), its (i) the exchange pop-up; its
+  double-click (or Enter) makes a process the process of the tab and opens a flow in a flow tab (*Row clicks*).
   Its keys are those of the lists of the pop-ups, in a pop-up and in a tab: ↓ from the panel tabs enters it, ↑/↓ move
   between the rows (↑ on the first goes back to the tabs), Space opens the row's pop-up, **i** its exchange, Enter
-  makes a process the process of the tab, Ctrl/⌘ + Enter of a new tab. In a tab, the card itself has these keys
+  uses the row in the tab, Ctrl/⌘ + Enter in a new tab. In a tab, the card itself has these keys
   (`dockedKeys`: `popupKeys` on its panels, `toTabs` for the way back) and the tree leaves them to it. Nothing is
   edited here: amounts change in Edit mode, in the exchange pop-up or the process form. Decision: *Explore* is the
   supply chain, computed; *Exchanges* is the dataset, recorded: one reads what the process does, the other what was
@@ -588,8 +595,8 @@ API in `src/lca_viewer/server.py`.
   in place; Edit mode stays in the top bar. A model built before exchanges were stored says to build it again.
   **Characterisation** (third, after *Exchanges*): the process's **total impacts** per unit of its product, one row
   per method — the main method (on top, "main") then the methods shown together (ticked in the *Methods* panel) —
-  with its total (cumulative, `G`), its direct score (`U`), their unit and the direct share; a method's name or
-  right-click opens its model pop-up. Read from `U` and `G`: no solve. Method names follow the *Name display* of the
+  with its total (cumulative, `G`), its direct score (`U`), their unit and the direct share; a method's right-click
+  (or Space) opens its model pop-up, its double-click (or Enter) a model tab. Read from `U` and `G`: no solve. Method names follow the *Name display* of the
   *Methods* panel (`methodTitle`, unit included), as in the flow's *Characterisation*. Decision: no list of the
   process's elementary flows here — they are in its *Exchanges*, and a flow's *Characterisation* leads on to the
   models. API: `GET /api/activity/{index}/characterisation?method=&limit=` (`totals`: `{direct, cumulative}`, one value
@@ -624,7 +631,10 @@ API in `src/lca_viewer/server.py`.
   history: **←** next to × (or **Backspace**) goes back; opening a pop-up
   from outside, or closing it, starts a new history.
 - **Pop-up windows** (all kinds). Drag the header to move a pop-up and any
-  edge or corner to resize it. *Pin* (in its ⋯ menu) keeps it open, so that several
+  edge or corner to resize it. The **pin** icon of its header, beside × (and ←, and the ⋯ menu when it has
+  actions), pins and unpins it (an outline, filled while pinned: `PinButton`). Decision: *Pin* was an item of the ⋯
+  menu with a mark in the header once pinned; one icon that is both the switch and the state is quicker and says
+  what it does. Pinned, a pop-up stays open, so that several
   can be side by side: a pinned pop-up ignores clicks outside and opening
   another pop-up, and Esc / Backspace act on it only while the pointer is on
   it; the one that is not pinned is replaced by the next you open. A pop-up
@@ -633,12 +643,12 @@ API in `src/lca_viewer/server.py`.
   ~56 px of a pane's edge opens it in a new pane on that side (a hint shows
   where it would go before you drop). Pop-ups belong to their tab and are
   not kept in saved views.
-- **Model pop-up** (the list icon at the right of a method in the *Methods* panel, with a process tab or a flow tab in
+- **Model pop-up** (the list icon at the right of a method in the *Methods* panel or a right-click on the method, with a process tab or a flow tab in
   focus; a model of the flow pop-up's *Characterisation*; not in Compare mode). Words: an LCIA **method** (EF v3.1)
   groups **models**, its impact categories (climate change…); the code calls a model a method (an index of
   `info.methods`) and its pop-up `CategoryPopup`. The model pop-up is a model seen from its elementary flows, in the
   whole database. **Cycle**: process → flow (*Characterisation* of the process pop-up) → model (*Characterisation* of
-  the flow pop-up: a model's name or right-click) → flow (the model's rows) → process (*Emitted by*), each opened in
+  the flow pop-up: a model's right-click) → flow (the model's rows) → process (*Emitted by*), each opened in
   place of the one before, in one history (← comes back). Decision: the "elementary flow
   database" of a method is this view, reached from the method, rather than a database of its own on the Projects
   page. The table lists the flows of the model with a factor ≠ 0: *factor*, *relative* (|factor| over the largest of
@@ -657,7 +667,8 @@ API in `src/lca_viewer/server.py`.
   unit beside it): each name shows once, where it was chosen. Columns *ref.*, *comp.*, *comp. / ref.*, with their units
   under the headers, and *only ref.* / *only comp.* for the flows one method does not characterise. When the units
   differ (EF acidification in mol H+-Eq, CML in kg SO2-Eq), the unit of comp. and that of the ratio are flagged. A flow's
-  name, right-click or double-click opens its pop-up, with the factor of this model in its header, and ← comes back. The pop-up
+  right-click (or Space) opens its pop-up, with the factor of this model in its header, and ← comes back; its
+  double-click (or Enter) opens it in a flow tab. The pop-up
   has the amber colour of impact categories (a top border and the list icon), apart from processes. **Factors on flows
   not in the model**, folded under the table: the factors of the method (and of comp.) that the calculation drops,
   recorded when the model is built (a model built before that has none: rebuild it), the largest first, each with
@@ -675,7 +686,9 @@ API in `src/lca_viewer/server.py`.
   bar's "Model · ‹title›"). Decision: one component, `CategoryView`, draws the card for the pop-up and the tab, each
   giving its own frame (a window, a pane), rather than two copies. A model tab has pop-ups of its own, as a flow tab: a
   flow opened from its rows opens its pop-up there, then the flow's process, model… in one history, and the model pop-up
-  of the *Methods* panel opens there while it has the focus. The *Processes* panel lists model tabs with the model icon,
+  of the *Methods* panel opens there while it has the focus. A model double-clicked (or Enter) in its pop-ups (a flow's
+  *Characterisation*) replaces the model of the tab, its *Organize by* kept and no comparison; Ctrl/⌘ opens it in a new
+  tab. The *Processes* panel lists model tabs with the model icon,
   without the tick and baseline of Compare mode (models are not compared); the search of the top bar, Enter on a model
   tab, opens the process in a new tab; a new tab (+) from a model tab starts with the default settings. A tab shows the
   icon and an amber top border. A method no longer in the database (another database opened with the same workspace)
@@ -685,13 +698,27 @@ API in `src/lca_viewer/server.py`.
   its factors on flows not in the model — is one component, so that they look and work alike: a filter box above the
   table at its left (all the words typed, in the text columns; shown when a list has more than 8 rows), a header that
   sorts (click; again: the other way) and filters by column (right-click: a row of boxes under the headers, text
-  contained or `> 10`, `< 0.1` on numbers; Esc hides it), rows of one height whose name links to the pop-up of what
-  they are, numbers at the right with their unit in a column of their own, shares as bars with their percentage,
-  foldable sections, and under it the empty state, how many rows the filters leave, *Show all*. The keys are those of
-  the pop-ups' rows (↑/↓, Space: its pop-up, i: its exchange, Enter: the process of the tab, Ctrl/⌘ + Enter: of a new
-  tab). The *Exchanges* panel replaces the filter row by a columns menu (`onHeaderMenu`). A list keeps a minimum
+  contained or `> 10`, `< 0.1` on numbers; Esc hides it), rows of one height (their gestures: *Row clicks*, below; the
+  name is no link, its tooltip says what they do), numbers at the right with their unit in a column of their own,
+  shares as bars with their percentage, foldable sections, and under it the empty state, how many rows the filters
+  leave, *Show all*. The keys are those of the pop-ups' rows (↑/↓, Space: its pop-up, i: its exchange, Enter: used in
+  the tab, Ctrl/⌘+Enter: in a new tab). The *Exchanges* panel replaces the filter row by a columns menu
+  (`onHeaderMenu`). A list keeps a minimum
   width: in a narrow pane it scrolls rather than squeezing the names. Decision: the *Explore* panel stays the main
   view's own list (the tree), which the others follow in row height and number style.
+- **Row clicks**, the same on every row of a process, a flow or a model: in the tree (list, tree view, Sankey) and in
+  the lists of the pop-ups and of the cards (*Used by*, *Alternatives*, *Exchanges*, the *Characterisation* of a process
+  and of a flow, *Emitted by*, *Same substance*, the model's flows). A **click** selects the row; a **right-click** is
+  **Space**: its pop-up; a **double-click** is **Enter**: it is used in the tab: a process becomes the process of a
+  process tab, a flow the flow of a flow tab, a model the model of a model tab; where the tab cannot show it (a flow
+  or a model in a process tab, a process in a flow or model tab…), it opens in a new tab, as with Ctrl/⌘. **Ctrl/⌘ +
+  double-click** is **Ctrl/⌘+Enter**: in a new tab (a process tab, a flow tab or a model tab). A flow tab opened from
+  a process tab keeps that process as its scope (*Emitted by* in its supply chain). The unpinned pop-up closes once
+  its row is used. The name of a row is no link (it opened the pop-up on a click): its tooltip says what the gestures
+  do, and the *Shortcuts* dialog lists them. Each tab gives its lists what Enter does there (`TabUseContext`:
+  `process`, `flow`, `model`; `dblUse` on the rows). Decision: one gesture per action, the same on every row and as
+  its key, rather than a name link here, a double-click that expands there and another that opens a pop-up; the
+  members of a bundle pop-up (others, group, merged) still open with a click.
 - **Flows, exchanges and inventory flows.** Decision: three words for three objects, used in titles, menus and
   these docs. A **flow** is the elementary flow itself, a node of the biosphere database (name, compartment, unit,
   factors), with no quantity. An **exchange** is a flow in one dataset: the amount per unit of a process, with its
@@ -712,18 +739,21 @@ API in `src/lca_viewer/server.py`.
   (they are what the flow is, as a process's name), a location chip only when the flow carries one (regionalised flows,
   as LC-IMPACT or IMPACT World+ make; the ecoinvent biosphere databases have none), and *Flow · emission · unit* under
   it; chips switch the compartments of a substance; then the panels, as the process's:
-  - *Characterisation* (the process's *Exchanges*): the models that characterise the flow, with the factor, its unit
-    and the **rank** of the flow in the model (by |factor| among the flows of the model it characterises, "1st of 5");
-    the active method highlighted. A model's name, right-click or double-click opens its **model pop-up** in place (←
-    comes back to the flow).
+  - *Characterisation* (the process's *Exchanges*): the models that characterise the flow, with the factor and its
+    unit; the active method highlighted. A model's right-click (or Space) opens its **model pop-up** in place (← comes
+    back to the flow), its double-click (or Enter) a model tab. Decision: no *rank* column ("1st of 5", the flow by
+    |factor| among the flows of the model) any more: it said little that the model card, sorted by factor, does not;
+    the API still gives `rank` and `of`.
   - *Emitted by* (*Taken by* for a resource; the process's *Used by*): the processes with an exchange of the flow, by
     amount per unit of their product (*Per unit*, then its *Unit*); opened from a process tab, also *In chain* (the amount
     in that supply chain, then its unit) and *Share*, and they are ranked by it. No count above the table: the panel's
-    name has it. A process's name or right-click opens its pop-up, its (i) its exchange of this flow. Drag one to a tab
+    name has it. A process's right-click opens its pop-up, its double-click makes it the process of the tab (from a
+    flow tab: of a new tab), its (i) its exchange of this flow. Drag one to a tab
     list: it opens as a tab.
   - *Same substance* (the process's *Alternatives*): the flows of the same name and unit in the other compartments,
     with how many processes emit each and their factor in the active method only. A factor in one compartment and none
-    in another often means a method that does not cover a compartment.
+    in another often means a method that does not cover a compartment. A right-click opens the flow's pop-up (in a flow
+    pop-up: in its place), a double-click makes it the flow of a flow tab (from a pop-up of a process tab: a new one).
   - *Metadata*: name; substance and qualifiers read from the structure of the name ("Carbon dioxide · fossil": the parts
     after ", "); CAS number, formula, synonyms and comment as the biosphere record has them (ecoinvent: CAS for most
     flows, synonyms for about half); compartment, subcompartment, location, unit, type, database id. A model built since

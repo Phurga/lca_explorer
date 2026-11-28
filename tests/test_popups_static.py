@@ -179,6 +179,61 @@ def test_information_names_the_unit_and_the_location():
     assert '<tr><th>Location</th><td>${info.location ? html`<span class="loc-chip">' not in info
 
 
+def test_pin_is_an_icon_of_the_header_not_a_menu_item():
+    window = body("PopupWindow")
+    assert "<${PinButton} pinned=${win.pinned} onPin=${win.onPin} />" in window
+    assert 'label: win.pinned ? "Unpin" : "Pin"' not in APP and "pin-mark" not in APP
+    assert "menu.length > 0" in window  # no empty ⋯ menu once Pin left it
+    assert "aria-pressed=${!!pinned}" in APP and "<${PinIcon} filled=${!!pinned} />" in APP
+
+
+def test_row_gestures_are_the_same_everywhere():
+    # A click selects, a right-click is Space (its pop-up), a double-click is Enter (used in the tab), Ctrl/⌘ +
+    # double-click is Ctrl/⌘+Enter (a new tab): on the rows of the pop-up lists, of ProcessRow, and of the tree's list,
+    # graph and Sankey
+    for name in ["PopupList", "ProcessRow", "Tree", "TreeGraph", "sankeyMarks"]:
+        assert "dblUse(" in body(name), name
+    assert "onDblClick=${() => r.expandable" not in APP  # the graph's double-click expanded; ± does
+    assert "onDblClick=${() => expandable && setOpen(!open)}" not in body("ProcessRow")
+    assert 'href="#"' not in body("NameCell")  # the name is no link: a click selects the row
+    assert "onUse(r, inTab)" in body("PopupList")  # Enter and Ctrl/⌘+Enter on a row of a list
+    assert "return useRow(row, inTab);" in body("FUView")  # Enter and the double-click of the tree are one
+    assert 'row.kind === "flow" && row.flow && tabUse' in body("FUView")  # a flow of the tree: a flow tab
+
+
+def test_each_tab_says_what_a_double_click_does_there():
+    for name in ["FUView", "FlowTab", "ModelTab"]:
+        assert "<${TabUseContext.Provider} value=" in body(name), name
+    assert "const [method, setMethod] = useState(start.method);" in body("ModelTab")  # a model replaces the tab's
+    assert "else if (target.flow !== current) setCurrent(target.flow);" in body("FlowTab")  # a flow replaces the tab's
+    for name in ["FlowPanels", "CategoryView", "InfoPopup"]:
+        assert "useContext(TabUseContext)" in body(name), name
+    assert "use.model(f.method, inTab)" in body("FlowPanels") and "use.process(p.index, inTab)" in body("FlowPanels")
+    assert "use.model(t.method, inTab)" in body("InfoPopup")
+    assert "use.flow({ flow: it.flows[0] }, inTab)" in body("CategoryView")
+
+
+def test_a_right_click_on_a_method_opens_its_model_card():
+    assert "onContextMenu=${onCategory ? (e) => { e.preventDefault(); onCategory(i, e.clientX, e.clientY); }" in body("MethodTree")
+
+
+def test_the_flow_characterisation_has_no_rank_column():
+    assert 'key: "rank"' not in body("FlowPanels") and "ordinal(" not in APP
+
+
+def test_the_focused_card_of_the_status_bar_is_plain_text():
+    card = body("FocusedCard")
+    assert "<button" not in card and "onClick" not in card and '<span class="status-text focused-card"' in card
+    assert "<${FocusedCard} info=${info} title=${titles[focusedTab]} />" in body("App")
+
+
+def test_the_shortcuts_list_the_mouse_gestures():
+    shortcuts = APP[APP.index("const SHORTCUTS = ["):APP.index("\nfunction Modal(")]
+    assert '["Double-click", "Use it in the tab (as Enter)"]' in shortcuts
+    assert '["Ctrl/⌘ + double-click", "Open it in a new tab (as Ctrl/⌘ + Enter)"]' in shortcuts
+    assert '["Right-click", "Its pop-up (as Space)"]' in shortcuts
+
+
 @pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
 def test_the_side_panel_tabs_have_short_names_and_icons_when_narrow():
     # Explore, Process, Flow, Uncharacterised, Rules: the side panel says they are contributions

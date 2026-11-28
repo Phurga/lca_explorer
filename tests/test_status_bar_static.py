@@ -46,7 +46,8 @@ def test_storage_opens_from_the_projects_dialog():
 
 
 def test_the_status_bar_names_the_focused_card_and_has_no_left_panel_button():
-    assert "<${FocusedCard}" in status_bar() and "POPUP_OPENERS[focusedTab]" in status_bar()
+    # the focused card is plain text: it no longer opens the pop-up of the tab (its row of the Processes panel does)
+    assert "<${FocusedCard}" in status_bar() and "POPUP_OPENERS[focusedTab]" not in status_bar()
     assert "SidePanelIcon" not in status_bar()
     label = body("focusedCardLabel")
     for kind in ["Model ·", "methodTitle(method)", '"Flow"', '"Process"']:
