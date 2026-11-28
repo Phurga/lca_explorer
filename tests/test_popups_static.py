@@ -225,7 +225,7 @@ def test_the_flow_characterisation_has_no_rank_column():
 
 def test_the_focused_card_of_the_status_bar_is_plain_text():
     card = body("FocusedCard")
-    assert "<button" not in card and "onClick" not in card and '<span class="status-text focused-card"' in card
+    assert "<button" not in card and "onClick" not in card and '<span class="status-field focused-card"' in card
     assert "<${FocusedCard} info=${info} title=${titles[focusedTab]} />" in body("App")
 
 
@@ -439,3 +439,46 @@ def test_used_by_expands_to_all_the_users_of_a_row():
 
 def test_the_alternatives_name_the_product_in_their_first_header():
     assert 'label: `Processing ${alternatives?.product' in body("InfoPopup")
+
+
+CSS = (STATIC / "style.css").read_text(encoding="utf-8")
+
+
+def test_every_fold_has_its_title_then_a_chevron():
+    # one disclosure style: the title first, its chevron after it, the open content in a box joined to the bar
+    fold = body("Fold")
+    assert "${title}<${Chevron} open=${shown} />" in fold and '<div class="fold-body">' in fold
+    assert '<span class="caret">' not in APP  # the ▸/▾ before the title
+    section = body("PopupList")
+    assert "${section.label}<${Chevron} open=${!folded.has(section.key)} />" in section
+    assert ".fold-caret::before" in CSS and '.fold-caret[aria-expanded="true"]::before' in CSS  # the other fold buttons
+    assert ".fold-body {" in CSS and "--btn-bg" in CSS and "--btn-border" in CSS
+
+
+def test_a_section_of_a_list_counts_its_rows_only_while_folded():
+    section = body("PopupList")
+    assert "${folded.has(section.key) && html`<span class=\"muted section-count\">${section.items.length} ${noun}" in section
+
+
+def test_one_colour_per_kind_of_card():
+    for kind in ["process", "flow", "model"]:
+        assert f"--kind-{kind}:" in CSS, kind
+        assert f".kind-{kind}" in CSS, kind
+    assert "--category: var(--kind-model)" in CSS
+    assert "--flow-color" not in APP and "--flow-color" not in CSS  # a flow's colour no longer follows its type
+    assert 'kind-${kindOfTitle(titles[id])}' in body("PaneView")
+    assert 'className="flow-popup exchange-popup"' in APP
+
+
+def test_the_focused_card_is_framed_and_its_tab_title_shown_in_full():
+    pane = body("PaneView")
+    assert '${focused ? "card-focus" : ""}' in pane
+    assert ".pane.card-focus .pane-tab.active { flex-shrink: 0; max-width: 100%; border: 2px solid var(--kind)" in CSS
+    assert ".pane.card-focus .pane-tab.active .pane-tab-title { white-space: normal;" in CSS
+    assert ".info-popup:focus-within { border-color: var(--kind);" in CSS
+    assert "body:has(.info-popup:focus-within) .pane.card-focus > .pane-body::after { display: none; }" in CSS
+
+
+def test_a_pinned_popup_shows_it_by_its_pin_only():
+    assert ".info-popup.pinned" not in CSS
+    assert ".info-head-actions button.pin.active { color: var(--kind); border-color: var(--kind);" in CSS

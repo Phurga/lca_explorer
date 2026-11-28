@@ -73,3 +73,14 @@ console.log(JSON.stringify([
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == ('["Process · steel (GLO)","Flow · Carbon dioxide (air)",'
                                      '"Model · EF v3.1 | climate change",null]')
+
+
+def test_the_fields_of_the_status_bar_are_grey_and_set_apart():
+    css = (STATIC / "style.css").read_text(encoding="utf-8")
+    bar = status_bar()
+    assert bar.count('class="status-field"') == 2  # the method and the rules; the focused card is the first field
+    assert '<span class="status-label">Method</span>' in bar and '<span class="status-label">Rules</span>' in bar
+    assert '<span class="status-field focused-card"' in body("FocusedCard") and 'class="status-label">${kind}' in body("FocusedCard")
+    assert ".status-bar .status-field + .status-field { border-left: 1px solid var(--border); }" in css
+    assert "color: var(--muted)" in css[css.index(".status-bar .status-field {"):]
+    assert "focused-card { max-width: 32vw; color: var(--text)" not in css

@@ -2037,9 +2037,8 @@ function LoadDatabase({ onClose, missing, onDatabases, onLocks }) {
               .sort((a, b) => rank(a) - rank(b)).map((p) => { const shown = unfolded.has(p.name) || form?.project === p.name || jobAt === p.name;
               const opened = p.databases.filter((d) => d.model?.key); return html`
               <tr class="project" key=${`p:${p.name}`}>
-                <td colspan="2"><button class="fold-caret" aria-expanded=${shown} aria-label=${shown ? "Fold the databases" : "Show the databases"}
+                <td colspan="2"><b class="project-name" onClick=${() => toggleProject(p.name)}>${p.name}</b><button class="fold-caret" aria-expanded=${shown} aria-label=${shown ? "Fold the databases" : "Show the databases"}
                     title=${shown ? "Fold the databases" : "Show the databases"} onClick=${() => toggleProject(p.name)}>${shown ? "▾" : "▸"}</button>
-                  <b>${p.name}</b>
                   <span class="muted"> · ${!p.twofive ? "Brightway 2 project: lca_viewer reads Brightway 2.5 projects only (upgrade it in Activity Browser 3 or Brightway 2.5)"
                     : p.databases.length ? `${p.databases.filter((d) => d.processes).length} ${p.databases.filter((d) => d.processes).length === 1 ? "database" : "databases"}, ${count(p.methods)} impact methods` : "empty"}
                     ${opened.length > 0 && html` · <span class="loc-chip" title="Databases of this project that are open">${opened.map((d) => d.name).join(", ")} open</span>`}</span></td>
@@ -3220,11 +3219,12 @@ function focusedCardLabel(info, title) {
 }
 
 // The focused card in the status bar: plain text, what the tab in focus shows (its pop-up opens from its row of the
-// Processes panel)
+// Processes panel). A field of the bar: its kind as the field's label (Process, Flow, Model), then its name
 function FocusedCard({ info, title }) {
   const label = focusedCardLabel(info, title);
   if (!label) return null;
-  return html`<span class="status-text focused-card" title=${label}>${label}</span>`;
+  const [kind, ...name] = label.split(" · ");
+  return html`<span class="status-field focused-card" title=${label}><span class="status-label">${kind}</span><span class="status-text">${name.join(" · ")}</span></span>`;
 }
 
 function EditPanel({ origin, dataset, pending, affected, locked, outdated, onForm, stage, unstage, unstageAll, onApplied, onRebuild, onCollapse }) {
@@ -4491,10 +4491,11 @@ function PopupFrame({ target, win, label, className = "", title, subtitle, foote
 // processes whose exchange it is, exchange?: i (the exchange only), tab?: the panel to open on, scope?: { index, name,
 // location, amount }: the process (functional unit) of the tab it was opened from }
 
-// The icon of a flow (a drop), in the colour of its type: resource (from nature) or emission (to nature)
+// The icon of a flow (a drop), in the colour of flows (--kind-flow: one colour for every flow, docs/ui.md); its type,
+// resource (from nature) or emission (to nature), in its tooltip
 function FlowIcon({ resource, size = 12 }) {
   const t = FLOW_TYPES[resource ? "resource" : "emission"];
-  return html`<svg class="flow-icon" width=${size} height=${size} viewBox="0 0 12 12" aria-label=${t.label} role="img" style=${{ color: t.color }}>
+  return html`<svg class="flow-icon" width=${size} height=${size} viewBox="0 0 12 12" aria-label=${t.label} role="img" >
     <title>${`Flow (${t.label.toLowerCase()})`}</title>
     <path d="M6 1 C6 1 2 5.6 2 7.8 A4 4 0 0 0 10 7.8 C10 5.6 6 1 6 1 Z" fill="currentColor" />
   </svg>`;
@@ -4530,7 +4531,7 @@ const flowTabsOf = (info) => (info ? [
 function FlowHead({ info, kind = "Flow" }) {
   if (!info) return html`<div class="info-title">…</div>`;
   return html`
-    <div class="info-title flow-title" style=${{ "--flow-color": FLOW_TYPES[info.resource ? "resource" : "emission"].color }}>
+    <div class="info-title flow-title">
       <${FlowIcon} resource=${info.resource} size=${13} /> ${flowTitleNames(info).main}${flowTitleNames(info).qual && html`<span class="flow-compartment">, ${flowTitleNames(info).qual}</span>`}
       ${info.location && html` <span class="loc-chip" title="Location of the flow">${info.location}</span>`}</div>
     <div class="muted">${kind} · ${info.resource ? "resource" : "emission"} · ${unit(info.unit)}</div>`;
@@ -4682,7 +4683,7 @@ function PopupList({ columns, rows, rowKey, rowClass, pinned, match, query, setQ
           onInput=${(e) => setText(e.target.value)} onKeyDown=${(e) => { if (e.key === "Escape" && typed) { e.stopPropagation(); setText(""); } }} />`}
         ${tools}</div>`}
       ${rows.length === 0 ? html`<p class="list-empty">${empty}</p>` : html`
-        <table class="plist" style=${{ minWidth: `${rest.reduce((n, c) => n + (c.width ?? LIST_WIDTHS[c.kind] ?? 110), 0) + 180}px` }}>
+        <table class=${`plist ${groups ? "sectioned" : ""}`} style=${{ minWidth: `${rest.reduce((n, c) => n + (c.width ?? LIST_WIDTHS[c.kind] ?? 110), 0) + 180}px` }}>
           <colgroup><col />${rest.map((c) => html`<col key=${c.key} style=${{ width: `${c.width ?? LIST_WIDTHS[c.kind] ?? 110}px` }} />`)}</colgroup>
           <thead>
             <tr>${columns.map((c) => html`
@@ -4700,8 +4701,8 @@ function PopupList({ columns, rows, rowKey, rowClass, pinned, match, query, setQ
             ${top.map(row)}
             ${drawn.map(({ section, r }) => (section ? html`
               <tr key=${`s:${section.key}`} class="list-section" ...${headerNav(section.key)} onClick=${() => fold(section.key)} aria-expanded=${!folded.has(section.key)}>
-                <td colspan=${section.cells ? 1 : columns.length}><span class="caret">${folded.has(section.key) ? "▸" : "▾"}</span> ${section.label}
-                  <span class="muted"> · ${section.items.length} ${noun}${section.items.length === 1 ? "" : "s"}</span></td>
+                <td colspan=${section.cells ? 1 : columns.length}>${section.label}<${Chevron} open=${!folded.has(section.key)} />
+                  ${folded.has(section.key) && html`<span class="muted section-count">${section.items.length} ${noun}${section.items.length === 1 ? "" : "s"}</span>`}</td>
                 ${section.cells}
               </tr>` : row(r)))}
           </tbody>
@@ -4910,7 +4911,7 @@ function UnlinkedFactors({ unlinked, both, a, b, open, setOpen, words }) {
     <div class="category-unlinked">
       <button class="fold-toggle" onClick=${() => setOpen(!open)} aria-expanded=${open}
         title="Factors of the method on flows that no process of the model has: the calculation drops them">
-        <span class="caret">${open ? "▾" : "▸"}</span> Factors on flows not in the model <span class="muted">· ${summary}</span></button>
+        Factors on flows not in the model<${Chevron} open=${open} />${!open && html`<span class="muted section-count">${summary}</span>`}</button>
       ${open && html`
         <${PopupList} noun="factor" filter=${false} rows=${rows} rowKey=${(it) => `${it.side}:${it.name}:${it.compartment}`}
           empty="No factor on a flow outside the model."
@@ -5084,7 +5085,7 @@ function FlowExchangePopup({ target, win, method, methods, onClose, onOpen, onFl
   const sections = (found || []).flatMap((f) => f.exchanges.filter((x) => x.amount !== 0 || x.exchanges.length).map((x) => ({ flow: f, ...x })));
   const single = sections.length === 1 ? sections[0] : null;
   return html`
-    <${PopupWindow} target=${target} win=${win} label="Exchange information" onClose=${onClose} onBack=${onBack}
+    <${PopupWindow} target=${target} win=${win} label="Exchange information" className="flow-popup exchange-popup" onClose=${onClose} onBack=${onBack}
       onKeyDown=${popupKeys({ tabs: [], shown: null, setTab: () => {}, body, onClose, exchange: true })}
       head=${html`
         <div class="info-title flow-title">${first ? html`<${FlowIcon} resource=${first.resource} size=${13} />` : ""}
@@ -6327,19 +6328,26 @@ function EyeIcon({ off }) {
 // A rule in words, whole (the list shows one line of it, this is its tooltip)
 const ruleText = (r) => `${r.target === "flows" ? "flows: " : ""}${r.by ? `group by ${r.by === "name" && r.target === "flows" ? "substance" : r.by}` : `${r.name} ← ${describePredicate(r.predicate)}`}${r.owner ? `, emitted by processes ${describePredicate(r.owner)}` : ""}`
   + ` — ${r.scope === "*" ? "everywhere in the tree" : `under ${r.scope} (this tab only)`}${r.disabled ? ", disabled" : ""}`;
+// The chevron after the title of a header that folds: down while open, right while folded (drawn by the CSS, as the
+// ▾/▸ of the other fold buttons, ``.fold-caret``)
+function Chevron({ open }) {
+  return html`<span class=${`chevron ${open ? "open" : ""}`} aria-hidden="true"></span>`;
+}
+
 // A section of a panel that folds: its header is the button, ``force`` keeps it open (a rule being edited), ``actions``
-// stay at the right of the header. Open or folded is kept per ``id``.
+// stay at the right of the header. Open or folded is kept per ``id``. One disclosure style for every fold (docs/ui.md):
+// a bar, the title then its chevron (down: open), the open content in a box joined to the bar.
 function Fold({ id, title, open = true, force = false, actions, innerRef, children }) {
   const [on, setOn] = useState(() => { const v = loadPreference(`fold.${id}`, ""); return v === "" ? open : v === "1"; });
   const shown = on || force;
   const toggle = () => { setOn(!shown); savePreference(`fold.${id}`, !shown ? "1" : "0"); };
   return html`
-    <section class="fold" ref=${innerRef}>
+    <section class=${`fold ${shown ? "open" : ""}`} ref=${innerRef}>
       <h3 class="fold-head">
-        <button class="fold-toggle" onClick=${toggle} aria-expanded=${shown} title=${shown ? "Fold" : "Unfold"}><span class="caret">${shown ? "▾" : "▸"}</span> ${title}</button>
+        <button class="fold-toggle" onClick=${toggle} aria-expanded=${shown} title=${shown ? "Fold" : "Unfold"}>${title}<${Chevron} open=${shown} /></button>
         ${actions}
       </h3>
-      ${shown && children}
+      ${shown && html`<div class="fold-body">${children}</div>`}
     </section>`;
 }
 
@@ -9087,6 +9095,8 @@ function tabTitleNames(title) {
   if (title.flow !== undefined) return flowTitleNames({ name: title.name, place: title.location });
   return processNames(title);
 }
+// The kind of the object of a tab, from its title: its colour (--kind-process, --kind-flow, --kind-model of style.css)
+const kindOfTitle = (title) => (title?.model !== undefined ? "model" : title?.flow !== undefined ? "flow" : "process");
 function PaneView({ pane, focused, multiple, titles, dragging, drop, setDrop, actions, children }) {
   const body = useRef(null);
   function zoneAt(e) {
@@ -9112,13 +9122,14 @@ function PaneView({ pane, focused, multiple, titles, dragging, drop, setDrop, ac
     actions.move(dragging, pane.id, drop.zone, drop.before);
   };
   const title = (id) => tabTitleNames(titles[id]).main;
+  // ``focused``: the window in focus, whose active tab is the focused card (a coloured frame, its title in full; a
+  // pop-up in focus takes the frame, see style.css)
   return html`
-    <div class="pane ${focused && multiple ? "focused" : ""}" onMouseDownCapture=${() => actions.focus(pane.id)}>
+    <div class="pane ${focused && multiple ? "focused" : ""} ${focused ? "card-focus" : ""} kind-${kindOfTitle(titles[pane.active])}" onMouseDownCapture=${() => actions.focus(pane.id)}>
       <div class="pane-tabs" role="tablist" data-pane=${pane.id} onDragOver=${over("center")} onDrop=${dropHere}>
         ${pane.tabs.map((id) => html`
           <div key=${id} role="tab" aria-selected=${id === pane.active} draggable="true"
-               class="pane-tab ${id === pane.active ? "active" : ""} ${titles[id]?.flow !== undefined ? "flow" : ""} ${titles[id]?.model !== undefined ? "model" : ""} ${drop?.pane === pane.id && drop.before === id ? "drop-before" : ""}"
-               style=${titles[id]?.flow !== undefined ? { "--flow-color": FLOW_TYPES[titles[id].resource ? "resource" : "emission"].color } : null}
+               class="pane-tab ${id === pane.active ? "active" : ""} kind-${kindOfTitle(titles[id])} ${drop?.pane === pane.id && drop.before === id ? "drop-before" : ""}"
                title=${titles[id]?.model !== undefined ? `Model card: ${titles[id].name}` : titles[id] ? `${titles[id].reference_product ? `${titles[id].reference_product} | ` : ""}${titles[id].name} (${titles[id].location})` : "New tab: choose a process"}
                onClick=${() => actions.select(pane.id, id)}
                onAuxClick=${(e) => e.button === 1 && actions.close(id)}
@@ -9876,9 +9887,10 @@ function App() {
       </div>`}
       <footer class="status-bar">
         <${FocusedCard} info=${info} title=${titles[focusedTab]} />
-        <button class="status-text" onClick=${() => lensApi.show("methods")} title=${methodLabel(info.methods[lens.method])}>
-          ${methodSummary(info, lens.method, lens.chartMethods)}</button>
-        <button class="status-text" onClick=${() => lensApi.show("groups")} title="The rule set shared by all tabs">Rules: ${lens.set} · ${lensApi.rules.filter((r) => !r.disabled).length}</button>
+        <button class="status-field" onClick=${() => lensApi.show("methods")} title=${methodLabel(info.methods[lens.method])}>
+          <span class="status-label">Method</span><span class="status-text">${methodSummary(info, lens.method, lens.chartMethods)}</span></button>
+        <button class="status-field" onClick=${() => lensApi.show("groups")} title="The rule set shared by all tabs">
+          <span class="status-label">Rules</span><span class="status-text">${lens.set} · ${lensApi.rules.filter((r) => !r.disabled).length}</span></button>
         <span class="spacer"></span>
         <button class="status-button" onClick=${() => setSettingsOpen(true)} aria-label="Settings" title="Settings: the colours (rules, types, locations…)"><${PaletteIcon} /></button>
         <button class="status-button" onClick=${() => setShortcutsOpen(true)} aria-label="Shortcuts" title="Keyboard shortcuts"><${KeyboardIcon} /></button>

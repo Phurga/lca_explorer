@@ -27,6 +27,13 @@ Changes on `dev`, not released yet.
   *Characterisation* has the *Multi indicator* chart, with a table of the same shares and its export. The right
   panel is Edit mode's (the Edit panel); Ctrl/⌘ + → shows or hides it there only. The tree's first column is
   named **Product** (it was *Supply chain*). A pop-up's card has no *Contribution*.
+- **One look for the cards**: every section that folds (panel folds, list sections, method families, projects, the
+  methods library) has its title then a chevron (down: open) on a button-like bar, its open content in a box joined
+  to it; list sections count their rows only while folded. One colour per kind of object on tabs, pop-ups, pins and
+  icons: processes green, flows blue (every flow, whatever its type), models amber (CSS tokens `--kind-*`, light and
+  dark). The focused card (the active tab of the window in focus, or the pop-up in focus) is framed in its kind's
+  colour and its tab title is shown in full; a pinned pop-up has no green border any more, its filled pin says it.
+  The status bar's fields (card, method, rules) are grey, labelled and set apart by dividers. See docs/ui.md, *Look*.
 - **View options on each process**: the sliders icon of a process in the left panel's *Processes* panel opens the
   view options of that tab in a pop-up (*Display*, *Cut-off*, *Organise by*, *Group by*, *Color by*, *Rows*,
   with *Reset* and *Save ▾*); the tab is shown in its window first. Key **v** in View mode opens those of the tab in

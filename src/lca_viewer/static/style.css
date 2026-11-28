@@ -15,8 +15,20 @@
   --selected: #fff4d6;
   --hover: #f0efea;
   --guide: #cbcac3;
-  --category: #a06a12;
-  --category-soft: #f6ecd9;
+  /* One colour per kind of object, on every card, tab, pop-up header, chip and mark (docs/ui.md): processes and
+     products, flows, methods and models. Not the accent: they keep their colour in edit mode */
+  --kind-process: #2f6f5e;
+  --kind-process-soft: #e3efe9;
+  --kind-flow: #1f78a8;
+  --kind-flow-soft: #e0eef6;
+  --kind-model: #a06a12;
+  --kind-model-soft: #f6ecd9;
+  --category: var(--kind-model);
+  --category-soft: var(--kind-model-soft);
+  /* The bars of the headers that fold, as buttons (GitHub's): a light fill, a border, darker on hover */
+  --btn-bg: #f3f3f0;
+  --btn-hover: #e9e8e3;
+  --btn-border: #d6d5ce;
   --font: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
@@ -36,15 +48,23 @@
     --selected: #3a3424;
     --hover: #272826;
     --guide: #52534d;
-    --category: #e0b060;
-    --category-soft: #3a3020;
+    --kind-process: #7cc3aa;
+    --kind-process-soft: #24352f;
+    --kind-flow: #6ab6e2;
+    --kind-flow-soft: #1d2d38;
+    --kind-model: #e0b060;
+    --kind-model-soft: #3a3020;
+    --btn-bg: #262725;
+    --btn-hover: #2f302d;
+    --btn-border: #40413d;
   }
 }
 :root[data-theme="dark"] {
   --bg: #161716; --panel: #1f201f; --text: #e8e7e2; --muted: #9a9a93; --border: #343532;
   --accent: #7cc3aa; --accent-soft: #24352f; --bar: #5fa58c; --bar-negative: #d98a5a;
   --group: #a597e0; --merged: #7fb0e6; --selected: #3a3424; --hover: #272826; --guide: #52534d;
-  --category: #e0b060; --category-soft: #3a3020;
+  --kind-process: #7cc3aa; --kind-process-soft: #24352f; --kind-flow: #6ab6e2; --kind-flow-soft: #1d2d38;
+  --kind-model: #e0b060; --kind-model-soft: #3a3020; --btn-bg: #262725; --btn-hover: #2f302d; --btn-border: #40413d;
 }
 
 * { box-sizing: border-box; }
@@ -139,9 +159,20 @@ select.database { max-width: 220px; font-weight: 600; }
 }
 .pane-tab:hover { background: var(--hover); }
 .pane-tab.active { background: var(--panel); border-color: var(--border); color: var(--text); margin-bottom: -1px; padding-bottom: 6px; }
-.pane.focused .pane-tab.active { box-shadow: inset 0 2px 0 var(--accent); }
-.pane-tab.drop-before { box-shadow: inset 2px 0 0 var(--accent); }
 .pane-tab-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+/* Every tab: a line of its kind's colour on top. The active tab of the window in focus: the focused card, framed in its
+   kind's colour (the tab and the card below it), its title in full (it wraps rather than ending in an ellipsis) */
+.pane-tab { box-shadow: inset 0 2px 0 var(--kind); }
+.pane-tab.drop-before { box-shadow: inset 2px 0 0 var(--accent), inset 0 2px 0 var(--kind); }
+.pane-tabs .pane-tab:not(.active) { flex-shrink: 4; }
+.pane.card-focus .pane-tab.active { flex-shrink: 0; max-width: 100%; border: 2px solid var(--kind); border-bottom: none; padding-bottom: 5px; margin-bottom: 0; box-shadow: none; }
+.pane.card-focus .pane-tab.active .pane-tab-title { white-space: normal; overflow-wrap: anywhere; overflow: visible; }
+.pane.card-focus .pane-tabs { border-bottom-color: var(--kind); }
+.pane.card-focus > .pane-body::after { content: ""; position: absolute; inset: 0; z-index: 24; pointer-events: none; border: 2px solid var(--kind); border-top-width: 0; }
+/* A pop-up in focus is the focused card: the window keeps a plain frame meanwhile (its tab still in full) */
+body:has(.info-popup:focus-within) .pane.card-focus > .pane-body::after { display: none; }
+body:has(.info-popup:focus-within) .pane.card-focus .pane-tabs { border-bottom-color: var(--border); }
+body:has(.info-popup:focus-within) .pane.card-focus .pane-tab.active { border-color: var(--border); box-shadow: inset 0 2px 0 var(--kind); }
 .pane-tab .loc { color: var(--muted); font-size: 11px; flex: none; }
 .pane-tab .close { border: none; background: none; padding: 0 4px; line-height: 1; color: var(--muted); visibility: hidden; }
 .pane-tab:hover .close, .pane-tab.active .close { visibility: visible; }
@@ -536,7 +567,13 @@ header { gap: 10px; }
 .status-bar button.on { color: var(--accent); }
 .status-bar .status-text { max-width: 40vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
 /* The focused card (the object of the tab in focus), first: a long name ends in an ellipsis */
-.status-bar .status-text.focused-card { max-width: 32vw; color: var(--text); }
+.status-bar .focused-card .status-text { max-width: 32vw; }
+/* Its fields (the focused card, the method, the rules): grey, each with its label, set apart by a divider */
+.status-bar .status-field { display: inline-flex; align-items: baseline; gap: 6px; min-width: 0; padding: 3px 10px; color: var(--muted); border-radius: 0; }
+.status-bar .status-field:first-child { padding-left: 4px; }
+.status-bar .status-field + .status-field { border-left: 1px solid var(--border); }
+.status-bar button.status-field:hover { color: var(--text); background: var(--hover); }
+.status-bar .status-label { flex: none; font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; opacity: .8; }
 .lens-menu .method-tree { max-height: 50vh; }
 .rule-sets { list-style: none; margin: 0 0 6px; padding: 0; max-height: 30vh; overflow: auto; }
 .rule-sets label { display: flex; align-items: center; gap: 6px; padding: 3px 4px; border-radius: 4px; cursor: pointer; }
@@ -598,13 +635,22 @@ table.results tr.selected td { background: var(--selected); }
 .share-bar i { display: block; height: 100%; border-radius: 3px; background: var(--accent); }
 .share-bar i.negative { background: var(--bar-negative); }
 .share-pct { flex: none; width: 44px; text-align: right; font-family: var(--mono); font-size: 12px; }
-.info-body table.plist tr.list-section { cursor: pointer; background: var(--bg); }
-.info-body table.plist tr.list-section td { font-weight: 600; }
+/* A section of a list: a bar as the folds' (the title, its chevron, the count while folded), its rows in a box joined
+   to it (borders drawn as inset shadows: the table's cells collapse their borders) */
+.info-body table.plist tr.list-section { cursor: pointer; }
+.info-body table.plist tr.list-section td { font-weight: 600; background: var(--btn-bg); background-clip: padding-box;
+  box-shadow: inset 0 1px 0 var(--btn-border), inset 0 -1px 0 var(--btn-border); }
+.info-body table.plist tr.list-section td:first-child { box-shadow: inset 1px 0 0 var(--btn-border), inset 0 1px 0 var(--btn-border), inset 0 -1px 0 var(--btn-border); }
+.info-body table.plist tr.list-section td:last-child { box-shadow: inset -1px 0 0 var(--btn-border), inset 0 1px 0 var(--btn-border), inset 0 -1px 0 var(--btn-border); }
+.info-body table.plist tr.list-section td:only-child { box-shadow: inset 0 0 0 1px var(--btn-border); }
+.info-body table.plist tr.list-section:hover td { background: var(--btn-hover); }
+.info-body table.plist tr + tr.list-section td { border-top: 6px solid transparent; }
 .info-body table.plist tr.list-section td .muted { font-weight: 400; }
-.info-body table.plist tr.list-section .caret { display: inline-block; width: 12px; color: var(--muted); }
+.info-body table.plist .section-count { margin-left: 4px; }
+.info-body table.plist.sectioned tr.list-section ~ tr:not(.list-section) > td:first-child { box-shadow: inset 1px 0 0 var(--btn-border); }
+.info-body table.plist.sectioned tr.list-section ~ tr:not(.list-section) > td:last-child { box-shadow: inset -1px 0 0 var(--btn-border); }
+.info-body table.plist.sectioned tr.list-section ~ tr:not(.list-section):is(:last-child, :has(+ tr.list-section)) > td { border-bottom: 1px solid var(--btn-border); }
 .info-body table.plist tr.in-section td.name { padding-left: 22px; }
-.category-popup table.plist tr.list-section { background: var(--category-soft); }
-.category-popup table.plist tr.list-section .caret { color: var(--category); }
 .category-popup .share-bar i { background: var(--category); }
 .category-controls .hint-rebuild { font-size: 12px; margin-left: 6px; }
 .info-body table.plist .toggle { flex: none; width: 14px; padding: 0; border: 0; background: none; color: var(--muted); cursor: pointer; }
@@ -682,8 +728,7 @@ table.results tr.muted td { color: var(--muted); }
 .info-head-actions { display: flex; gap: 4px; flex: none; }
 .info-head-actions button.back { font-size: 14px; }
 .info-head-actions button.pin { display: inline-flex; align-items: center; color: var(--muted); }
-.info-head-actions button.pin.active { color: var(--accent); border-color: var(--accent); }
-.info-popup.pinned { border-color: var(--accent); }
+.info-head-actions button.pin.active { color: var(--kind); border-color: var(--kind); background: color-mix(in srgb, var(--kind) 14%, var(--panel)); }
 .info-popup.moving { user-select: none; opacity: .92; }
 /* Edges and corners that resize a pop-up */
 .pop-resize { position: absolute; z-index: 2; }
@@ -1011,19 +1056,11 @@ textarea.editing { width: 100%; box-sizing: border-box; }
 .toast span { flex: 1; }
 .tree tr[draggable="true"] { cursor: default; }
 
-/* Sections of a panel that fold */
-.fold { border: none; margin: 0 0 6px; }
-.fold-head { display: flex; align-items: center; gap: 6px; margin: 8px 0 4px; font-size: 13px; }
-.fold-toggle { border: none; background: none; padding: 2px 4px 2px 0; font: inherit; font-weight: 600; color: var(--text); display: inline-flex; gap: 4px; align-items: center; }
-.fold-toggle:hover { color: var(--accent); }
 
 /* The picture of the attribution */
 .attribution-dialog { width: min(1040px, 96vw); }
 .attribution-picture { width: 100%; height: auto; display: block; }
 
-/* One caret for every list or section that folds */
-.fold-caret, .fold-toggle .caret { border: none; background: none; padding: 0 2px; color: var(--muted); font-size: 12px; line-height: 1; display: inline-block; width: 16px; text-align: center; cursor: pointer; }
-.fold-caret:hover, .fold-toggle:hover .caret { color: var(--accent); }
 .palette-strip { display: inline-flex; gap: 2px; }
 .palette-strip i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
 .history-row { margin-bottom: 6px; }
@@ -1070,10 +1107,6 @@ textarea.editing { width: 100%; box-sizing: border-box; }
 .icon-plain { border: none; background: none; padding: 4px 6px; color: var(--muted); display: inline-flex; align-items: center; border-radius: 6px; }
 .icon-plain:hover:not(:disabled) { color: var(--accent); background: var(--hover); }
 
-/* The folds: an arrow as strong as the header */
-.fold-caret, .fold-toggle .caret { color: var(--text); font-size: 21px; font-weight: 700; width: 22px; height: 22px; line-height: 22px; padding: 0; text-align: center; border-radius: 5px; }
-.fold-caret:hover, .fold-toggle:hover .caret { color: var(--accent); background: var(--hover); }
-.fold-head { font-size: 14px; }
 /* Method selection: the list takes the room down to the bottom of the pane */
 .leftbar .methods-panel { display: flex; flex-direction: column; min-height: 0; }
 .leftbar .methods-panel .lens-menu { display: flex; flex-direction: column; flex: 1; min-height: 0; }
@@ -1093,8 +1126,6 @@ textarea.editing { width: 100%; box-sizing: border-box; }
 .rule-colours li span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Model pop-up (an impact category of a method; EF roadmap, phase 4): its own colour, apart from processes (accent) and groups */
-.info-popup.category-popup { border-top: 3px solid var(--category); }
-.info-popup.category-popup.pinned { border-color: var(--category); }
 .kind-mark.category { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; margin-right: 6px;
   border-radius: 5px; background: var(--category-soft); color: var(--category); vertical-align: -4px; }
 .method-row .category-open { padding: 2px 4px; opacity: .55; }
@@ -1114,9 +1145,8 @@ textarea.editing { width: 100%; box-sizing: border-box; }
 
 /* Flows (the abstract elementary flow): an icon in the colour of its type (resource / emission) on tabs, rows and headers */
 .flow-icon { flex: none; vertical-align: -1px; }
-.pane-tab.flow { box-shadow: inset 0 2px 0 var(--flow-color); }
-.pane-tab.flow.drop-before { box-shadow: inset 2px 0 0 var(--accent), inset 0 2px 0 var(--flow-color); }
-.flow-title { border-left: 3px solid var(--flow-color, transparent); padding-left: 6px; }
+.flow-icon { color: var(--kind-flow); }
+.flow-title { border-left: 3px solid var(--kind-flow); padding-left: 6px; }
 .process-row.flow-row .compare-tab { gap: 6px; }
 .process-row.flow-row .name .loc { margin-left: 4px; }
 .flow-tab { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--panel); }
@@ -1124,10 +1154,7 @@ textarea.editing { width: 100%; box-sizing: border-box; }
 .flow-tab .info-body { flex: 1; overflow: auto; max-height: none; }
 .flow-title a { color: var(--accent); }
 /* Model tabs: the model card in a pane, with the amber of models (a top border, the list icon on its tab and row) */
-.pane-tab.model { box-shadow: inset 0 2px 0 var(--category); }
-.pane-tab.model.drop-before { box-shadow: inset 2px 0 0 var(--accent), inset 0 2px 0 var(--category); }
-.model-mark { display: inline-flex; align-items: center; color: var(--category); flex: none; }
-.model-tab { border-top: 3px solid var(--category); }
+.model-mark { display: inline-flex; align-items: center; color: var(--kind-model); flex: none; }
 .model-tab-card { flex: 1; display: flex; flex-direction: column; min-height: 0; outline: none; }
 .model-tab-head { display: flex; align-items: flex-start; gap: 8px; }
 .model-tab-title { flex: 1; min-width: 0; }
@@ -1153,3 +1180,58 @@ textarea.editing { width: 100%; box-sizing: border-box; }
 .compare-tab .compare-mark { margin-right: 1px; }
 /* What a database opened before its build ended does not have yet (its exchanges) */
 .arriving { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+
+/* ------------------------------------------------------------------ kinds, folds, focus (docs/ui.md)
+   The kind of a card (--kind): its tab, its pop-up's header line, its pin while pinned, its frame while in focus */
+.kind-process, .info-popup { --kind: var(--kind-process); }
+.kind-flow, .info-popup.flow-popup, .flow-tab { --kind: var(--kind-flow); }
+.kind-model, .info-popup.category-popup, .flow-tab.model-tab { --kind: var(--kind-model); }
+.info-popup.view-options-popup { --kind: var(--muted); }
+.info-popup { border-top: 3px solid var(--kind); }
+/* The pop-up in focus (it takes the keyboard when it opens or is clicked): framed in its kind's colour. A pinned
+   pop-up has no frame of its own: its pin shows it (filled, in the kind's colour) */
+.info-popup:focus-within { border-color: var(--kind); box-shadow: 0 0 0 1px var(--kind), 0 12px 40px rgba(0,0,0,.22); }
+
+/* One disclosure style for every section that folds (Fold, the sections of the lists, the fold buttons): a bar like a
+   button, the title then a chevron (down: open, right: folded), the open content in a box joined to the bar */
+.chevron, .fold-caret::before { content: ""; display: inline-block; flex: none; width: 6px; height: 6px; margin: 0 4px 2px 8px;
+  border-right: 1.6px solid currentColor; border-bottom: 1.6px solid currentColor; transform: rotate(-45deg); vertical-align: middle; }
+.chevron.open { transform: rotate(45deg); margin-bottom: 4px; }
+.chevron { color: var(--muted); }
+.fold-caret { font-size: 0; width: 20px; height: 20px; padding: 0; border: none; background: none; border-radius: 4px; color: var(--muted);
+  display: inline-flex; align-items: center; justify-content: center; vertical-align: middle; cursor: pointer; flex: none; }
+.fold-caret::before { margin: 0 0 1px; }
+.fold-caret[aria-expanded="true"]::before { transform: rotate(45deg); margin: 0 0 4px; }
+.fold-caret:hover:not(:disabled) { color: var(--text); background: var(--btn-hover); }
+section.fold { border: none; margin: 0 0 8px; }
+section.fold > h3.fold-head { display: flex; align-items: center; gap: 4px; margin: 8px 0 0; padding: 2px 4px 2px 0; font-size: 13px;
+  background: var(--btn-bg); border: 1px solid var(--btn-border); border-radius: 6px; }
+section.fold > h3.fold-head:hover { background: var(--btn-hover); }
+section.fold.open > h3.fold-head { border-radius: 6px 6px 0 0; }
+.fold-toggle { flex: 1; min-width: 0; display: inline-flex; align-items: center; justify-content: flex-start; text-align: left; border: none; background: none;
+  padding: 3px 8px; font: inherit; font-weight: 600; color: var(--text); }
+.fold-toggle:hover .chevron { color: var(--text); }
+.fold-body { border: 1px solid var(--btn-border); border-top: none; border-radius: 0 0 6px 6px; padding: 8px 10px; background: var(--panel); }
+.fold-body > :first-child { margin-top: 0; }
+.fold-body > :last-child { margin-bottom: 0; }
+.fold-toggle .section-count { margin-left: 4px; font-weight: 400; }
+/* The factors of a model on flows outside it: a fold of the Model card */
+.category-unlinked { border-top: none; padding-top: 0; }
+.category-unlinked > .fold-toggle { width: 100%; background: var(--btn-bg); border: 1px solid var(--btn-border); border-radius: 6px; }
+.category-unlinked > .fold-toggle:hover { background: var(--btn-hover); }
+.category-unlinked > .fold-toggle[aria-expanded="true"] { border-radius: 6px 6px 0 0; }
+.category-unlinked > .fold-toggle[aria-expanded="true"] + * { border: 1px solid var(--btn-border); border-top: none; border-radius: 0 0 6px 6px; margin-top: 0; padding: 4px 10px 6px; }
+/* The family of methods of a method list: its tick, its name then the chevron */
+.method-head input { order: -2; }
+.method-head .name { order: -1; flex: 0 1 auto; }
+.method-head .count { margin-left: auto; }
+.method-head .fold-caret { width: 18px; height: 18px; }
+/* The methods library (Projects): a bar as the folds', its list in a box joined to it */
+.load-page section.methods-library, .load-dialog section.methods-library { border: 1px solid var(--btn-border); border-radius: 6px; padding: 0 10px; }
+.methods-library > .load-head { margin: 0 -10px; padding: 3px 6px 3px 10px; background: var(--btn-bg); border-radius: 5px; }
+.methods-library > .load-head:hover { background: var(--btn-hover); }
+.methods-library:has(> .load-head .fold-caret[aria-expanded="true"]) { padding-bottom: 8px; }
+.methods-library:has(> .load-head .fold-caret[aria-expanded="true"]) > .load-head { border-radius: 5px 5px 0 0; border-bottom: 1px solid var(--btn-border); margin-bottom: 8px; }
+.methods-library > .load-head .library-title { order: -1; }
+/* A project (Projects): its name then the chevron */
+table.load-table tr.project .project-name { cursor: pointer; }
