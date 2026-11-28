@@ -1588,7 +1588,7 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
         cache; None: those it has, else all of the project's. ``on_ready(entry)``: called once the database can be
         opened (its results solved), while the build goes on reading the exchanges; a database open being rebuilt
         is closed then (with ``reopen``), not at the end. A database built whose exchanges are not read (a build
-        stopped before) is built again for them alone, even when open."""
+        stopped before) and up to date is built again for them alone, even when open."""
         import importlib.util
 
         folder = str(Path(folder).expanduser().resolve())
@@ -1598,7 +1598,9 @@ def create_library(data=None, preload: list[dict] = ()) -> FastAPI:
         state = project_cache.status(cache, database, p)
         current = (state["built"] and not rebuild and not state["solve"]
                    and not library.stale(project_cache.read_project(cache)))
-        if current and state["exchanges"]:
+        # Exchanges not read are read alone only while the project is as it was built: else they would be those of
+        # the project changed since (and its segments read again): they come with the rebuild, when asked for
+        if current and (state["exchanges"] or state["outdated"]):
             return entry
         if loaded_key(entry["path"]) and not reopen and not current:
             raise ValueError(f"{database} is open: close it first (Close, in the list of loaded databases), then rebuild it")
