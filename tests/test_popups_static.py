@@ -238,10 +238,10 @@ def test_the_shortcuts_list_the_mouse_gestures():
 
 def test_view_mode_has_no_side_panel_its_panels_are_the_cards():
     # The side panel of View mode left: its contributions are the Contribution panel of a process tab's card (sub-panels
-    # Process, Flow, Uncharacterised, Rules), its Explore chart's export is on the card's Explore panel, its multi indicator
-    # chart and table are in the card's Characterisation panel; the right panel is Edit mode's (the Edit panel)
-    assert ('const CONTRIBUTION_PANELS = [["chart", "Process"], ["flows", "Flow"], ["missing", "Uncharacterised"], '
-            '["global", "Rules"]];') in APP
+    # Characterisation first, then Process, Flow, Uncharacterised, Rules), its Explore chart's export is on the card's
+    # Explore panel, its multi indicator chart and table are in Characterisation; the right panel is Edit mode's
+    assert ('const CONTRIBUTION_PANELS = [["characterisation", "Characterisation"], ["chart", "Process"], ["flows", "Flow"], '
+            '["missing", "Uncharacterised"], ["global", "Rules"]];') in APP
     for gone in ("SIDE_PANELS", "SidePanelTabs", "SidePanelTabIcon", "function ChartPanel", "onCollapseSide", "side-slot"):
         assert gone not in APP, gone
     fu = body("FUView")
@@ -250,6 +250,16 @@ def test_view_mode_has_no_side_panel_its_panels_are_the_cards():
     info = body("InfoPopup")
     assert 'card?.contribution && { id: "contribution", label: "Contribution" }' in info
     assert "${!idle && card?.characterisation}" in info
+    # in a tab's card, Characterisation is a sub-panel of Contribution (a pop-up keeps it as a panel of its own)
+    assert 'info && !card?.contribution && { id: "characterisation"' in info
+    assert "card?.contribution(characterisationNode," in info
+    assert 'useState("characterisation")' in fu and "panel=${contributionPanel ? contributionPanel() : characterisation}" in fu
+
+
+def test_contribution_names_processes_by_the_name_display():
+    assert "label=${processLabel}" in body("ProcessContributions") and 'processCell(c, "loc-chip")' in body("ProcessContributions")
+    assert "${processCell(c)}" in body("GlobalPanel") and "${processCell(c)}" in body("FlowContribution")
+    assert "[items, others, total, unitLabel, chosen, nameStamp]" in body("ContributionList")
     # the tree's export: the rows as CSV, and the single indicator chart drawn off the page for its image
     export = body("TreeExport")
     assert 'downloadCsv("contributions.csv"' in export and "offscreenImage(singleChartOption(" in export

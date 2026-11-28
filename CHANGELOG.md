@@ -20,6 +20,10 @@ Changes on `dev`, not released yet.
   tab's supply chain (or reached by a flow under 1e-12) though its own card lists its users; every level now lists all
   the users, as the first one does, those of the supply chain first.
 - **Alternatives**: the first column is headed *Processing {product}* (the product of the card) instead of *Process*.
+- **Characterisation inside Contribution**: in a process tab's card, *Characterisation* (the totals per method, the
+  multi indicator chart and table) is the first sub-panel of *Contribution*, before *Process*, *Flow*,
+  *Uncharacterised* and *Rules*; a pop-up keeps it as a panel. The processes of the Contribution charts and tables are
+  named by the *Name display*, as in the tree.
 - **No right panel in View mode: its panels are in each process card.** A process tab's card has a new
   **Contribution** panel (after *Characterisation*) with sub-panels *Process*, *Flow*, *Uncharacterised* and *Rules*,
   the side panel's contributions of before. The side panel's *Explore* chart is gone (the tree shows the same rows);

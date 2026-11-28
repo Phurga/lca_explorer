@@ -634,7 +634,7 @@ API in `src/lca_viewer/server.py`.
   supply chain, computed; *Exchanges* is the dataset, recorded: one reads what the process does, the other what was
   entered. Decision (tried and dropped): an *Edit* button on this panel entering Edit mode, with the amounts edited
   in place; Edit mode stays in the top bar. A model built before exchanges were stored says to build it again.
-  **Characterisation** (third, after *Exchanges*): the process's **total impacts** per unit of its product, one row
+  **Characterisation** (third, after *Exchanges*, in a pop-up; in a tab's card, the first sub-panel of *Contribution*): the process's **total impacts** per unit of its product, one row
   per method — the main method (on top, "main") then the methods shown together (ticked in the *Methods* panel) —
   with its total (cumulative, `G`), its direct score (`U`), their unit and the direct share; a method's right-click
   (or Space) opens its model pop-up, its double-click (or Enter) a model tab. Read from `U` and `G`: no solve. Method names follow the *Name display* of the
@@ -825,21 +825,24 @@ API in `src/lca_viewer/server.py`.
   tab, opens the process in a new tab. Decision: one shell for both kinds of tabs (a tab's saved state holds `root` for a
   process, `flow` for a flow), so saving, closing, *Undo* and the open history work for both.
 - **Panels of a process card** (a process tab; View mode has no right panel any more): *Explore* (the tree),
-  *Exchanges*, *Characterisation*, **Contribution**, *Used by*, *Alternatives*, *Information*. What the side panel of
+  *Exchanges*, **Contribution**, *Used by*, *Alternatives*, *Information*. What the side panel of
   View mode held is there now:
   - the export of its *Explore* chart is on the card's **Explore**, at the right of the tree's foot (by *Total*;
     `TreeExport`): the tree's rows as CSV (`contributions.csv`, every method of the rows) and the **single indicator
     chart** as PNG, drawn off the page for the image (`offscreenImage`: the chart itself is not shown any more; the
     tree is the same rows). Its menu opens upward when the window has no room below it (`PopupMenu`).
   - its *Multi indicator* chart, with a table of the same shares and their export, is in **Characterisation**
-    (above, under *Characterisation*).
-  - its *Process*, *Flow*, *Uncharacterised* and *Rules* are the sub-panels of **Contribution**
+    (above, under *Characterisation*), the first sub-panel of **Contribution**.
+  - its *Process*, *Flow*, *Uncharacterised* and *Rules* are the next sub-panels of **Contribution**
     (`CONTRIBUTION_PANELS`, `ContributionPanels`; what each shows is explained in a popup on its name), with the same
     computation, of the tab's process and amount. The sub-panel chosen is kept by the tab (as the side panel's tab
-    was), *Process* at first; ← → on the sub-panels' bar switch them (on the card's bar: the card's panels).
+    was), *Characterisation* at first; ← → on the sub-panels' bar switch them (on the card's bar: the card's panels).
+    Their processes are named by the *Name display* (`processLabel` on the charts' axes, `processCell` in the tables),
+    as in the tree; the CSV exports keep the activity name and location, to find the dataset again.
   Decision: one *Contribution* panel with sub-panels rather than four more panels in the card's bar, which already has
-  seven and scrolls in a narrow pane; after *Characterisation*, since both read the process's score (what it is, then
-  what makes it), and before *Used by* and *Alternatives*, which are about other processes. The side panel's
+  seven and scrolls in a narrow pane; *Characterisation* is its first sub-panel (it was a panel of the card, before
+  *Contribution*), since both read the process's score (what it is, then what makes it); before *Used by* and
+  *Alternatives*, which are about other processes. A pop-up keeps *Characterisation* as a panel of its own. The side panel's
   *Explore* chart is dropped (the tree is its rows), only its export kept. The first column of the tree is
   **Product** (it was *Supply chain*): the rows are named by their product by default (*Name display*).
   Decision: a **pop-up**'s process card has no *Contribution* (tabs only): its sub-panels need a tree and a functional

@@ -5383,8 +5383,9 @@ function ProcessExchanges({ index, info, exchanges, onOpen, onExchange, onUse })
 // uncertainty of the input, ``target.exchange``). ``onFollow(target)`` opens another in place.
 // ``docked``: the same panels in a tab, under its first line: the tree (``treeSlot``) is the first panel, the pop-up's the
 // others; ``active``: the tab is the one shown (a hidden tab loads nothing). ``card``: what a tab's card has more than a
-// pop-up, from its tree: { characterisation: the multi indicator chart and table under the totals, contribution: the
-// Contribution panel (its sub-panels) }
+// pop-up, from its tree: { characterisation: the multi indicator chart and table under the totals, contribution(node,
+// label): the Contribution panel, its first sub-panel *Characterisation* the card's own (``node``), contributionTab: the
+// sub-panel shown }
 function DockedShell({ children, onKeyDown }) {
   return html`<div class="docked-panels" onKeyDown=${onKeyDown}>${children}</div>`;
 }
@@ -5557,7 +5558,7 @@ function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsByI
   const tabs = (info || docked) && !exchange ? [
     docked ? { id: "explore", label: "Explore" } : exchanges?.available && { id: "explore", label: "Explore" },
     info && exchanges && { id: "exchanges", label: exchanges.available ? `Exchanges · ${(production ? 1 : 0) + exchanges.inputs.length + exchanges.flows.length}` : "Exchanges" },
-    info && { id: "characterisation", label: `Characterisation · ${totalMethods.length}` },
+    info && !card?.contribution && { id: "characterisation", label: `Characterisation · ${totalMethods.length}` },
     card?.contribution && { id: "contribution", label: "Contribution" },
     info && { id: "users", label: `${users?.waste ? "Treats" : "Used by"}${users ? ` · ${users.count}` : ""}` },
     alternatives && !target.direct && { id: "alternatives", label: `Alternatives · ${alternatives.count}` },
@@ -5573,15 +5574,37 @@ function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsByI
     popupKeys({ tabs, shown, setTab, body, onClose, toTabs: () => tabsBar.current?.querySelector("button.active")?.focus() })(e);
   };
   useEffect(() => {
-    if (shown !== "characterisation" || idle) return;
+    if (!(shown === "characterisation" || (shown === "contribution" && card?.contributionTab === "characterisation")) || idle) return;
     let live = true;
     request(`/api/activity/${target.index}/characterisation?method=${method}`)
       .then((c) => live && setCharacterisation({ ...c, index: target.index })).catch((e) => live && setError(e.message));
     return () => { live = false; };
-  }, [shown, target.index, method, idle]);
+  }, [shown, card?.contributionTab, target.index, method, idle]);
   const characterised = characterisation?.index === target.index && characterisation.method === method ? characterisation : null;
   const totals = characterised && totalMethods.filter((k) => k < characterised.totals.direct.length)
     .map((k) => ({ method: k, direct: characterised.totals.direct[k], cumulative: characterised.totals.cumulative[k] }));
+  // Its total impacts in the methods (in a tab's card, the first sub-panel of Contribution; with, there, the multi
+  // indicator chart and table of the tab's tree)
+  const characterisationNode = info && html`
+            <section>
+              ${!characterised ? html`<${Waiting} text="Reading its impacts…" />` : html`
+                <p class="muted list-summary">Per ${unit(info.unit)} of ${info.reference_product}, with its supply chain (<i>Total</i>) and
+                  from its own exchanges with nature (<i>Direct</i>), in the main method and the methods shown together (ticked in the
+                  Methods panel).</p>
+                <${PopupList} key=${`totals-${target.index}`} noun="method" rows=${totals} rowKey=${(t) => t.method}
+                  rowClass=${(t) => (t.method === method ? "current" : "")}
+                  onOpen=${(t, e) => follow({ category: t.method }, e)} onUse=${use && ((t, inTab) => use.model(t.method, inTab))}
+                  columns=${[
+                    { key: "method", label: "Method", title: "The main method and the methods shown together: open one for its model card",
+                      value: (t) => methodTitle(model.methods[t.method]), tip: (t) => `${model.methods[t.method].name.join(" | ")} [${model.methods[t.method].unit}]: its model card`,
+                      chip: (t) => (t.method === method ? html`<span class="muted">main</span>` : "") },
+                    { key: "cumulative", label: "Total", kind: "num", title: "With its supply chain (cumulative)", value: (t) => t.cumulative },
+                    { key: "direct", label: "Direct", kind: "num", title: "Its own exchanges with nature", value: (t) => t.direct },
+                    { key: "unit", label: "Unit", kind: "unit", width: 150, value: (t) => `${model.methods[t.method].unit} / ${unit(info.unit)}` },
+                    { key: "share", label: "Direct share", kind: "share", title: "Share of the total that is direct", value: (t) => (t.cumulative ? t.direct / t.cumulative : null) },
+                  ]} />`}
+            </section>
+            ${!idle && card?.characterisation}`;
   return html`
     <${docked ? DockedShell : PopupWindow} target=${target} win=${win} label=${exchange ? "Exchange information" : "Activity information"} onClose=${onClose} onBack=${onBack}
       onDock=${info && !exchange ? (place) => { onOpenTab(info, place); onClose(); } : null}
@@ -5648,27 +5671,8 @@ function InfoPopup({ target, win, model, method, methodInfo, rootImpact, rowsByI
                 onExchange=${(r, e) => (r.kind === "flow" ? follow({ flow: r.index, activities: [target.index], exchange: true }, e) : openExchange(r.index, base, e))}
                 onUse=${(r, inTab) => (r.kind === "flow" ? use?.flow({ flow: r.index }, inTab) : useAsRoot(r, inTab))} />
             </section>`}
-          ${shown === "characterisation" && info && html`
-            <section>
-              ${!characterised ? html`<${Waiting} text="Reading its impacts…" />` : html`
-                <p class="muted list-summary">Per ${unit(info.unit)} of ${info.reference_product}, with its supply chain (<i>Total</i>) and
-                  from its own exchanges with nature (<i>Direct</i>), in the main method and the methods shown together (ticked in the
-                  Methods panel).</p>
-                <${PopupList} key=${`totals-${target.index}`} noun="method" rows=${totals} rowKey=${(t) => t.method}
-                  rowClass=${(t) => (t.method === method ? "current" : "")}
-                  onOpen=${(t, e) => follow({ category: t.method }, e)} onUse=${use && ((t, inTab) => use.model(t.method, inTab))}
-                  columns=${[
-                    { key: "method", label: "Method", title: "The main method and the methods shown together: open one for its model card",
-                      value: (t) => methodTitle(model.methods[t.method]), tip: (t) => `${model.methods[t.method].name.join(" | ")} [${model.methods[t.method].unit}]: its model card`,
-                      chip: (t) => (t.method === method ? html`<span class="muted">main</span>` : "") },
-                    { key: "cumulative", label: "Total", kind: "num", title: "With its supply chain (cumulative)", value: (t) => t.cumulative },
-                    { key: "direct", label: "Direct", kind: "num", title: "Its own exchanges with nature", value: (t) => t.direct },
-                    { key: "unit", label: "Unit", kind: "unit", width: 150, value: (t) => `${model.methods[t.method].unit} / ${unit(info.unit)}` },
-                    { key: "share", label: "Direct share", kind: "share", title: "Share of the total that is direct", value: (t) => (t.cumulative ? t.direct / t.cumulative : null) },
-                  ]} />`}
-            </section>
-            ${!idle && card?.characterisation}`}
-          ${shown === "contribution" && !idle && card?.contribution}
+          ${shown === "characterisation" && characterisationNode}
+          ${shown === "contribution" && !idle && card?.contribution(characterisationNode, `Characterisation · ${totalMethods.length}`)}
           ${shown === "users" && users && info && html`
             <section>
               <${PopupList} key=${`users-${target.index}`} noun="process" rows=${users.users} rowKey=${(u) => u.index} columns=${usersPanel.columns}
@@ -5810,6 +5814,10 @@ function processNames(meta, n = nameDisplay) {
 }
 // The title of a process card (its pop-up, its tab, its row of the Processes panel)
 const processTitle = (info) => processNames(info).main;
+// A process of a list or a chart (the Contribution panel's), named by the name display: in one line, the grey part in
+// brackets (a chart's axis), or as a cell, the grey part after it (``chip``: its class)
+const processLabel = (m) => { const n = processNames(m); return n.qual ? `${n.main} (${n.qual})` : n.main; };
+const processCell = (m, chip = "loc") => { const n = processNames(m); return html`${n.main}${chip === "loc-chip" ? " " : ""}${n.qual && html`<span class=${chip}>${n.qual}</span>`}`; };
 // A flow ({ name, compartment, subcompartment } or { name, place: "air, urban air…" }) named by the name display: { main, qual }
 function flowTitleNames(f, n = nameDisplay) {
   const split = f.subcompartment === undefined;
@@ -6009,6 +6017,7 @@ function RecipeEditor({ recipe, setRecipe, example, kinds = ["process", "flow"] 
 // ---------------------------------------------------------------- panels of a process card: charts and contributions
 // What each panel shows, in a popup on its name (the Contribution panel's sub-panels, the left panel's tabs)
 const PANEL_TIPS = {
+  characterisation: "The process's total impacts in each method shown, per unit of its product, and the share of each row of the tree in them.",
   chart: "What each process of the supply chain adds by its own emissions, wherever it is in the tree.",
   flows: "Which substances drive the score, and which processes emit them.",
   missing: "The flows of the inventory that the active method has no factor for: what the score leaves out, and which another method characterises.",
@@ -6018,17 +6027,17 @@ const PANEL_TIPS = {
   global: "The score split by your rules over the whole supply chain, to see what each rule weighs.",
 };
 // The sub-panels of the Contribution panel of a process tab's card, in the order of its tab bar (they were the side
-// panel's, before the side panel left View mode)
-const CONTRIBUTION_PANELS = [["chart", "Process"], ["flows", "Flow"], ["missing", "Uncharacterised"], ["global", "Rules"]];
+// panel's, before the side panel left View mode), *Characterisation* first (it was a panel of the card)
+const CONTRIBUTION_PANELS = [["characterisation", "Characterisation"], ["chart", "Process"], ["flows", "Flow"], ["missing", "Uncharacterised"], ["global", "Rules"]];
 // The Contribution panel: its sub-panels' tab bar (← → switch them, the focus staying on the bar) and the one chosen.
-// ``panel``: the node of the sub-panel shown
-function ContributionPanels({ tab, setTab, panel }) {
+// ``panel``: the node of the sub-panel shown; ``labels``: a sub-panel's label when it has one of its own (a count)
+function ContributionPanels({ tab, setTab, panel, labels = {} }) {
   return html`
     <section class="card-contribution">
       <div class="tabs contribution-tabs" role="tablist" onKeyDown=${tabKeys(CONTRIBUTION_PANELS.map(([key]) => key), tab, setTab)}>
         ${CONTRIBUTION_PANELS.map(([key, label]) => html`
           <${TabButton} key=${key} role="tab" class=${tab === key ? "active" : ""} aria-selected=${tab === key} onClick=${() => setTab(key)}
-            tip=${PANEL_TIPS[key]}>${label}<//>`)}
+            tip=${PANEL_TIPS[key]}>${labels[key] || label}<//>`)}
       </div>
       ${panel}
     </section>`;
@@ -6207,7 +6216,7 @@ function ContributionList({ items, others, total, count, what, unitLabel, cut, s
         itemStyle: { color: cssVar(!it ? "--muted" : v < 0 ? "--bar-negative" : "--bar"), opacity: chosen != null && !(it && keyOf(it) === chosen) ? 0.35 : 1 } })),
       label: { show: true, position: "right", formatter: (d) => share(d.value), color: cssVar("--muted") } }];
     return o;
-  }, [items, others, total, unitLabel, chosen]);
+  }, [items, others, total, unitLabel, chosen, nameStamp]);
   const exportCsv = () => downloadCsv(`${exportName}.csv`, [...csv.header, ...columns.filter((c) => c.csv).map((c) => c.head), "impact", "share"], [
     ...items.map((it) => [...csv.cells(it), ...columns.filter((c) => c.csv).map((c) => c.csv(it)), it.impact, total ? it.impact / total : 0]),
     ...(others.count > 0 ? [[`${others.count} more`, ...csv.header.slice(1).map(() => ""), ...columns.filter((c) => c.csv).map(() => ""),
@@ -6252,17 +6261,17 @@ function ProcessContributions({ info, root, amount, method, onInfo }) {
   const flowsOf = (c) => (inner.error ? html`<tr class="sub"><td colspan="3" class="error">${inner.error}</td></tr>`
     : !inner.data ? html`<tr class="sub"><td colspan="3"><${Waiting} text="Computing…" /></td></tr>`
     : html`${inner.data.flows.map((f) => html`
-        <tr class="sub" key=${f.flow}><td>${f.name} <span class="muted">${f.compartment}</span></td>
+        <tr class="sub" key=${f.flow}><td>${(({ main, qual }) => html`${main} <span class="muted">${qual}</span>`)(flowTitleNames({ name: f.name, place: f.compartment }))}</td>
           <td class="num">${fmt(f.impact)}</td><td class="num muted" title="Of this process's contribution">${pct(inner.data.total ? f.impact / inner.data.total : 0)}</td></tr>`)}
         ${inner.data.others.count > 0 && html`<tr class="sub muted"><td>+ ${inner.data.others.count} more flows</td><td class="num">${fmt(inner.data.others.impact)}</td><td></td></tr>`}`);
   return html`
     <div class="panel">
       <${ContributionList} items=${found.contributors} others=${found.others} total=${found.total} count=${found.count} what="processes"
         unitLabel=${info.methods[method].unit} cut=${cut} setCut=${setCut} exportName="process-contributions" tableClass="direct-contributions"
-        keyOf=${(c) => c.index} label=${(c) => `${c.name} (${c.location})`} chosen=${chosen}
+        keyOf=${(c) => c.index} label=${processLabel} chosen=${chosen}
         onChoose=${(c) => setChosen(chosen === c.index ? null : c.index)}
         head=${html`Process <span class="muted">· direct contributions</span>`}
-        name=${(c) => html`${c.name} <span class="loc-chip">${c.location}</span>`}
+        name=${(c) => processCell(c, "loc-chip")}
         rowProps=${(c) => ({ ...dragProcess(c.index), title: `${c.reference_product ?? ""} | ${c.name} | ${c.location}: click for the flows it is made of, right-click for its details`,
           onContextMenu: (e) => { e.preventDefault(); onInfo?.(c.index, e.clientX, e.clientY); } })}
         below=${flowsOf} csv=${{ header: ["process", "location"], cells: (c) => [c.name, c.location] }} />
@@ -6846,7 +6855,7 @@ function GlobalPanel({ info, root, amount, method, rules, view, rule, setRule, o
                         onClick=${(e) => e.detail < 2 && onInfo(c.index, e.clientX, e.clientY)}
                         onContextMenu=${(e) => menu.open(e, c)}
                         onDblClick=${() => goTo(c)}>
-                      <td>${c.name}<span class="loc">${c.location}</span></td>
+                      <td>${processCell(c)}</td>
                       <td class="num">${fmt(c.impact)}</td><td class="pct">${ofGroup(c.impact)}</td><td class="pct">${ofTotal(c.impact)}</td>
                     </tr>`)}
                   ${contributors.others.count > 0 && html`
@@ -7134,7 +7143,7 @@ function FlowContribution({ info, root, amount, method, onLocate, onInfo, onFlow
                   ${contributors.contributors.map((c) => html`
                     <tr key=${c.index} ...${dragProcess(c.index)} title=${`${c.reference_product} | ${c.name} | ${c.location}`}
                         onContextMenu=${(e) => menu.open(e, c)} onDblClick=${() => goTo(c)}>
-                      <td>${c.name}<span class="loc">${c.location}</span></td>
+                      <td>${processCell(c)}</td>
                       <td class="num">${fmtAmount(c.amount)}</td><td class="num">${fmt(c.impact)}</td>
                       <td class="pct">${ofFlow(c.impact)}</td><td class="pct">${ofTotal(c.impact)}</td>
                     </tr>`)}
@@ -7562,7 +7571,7 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
     [allData, view.hideOthers]);
   const [error, setError] = useState(null);
   // The sub-panel of the card's Contribution panel (Process, Flow, Uncharacterised, Rules), kept by the tab
-  const [contributionTab, setContributionTab] = useState("chart");
+  const [contributionTab, setContributionTab] = useState("characterisation");
   // The pop-up of the view options (the Processes panel's button, key v): { x, y, rect, pinned }, or null
   const [optionsPop, setOptionsPop] = useState(null);
   const openViewOptions = (x, y) => setOptionsPop((p) => ({ x, y, rect: p?.rect ?? null, pinned: p?.pinned ?? false }));
@@ -8323,7 +8332,9 @@ function FUView({ id, info, initial, visible, onSave, onTitle, onOpenTab, onNewT
   const cardPanels = !embedded && {
     characterisation: html`<${MultiIndicator} key=${editing ? "edit" : "view"} data=${allData} info=${info} chartMethods=${chartMethods}
       view=${view} onPickMethods=${() => lens.show("methods")} />`,
-    contribution: contributionPanel && html`<${ContributionPanels} tab=${contributionTab} setTab=${setContributionTab} panel=${contributionPanel()} />`,
+    contributionTab,
+    contribution: root && ((characterisation, label) => html`<${ContributionPanels} tab=${contributionTab} setTab=${setContributionTab}
+      labels=${{ characterisation: label }} panel=${contributionPanel ? contributionPanel() : characterisation} />`),
   };
   return html`
     <${TabUseContext.Provider} value=${tabUse}>
