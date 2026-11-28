@@ -1102,3 +1102,10 @@ textarea.editing { width: 100%; box-sizing: border-box; }
 .storage-table tr.storage-project td { border-top: 1px solid var(--border); padding-top: 8px; }
 .storage-table tr.storage-segment td:first-child { padding-left: 18px; }
 .graph-form .chart { border: 1px solid var(--border); border-radius: 4px; }
+
+/* Name display of processes and flows (the top of the Processes panel): narrow, so the recipe fields stack */
+.name-display .recipe-field { min-width: 0; flex-basis: 100%; }
+.name-display .recipe .recipe-kind { width: auto; flex-basis: 100%; }
+.name-display .example-main { color: var(--text); }
+/* The compare mark of a tab: a method's box (.method-mark), ✓ compared, ★ the baseline */
+.compare-tab .compare-mark { margin-right: 1px; }

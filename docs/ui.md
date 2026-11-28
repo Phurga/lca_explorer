@@ -106,8 +106,9 @@ API in `src/lca_viewer/server.py`.
 - **Compare mode** (the middle button): the workspace and the side
   panel give way to a comparison of the processes of the open tabs (the
   tabs stay mounted, so nothing is lost when going back). The tabs to
-  compare are ticked in the **Processes** tab of the left panel, the first one (the radio
-  marks the **baseline**, the others are read against it; all tabs by default); the impact
+  compare are marked in the **Processes** tab of the left panel, with one box per tab as the methods have: **✓**
+  compared, **★** (orange) the **baseline**, the others being read against it (all tabs by default, the first one
+  the baseline); the impact
   methods and the group rules are those of the workspace (see **Methods and Rules**
   below). Decision: a *Compared* column of its own in this mode was a third place for
   settings that the panel already holds, so the panel lists the tabs, and a strip over the
@@ -242,7 +243,7 @@ API in `src/lca_viewer/server.py`.
   The **view options** belong to each process tab: the sliders icon of its row in the
   left panel's *Processes* panel opens them in a pop-up (the tab is shown in its window first, as a click on its name),
   and key v in View mode opens those of **the tab in focus**, the one of the window (split pane) used last. One line
-  each and in this order: *Display* (List / Tree / Sankey), *Cut-off*, *Names*, *Organise by*, *Group by*, *Color by*,
+  each and in this order: *Display* (List / Tree / Sankey), *Cut-off*, *Organise by*, *Group by*, *Color by*,
   then *Rows*; *Reset* and *Save* are icons at the top right of the pop-up (Save's arrow: Load, Copy, Default
   settings). The pop-up is drawn by the tab itself, on the page, so it stays open (pinned) while the tab is hidden;
   flow tabs have no view options. Decision: the options were the top of the side panel's first panel, which showed
@@ -262,16 +263,19 @@ API in `src/lca_viewer/server.py`.
   are in one place. *Shortcuts* (keyboard) lists the keys. The active method and the rule set in use open the
   left panel; the status bar has no icon of its own for it any more (the edge of the page and Ctrl/⌘ + ← do it).
 - **First start** (nothing kept in the browser): the plain reading first, complexity when asked for. A tab is a list
-  with *Amount*, *Impact* and *Share*, no cut-off, nothing grouped, the direct emissions organised by compartment, full names, no colours; the left
+  with *Amount*, *Impact* and *Share*, no cut-off, nothing grouped, the direct emissions organised by compartment, processes named by their product, no colours; the left
   panel is closed, the side panel open on *Explore* (the chart; the view options are in their pop-up, closed). Widths follow the window until dragged
   (side panel 42 % of it, leaving the tree 720 px). Constants `DEFAULT_VIEW`, `DEFAULT_CUTOFF` and `FIRST_PANELS` in
   `app.js`. Decision: a preference is written when the user changes it, not at the first render, so a default never
   chosen can still change in a later version; *Default settings* (save menu) restores all of it, panels included.
 - **Left panel: Processes, Methods and Rules** (hidden and shown with its icon, the
   edge of the page or Ctrl/⌘ + ←; the right panel with Ctrl/⌘ + →;
-  resizable, in every mode). *Processes* lists the tabs open: the tick for the ones compared in
-  Compare mode, the round mark for the baseline, the sliders icon of its view options (a process tab; see *Status
-  bar*) and a × that closes the tab; what each
+  resizable, in every mode). *Processes* lists the tabs open: one box for Compare mode, clicked in turn as a
+  method's box (`CompareMark`, the same `.method-mark`): **✓** compared, then **★** the baseline (the one before stays
+  ✓), then unticked (if it was the baseline, the first other compared tab becomes the baseline; the baseline alone
+  cannot be unticked); a click on the name only shows the tab. Then the sliders icon of its view options (a process
+  tab; see *Status bar*) and a × that closes the tab. Decision: one control in place of a tick and a radio, as in
+  the Methods panel, since the baseline is always one of the tabs compared. What each
   does is in its tooltip, not in a text, and a right-click on a process opens its pop-up (the tab is
   shown in its window first). The amount of a process is 1: it is no longer set in the panel.
   A side pane that is opened takes the focus, on its panel's tab, where ← and → switch panel. The tabs are grouped
@@ -306,6 +310,21 @@ API in `src/lca_viewer/server.py`.
   clears a tab's own groups, merges and names, not the shared set. Loading a view file
   applies its tree, not its method or its set of rules (a notice says so). The explorer
   inside a pop-up takes the method of its tab, with rules of its own.
+  **Name display of processes and flows** (a fold at the top of the *Processes* panel, as the Methods panel has for
+  methods): one setting of the workspace, kept in the lens (`naming`: `{ process, flow, recipe }`), not per tab. A
+  **process** format, *Product* (default: the reference product, the location in grey), *Activity* (the activity
+  name, the location in grey: the *Full* names of before) or *Custom* (a recipe with the tokens `{product}`,
+  `{name}`, `{location}`, `{unit}`, `{type}`, `{isic}`, `{cpc}`, `{database}`), and a **flow** format, *Full* (the
+  substance, its compartment in grey), *Substance* or *Custom* (`{substance}`, `{compartment}`,
+  `{subcompartment}`). The tree, the Sankey, the charts, the pop-ups, the members pop-ups, the tab titles, the rows
+  of this panel and the labels of Compare mode follow it, and so do the titles of the process and flow cards (the
+  pop-up or docked card's header, `processTitle`; `FlowHead`); a name given to a row (✎) still wins where it did.
+  The tabs' views get it as `view.naming` / `view.recipe` (`viewNaming`: *Activity* with *Full* flows is the
+  `full` naming of before, the rest a recipe), so the readers did not change. Decision: the names were a line of
+  each tab's view options (*Full / Short / Custom*), so two tabs could name the same process two ways and the titles
+  of tabs and cards did not follow; the product, more than the activity name, tells what a process makes. The old
+  preference is read once: *Short* becomes *Product* with *Substance* flows, *Custom* keeps its recipe, *Full* (the
+  default then) takes the new default.
   *Name display* (a section of the Methods panel) sets how a method is named in the titles, the files, the
   several-methods chart and the matrix: parts (source, family, category, indicator, unit) or a
   custom format with the tokens `{source}`, `{family}`, `{category}`, `{indicator}` and `{unit}`. A method name is
@@ -401,7 +420,7 @@ API in `src/lca_viewer/server.py`.
   — whatever the kind: the activity pop-up below for a process or direct
   emissions, the flow pop-up for an elementary flow, and a **members pop-up**
   for a bundle (others, group, merged; nothing opens on hover or on a plain
-  click, which only selects). Members pop-ups follow the view's naming choice;
+  click, which only selects). Members pop-ups follow the *Name display* (Processes panel);
   clicking or right-clicking a member opens its own pop-up (← comes back).
   - *Others*: what the row contains and why (below cut-off / moved);
     ticking a member **restores** it: shown again in the tree and the chart
@@ -492,9 +511,8 @@ API in `src/lca_viewer/server.py`.
   rows, with the rows of an expanded one, and their boxes in the tree view and the Sankey, are left out; the chart keeps them), *Collapse singletons* (a process made of only one process, with no
   other input and no emissions of its own, such as a market of one supplier, shows as that process, and so on down
   the chain: the row is the last process, "via" the ones above it; same impacts, a shorter tree;
-  `collapse_singletons` in `/api/rows`, each such row lists them as `chain`), *Full / Short /
-  Custom* names, applied
-  to the list, the tree view, the others panel and the chart; see
+  `collapse_singletons` in `/api/rows`, each such row lists them as `chain`); the names, from the *Name display*
+  of the Processes panel, apply to the list, the tree view, the others panel and the chart; see
   [charts.md](charts.md); and the colours (*Color by*, see above). *Group by
   substance* and *Group by compartment* bundle the flows under direct emissions (they were quick
   groups of the Rules panel, which are gone); with *Color by Type* the colour bar at the left of a row names its type on hover.
@@ -585,7 +603,7 @@ API in `src/lca_viewer/server.py`.
   its own: expanding, selection, cut-off (starting at the 500 largest rows, so that
   every input is listed), method, groups, merges, pins and names are not shared with
   the tab, nor with another pop-up, and are kept while the pop-up stays on the
-  process. Its defaults differ from the tab's: full names, *Split by flow type* on, every input
+  process. Its defaults differ from the tab's: *Split by flow type* on, every input
   listed (cut-off); its options (above its list) are the header, Collapse, Reset view, *Group
   by product* and *Split by flow type* only. Space, **i** and the **(i)** of a
   process or flow row replace the pop-up with that process's, that exchange's or
@@ -872,7 +890,8 @@ and *Copy view as JSON*. Files are `version` 2: `cutoff` is a fraction, as in
 percentage and still load. The `labels` of a file (`p:<activity>`, `f:<flow>`,
 `r:<row id>`) can be sent to `/api/rows` too: the rows they name come back with
 the name as `custom`. Saved files record the model (title, size), the
-process's name and location, method names and the naming settings,
+process's name and location, method names and the naming settings (not applied on load: the names are the
+workspace's *Name display*),
 besides positions. Node ids are positions in the model, so on load, if the
 process is not at the same position (view saved from another model
 or database version), it is found by name and location and only the
